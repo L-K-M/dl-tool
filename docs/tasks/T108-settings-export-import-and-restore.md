@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T080, T086, T106, T107 |
-| **Blocks** | — |
+| **Blocks** | T121 |
 | **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/api/server.go`, `internal/store/db.go` |
 | **Implements** | [FR-145](../02-requirements.md#fr-145-export-and-import-portable-settings), [FR-146](../02-requirements.md#fr-146-restore-a-backup-from-the-command-line) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |

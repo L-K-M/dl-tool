@@ -6,11 +6,11 @@
 | **Milestone** | M4 |
 | **Status** | todo |
 | **Depends on** | T054, T055, T056, T057 |
-| **Blocks** | T061, T062, T105 |
+| **Blocks** | T061, T062, T105, T116 |
 | **Parallel-safe** | no — extends T055's `internal/api/search.go` |
 | **Implements** | [FR-056](../02-requirements.md#fr-056-test-an-indexer-on-demand), [FR-051](../02-requirements.md#fr-051-load-declarative-dlsearchv1-engines) |
 | **Decisions** | [ADR-0008](../decisions/0008-torznab-first-declarative-yaml-second.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |
-| **Est. size** | 2 new files, ~470 LOC |
+| **Est. size** | 2 new files, ~470 LOC. The closed placeholder set, the twelve transform ops and the two fetchers are one evaluator; `Runner` does not compile without all of them, so this cannot be split. |
 
 ## Goal
 `search.Runner` turns a validated `Definition` of kind `rss` or `json` plus a query into `[]SearchResult`,

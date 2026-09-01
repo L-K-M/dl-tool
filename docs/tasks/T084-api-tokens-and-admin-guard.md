@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T008, T009 |
-| **Blocks** | T085, T086, T106, T107 |
+| **Blocks** | T085, T086, T106, T107, T120 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/auth.go`, `internal/api/server.go`, `internal/store/users.go` |
 | **Implements** | [FR-117](../02-requirements.md#fr-117-issue-and-revoke-api-tokens), [FR-118](../02-requirements.md#fr-118-restrict-administrative-endpoints-to-admins), [NFR-016](../02-requirements.md#nfr-016-keep-api-tokens-revocable-and-out-of-the-logs) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |

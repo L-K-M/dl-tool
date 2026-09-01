@@ -6,7 +6,7 @@
 | **Milestone** | M5 |
 | **Status** | todo |
 | **Depends on** | T012, T054, T065 |
-| **Blocks** | T067, T071, T072, T081, T083, T091 |
+| **Blocks** | T067, T071, T072, T081, T083, T091, T117 |
 | **Parallel-safe** | no — adds `POST /feeds/{id}/refresh` to T065's `internal/api/feeds.go` |
 | **Implements** | [FR-071](../02-requirements.md#fr-071-poll-feeds-politely-with-conditional-get-and-backoff) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md) |

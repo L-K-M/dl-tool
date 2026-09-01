@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T027, T045, T047, T050, T052 |
-| **Blocks** | T104 |
+| **Blocks** | T104, T116, T117, T118, T119, T120, T121 |
 | **Parallel-safe** | no — it also edits the shared file `web/src/App.tsx` |
 | **Implements** | — (renders [FR-143](../02-requirements.md#fr-143-list-engines-and-test-connectivity), covered by T027, and the client half of [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences-per-user), covered by T107) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |
@@ -137,13 +137,13 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Out of scope — do NOT
 - Do NOT call `GET /settings` or `PATCH /settings`; T092 owns those endpoints and the sections that need
   them arrive with their own milestone.
-- Do NOT build the 24×7 schedule grid or the bandwidth section; the suggested task **T118** in
-  [`00-task-index.md` "Missing tasks"](00-task-index.md#missing-tasks--must-be-written-before-m3-and-m4-close) owns
-  them, against [FR-092](../02-requirements.md#fr-092-store-and-edit-a-247-schedule-grid).
-- Do NOT build the Indexers, RSS, Downloads, BitTorrent, Users, Notifications or Advanced forms; the
-  suggested tasks **T116, T117, T119, T120 and T121** in that same table own them. No task in M4–M7 as
-  currently written touches `web/src/components/Settings/`, so if you find yourself needing one of these
-  forms, STOP and write it under "Blocked".
+- Do NOT build the 24×7 schedule grid or the bandwidth section;
+  [T118](T118-bandwidth-settings-and-schedule-grid.md) owns them, against
+  [FR-092](../02-requirements.md#fr-092-store-and-edit-a-247-schedule-grid).
+- Do NOT build the Indexers, RSS, Downloads, BitTorrent, Users, Notifications or Advanced forms;
+  [T116](T116-indexers-settings-section.md), [T117](T117-rss-settings-section.md),
+  [T119](T119-downloads-and-bittorrent-settings.md), [T120](T120-users-auth-and-notifications-settings.md)
+  and [T121](T121-advanced-settings-and-log-viewer.md) own them, one section at a time.
 - Do NOT render an engine password, secret or token field, even disabled.
 - Do NOT reorder or rename a section; a Download Station user must find them where doc 09 §9 puts them.
 

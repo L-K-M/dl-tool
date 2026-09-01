@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T003, T007 |
-| **Blocks** | T014, T040, T093, T095 |
+| **Blocks** | T014, T040, T095, T124 |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
 | **Implements** | — (the mechanism behind [NFR-006](../02-requirements.md#nfr-006-work-when-hosted-under-a-sub-path), verified end to end by T095) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0012](../decisions/0012-single-data-mount.md) |

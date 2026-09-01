@@ -10,7 +10,7 @@
 | **Parallel-safe** | yes — touches only `internal/uri/` |
 | **Implements** | [FR-003](../02-requirements.md#fr-003-decode-obfuscated-chinese-download-manager-schemes), [FR-004](../02-requirements.md#fr-004-reject-ed2k-links-with-a-clear-message) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |
-| **Est. size** | 4 new files, ~360 LOC |
+| **Est. size** | 3 new source files, 1 test file, ~360 LOC |
 
 ## Goal
 `internal/uri` turns any string a user pastes into a `Normalized` value carrying a canonical URI, a `Kind`

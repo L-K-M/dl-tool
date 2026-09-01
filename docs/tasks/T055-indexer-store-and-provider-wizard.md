@@ -6,11 +6,11 @@
 | **Milestone** | M4 |
 | **Status** | todo |
 | **Depends on** | T006, T007, T008, T054 |
-| **Blocks** | T057, T058, T059, T060, T061 |
+| **Blocks** | T057, T058, T059, T060, T061, T116 |
 | **Parallel-safe** | no — creates `internal/api/search.go` and registers routes in `internal/api/server.go` |
 | **Implements** | — (storage and CRUD behind [FR-050](../02-requirements.md#fr-050-query-torznab-and-newznab-indexers) and [FR-056](../02-requirements.md#fr-056-test-an-indexer-on-demand), covered by T054 and T058) |
 | **Decisions** | [ADR-0008](../decisions/0008-torznab-first-declarative-yaml-second.md), [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |
-| **Est. size** | 3 new files, ~520 LOC |
+| **Est. size** | 3 new files, ~520 LOC — of which ~120 lines are the newznab category tree transcribed as data from doc 07 §2.3. CRUD, the category tree and the provider enumeration all read the same sealed `indexers` row and register on one router, so they cannot be split. |
 
 ## Goal
 `indexers` rows are created, listed, patched and deleted over `/api/v1/indexers`, the API key is sealed at
@@ -30,7 +30,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    — the nine roots and their subcategories, reproduced as data.
 5. [`docs/14-conventions.md` §2.4 SQL and sqlx](../14-conventions.md#24-sql-and-sqlx) — explicit column
    lists, `?` placeholders, one transaction per multi-statement write.
-6. [`docs/tasks/T054-torznab-client-and-ssrf-guard.md`](T054-torznab-client-and-ssrf-guard.md) — `Caps`,
+6. [`docs/tasks/T054-torznab-client.md`](T054-torznab-client.md) — `Caps`,
    `Category`, `NewTorznabClient` and `secure.NewClient`.
 
 ## Files

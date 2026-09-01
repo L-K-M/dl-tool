@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | **ID** | T091 |
-| **Milestone** | M7 |
+| **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T006, T012, T066 |
-| **Blocks** | T092 |
+| **Blocks** | T092, T121 |
 | **Parallel-safe** | no — it edits `internal/jobs/cron.go` and `internal/api/server.go` |
 | **Implements** | [FR-142](../02-requirements.md#fr-142-produce-consistent-backups), [NFR-026](../02-requirements.md#nfr-026-store-data-durably-in-one-sqlite-database) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |

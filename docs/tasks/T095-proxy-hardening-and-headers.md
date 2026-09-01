@@ -10,7 +10,7 @@
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
 | **Implements** | [NFR-006](../02-requirements.md#nfr-006-work-when-hosted-under-a-sub-path), [NFR-010](../02-requirements.md#nfr-010-always-verify-tls-certificates), [NFR-013](../02-requirements.md#nfr-013-reject-unexpected-host-headers), [NFR-021](../02-requirements.md#nfr-021-serve-strict-security-headers), [NFR-024](../02-requirements.md#nfr-024-validate-login-redirects-as-relative-paths) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md), [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
-| **Est. size** | 4 new files, ~380 LOC |
+| **Est. size** | 1 new source file, 1 test file and 2 proxy snippets, ~380 LOC |
 
 ## Goal
 Every HTML response carries the eight documented security headers, an unexpected `Host` is answered `421`,

@@ -115,7 +115,7 @@ correct and must stay.
 
 | Milestone | Theme | Exit checkpoint |
 |---|---|---|
-| **M0** | Foundations: repo, CI, config, store, auth, health, SSE skeleton | `docker compose up -d` serves a login page; `/healthz` returns `{"status":"ok"}`; CI green |
+| **M0** | Foundations: repo, CI, config, store, auth, health, SSE skeleton, image and compose stack | `docker compose up -d` serves the app on `${DLTOOL_PORT:-8091}`; `/healthz` returns `{"status":"ok"}`; CI green. The rendered login page arrives with M3 |
 | **M1** | Task core and the aria2 engine | A pasted HTTPS URL downloads to `/data`, progress streams over SSE, pause/resume/remove work |
 | **M2** | BitTorrent via qBittorrent | A magnet added with a file-selection step downloads and seeds; per-file priorities apply |
 | **M3** | Web UI | The full Download-Station-equivalent screen works in a browser; Playwright E2E green |
@@ -124,8 +124,18 @@ correct and must stay.
 | **M6** | Post-processing, scheduling, multi-user | Auto-extract, the 24×7 grid, and per-user destinations and quotas all work end to end |
 | **M7** | Media downloads, packaging, release | yt-dlp works; a signed multi-arch image is published |
 
+## Decisions referenced
+| ADR | Decision |
+|---|---|
+| [0016](decisions/0016-relicense-to-apache-2.md) | The only `proposed` record: `LICENSE` is unchanged until the repository owner decides. |
+| [0017](decisions/0017-exclusive-control-of-engines.md) | dl-tool ignores any engine transfer it did not create — why `T102` is unused. |
+
+## Open questions
+- (none)
+
 ## Change log
 
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version. |
+| 2026-09-01 | Consistency pass: added the `Decisions referenced` and `Open questions` sections required by the document template. |

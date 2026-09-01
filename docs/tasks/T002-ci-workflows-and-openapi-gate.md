@@ -67,10 +67,10 @@ Job-to-target mapping — the job names are load-bearing and are referenced by l
 | `ci.yml` | `compose` | `make compose-check`, `make docker-build`, behind the guard below |
 | `docs-lint.yml` | `doclint` | `cargo install --locked lychee --version <pin>`, then `make doclint` |
 
-The `compose` and `integration` jobs have no input files until M7 and M2 respectively — `Dockerfile`,
-`compose.yaml` and `compose.dev.yaml` are T093/T094, and the first adapter under test is T028. Both jobs
-therefore start with a guard step, which becomes a no-op as soon as the files land. This is a guard, not
-`continue-on-error`: once the file exists the job fails on a real failure.
+The `compose` and `integration` jobs have no input files when this task runs — `Dockerfile`,
+`compose.yaml` and `compose.dev.yaml` arrive later in M0 with T124 and T125, and the first adapter under
+test is T028, in M2. Both jobs therefore start with a guard step, which becomes a no-op as soon as the
+files land. This is a guard, not `continue-on-error`: once the file exists the job fails on a real failure.
 
 ```yaml
       - id: probe

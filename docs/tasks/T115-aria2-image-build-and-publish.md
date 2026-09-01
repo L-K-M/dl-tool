@@ -10,7 +10,7 @@
 | **Parallel-safe** | no — it edits `.github/workflows/release.yml` |
 | **Implements** | [NFR-005](../02-requirements.md#nfr-005-publish-a-multi-architecture-image), [NFR-025](../02-requirements.md#nfr-025-run-unprivileged-with-the-operators-uid-and-gid), [FR-143](../02-requirements.md#fr-143-list-engines-and-test-connectivity) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md), [ADR-0012](../decisions/0012-single-data-mount.md) |
-| **Est. size** | 2 new files, ~150 LOC |
+| **Est. size** | 1 new file, 2 modified, ~150 net new lines |
 
 ## Goal
 `deploy/aria2/Dockerfile` builds an `alpine:3.22` image running `aria2c` with JSON-RPC enabled, the same
@@ -96,7 +96,7 @@ The matrix entry added to `.github/workflows/release.yml`, alongside the existin
 ```
 
 ## Steps
-1. Create `deploy/aria2/Dockerfile` exactly as doc 10 §5.1 specifies. `curl` is present only so the compose
+1. Edit `deploy/aria2/Dockerfile` — T028 created its two lines — so that it matches doc 10 §5.1 exactly. `curl` is present only so the compose
    healthcheck can post `aria2.getVersion`; it fetches nothing at build time.
 2. Create `deploy/aria2/entrypoint.sh` as above and `chmod 0755` it. The final line must be an `exec`, so
    `SIGTERM` reaches `aria2c` and the session file is written on stop.
@@ -126,9 +126,12 @@ The matrix entry added to `.github/workflows/release.yml`, alongside the existin
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 --output=type=cacheonly ./deploy/aria2 && docker build -t dl-tool-aria2:t115 ./deploy/aria2 && docker run --rm --entrypoint aria2c dl-tool-aria2:t115 --version | head -1
+docker buildx build --platform linux/amd64,linux/arm64 --output=type=cacheonly ./deploy/aria2 && make test-integration
 ```
-Expected: both builds complete with no error, and the final line begins with `aria2 version `.
+Expected: `buildx` prints `DONE` for both `linux/amd64` and `linux/arm64` and exits 0; then
+`ok  github.com/L-K-M/dl-tool/internal/engine/aria2` with
+`--- PASS: TestAria2Contract/AddURL/Progress/Pause/Resume/Remove` and the four other subtests of T028
+`PASS` against a container built from this Dockerfile. No `FAIL`.
 
 Also confirm scope:
 ```bash

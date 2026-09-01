@@ -6,7 +6,7 @@
 | **Milestone** | M7 |
 | **Status** | todo |
 | **Depends on** | T004, T010, T024, T092 |
-| **Blocks** | — |
+| **Blocks** | T121 |
 | **Parallel-safe** | no — it edits `internal/obs/log.go` and `internal/api/server.go` |
 | **Implements** | [FR-151](../02-requirements.md#fr-151-expose-system-logs-with-secrets-redacted), [NFR-016](../02-requirements.md#nfr-016-keep-api-tokens-revocable-and-out-of-the-logs) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md), [ADR-0002](../decisions/0002-go-for-the-backend.md) |

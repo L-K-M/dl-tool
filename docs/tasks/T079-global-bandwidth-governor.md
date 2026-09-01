@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T016, T019, T027, T037 |
-| **Blocks** | T080, T081, T082, T110 |
+| **Blocks** | T080, T081, T082, T110, T118 |
 | **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/store/settings.go` |
 | **Implements** | [FR-090](../02-requirements.md#fr-090-enforce-global-rate-limits-in-bytes-per-second) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |

@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T079, T080, T081, T082 |
-| **Blocks** | — |
+| **Blocks** | T118 |
 | **Parallel-safe** | no — extends `internal/engine/bandwidth.go` and `internal/jobs/cron.go` |
 | **Implements** | [FR-096](../02-requirements.md#fr-096-combine-schedule-global-and-per-task-limits-by-minimum), [FR-097](../02-requirements.md#fr-097-evaluate-the-schedule-in-the-container-time-zone) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |

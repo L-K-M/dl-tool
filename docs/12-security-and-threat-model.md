@@ -3,7 +3,7 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** T005, T008, T009, T046, T054, T056, T074, T084, T097
+> **Read this before:** T005, T008, T009, T046, T054, T056, T074, T084, T097, T122, T123
 
 ## Purpose
 

@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T006, T007 |
-| **Blocks** | T096 |
+| **Blocks** | T096, T124 |
 | **Parallel-safe** | no — it edits `internal/api/server.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-152](../02-requirements.md#fr-152-expose-health-and-readiness-endpoints), [FR-153](../02-requirements.md#fr-153-expose-prometheus-metrics-on-a-separate-listener) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |

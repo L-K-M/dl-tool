@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T012, T017, T024 |
-| **Blocks** | T075, T076, T077, T078 |
+| **Blocks** | T075, T076, T077, T078, T119 |
 | **Parallel-safe** | no — it also edits the shared file `internal/store/tasks.go` |
 | **Implements** | [FR-100](../02-requirements.md#fr-100-auto-extract-the-supported-archive-formats), [FR-102](../02-requirements.md#fr-102-report-extraction-state-progress-and-failures), [FR-106](../02-requirements.md#fr-106-remove-completed-tasks-automatically), [NFR-018](../02-requirements.md#nfr-018-extract-archives-safely) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |

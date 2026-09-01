@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T027, T079 |
-| **Blocks** | T081, T108, T110 |
+| **Blocks** | T081, T108, T110, T118 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/server.go`, `internal/store/settings.go` |
 | **Implements** | [FR-092](../02-requirements.md#fr-092-store-and-edit-a-247-schedule-grid) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |
@@ -135,10 +135,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Out of scope — do NOT
 - Do NOT evaluate the grid or act on the active cell; T081 owns the per-minute evaluation.
 - Do NOT implement the DST repeated-hour and skipped-hour rules; T110 owns them.
-- Do NOT build the painting grid UI. T053 explicitly excludes it, so **no task currently owns it**: the
-  suggested task **T118** in
-  [`00-task-index.md` "Missing tasks"](00-task-index.md#missing-tasks--must-be-written-before-m3-and-m4-close)
-  does, against doc 09 §9.1.
+- Do NOT build the painting grid UI; [T118](T118-bandwidth-settings-and-schedule-grid.md) owns it, against
+  doc 09 §9.1.
 - Do NOT store the grid as a JSON blob in `settings`; it has its own 168-row table.
 - Do NOT accept a `timezone` from the client; the container's `TZ` is the only source.
 

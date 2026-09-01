@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T077, T084 |
-| **Blocks** | T108 |
+| **Blocks** | T108, T120 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/server.go`, `internal/store/settings.go` |
 | **Implements** | [FR-107](../02-requirements.md#fr-107-manage-notification-channels), [FR-104](../02-requirements.md#fr-104-send-notifications-and-offer-a-per-channel-test) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md) |

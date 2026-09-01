@@ -6,7 +6,7 @@
 | **Milestone** | M5 |
 | **Status** | todo |
 | **Depends on** | T006, T007, T008 |
-| **Blocks** | T066, T068, T072 |
+| **Blocks** | T066, T068, T072, T117 |
 | **Parallel-safe** | no — it also edits the shared file `internal/api/server.go` |
 | **Implements** | [FR-070](../02-requirements.md#fr-070-manage-feeds-and-refresh-on-demand) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md) |

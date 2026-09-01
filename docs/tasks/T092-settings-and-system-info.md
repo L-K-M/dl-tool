@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | **ID** | T092 |
-| **Milestone** | M7 |
+| **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T005, T027, T091 |
-| **Blocks** | T096 |
+| **Blocks** | T096, T117, T118, T119, T121 |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
 | **Implements** | [FR-140](../02-requirements.md#fr-140-read-and-update-settings-without-exposing-secrets), [FR-141](../02-requirements.md#fr-141-resolve-settings-from-environment-then-database) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |

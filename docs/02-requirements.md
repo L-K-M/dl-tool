@@ -989,11 +989,11 @@ When dl-tool restarts, it shall reconcile its stored tasks against each engine b
 ### NFR-004 Shut down gracefully on SIGTERM
 When dl-tool receives SIGTERM, it shall stop accepting new work, flush task state, run `PRAGMA wal_checkpoint(TRUNCATE)`, close the database and exit 0 within 20 seconds.
 
-**Verify:** T093 sends SIGTERM under load and asserts exit code 0 within 20 seconds and that no `-wal` file remains.
+**Verify:** T124 sends SIGTERM under load and asserts exit code 0 within 20 seconds and that no `-wal` file remains.
 
 | Covered by | Priority |
 |---|---|
-| T093 | must |
+| T124 | must |
 
 ### NFR-005 Publish a multi-architecture image
 The dl-tool release pipeline shall publish `linux/amd64` and `linux/arm64` images to the configured registry from a single tag, built with `CGO_ENABLED=0`.
@@ -1106,11 +1106,11 @@ The dl-tool token store shall persist only a hash of each token, shall accept to
 ### NFR-017 Block server-side request forgery
 The dl-tool outbound HTTP client shall validate the resolved peer address on every connection and every redirect, deny loopback, link-local, private, CGNAT and IPv6 unique-local targets unless explicitly allowed for that engine, allow only `http` and `https`, follow at most five redirects, and cap response size and total time.
 
-**Verify:** T054 asserts fetches to `127.0.0.1`, `169.254.169.254` and a public host that redirects to `127.0.0.1` are all blocked with `ssrf_blocked`.
+**Verify:** T123 asserts fetches to `127.0.0.1`, `169.254.169.254` and a public host that redirects to `127.0.0.1` are all blocked with `ssrf_blocked`; T122 asserts the same for a URI submitted to `POST /tasks`.
 
 | Covered by | Priority |
 |---|---|
-| T054 | must |
+| T123, T122 | must |
 
 ### NFR-018 Extract archives safely
 The dl-tool extractor shall extract into a fresh empty directory on the target filesystem, sanitise every member name, refuse symlinks, hardlinks, device nodes and setuid bits, extract exactly one level without recursing into nested archives, and abort when the total uncompressed size or member count exceeds its configured caps.
@@ -1178,11 +1178,11 @@ If a login redirect parameter is not a relative path beginning with a single `/`
 ### NFR-025 Run unprivileged with the operator's UID and GID
 The dl-tool container entrypoint shall apply the configured UID, GID and umask, drop privileges before starting the binary, and shall run the application as a non-root user.
 
-**Verify:** T093 starts the container with a non-default UID and asserts files written to the data mount carry that ownership and that the application process is not root.
+**Verify:** T124 starts the container with a non-default UID and asserts files written to the data mount carry that ownership and that the application process is not root.
 
 | Covered by | Priority |
 |---|---|
-| T093 | must |
+| T124 | must |
 
 ### NFR-026 Store data durably in one SQLite database
 The dl-tool store shall use a single SQLite database in the configuration directory with WAL journalling and a busy timeout, shall refuse to start against a database whose schema version is newer than the binary, and shall require no other datastore.

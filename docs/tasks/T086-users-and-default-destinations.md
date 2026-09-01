@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T084, T085, T098 |
-| **Blocks** | T108, T109 |
+| **Blocks** | T108, T109, T120 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/tasks.go`, `internal/engine/admission.go`, `internal/store/users.go` |
 | **Implements** | [FR-120](../02-requirements.md#fr-120-apply-a-per-user-default-destination), [FR-095](../02-requirements.md#fr-095-order-the-queue-by-creation-date-or-by-owner) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |

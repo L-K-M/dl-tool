@@ -35,16 +35,18 @@ IDs are never reused. `docs/15-*` and ADR 0014 carry the same permanent gap.
 
 ## M0 — Foundations
 
-Repository, CI, configuration, the database and migrations, authentication, health and the SSE skeleton.
-Exit checkpoint: `make build && ./bin/dl-tool serve` starts on `:8080`; `curl -s localhost:8080/healthz`
-returns `{"status":"ok"}`; `curl -s localhost:8080/` returns the embedded SPA shell; the `lint`, `test`
-and `gen-drift` CI jobs are green.
+Repository, CI, configuration, the database and migrations, authentication, health, the SSE skeleton, the
+runtime image and the compose stack.
+Exit checkpoint: `cp .env.example .env && docker compose -f compose.yaml -f compose.dev.yaml up -d --build`
+starts the stack; `curl -s localhost:8091/healthz` returns `{"status":"ok"}`; `curl -s localhost:8091/`
+returns the embedded SPA shell; the `lint`, `test`, `gen-drift`, `compose` and `doclint` CI jobs are green.
 
-**The brief's M0 checkpoint wording (`docker compose up -d` serving a login page) is not reachable in M0**
-and has been restated above to what M0's tasks actually build. No M0 task produces `Dockerfile`,
-`compose.yaml` or `compose.dev.yaml` — T093 and T094 do, in M7 — and the rendered login screen is T040, in
-M3. T013 embeds only a placeholder `index.html`. The `compose` and `integration` CI jobs therefore cannot
-be green until M7 and M2 respectively; see the deferral register.
+T124 and T125 build `Dockerfile`, `.dockerignore`, `deploy/entrypoint.sh`, `compose.yaml`,
+`compose.dev.yaml` and `.env.example` inside M0, so the brief's `docker compose up -d` checkpoint is
+reachable here and the `compose` CI job has input files. Two clauses of the brief's wording still are not
+reachable in M0: the rendered **login page** is T040, in M3 — T013 embeds only a placeholder `index.html` —
+and the `integration` CI job has no engine adapter to exercise until M1/M2. Both stay in the deferral
+register.
 
 | Task | Title | Depends on | Status |
 |---|---|---|---|
@@ -62,6 +64,8 @@ be green until M7 and M2 respectively; see the deferral register.
 | [T012](T012-job-worker-pool.md) | Run the database-backed job worker pool | T006 | todo |
 | [T013](T013-embed-spa-and-base-path.md) | Embed the built SPA and serve it under the base path | T003, T007 | todo |
 | [T014](T014-typed-api-client.md) | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | todo |
+| [T124](T124-runtime-dockerfile-and-entrypoint.md) | Write the runtime Dockerfile and the entrypoint | T003, T004, T010, T013 | todo |
+| [T125](T125-compose-and-env-example.md) | Write `compose.yaml` and `.env.example` | T124 | todo |
 
 ## M1 — Task core and aria2
 
@@ -135,7 +139,7 @@ The Torznab client, `dlsearch/v1` engines, `.dlm` import and the search screen. 
 
 | Task | Title | Depends on | Status |
 |---|---|---|---|
-| [T054](T054-torznab-client-and-ssrf-guard.md) | Fetch and parse Torznab responses through an SSRF-guarded client | T005 | todo |
+| [T054](T054-torznab-client.md) | Fetch and parse Torznab caps and search responses | T005, T123 | todo |
 | [T055](T055-indexer-store-and-provider-wizard.md) | Store indexers and import a Prowlarr or Jackett instance | T006, T007, T008, T054 | todo |
 | [T056](T056-dlsearch-definition-loader.md) | Load and validate `dlsearch/v1` definitions | T004, T005 | todo |
 | [T057](T057-bundled-engine-definitions.md) | Bundle the four default engine definitions | T055, T056 | todo |
@@ -147,6 +151,9 @@ The Torznab client, `dlsearch/v1` engines, `.dlm` import and the search screen. 
 | [T063](T063-search-screen.md) | Build the search screen | T014, T041, T042, T044, T061, T062 | todo |
 | [T064](T064-saved-searches.md) | Save and re-run a search | T043, T045, T061, T063 | todo |
 | [T105](T105-static-linux-distributions-engine.md) | Ship the curated static `linux-distributions` engine | T056, T057, T058, T062 | todo |
+| [T116](T116-indexers-settings-section.md) | Build the Indexers settings section | T053, T055, T058 | todo |
+| [T122](T122-apply-ssrf-guard-to-user-uris.md) | Apply the SSRF guard to user-submitted URIs | T020, T031, T123 | todo |
+| [T123](T123-ssrf-guarded-http-client.md) | Build the SSRF-guarded outbound HTTP client | T005 | todo |
 
 ## M5 — RSS
 
@@ -166,7 +173,7 @@ The feed poller, the rule engine, dry-run and the RSS screens. Exit checkpoint: 
 
 ## M6 — Post-processing and multi-user
 
-Extraction, the bandwidth schedule, watch folders, users and quotas, and notifications. Exit checkpoint: Auto-extract, the 24×7 grid, and per-user destinations and quotas all work end to end.
+Extraction, the bandwidth schedule, watch folders, users and quotas, notifications, the backup, settings and system-info endpoints, and the settings sections that read them. Exit checkpoint: Auto-extract, the 24×7 grid, and per-user destinations and quotas all work end to end.
 
 | Task | Title | Depends on | Status |
 |---|---|---|---|
@@ -183,16 +190,22 @@ Extraction, the bandwidth schedule, watch folders, users and quotas, and notific
 | [T084](T084-api-tokens-and-admin-guard.md) | Issue, list and revoke API tokens | T008, T009 | todo |
 | [T085](T085-ownership-filtering-and-quotas.md) | Scope tasks to their owner and enforce the storage quota | T020, T021, T022, T084 | todo |
 | [T086](T086-users-and-default-destinations.md) | Manage users, their default destinations and the process order | T084, T085, T098 | todo |
+| [T091](T091-database-backup-and-retention.md) | Back up the database on demand and prune on a schedule | T006, T012, T066 | todo |
+| [T092](T092-settings-and-system-info.md) | Serve settings and system info without leaking secrets | T005, T027, T091 | todo |
 | [T106](T106-notification-channel-endpoints.md) | Manage notification channels and test one | T077, T084 | todo |
 | [T107](T107-tag-prefs-and-watch-folder-endpoints.md) | Reach the tag, preference and watch-folder tables over HTTP | T050, T083, T084 | todo |
 | [T108](T108-settings-export-import-and-restore.md) | Export and import portable settings, and restore from the CLI | T080, T086, T106, T107 | todo |
 | [T109](T109-per-user-root-jail.md) | Jail non-admins to their own destination subtree | T046, T047, T085, T086, T107 | todo |
 | [T110](T110-bandwidth-precedence-and-dst.md) | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | todo |
 | [T111](T111-delete-data-and-hardlink-safety.md) | Delete downloaded data safely and prove hardlink survival | T023, T076, T085, T109 | todo |
+| [T117](T117-rss-settings-section.md) | Build the RSS settings section | T053, T065, T066, T068, T092 | todo |
+| [T118](T118-bandwidth-settings-and-schedule-grid.md) | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | todo |
+| [T119](T119-downloads-and-bittorrent-settings.md) | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | todo |
+| [T120](T120-users-auth-and-notifications-settings.md) | Build the Users & Auth and Notifications settings sections | T053, T084, T086, T106 | todo |
 
 ## M7 — yt-dlp, packaging and release
 
-The yt-dlp engine, the runtime image, compose, the release pipeline and the documentation. Exit checkpoint: Multi-arch image published and signed; the quickstart brings the stack up from scratch.
+The yt-dlp engine, the release hardening of the image and the compose stack, the release pipeline, the log viewer and the documentation. Exit checkpoint: Multi-arch image published and signed; the quickstart brings the stack up from scratch.
 
 | Task | Title | Depends on | Status |
 |---|---|---|---|
@@ -200,36 +213,14 @@ The yt-dlp engine, the runtime image, compose, the release pipeline and the docu
 | [T088](T088-ytdlp-extractor-cache.md) | Cache the yt-dlp extractor patterns for the router | T016, T087 | todo |
 | [T089](T089-ytdlp-progress-and-exit-codes.md) | Parse yt-dlp progress lines and exit codes | T087 | todo |
 | [T090](T090-ytdlp-engine-registration.md) | Register the yt-dlp engine and run the contract suite | T028, T088, T089 | todo |
-| [T091](T091-database-backup-and-retention.md) | Back up the database on demand and prune on a schedule | T006, T012, T066 | todo |
-| [T092](T092-settings-and-system-info.md) | Serve settings and system info without leaking secrets | T005, T027, T091 | todo |
-| [T093](T093-runtime-image-and-entrypoint.md) | Build the runtime image and the PUID/PGID entrypoint | T003, T004, T013 | todo |
-| [T094](T094-compose-stack-and-quickstart.md) | Ship the compose stack, the env template and the quickstart | T093 | todo |
+| [T093](T093-harden-runtime-image.md) | Harden the runtime image for a multi-arch release | T124 | todo |
+| [T094](T094-harden-compose-and-release-verification.md) | Harden the compose stack and document release verification | T093, T125 | todo |
 | [T095](T095-proxy-hardening-and-headers.md) | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | todo |
 | [T096](T096-log-redaction-and-system-logs.md) | Redact secrets in logs and serve the system log | T004, T010, T024, T092 | todo |
 | [T097](T097-release-pipeline-and-pin-bump.md) | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | todo |
 | [T113](T113-ytdlp-pin-and-capability-probe.md) | Enforce the yt-dlp pin and probe the runtime at boot | T090, T093, T097 | todo |
 | [T115](T115-aria2-image-build-and-publish.md) | Build and publish the aria2 image | T093, T094, T097 | todo |
-
-## Missing tasks — must be written before M3 and M4 close
-
-[`09-web-ui-spec.md` §9](../09-web-ui-spec.md#9-settings-screens) specifies ten settings sections and
-[§9.1](../09-web-ui-spec.md#91-the-247-schedule-grid) specifies the painting grid in full. T053 builds only
-**General** and **Connection** and defers the rest to "M4, M5, M6 and M7"; no task in those milestones
-touches `web/src/components/Settings/`. `docs/09-web-ui-spec.md` §2.1 also routes `/logs`, which no task
-renders. The M6 exit checkpoint ("the 24×7 grid … works end to end") cannot be met until these exist.
-
-| Suggested ID | Milestone | Title | Scope |
-|---|---|---|---|
-| T116 | M4 | Build the Indexers settings section | The doc 09 §9 Indexers table — Name/Type/URL/Categories/Enabled/Priority/Last test — with Add, Edit, Test, Test all, Reorder and Import over `/indexers` and `/indexers/import`; imported definitions render disabled with their provenance. Depends on T053, T055, T058. |
-| T117 | M5 | Build the RSS settings section | Enable fetching, update interval, maximum articles per feed, auto-downloader toggle and smart-episode patterns, over `PATCH /settings`. Depends on T053, T066, T092. |
-| T118 | M6 | Build the Bandwidth settings section and the 24×7 schedule grid | Global and alternative limits in B/s; the *Immediately* / *Advanced schedule* radio; the 24 × 7 `<table>` of doc 09 §9.1 with the three brushes, drag and rectangle painting, row/column header painting, the arrow/Space keyboard map, the four bulk buttons, the pattern-plus-colour legend, the displayed `TZ`, over `GET`/`PUT /settings/schedule`. Depends on T053, T079, T080, T110. |
-| T119 | M6 | Build the Downloads and BitTorrent settings sections | Default and incomplete destinations through the folder browser, content layout, watch-folder table, auto-extract plus the shared password list, the category→path table, per-root `min_free_space`; and the BitTorrent row of doc 09 §9. Depends on T053, T074, T083, T107. |
-| T120 | M6 | Build the Users & Auth and Notifications settings sections | The users table with quota and default destination, add/edit/delete, change password, session lifetime, the API-token create-once reveal; and the per-event × per-channel matrix with **Send test** rendering the raw upstream status line and body. Depends on T053, T084, T086, T106. |
-| T122 | M4 | Apply the SSRF guard to user-submitted URIs | [`05-api-contract.md`](../05-api-contract.md) §5.2 and §5.3 both list `403 /problems/ssrf-blocked`, and [`12-security-and-threat-model.md`](../12-security-and-threat-model.md) §2.3 says the guard governs "URLs originating from a user", but T020 and T031 predate the guard (T054, M4) and neither applies it; no later task wires it in. Scope: pre-resolve every `http`/`https`/`ftp`/`sftp` URI through `secure.Guard.Check` at `POST /tasks` and `POST /tasks/inspect`, reject with `403 /problems/ssrf-blocked` and `tasks.error_code = 'ssrf_blocked'`, and honour `DLTOOL_SSRF_ALLOW_PRIVATE`. Depends on T020, T031, T054. |
-| T121 | M7 | Build the Advanced settings section and the system log viewer | Log level and retention, database maintenance and vacuum, settings export/import, reset to defaults, version and build info; plus the `/logs` route of doc 09 §2.1 over `GET /system/logs`. Depends on T053, T091, T092, T096, T108. |
-
-These IDs are suggestions only; they are outside the ranges in the brief §8 and must be confirmed before a
-file is created. Until then T053's and T080's "M6 owns it" / "T053 owns it" pointers refer to this table.
+| [T121](T121-advanced-settings-and-log-viewer.md) | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | todo |
 
 ## Deferral register
 A `should` or `could` requirement may be deferred only by adding a row here, naming the requirement, the
@@ -237,31 +228,29 @@ reason and the task that will carry it.
 
 | Requirement | Deferred from | Reason | Carried by |
 |---|---|---|---|
-| M0 exit: `docker compose up -d` | brief §8 | `Dockerfile`, `compose.yaml` and `compose.dev.yaml` are M7 artefacts; no M0 task creates them. | T093, T094 |
 | M0 exit: a rendered login page | brief §8 | T013 embeds a placeholder `index.html`; the login screen is a React route. | T040 |
-| M0 exit: the `compose` CI job green | brief §8 | `make compose-check` and `make docker-build` have no input files until M7. | T093, T094 |
 | M0 exit: the `integration` CI job green | brief §8 | `make test-integration` has no adapter to exercise until M1/M2. | T028 |
-
-## Decisions referenced
-| ADR | Decision |
-|---|---|
-| [0017](../decisions/0017-exclusive-control-of-engines.md) | dl-tool assumes exclusive control of its engines — why T102 is unused |
-
-## Open questions
-- (none)
-
-## Change log
-| Date | Change |
-|---|---|
-| 2026-09-01 | Initial version: 112 tasks across M0–M7, with the permanently unused IDs recorded. |
+| M3 exit: the eight remaining settings sections | brief §8 | T053 ships the settings shell with General and Connection and lists the rest in `IMPLEMENTED`; each remaining section needs endpoints that do not exist in M3. | T116, T117, T118, T119, T120, T121 |
 
 ## A note on identifier order
 
-Task identifiers **T098–T115** are overflow numbers allocated after the original ranges were set. They
+Task identifiers **T098–T125** are overflow numbers allocated after the original ranges were set. They
 belong to earlier milestones than their number suggests — T098 and T099 are M1, T100 and T101 are M2,
-T103 and T104 are M3, T105 is M4, T106–T111 are M6, and T113 and T115 are M7. A dependency on a
-numerically higher identifier is therefore not a forward reference: work milestones in order and the
-dependency is already satisfied. Do not "fix" these edges.
+T103 and T104 are M3, T105, T116, T122 and T123 are M4, T106–T111 and T117–T120 are M6,
+T113, T115 and T121 are M7, and T124 and T125 are M0. A dependency on a numerically higher identifier is
+therefore usually not a forward reference: work milestones in order and the dependency is already
+satisfied. Do not "fix" these edges.
+
+Two consequences of that overflow numbering are recorded rather than "fixed":
+
+- **T091 and T092 sit in M6, not M7.** The settings sections T117, T118 and T119 need
+  `GET`/`PATCH /settings`, so the settings and system-info endpoints — and the backup handler whose file
+  they extend — moved forward into M6 with them. M7 keeps the yt-dlp engine, the release hardening and the
+  release pipeline.
+- **In M4, take T123 before T054.** T054 is the lower-numbered row but depends on T123, which owns the
+  SSRF-guarded HTTP client it is built on; T122 depends on T123 for the same reason. Rule 2 handles this
+  by itself — T054's dependencies are not `done`, so the next unblocked row is T123 — but do not
+  "correct" the edge.
 
 ## Roster
 
@@ -283,6 +272,8 @@ dependency is already satisfied. Do not "fix" these edges.
 | T012 | Run the database-backed job worker pool | T006 | no | todo | [T012](T012-job-worker-pool.md) |
 | T013 | Embed the built SPA and serve it under the base path | T003, T007 | no | todo | [T013](T013-embed-spa-and-base-path.md) |
 | T014 | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | yes | todo | [T014](T014-typed-api-client.md) |
+| T124 | Write the runtime Dockerfile and the entrypoint | T003, T004, T010, T013 | no | todo | [T124](T124-runtime-dockerfile-and-entrypoint.md) |
+| T125 | Write `compose.yaml` and `.env.example` | T124 | yes | todo | [T125](T125-compose-and-env-example.md) |
 
 ### M1
 
@@ -348,7 +339,7 @@ dependency is already satisfied. Do not "fix" these edges.
 
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
-| T054 | Fetch and parse Torznab responses through an SSRF-guarded client | T005 | yes | todo | [T054](T054-torznab-client-and-ssrf-guard.md) |
+| T054 | Fetch and parse Torznab caps and search responses | T005, T123 | yes | todo | [T054](T054-torznab-client.md) |
 | T055 | Store indexers and import a Prowlarr or Jackett instance | T006, T007, T008, T054 | no | todo | [T055](T055-indexer-store-and-provider-wizard.md) |
 | T056 | Load and validate `dlsearch/v1` definitions | T004, T005 | yes | todo | [T056](T056-dlsearch-definition-loader.md) |
 | T057 | Bundle the four default engine definitions | T055, T056 | no | todo | [T057](T057-bundled-engine-definitions.md) |
@@ -360,6 +351,9 @@ dependency is already satisfied. Do not "fix" these edges.
 | T063 | Build the search screen | T014, T041, T042, T044, T061, T062 | no | todo | [T063](T063-search-screen.md) |
 | T064 | Save and re-run a search | T043, T045, T061, T063 | no | todo | [T064](T064-saved-searches.md) |
 | T105 | Ship the curated static `linux-distributions` engine | T056, T057, T058, T062 | no | todo | [T105](T105-static-linux-distributions-engine.md) |
+| T116 | Build the Indexers settings section | T053, T055, T058 | no | todo | [T116](T116-indexers-settings-section.md) |
+| T122 | Apply the SSRF guard to user-submitted URIs | T020, T031, T123 | no | todo | [T122](T122-apply-ssrf-guard-to-user-uris.md) |
+| T123 | Build the SSRF-guarded outbound HTTP client | T005 | yes | todo | [T123](T123-ssrf-guarded-http-client.md) |
 
 ### M5
 
@@ -392,12 +386,18 @@ dependency is already satisfied. Do not "fix" these edges.
 | T084 | Issue, list and revoke API tokens | T008, T009 | yes | todo | [T084](T084-api-tokens-and-admin-guard.md) |
 | T085 | Scope tasks to their owner and enforce the storage quota | T020, T021, T022, T084 | no | todo | [T085](T085-ownership-filtering-and-quotas.md) |
 | T086 | Manage users, their default destinations and the process order | T084, T085, T098 | yes | todo | [T086](T086-users-and-default-destinations.md) |
+| T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | todo | [T091](T091-database-backup-and-retention.md) |
+| T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | todo | [T092](T092-settings-and-system-info.md) |
 | T106 | Manage notification channels and test one | T077, T084 | yes | todo | [T106](T106-notification-channel-endpoints.md) |
 | T107 | Reach the tag, preference and watch-folder tables over HTTP | T050, T083, T084 | yes | todo | [T107](T107-tag-prefs-and-watch-folder-endpoints.md) |
 | T108 | Export and import portable settings, and restore from the CLI | T080, T086, T106, T107 | yes | todo | [T108](T108-settings-export-import-and-restore.md) |
 | T109 | Jail non-admins to their own destination subtree | T046, T047, T085, T086, T107 | no | todo | [T109](T109-per-user-root-jail.md) |
 | T110 | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | no | todo | [T110](T110-bandwidth-precedence-and-dst.md) |
 | T111 | Delete downloaded data safely and prove hardlink survival | T023, T076, T085, T109 | no | todo | [T111](T111-delete-data-and-hardlink-safety.md) |
+| T117 | Build the RSS settings section | T053, T065, T066, T068, T092 | no | todo | [T117](T117-rss-settings-section.md) |
+| T118 | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | no | todo | [T118](T118-bandwidth-settings-and-schedule-grid.md) |
+| T119 | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | no | todo | [T119](T119-downloads-and-bittorrent-settings.md) |
+| T120 | Build the Users & Auth and Notifications settings sections | T053, T084, T086, T106 | no | todo | [T120](T120-users-auth-and-notifications-settings.md) |
 
 ### M7
 
@@ -407,12 +407,27 @@ dependency is already satisfied. Do not "fix" these edges.
 | T088 | Cache the yt-dlp extractor patterns for the router | T016, T087 | no | todo | [T088](T088-ytdlp-extractor-cache.md) |
 | T089 | Parse yt-dlp progress lines and exit codes | T087 | yes | todo | [T089](T089-ytdlp-progress-and-exit-codes.md) |
 | T090 | Register the yt-dlp engine and run the contract suite | T028, T088, T089 | no | todo | [T090](T090-ytdlp-engine-registration.md) |
-| T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | todo | [T091](T091-database-backup-and-retention.md) |
-| T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | todo | [T092](T092-settings-and-system-info.md) |
-| T093 | Build the runtime image and the PUID/PGID entrypoint | T003, T004, T013 | yes | todo | [T093](T093-runtime-image-and-entrypoint.md) |
-| T094 | Ship the compose stack, the env template and the quickstart | T093 | no | todo | [T094](T094-compose-stack-and-quickstart.md) |
+| T093 | Harden the runtime image for a multi-arch release | T124 | yes | todo | [T093](T093-harden-runtime-image.md) |
+| T094 | Harden the compose stack and document release verification | T093, T125 | no | todo | [T094](T094-harden-compose-and-release-verification.md) |
 | T095 | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | no | todo | [T095](T095-proxy-hardening-and-headers.md) |
 | T096 | Redact secrets in logs and serve the system log | T004, T010, T024, T092 | no | todo | [T096](T096-log-redaction-and-system-logs.md) |
 | T097 | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | yes | todo | [T097](T097-release-pipeline-and-pin-bump.md) |
 | T113 | Enforce the yt-dlp pin and probe the runtime at boot | T090, T093, T097 | no | todo | [T113](T113-ytdlp-pin-and-capability-probe.md) |
 | T115 | Build and publish the aria2 image | T093, T094, T097 | no | todo | [T115](T115-aria2-image-build-and-publish.md) |
+| T121 | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | no | todo | [T121](T121-advanced-settings-and-log-viewer.md) |
+
+## Decisions referenced
+| ADR | Decision |
+|---|---|
+| [0017](../decisions/0017-exclusive-control-of-engines.md) | dl-tool assumes exclusive control of its engines — why T102 is unused |
+
+## Open questions
+- (none)
+
+## Change log
+| Date | Change |
+|---|---|
+| 2026-09-01 | Initial version: 112 tasks across M0–M7, with the permanently unused IDs recorded. |
+| 2026-09-01 | Added T116–T125; deleted the "Missing tasks" table; moved the image and compose stack into M0 (T124, T125) and rescoped T093 and T094 to hardening; split the SSRF guard out of T054 into T123. |
+| 2026-09-01 | Executability pass: moved T091, T092 and T117 into M6 so no task depends on a later milestone; completed every `Blocks` field against the `Depends on` graph; recorded the M3 settings-section deferral. |
+| 2026-09-01 | Final consistency pass: moved `A note on identifier order` and `Roster` above `Decisions referenced` so the section order matches the document template, and corrected the identifier-order note to place T117 in M6 with T118–T120. |

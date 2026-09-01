@@ -6,7 +6,7 @@
 | **Milestone** | M5 |
 | **Status** | todo |
 | **Depends on** | T007, T008, T065 |
-| **Blocks** | T069, T070, T073 |
+| **Blocks** | T069, T070, T073, T117 |
 | **Parallel-safe** | no — registers a second operation group on T007's Huma API |
 | **Implements** | [FR-074](../02-requirements.md#fr-074-reject-a-malformed-episode-filter-at-save-time) |
 | **Decisions** | [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |

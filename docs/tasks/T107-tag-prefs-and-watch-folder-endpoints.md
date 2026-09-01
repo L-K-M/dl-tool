@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T050, T083, T084 |
-| **Blocks** | T108, T109 |
+| **Blocks** | T108, T109, T119 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/server.go`, `internal/store/settings.go` |
 | **Implements** | [FR-033](../02-requirements.md#fr-033-list-rename-and-delete-tags), [FR-046](../02-requirements.md#fr-046-manage-watch-folders-and-scan-one-on-demand), [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences-per-user), [FR-031](../02-requirements.md#fr-031-assign-free-form-tags-and-filter-by-them) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md) |

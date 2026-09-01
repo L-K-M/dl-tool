@@ -53,7 +53,7 @@ var ErrNotFound = errors.New("store: not found")
 
 // Open builds the DSN from dbPath, applies the connection pool limits, backs the
 // database up, migrates it and returns a ready handle. It refuses to run when the
-// directory holding dbPath is on nfs, cifs, smb3 or a fuse filesystem, and when the
+// directory holding dbPath is on nfs, nfs4, cifs, smb3 or a fuse filesystem, and when the
 // applied schema version is newer than the newest embedded migration.
 func Open(ctx context.Context, dbPath, backupDir string) (*sqlx.DB, error)
 
@@ -108,7 +108,7 @@ func NewID(prefix string) string
 5. Create `internal/store/db.go`. Register `modernc.org/sqlite` under the driver name `"sqlite"`, build the
    DSN exactly as above, and apply `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)`.
 6. Before opening, read the filesystem type of `filepath.Dir(dbPath)` from `/proc/self/mountinfo`; if it is
-   `nfs`, `cifs`, `smb3` or matches `fuse.*`, return an error naming the path and the type. There is no
+   `nfs`, `nfs4`, `cifs` or `smb3`, or begins with `fuse.`, return an error naming the path and the type. There is no
    degraded fallback.
 7. Run `VACUUM INTO '<backupDir>/dl-tool.db.pre-migration-<version>.bak.tmp'` and rename it into place, then
    abort the migration if the backup failed. Skip the backup when the database file does not yet exist.

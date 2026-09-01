@@ -88,7 +88,7 @@ own, and one interface, the one you look at.
 | 2048 tasks for admins, 256 for other users; 50 URLs per add | No arbitrary caps; the 50-line hint is a soft warning, never a silent truncation |
 | Errors hidden inside "Inactive Downloads" | A dedicated **Error** filter, an error column, and a per-task event log |
 | BT search plugins are PHP that runs on your NAS | Declarative definitions only. dl-tool executes no third-party code, ever |
-| Local DSM users only — no LDAP, no SSO | Built-in users, plus optional trusted-header and OIDC single sign-on |
+| Local DSM users only — no domain or LDAP users | Built-in users with per-user default destinations, storage and concurrency quotas, a destination jail, and revocable API tokens |
 | No dark mode, no mobile layout | Both, in v1 |
 
 ## Quickstart (once it exists)

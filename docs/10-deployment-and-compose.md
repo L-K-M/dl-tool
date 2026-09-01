@@ -3,7 +3,7 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** T001–T005, T093–T097, T099, T113, T115, and any task touching `compose.yaml`, `Dockerfile`, `deploy/` or `.github/workflows/release.yml`
+> **Read this before:** T001–T005, T093–T097, T099, T113, T115, T124, T125, and any task touching `compose.yaml`, `Dockerfile`, `deploy/` or `.github/workflows/release.yml`
 
 ## Purpose
 Define the shipped container topology: service names, ports, volumes, compose profiles, the image build, the
@@ -962,7 +962,7 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
   profile-less. `02-requirements.md` and `13-testing-and-verification.md` should agree on one.]
 - [NEEDS CLARIFICATION: `deploy/entrypoint.sh` and `deploy/aria2/entrypoint.sh` are not listed in the
   settled repository layout in the brief section 5, which names only `deploy/aria2/Dockerfile`. Confirm the
-  two entrypoint paths before T093 creates them.]
+  two entrypoint paths before T124 creates them.]
 
 ## Change log
 | Date | Change |

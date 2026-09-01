@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T017, T020, T021 |
-| **Blocks** | T053, T073, T107 |
+| **Blocks** | T053, T073, T107, T119 |
 | **Parallel-safe** | no — extends `internal/store/settings.go` and `internal/api/tasks.go` |
 | **Implements** | [FR-030](../02-requirements.md#fr-030-manage-categories-with-a-save-path), [FR-031](../02-requirements.md#fr-031-assign-free-form-tags-and-filter-by-them) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |
