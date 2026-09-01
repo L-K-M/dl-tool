@@ -151,10 +151,10 @@ services:
       - ${CONFIG_DIR:-./config}/aria2:/config
       - ${DATA_DIR:-/srv/data}:/data
     healthcheck:
-      # Liveness only: proves the JSON-RPC listener answers HTTP. It calls the one method
-      # that takes no token (06-download-engines.md section 4.2: every aria2.* method
-      # requires token:<secret>, so getVersion without one would fail the check forever).
-      # Credentials are checked by POST /engines/{id}/test.
+      # Liveness only: proves the JSON-RPC listener answers HTTP. It calls one of the two
+      # documented methods that take no token (06-download-engines.md section 4.2: every
+      # aria2.* method requires token:<secret>, so getVersion without one would fail the
+      # check forever). Credentials and RPC-level health are checked by POST /engines/{id}/test.
       test: ["CMD-SHELL", "curl -fsS -X POST -d '{\"jsonrpc\":\"2.0\",\"id\":\"hc\",\"method\":\"system.listMethods\",\"params\":[]}' http://127.0.0.1:6800/jsonrpc >/dev/null"]
       interval: 30s
       timeout: 5s
