@@ -959,13 +959,13 @@ to the job's results. To turn a result into a task, `POST /tasks` with
 ```
 
 `refresh_interval_s: 0` means "use the global RSS interval". `POST /feeds` requires `url` and accepts
-`title`, `enabled`, `refresh_interval_s`, `item_cap` and `priority`; `PATCH /feeds/{id}` accepts the same
-set **plus `auto_download`** — `true` creates the `auto:<feed_id>` rule when it does not exist, `false`
-deletes it, so a misticked box is undone without deleting the feed and its read state;
-`DELETE /feeds/{id}` returns `204`, deletes the `auto:` rule and cascades to the feed's items. `priority`
-is only the per-run tie-break of the rule engine ([`08-rss-automation.md`](08-rss-automation.md) §5 step 13):
-when two feeds carry the same content, the lower `priority` feed's copy wins; it affects neither polling
-nor display.
+`title`, `enabled`, `refresh_interval_s`, `item_cap`, `priority` and `auto_download`;
+`PATCH /feeds/{id}` accepts the same set. On both verbs `auto_download: true` creates the
+`auto:<feed_id>` rule when it does not exist and `false` deletes it, so a misticked box is undone without
+deleting the feed and its read state; `DELETE /feeds/{id}` returns `204`, deletes the `auto:` rule and
+cascades to the feed's items. `priority` is only the per-run tie-break of the rule engine
+([`08-rss-automation.md`](08-rss-automation.md) §5 step 13): when two feeds carry the same content, the
+lower `priority` feed's copy wins; it affects neither polling nor display.
 
 The add-dialog's *Automatically download all items* checkbox
 ([`09-web-ui-spec.md`](09-web-ui-spec.md) §8.1, Download Station's own option) is **not** a `feeds`
@@ -1475,3 +1475,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
 | 2026-09-01 | Closed both open questions: `requested_destination` became a `tasks` column, and saved searches are specified as a `search` member of the `/prefs` document (§11.4, task T064) — no `/search/saved` surface. The feed object gains `priority` (the rule engine's per-run tie-break) and `POST /feeds` gains `auto_download`, which creates the `auto:<feed_id>` rule behind the dialog's Download-Station checkbox. `DELETE /users/{id}` for a user who still owns tasks is `409`, matching `ON DELETE RESTRICT`. |
 | 2026-09-01 | Review pass: the users-group `409` enumeration now names the owned-rows case; the saved-search 50-entry cap is stated as client-enforced (the server's bound is the 64 KiB document cap) and `/prefs` is excluded from the settings export; `PATCH /feeds/{id}` accepts `auto_download` so the checkbox is reversible without deleting the feed. |
+| 2026-09-01 | Review pass 2: both feed verbs list `auto_download` explicitly — the earlier "plus" wording read as if `POST /feeds` rejected the field the add dialog sends. |
