@@ -485,7 +485,7 @@ and 1.37.0 is feature-complete for HTTP/FTP/SFTP. dl-tool builds its aria2 image
 ```
 aria2c \
   --enable-rpc --rpc-listen-all --rpc-listen-port=6800 \
-  --rpc-secret=${ARIA2_RPC_SECRET} --rpc-allow-origin-all \
+  --rpc-secret=${ARIA2_RPC_SECRET} \
   --dir=/data --continue=true \
   --max-concurrent-downloads=5 --max-connection-per-server=8 --split=8 \
   --file-allocation=falloc \
@@ -494,6 +494,10 @@ aria2c \
   --save-session-interval=30 --auto-save-interval=30 \
   --conf-path=/config/aria2.conf
 ```
+
+`--rpc-allow-origin-all` is deliberately absent and must never be added: the sidecar is reachable only on
+the compose network and CORS relaxation is not needed for a non-browser client
+([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §10).
 
 | Flag | Documented default | Why |
 |---|---|---|
@@ -1265,3 +1269,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | File-priority vocabulary corrected to `skip=0 normal=1 high=6 maximum=7` with the per-engine translation table (§1.1) and the §5.7 identity mapping; added the `engine_ref` rule for BitTorrent v1/v2/hybrid identity (§3.5); added §8 engine ownership and the foreign-task policy, §9 engine conformance at boot, and §10 the bandwidth precedence chain with its per-engine fan-out calls; rewrote §7.6 for the pinned `yt-dlp_musllinux` binary, disabled self-update, the weekly rebuild, the boot capability probe and `js_runtime_missing`; renumbered the contract test suite to §11; corrected the ADR filenames. |
 | 2026-09-01 | Migration subsystem cut: §8 restated as one rule with no options — a transfer dl-tool did not create is ignored; the `adopt` mode and `engines.foreign_task_policy` are deleted, as is every link to the withdrawn migration document. §9 engine conformance is unchanged. |
 | 2026-09-01 | M2 task allocation: §11 now attributes the §8 ownership assertion to T026 and T030; task identifier T102 is retired with the foreign-task policy. |
+| 2026-09-01 | Contradiction fix: dropped `--rpc-allow-origin-all` from the §4.1 daemon flags — `12-security-and-threat-model.md` §10 forbids it in any environment and the entrypoint in `10-deployment-and-compose.md` §5.1 never set it. |

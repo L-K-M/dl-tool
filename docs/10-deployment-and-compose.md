@@ -584,8 +584,9 @@ following hold. Each is a hard requirement on the implementation.
    and `new URL(base + '/api/v1/', document.baseURI)`. Never a hardcoded `/api/v1`.
 6. **Cookie `Path` equals the base.** MDN: "If omitted, this attribute defaults to the path component of the
    request URL" — too fragile to rely on. Set it explicitly, with `HttpOnly`, `Secure` and `SameSite=Lax`.
-   The `__Host-` prefix **requires `Path=/`**, so under a subfolder the session cookie must use the
-   `__Secure-` prefix instead.
+   The cookie name stays `dltool_session` with no prefix ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.1):
+   `__Host-` would force `Path=/` and break under a subfolder, and `__Secure-` would rename the cookie
+   depending on the deployment, invalidating sessions when the base path changes.
 7. **Redirects preserve the base.** Never `Location: /login`; always `Location: {base}/login`. This includes
    the first-run wizard redirect, the post-login redirect and the trailing-slash normalisation.
 8. **SPA fallback stays inside the base.** `GET {base}/anything` serves `index.html`; `GET /anything` outside

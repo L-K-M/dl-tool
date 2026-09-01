@@ -182,7 +182,8 @@ Filter", is the cautionary tale for getting the default wrong.
 |---|---|
 | Connect timeout · total request timeout | 10 s · 120 s |
 | Redirect hops | 5 |
-| Body, metadata fetch (`.torrent`, feed, indexer page) | 8 MiB, enforced while streaming |
+| Body, metadata fetch (`.torrent`, indexer page) | 8 MiB, enforced while streaming |
+| Body, feed poll | 16 MiB, enforced while streaming — owned by [`08-rss-automation.md`](08-rss-automation.md) §2.1 |
 | Response headers | 100 headers, 64 KiB total |
 
 Every block logs one `warn` record carrying `url_redacted`, `resolved_ip`, `matched_prefix` and `hop`
@@ -701,3 +702,4 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | Contradiction fix: §2.4 splits the body cap — feed polls 16 MiB (owned by `08-rss-automation.md` §2.1) from the 8 MiB metadata-fetch cap. |

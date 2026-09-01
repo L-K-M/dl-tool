@@ -140,7 +140,7 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `max_active_per_user` | integer, `0` = unlimited | `3` | `PATCH /settings` |
 | `process_order` | enum `by_date_created\|by_user_round_robin` | `by_date_created` | `PATCH /settings` |
 | `rss_enabled` | boolean | `true` | `PATCH /settings` |
-| `rss_interval_s` | integer seconds, minimum `60` | `900` | `PATCH /settings` |
+| `rss_interval_s` | integer seconds, minimum `300` | `1800` | `PATCH /settings` — the global poll interval and its 5-minute floor are owned by [`08-rss-automation.md`](08-rss-automation.md) §2.1 |
 | `auto_extract` | boolean | `false` | `PATCH /settings` |
 | `extract_passwords` | **secret** array of strings | `[]` | `PATCH /settings` |
 | `confirm_on_delete` | boolean | `true` | `PATCH /settings` |
@@ -312,3 +312,4 @@ stated fallback.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
+| 2026-09-01 | Contradiction fix: `rss_interval_s` default 1800 and minimum 300, matching `08-rss-automation.md` §2.1 (30-minute default, 5-minute floor), which owns the value. |
