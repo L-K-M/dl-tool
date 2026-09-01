@@ -602,11 +602,10 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 ```
 ┌ RSS ──────────────────────────────────────────────────────────────────────┐
 │ ┌ Feeds ──────────┐┌ Items ────────────────────────────────────────────┐  │
-│ │ [+ Feed][+ Fld] ││ ☐  Title                          Feed    Age  Rule│  │
-│ │ ▾ 📁 Linux   12 ││ ●  archlinux-2026.09.01-x86_64…   Arch    1h  [ISO]│  │
-│ │   ● Arch      9 ││ ○  archlinux-2026.08.01-x86_64…   Arch    1d  [ISO]│  │
-│ │   ● Academic  3 ││ ○  Some.Dataset.2026                Acad  2d   —  │  │
-│ │ ⚠ BrokenFeed  ! ││                                                    │  │
+│ │ [+ Feed]        ││ ☐  Title                          Feed    Age  Rule│  │
+│ │ ● Arch        9 ││ ●  archlinux-2026.09.01-x86_64…   Arch    1h  [ISO]│  │
+│ │ ● Academic    3 ││ ○  archlinux-2026.08.01-x86_64…   Arch    1d  [ISO]│  │
+│ │ ⚠ BrokenFeed  ! ││ ○  Some.Dataset.2026                Acad  2d   —  │  │
 │ └─────────────────┘│ ┌ Preview ────────────────────────────────────────┐│  │
 │  [Update] [Update all]│ Title · pubDate · size · category · torrent URL ││  │
 │                    │ │ [ Download ] [ Mark read ] [ Open link ]        ││  │
@@ -614,10 +613,15 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Feed tree**: folders and feeds, each with an unread count. Feed states: OK `●`, loading `◐`, error `⚠`
+- **Feed list**: a flat list of feeds, each with an unread count; there are no feed folders, because the
+  API and schema carry no folder concept. Feed states: OK `●`, loading `◐`, error `⚠`
   with the HTTP status or parse error in the tooltip. Context menu: Update · Rename… · Edit URL… ·
-  Mark all read · Move to folder ▸ · Copy feed URL · Remove.
-- **Add feed** dialog fields: URL · Name · Folder · `☐ Automatically download all items`.
+  Mark all read · Copy feed URL · Remove.
+- **Add feed** dialog fields: URL · Name · `☐ Automatically download all items`. Ticking the checkbox also
+  creates an enabled rule named after the feed, scoped to that feed's URL, whose `any_of` is empty — every
+  item passes — reusing the rules engine as the only auto-download path. The result is an ordinary rule:
+  it is edited and deleted like any other, and editing the feed's URL afterwards does not rewrite it,
+  because rules scope feeds by URL.
 - **Item list** columns: checkbox · Title (unread bold with a filled dot, read muted) · Feed · Age ·
   matched-rule chips. Hovering a chip explains why the rule matched. Multi-select plus *Download selected*,
   *Mark read*, *Mark all read*, and a filter box.
