@@ -712,7 +712,7 @@ Where a notification channel is configured, dl-tool shall deliver an event to it
 ### FR-105 Run a completion hook only when explicitly enabled
 Where a completion hook is enabled in the configuration file, dl-tool shall execute it as an argument vector with a fixed environment and a timeout, and shall not expose the hook command for editing through the HTTP API.
 
-**Verify:** T078 asserts the hook is off by default, that a PATCH attempting to set the hook command returns 403, and that the executed process receives argv entries rather than a shell string.
+**Verify:** T078 asserts the hook is off by default, that a PATCH attempting to set the hook command returns 422 with the same body shape as any other unknown settings key — the response must not reveal that a hook key is special — and that the executed process receives argv entries rather than a shell string.
 
 | Covered by | Priority |
 |---|---|
