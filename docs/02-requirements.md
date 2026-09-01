@@ -741,9 +741,9 @@ The dl-tool notification API shall create, update, delete and list channels of k
 ## Users, authentication and quotas (FR-115 – FR-129)
 
 ### FR-115 Complete a first-run setup using a one-time token
-While no user exists, dl-tool shall refuse every API call except the setup endpoint, shall accept a one-time setup token printed to stdout and written to `<config>/setup-token` with mode `0600`, shall require the first admin password to be at least 12 characters, and shall delete the token on success.
+While no user exists, dl-tool shall refuse every API call except the setup endpoint, shall accept a one-time setup token of 256 bits (32 bytes) from a cryptographic random source, printed to stdout and written to `<config>/setup-token` with mode `0600`, shall regenerate the unused token on every boot, shall require the first admin password to be at least 12 characters, shall rate-limit setup attempts with the per-source-IP login throttle, and shall delete the token on success.
 
-**Verify:** T009 boots an empty config, asserts every other endpoint returns 401, completes setup with the token, asserts the token file is deleted and a second setup attempt returns 409.
+**Verify:** T009 boots an empty config, asserts every other endpoint returns 401, asserts the token file holds a different value after a restart while unused, drives nine failed setup attempts from one source and asserts the tenth returns `429` with `Retry-After`, advances past the bucket window, then completes setup with the token, asserts the token file is deleted and a second setup attempt returns 409.
 
 | Covered by | Priority |
 |---|---|
@@ -1261,4 +1261,10 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+<<<<<<< HEAD
+| 2026-09-01 | FR-115 hardened: the setup token is at least 128 bits from a CSPRNG and setup attempts are rate-limited with the login throttles; the Verify line asserts the `429`. |
+| 2026-09-01 | Review pass: FR-115 pins the token at 256 bits (matching §6.4 of the threat model), names the per-source-IP throttle specifically, and its Verify is passable in one run — nine failures, the tenth 429s, the window advances, setup then completes — plus the regenerate-on-restart assertion. |
+| 2026-09-01 | Review pass 2: FR-115 gains the regenerate-on-every-boot shall-clause its Verify already asserted, closing the traceability gap. |
+=======
 | 2026-09-01 | Dropped the resolved FR-121-anchor open question; `05-api-contract.md` no longer carries the stale anchor. |
+>>>>>>> origin/main
