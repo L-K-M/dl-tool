@@ -69,10 +69,13 @@ services:
       DLTOOL_TRUSTED_PROXIES: "${DLTOOL_TRUSTED_PROXIES:-}"
       DLTOOL_LOG_LEVEL: "${DLTOOL_LOG_LEVEL:-info}"
       DLTOOL_LOG_FORMAT: "${DLTOOL_LOG_FORMAT:-json}"
-      DLTOOL_QBITTORRENT_URL: "http://qbittorrent:8080"
+      # An engine lane is enabled by setting its URL; leave the URL empty to
+      # disable the lane (11-config-reference.md §8 makes a set URL with
+      # missing credentials a fatal config_missing).
+      DLTOOL_QBITTORRENT_URL: "${DLTOOL_QBITTORRENT_URL:-}"
       DLTOOL_QBITTORRENT_USERNAME: "${QBT_USERNAME:-}"
       DLTOOL_QBITTORRENT_PASSWORD: "${QBT_PASSWORD:-}"
-      DLTOOL_ARIA2_URL: "http://aria2:6800/jsonrpc"
+      DLTOOL_ARIA2_URL: "${DLTOOL_ARIA2_URL:-}"
       DLTOOL_ARIA2_SECRET: "${ARIA2_RPC_SECRET:-}"
     volumes:
       - ${CONFIG_DIR:-./config}/dl-tool:/config
@@ -121,7 +124,10 @@ services:
     container_name: aria2
     environment:
       <<: *common-env
-      ARIA2_RPC_SECRET: "${ARIA2_RPC_SECRET:?set ARIA2_RPC_SECRET in .env}"
+      # Not the `:?` form: Compose resolves required variables for every
+      # service before profile filtering, so `:?` breaks a core-only `up`.
+      # The entrypoint refuses an empty secret when this profile is active.
+      ARIA2_RPC_SECRET: "${ARIA2_RPC_SECRET:-}"
     volumes:
       - ${CONFIG_DIR:-./config}/aria2:/config
       - ${DATA_DIR:-/srv/data}:/data
@@ -173,11 +179,16 @@ DATA_DIR=/srv/data
 DLTOOL_PORT=8091
 
 # ---- engines (compose-level) ----
-# Required whenever the aria2 profile is active. Generate: openssl rand -hex 32
-ARIA2_RPC_SECRET=
-QBT_WEBUI_PORT=8080
+# An engine lane is disabled until its URL is set; a set URL without its
+# credentials is a fatal config_missing at boot. For qBittorrent, also set the
+# same username/password in its own WebUI — the image does not read these vars.
+#   DLTOOL_QBITTORRENT_URL=http://qbittorrent:8080
 QBT_USERNAME=admin
 QBT_PASSWORD=
+# Required when the aria2 profile is active. Generate: openssl rand -hex 32
+ARIA2_RPC_SECRET=
+#   DLTOOL_ARIA2_URL=http://aria2:6800/jsonrpc
+QBT_WEBUI_PORT=8080
 
 # ---- app settings surfaced through compose ----
 # Leave DLTOOL_BASE_PATH empty for a subdomain; set /dl-tool to serve under a subfolder.
@@ -194,8 +205,11 @@ DLTOOL_LOG_FORMAT=json
    the aria2 RPC port stay unpublished; only `dl-tool` reaches them, over the compose network.
 3. Bind `${DATA_DIR:-/srv/data}:/data` in every service at that identical container path, so `rename(2)`
    stays atomic and hardlinks keep working.
-4. Keep `ARIA2_RPC_SECRET: "${ARIA2_RPC_SECRET:?set ARIA2_RPC_SECRET in .env}"` in its `:?` form, so an
-   empty value fails the run with a named error instead of starting an unauthenticated RPC endpoint.
+4. Keep `ARIA2_RPC_SECRET: "${ARIA2_RPC_SECRET:-}"` in the aria2 service. Do **not** use the `:?` form:
+   Compose resolves required variables for every service in the file before profile filtering, so `:?`
+   would fail even a core-only `docker compose up -d` with a fresh `.env`. The empty-secret refusal lives
+   in the aria2 entrypoint ([`docs/10-deployment-and-compose.md` §5.1](../10-deployment-and-compose.md#51-deployaria2dockerfile)),
+   which exits before `aria2c` starts an unauthenticated RPC endpoint.
 5. Leave `aria2` behind `profiles: ["aria2"]` and `dl-tool` profile-less, with `depends_on` naming only
    `qbittorrent`: Compose refuses a dependency that sits behind a profile the dependant is not in.
 6. Keep the `aria2` `build:` stanza pointing at `deploy/aria2`, which T115 creates; `docker compose config`
@@ -207,20 +221,23 @@ DLTOOL_LOG_FORMAT=json
 
 ## Acceptance criteria
 - [ ] `make compose-check` exits `0` for the base file and for the base plus the dev overlay.
-- [ ] `docker compose config` emits no `version` warning, shows `dl-tool` and `qbittorrent` with no profile and `aria2` under `aria2`, and fails with `set ARIA2_RPC_SECRET in .env` when that variable is unset.
+- [ ] `docker compose config` emits no `version` warning, shows `dl-tool` and `qbittorrent` with no profile and `aria2` under `aria2`, and succeeds with `ARIA2_RPC_SECRET` unset or empty (the entrypoint, not Compose, refuses the empty secret when the profile is active).
 - [ ] `docker compose config` lists exactly three published host ports: `8091`, `6881/tcp` and `6881/udp`.
 - [ ] `dl-tool` and `qbittorrent` both bind `${DATA_DIR}` to `/data`, and no service binds a second data path.
 - [ ] `stop_grace_period` is `60s`, `120s` and `30s`, and all three services carry `no-new-privileges:true`.
 - [ ] `.env.example` contains no secret value, and `compose.yaml` has no `gluetun`, `caddy` or Postgres service.
+- [ ] Both `DLTOOL_*_URL` engine variables interpolate from `.env` with an empty default; with a fresh
+      `.env` the dl-tool container boots with both engine lanes disabled instead of exiting `config_missing`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-cp .env.example .env && ARIA2_RPC_SECRET=checkonly make compose-check && echo COMPOSE_OK
+cp .env.example .env && make compose-check && echo COMPOSE_OK
 ```
 Expected: both `docker compose config -q` invocations print nothing at all, then a final line of exactly
-`COMPOSE_OK`. A `version` obsolete warning or a `variable is not set` message is a failure. No registry
-access is needed: `config` never pulls an image.
+`COMPOSE_OK`. A `version` obsolete warning, a `variable is not set` message or an empty-value `:?` failure
+is a failure: the fresh `.env` must start the core stack without extra variables. No registry access is
+needed: `config` never pulls an image.
 
 Also confirm scope:
 ```bash
