@@ -215,8 +215,10 @@ adapter is not precluded.
 | `push_events` | ✅ WebSocket notifications | ❌ poll `sync/maindata` | ✅ subprocess stdout |
 | `nzb` `search` `rss_rules` | ❌ | ❌ | ❌ |
 
-`internal/engine/registry.go` holds `map[string]Engine` keyed by `Name()`; adding an engine touches one
-directory plus one registry line. `internal/engine/router.go` implements §2.
+`internal/engine/registry.go` exposes `NewRegistry(instances ...Engine)` and builds its name map from injected
+instances, rejecting duplicate names. It never imports a concrete adapter. `cmd/dl-tool/engines.go` constructs
+the enabled adapters and passes them in; adding an engine touches its directory plus one composition line.
+`internal/engine/router.go` implements §2.
 
 ### 1.1 File priority vocabulary
 
@@ -1265,3 +1267,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | File-priority vocabulary corrected to `skip=0 normal=1 high=6 maximum=7` with the per-engine translation table (§1.1) and the §5.7 identity mapping; added the `engine_ref` rule for BitTorrent v1/v2/hybrid identity (§3.5); added §8 engine ownership and the foreign-task policy, §9 engine conformance at boot, and §10 the bandwidth precedence chain with its per-engine fan-out calls; rewrote §7.6 for the pinned `yt-dlp_musllinux` binary, disabled self-update, the weekly rebuild, the boot capability probe and `js_runtime_missing`; renumbered the contract test suite to §11; corrected the ADR filenames. |
 | 2026-09-01 | Migration subsystem cut: §8 restated as one rule with no options — a transfer dl-tool did not create is ignored; the `adopt` mode and `engines.foreign_task_policy` are deleted, as is every link to the withdrawn migration document. §9 engine conformance is unchanged. |
 | 2026-09-01 | M2 task allocation: §11 now attributes the §8 ownership assertion to T026 and T030; task identifier T102 is retired with the foreign-task policy. |
+| 2026-09-01 | Made the engine registry instance-injected so abstract and concrete packages remain acyclic. |

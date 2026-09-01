@@ -138,7 +138,7 @@ flowchart TB
     main["cmd/dl-tool<br/>humacli wiring only"]
     api["internal/api<br/>chi, Huma, SPA static, SSE"]
     secure["internal/secure<br/>ssrf, hash, session, csrf"]
-    engine["internal/engine<br/>Engine interface, registry, router"]
+    engine["internal/engine<br/>Engine interface, injected registry, router"]
     uri["internal/uri<br/>normalize, obfuscated, magnet, metainfo"]
     search["internal/search"]
     rss["internal/rss"]
@@ -152,24 +152,25 @@ flowchart TB
     store["internal/store<br/>sqlx, goose migrations, models"]
     cfgp["internal/config"]
     obs["internal/obs<br/>log, metrics, health"]
-    main --> api & cfgp & obs & jobs
+    main --> api & cfgp & obs & jobs & engine
+    main --> a2 & qb & yt
     api --> secure & uri & engine & syncp & search & rss & fsx
-    engine --> a2 & qb & yt
+    a2 & qb & yt --> engine
     jobs --> engine & fsx
     rss --> jobs
     syncp --> engine
     search --> secure
-    api & jobs & syncp & engine --> store
+    api & jobs & syncp --> store
     ct -.->|"one contract suite every adapter must pass"| engine
 ```
 
 | Package | Responsibility |
 |---|---|
-| `cmd/dl-tool` | `humacli` wiring: load config, open the store, build the router, start workers. No business logic. |
+| `cmd/dl-tool` | Composition root: load config, open the store, construct adapters, inject the engine registry, build the router and start workers. No business logic. |
 | `internal/config` | Parse `DLTOOL_*` environment variables into one struct and validate them at boot. |
 | `internal/store` | All SQL: `sqlx` access, goose migrations, and row structs with `db:` and `json:` tags. |
 | `internal/api` | chi router, Huma operations, session and CSRF middleware, embedded SPA, the SSE endpoint. |
-| `internal/engine` | The `Engine` interface, the adapter registry, and the URI-to-engine routing table. |
+| `internal/engine` | The `Engine` interface, an injected-instance registry, and the URI-to-engine routing table. It imports no adapter package. |
 | `internal/engine/aria2`, `.../qbittorrent` | Protocol client plus status and field normalisation, one package per daemon. |
 | `internal/engine/ytdlp` | yt-dlp subprocess runner and stdout JSON parser. |
 | `internal/engine/enginetest` | One shared conformance suite that every adapter must pass. |
@@ -182,8 +183,11 @@ flowchart TB
 | `internal/secure` | SSRF guard, argon2id password hashing, session tokens, CSRF tokens. |
 | `internal/obs` | `log/slog` setup, the Prometheus registry, `/healthz` and `/readyz` handlers. |
 
-Layering rule: `internal/store` imports nothing from `internal/api`, `internal/engine` or `internal/jobs`,
-and adapters import `internal/engine` only. Adding an engine touches one directory plus one `registry.go` line.
+Layering rule: `internal/store` imports nothing from `internal/api`, `internal/engine` or `internal/jobs`.
+Concrete adapters import `internal/engine`; `internal/engine` never imports them. The composition root is the
+only production package that imports both sides: it constructs enabled adapters and passes them to
+`engine.NewRegistry(instances ...Engine)`. Adding an engine touches its adapter directory plus one composition
+line in `cmd/dl-tool/engines.go`.
 
 ---
 
@@ -503,7 +507,7 @@ dl-tool created, and nothing else. Behaviour and detection detail live in
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | aria2 has shipped no tagged release since `1.37.0` on 2023-11-15, although `master` still receives commits, the most recent seen on 2026-06-25. Treat this as maintenance mode, not abandonment. | The `Engine` interface isolates aria2 in `internal/engine/aria2`; replacing it touches one directory plus one line of `registry.go`, and `enginetest` already defines what a replacement must satisfy. |
+| R1 | aria2 has shipped no tagged release since `1.37.0` on 2023-11-15, although `master` still receives commits, the most recent seen on 2026-06-25. Treat this as maintenance mode, not abandonment. | The `Engine` interface isolates aria2 in `internal/engine/aria2`; replacing it touches one directory plus one composition line, and `enginetest` already defines what a replacement must satisfy. |
 | R2 | yt-dlp breaks whenever a media site changes, so it needs updating far more often than the rest of the stack — but a self-updating binary is an unreviewed remote code path inside the container. | Install the standalone `yt-dlp_musllinux` binary at an exact version verified by SHA-256 at image build time; `yt-dlp -U` and every other self-update path is disabled at runtime. Freshness comes from a scheduled weekly CI job that bumps the pin and rebuilds the image. The boot probe records the resolved version in `engines.version` and `GET /system/info` reports it. See [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md). |
 | R3 | qBittorrent's upstream wiki is stale in two places that break adapters: `torrents/add` reads `stopped`, not the documented `paused`; and the `state` enum returns `stoppedDL`/`stoppedUP` in 5.x where the wiki says `pausedDL`/`pausedUP`. | Send both parameter names, accept both spellings on read, and always provide a `default` branch mapping unknown states to `queued` with a logged warning rather than a crash. The exact parameter list and state enum are reproduced in [`06-download-engines.md`](06-download-engines.md). |
 | R4 | SQLite WAL mode does not work on a network filesystem, because WAL requires all processes to share memory and processes on separate hosts cannot. | **IMPORTANT:** `/config`, and therefore `dl-tool.db`, must be a local path or local Docker volume — never NFS or SMB. Download destinations under `/data` may be network mounts. At boot, detect `nfs`, `cifs`, `smb3` or `fuse.*` on the directory holding the database and **refuse to start** with a named error. There is no degraded fallback: `journal_mode=DELETE` on a network mount is not offered, because a silently slower and still-corruptible database is worse than a refusal the operator can read. |
@@ -545,3 +549,4 @@ The D-list in §4 is the full map, D14 excluded. ADRs that shape this document d
 | 2026-09-01 | Compatibility façades cut: removed D14, ADR-0014, `internal/compat`, the façade actor and its context row. Added §6.4 admission control, §8.7 engine conformance, §8.8 foreign-task policy, ADR-0017 and ADR-0018, and risk R6 (JS runtime). Hardened R2 (pinned yt-dlp) and R4 (refuse to start on a network filesystem). ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: removed the Download Station NAS actor and its migration edge from the §3 context diagram, its external-interface row, and every link to the withdrawn migration document. §8.8 restated as one rule with no setting — foreign tasks are always ignored; `engines.foreign_task_policy` deleted. |
 | 2026-09-01 | M2 task allocation: task identifier T102 retired with the foreign-task policy; the §8.8 rule is asserted by T026 and T030. |
+| 2026-09-01 | Moved concrete engine construction to the composition root, removing the adapter import cycle. |
