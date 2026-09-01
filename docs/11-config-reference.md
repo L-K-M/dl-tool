@@ -31,7 +31,7 @@ Two categories, one rule each. Every variable in this document is labelled with 
 | Category | Covers | Winner | Changeable at runtime |
 |---|---|---|---|
 | `infrastructure` | Listen addresses, base path, filesystem paths, engine URLs, engine credentials, log sinks, security switches | **Environment wins at boot.** No API can change it. | No — restart the container |
-| `preference` | Speed limits, bandwidth schedule, concurrency limits, RSS interval, extraction options, default destination, façade toggles, watch folder, notification target | **Database wins.** The env var seeds the row on first boot only and is ignored on every later boot. | Yes — `PATCH /settings` |
+| `preference` | Speed limits, bandwidth schedule, concurrency limits, RSS interval, extraction options, default destination, watch folder, notification target | **Database wins.** The env var seeds the row on first boot only and is ignored on every later boot. | Yes — `PATCH /settings` |
 
 ```mermaid
 flowchart TD
@@ -62,7 +62,7 @@ column names the package that consumes the parsed field.
 
 | Name | Type | Default | Required | Category | Effect | Read by |
 |---|---|---|---|---|---|---|
-| `DLTOOL_HTTP_ADDR` | listen addr | `:8080` | no | infrastructure | Address of the main HTTP listener serving the SPA, `/api/v1`, `/healthz`, `/readyz` and any enabled façade. | `internal/api/server.go` |
+| `DLTOOL_HTTP_ADDR` | listen addr | `:8080` | no | infrastructure | Address of the main HTTP listener serving the SPA, `/api/v1`, `/healthz` and `/readyz`. | `internal/api/server.go` |
 | `DLTOOL_BASE_PATH` | url path | *(empty)* | no | infrastructure | Sub-path prefix when reverse-proxied, e.g. `/dl-tool`. Must start with `/` and must not end with `/`. Empty means the app is served at the root. | `internal/api/server.go`, `internal/api/static.go` |
 | `DLTOOL_CONFIG_DIR` | dir path | `/config` | no | infrastructure | Directory holding the database, `secrets.env`, `backups/`, `logs/` and `torrents/`. Must exist and be writable by the dropped user. | `internal/config`, `internal/store/db.go` |
 | `DLTOOL_DATA_ROOTS` | `:`-separated dir paths | `/data` | no | infrastructure | The only directories any destination, browse, mkdir, move or delete-data operation may touch. Order matters: the first root is the fallback default destination. | `internal/fsx/safepath.go` |
@@ -101,7 +101,7 @@ process never reads them, except that `TZ` reaches it through the standard libra
 | `UMASK` | octal mask | `002` | Applied with `umask` before `exec`. `002` yields `775` directories and `664` files; `022` yields `755`/`644`. |
 
 Files are created with mode `0666` and directories with `0777` so that `UMASK` — not a hard-coded mode —
-decides the result. See [ADR-0011](decisions/0011-alpine-runtime-image-with-puid-pgid-privilege-drop.md).
+decides the result. See [ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md).
 
 ---
 
@@ -113,7 +113,7 @@ environment; they only produce values for other fields.
 | Name | Default in `compose.yaml` | Interpolated into |
 |---|---|---|
 | `CONFIG_DIR` | `./config` | The host side of the `/config` bind mount for dl-tool and each engine. |
-| `DATA_DIR` | `/srv/data` | The host side of the single `/data` bind mount, identical in every service ([ADR-0012](decisions/0012-a-single-data-mount.md)). |
+| `DATA_DIR` | `/srv/data` | The host side of the single `/data` bind mount, identical in every service ([ADR-0012](decisions/0012-single-data-mount.md)). |
 | `DLTOOL_PORT` | `8091` | Published host port mapped to container `8080`. |
 | `ARIA2_RPC_SECRET` | *(none — must be set)* | The aria2 service's RPC secret **and** dl-tool's `DLTOOL_ARIA2_SECRET`. One value, two consumers. |
 | `QBT_WEBUI_PORT` | `8080` | qBittorrent's in-container WebUI port, used to build `DLTOOL_QBITTORRENT_URL`. |
@@ -295,10 +295,9 @@ stated fallback.
 | ADR | Decision |
 |---|---|
 | [ADR-0004](decisions/0004-sqlite-as-the-only-datastore.md) | SQLite as the only datastore |
-| [ADR-0011](decisions/0011-alpine-runtime-image-with-puid-pgid-privilege-drop.md) | Alpine runtime image with PUID/PGID privilege drop |
-| [ADR-0012](decisions/0012-a-single-data-mount.md) | A single `/data` mount |
-| [ADR-0014](decisions/0014-opt-in-qbittorrent-and-synology-compatibility-facades.md) | Opt-in qBittorrent and Synology compatibility façades |
-| [ADR-0018](decisions/0018-pin-yt-dlp-by-version-and-hash-never-self-update-at-runtime.md) | Pin yt-dlp by version and hash; never self-update at runtime |
+| [ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md) | Alpine runtime image with PUID/PGID privilege drop |
+| [ADR-0012](decisions/0012-single-data-mount.md) | A single `/data` mount |
+| [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | Pin yt-dlp by version and hash; never self-update at runtime |
 
 ## Open questions
 
@@ -312,3 +311,4 @@ stated fallback.
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |

@@ -1,6 +1,6 @@
 # NNNN - Short title naming the problem and the chosen solution
 
-> **Status:** proposed | accepted | superseded by [ADR-NNNN](NNNN-slug.md)
+> **Status:** proposed | accepted | `superseded by [ADR-NNNN](NNNN-slug.md)`
 > **Date:** YYYY-MM-DD
 > **Deciders:** repository owner
 

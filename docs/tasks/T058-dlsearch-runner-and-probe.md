@@ -154,7 +154,8 @@ Operation id: `test-indexer`, `POST /indexers/{id}/test`, admin only, added insi
 9. When no expanded `request.query` value referenced `{{ .Keywords }}`, filter rows in process by
    case-insensitive substring of `Title` — the browse-style behaviour of doc 07 §3.6.
 10. Implement `Probe`: `t=caps` through `TorznabClient.Caps` for a Torznab or Newznab indexer, one
-    `request` fetch for `rss`, `json` and `html`, and definition validation only for `static`; count
+    `request` fetch for `rss`, `json` and `html`, and definition validation only for `static`, which T105
+    extends with the per-URL reachability check; count
     categories, fill `Server` from the caps `<server title>` where present.
 11. Add `TestIndexer` to `internal/api/search.go`, calling `RecordTest` with the outcome, returning `200`
     with `ok:false` for an upstream error and `503` `/problems/engine-unavailable` only when the probe could
@@ -188,7 +189,7 @@ git diff --name-only | sort
 Expected: exactly the paths in the Files table.
 
 ## Out of scope — do NOT
-- Do NOT implement `kind: static` execution; T105 owns `entries[]` filtering.
+- Do NOT implement `kind: static` execution; T105 owns `entries[]` filtering and the static probe.
 - Do NOT implement `kind: html` row extraction beyond the probe; no bundled engine may use it, and the
   goquery path is only reachable for a user-supplied definition.
 - Do NOT start a search job or write `search_results` rows; T061 and T062 own the job model.

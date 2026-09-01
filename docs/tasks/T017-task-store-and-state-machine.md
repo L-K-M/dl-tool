@@ -107,19 +107,20 @@ func (s *TaskStore) Transition(ctx context.Context, id, next, code, message stri
 func (s *TaskStore) AppendEvent(ctx context.Context, taskID, level, code, message string, detail any) error
 ```
 
-Legal transitions — the table `Transition` consults, plus the two universal rules that every state may move
-to `error` and to `removed`:
+Legal transitions — the table `Transition` consults, plus the three universal rules of
+[`03-architecture.md` §8.1](../03-architecture.md#81-task-state-machine): every state may move to `paused`,
+to `error` and to `removed`. The schedule's `No Download` cell pauses tasks in `checking` as well as in
+`downloading` and `queued` (T081), so `checking` → `paused` must be legal.
 
 | From | To |
 |---|---|
-| `queued` | `downloading`, `paused` |
-| `downloading` | `checking`, `paused`, `seeding`, `extracting`, `moving` |
+| `queued` | `downloading` |
+| `downloading` | `checking`, `seeding`, `extracting`, `moving` |
 | `checking` | `downloading` |
 | `paused` | `downloading`, `queued` |
-| `seeding` | `paused`, `completed` |
+| `seeding` | `completed` |
 | `extracting` | `moving` |
 | `moving` | `completed`, `seeding` |
-| `completed` | `removed` |
 | `error` | `queued` |
 
 ## Steps
@@ -146,7 +147,7 @@ to `error` and to `removed`:
 - [ ] No statement in `internal/store/tasks.go` or `events.go` uses `SELECT *`.
 - [ ] `Create` then `Get` returns every column unchanged, including the nullable ones as `nil`.
 - [ ] Every pair in the transition table succeeds and every other pair returns `ErrIllegalTransition`.
-- [ ] Any state may move to `error` and to `removed`.
+- [ ] Any state may move to `paused`, to `error` and to `removed`.
 - [ ] A rejected transition writes no `task_events` row.
 
 ## Verification

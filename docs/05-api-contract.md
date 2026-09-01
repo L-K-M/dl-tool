@@ -1080,12 +1080,17 @@ value.
 
 ```json
 GET /settings/schedule →
-{"enabled":true,"cells":[1,1,1,1,1,1,0,0,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,1, "…144 more…"]}
+{"enabled":true,"timezone":"Europe/Zurich","active_mode":"default",
+ "cells":[1,1,1,1,1,1,0,0,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,1, "…144 more…"]}
 ```
 
 `cells` is exactly 168 integers indexed `day * 24 + hour`, day `0 = Monday`, hour `0`–`23` in the configured
-timezone; values `0` no download, `1` default speed, `2` alternative speed. `PUT /settings/schedule`
-replaces all 168 in one transaction with the same body shape and returns the stored grid. `200` · `403` ·
+timezone; values `0` no download, `1` default speed, `2` alternative speed. `timezone` is the container's
+`TZ` as an IANA name and is **read-only**: it is returned so the UI can label the grid, and any value a
+client sends is ignored. `active_mode` is likewise read-only and is the cell in force at the moment of the
+call — `no_download` \| `default` \| `alternative`, the same vocabulary as `schedule.active_mode` on
+`GET /system/info` (§13) — so the status bar never has to resolve the grid itself across a DST boundary. `PUT /settings/schedule` replaces all 168 cells in one transaction with the same
+body shape and returns the stored grid. `200` · `403` ·
 `422` when the array is not exactly 168 elements or holds a value outside `0..2`.
 
 ### 11.3 `GET /engines` and `POST /engines/{id}/test`
@@ -1437,3 +1442,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
+| 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |

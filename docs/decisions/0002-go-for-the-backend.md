@@ -19,7 +19,7 @@ stdout is parsed. Every candidate language can do that work, so the tie-breaker 
 - Every code path in a download manager is flaky I/O — network, disk, subprocess. Error paths must be
   written down, not defaulted.
 - One static binary with an embedded SPA is what makes dl-tool a single container
-  ([ADR-0007](0007-react-spa-embedded-in-the-binary.md), [ADR-0011](0011-alpine-runtime-image-with-puid-pgid-privilege-drop.md)).
+  ([ADR-0007](0007-react-spa-embedded-in-the-binary.md), [ADR-0011](0011-alpine-runtime-with-puid-pgid.md)).
 - Dependency resolution must be hermetic and reproducible in CI without wheels, C extensions or peer-dep
   resolution.
 
@@ -115,5 +115,7 @@ producing a dynamically linked binary. CI runs the same target — see
 
 - Research: `architecture.md` §1 and its fact-check — summarised in
   [`../16-prior-art-and-research.md`](../16-prior-art-and-research.md).
-- Exact pinned versions live in [`../03-architecture.md`](../03-architecture.md); build and image details in
+- The exact backend dependency pins live in the `go.mod` block of
+  [`../tasks/T004-go-module-and-entrypoint.md`](../tasks/T004-go-module-and-entrypoint.md); the frontend pins
+  in [`../09-web-ui-spec.md`](../09-web-ui-spec.md); build and image details in
   [`../10-deployment-and-compose.md`](../10-deployment-and-compose.md).

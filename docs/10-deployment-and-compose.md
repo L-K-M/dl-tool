@@ -729,10 +729,11 @@ scheduling and the schema-newer-than-binary refusal are owned by
 
 ### 9.2 Disk space
 
-- Pre-check before enqueueing: compare `f_bavail * f_frsize` on the destination filesystem against the task
-  size plus committed-but-unwritten bytes (the sum of `total_bytes - completed_bytes` over active tasks on
-  the same filesystem) plus `min_free_space` (default 2 GiB per root). Reject with `quota_exceeded` or
-  `disk_full` as appropriate.
+- Pre-check before releasing a task to an engine: compare `f_bavail * f_frsize` on the destination
+  filesystem against the task size plus committed-but-unwritten bytes (the sum of
+  `total_bytes - completed_bytes` over active tasks on the same filesystem) plus `min_free_space`
+  (default 2 GiB per root). A candidate that fails stays in `queued` with `error_code` `disk_full`; it is
+  not rejected and nothing is deleted → [`03-architecture.md`](03-architecture.md) §6.4.
 - A background job re-checks every active destination every 30s. Below `min_free_space` it **auto-pauses**
   active tasks with `disk_full` and raises a banner rather than letting the engine hit `ENOSPC`.
 - `ENOSPC` never deletes partial data. A paused task resumes when space returns.
@@ -962,11 +963,10 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 - [NEEDS CLARIFICATION: `deploy/entrypoint.sh` and `deploy/aria2/entrypoint.sh` are not listed in the
   settled repository layout in the brief section 5, which names only `deploy/aria2/Dockerfile`. Confirm the
   two entrypoint paths before T093 creates them.]
-- [NEEDS CLARIFICATION: ADR-0018's filename slug is assumed to be the full kebab-cased title; confirm when
-  `docs/decisions/` is written.]
 
 ## Change log
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |
+| 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |

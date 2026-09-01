@@ -22,7 +22,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/09-web-ui-spec.md` §8.2 Rule editor](../09-web-ui-spec.md#82-rule-editor) — the wireframe, the
    thirteen field labels in order, the live-preview rules, the verbatim `(?)` help text and the
    *Run rule against existing items* action.
-2. [`docs/05-api-contract.md` §10.3 `POST /rules/test` — the dry run](../05-api-contract.md#103-postrulestest--the-dry-run)
+2. [`docs/05-api-contract.md` §10.3 `POST /rules/test` — the dry run](../05-api-contract.md#103-post-rulestest--the-dry-run)
    — the request body, the `results[]` shape and the `422` `errors[].location` used for inline errors.
 3. [`docs/05-api-contract.md` §10.2 Rule CRUD](../05-api-contract.md#102-rule-crud) — save, patch, delete
    and `POST /rules/{id}/run`.

@@ -19,7 +19,7 @@ and the clause index responsible. It creates nothing, stores nothing, and repeat
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
-1. [`docs/05-api-contract.md` §10.3 `POST /rules/test` — the dry run](../05-api-contract.md#103-postrulestest--the-dry-run)
+1. [`docs/05-api-contract.md` §10.3 `POST /rules/test` — the dry run](../05-api-contract.md#103-post-rulestest--the-dry-run)
    — the body table, the worked request, the worked response and the six contract details.
 2. [`docs/08-rss-automation.md` §8 Dry run](../08-rss-automation.md#8-dry-run) — the behavioural contract
    and the six UI requirements the payload has to support.

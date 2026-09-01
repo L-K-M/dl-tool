@@ -364,17 +364,16 @@ The `prose` filter strips fenced code blocks, so an example or template cannot t
 | ADR | Decision |
 |---|---|
 | [ADR-0003](decisions/0003-chi-huma-code-first-openapi.md) | chi + Huma with code-first OpenAPI — makes the §7.1 drift gate possible |
-| [ADR-0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines — the three adapters that run the §4 contract suite |
-| [ADR-0007](decisions/0007-react-spa-embedded-in-the-go-binary.md) | React SPA embedded in the Go binary — why §6 needs both Vitest and Playwright |
+| [ADR-0005](decisions/0005-aria2-qbittorrent-ytdlp-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines — the three adapters that run the §4 contract suite |
+| [ADR-0007](decisions/0007-react-spa-embedded-in-the-binary.md) | React SPA embedded in the Go binary — why §6 needs both Vitest and Playwright |
 
 ## Open questions
 - **UNVERIFIED:** lychee's fragment-checking flag is carried over from the research as `--include-fragments`
   and was not re-verified against lychee's own documentation. Confirm it with `lychee --help` when the
   docs-lint job is wired, and pin the lychee version in `make setup` at the same time.
-- The ADR links above use the kebab-cased titles from the decision index; confirm the exact slugs against
-  [`decisions/README.md`](decisions/README.md) when those files are created.
 
 ## Change log
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | Consistency review: corrected the ADR-0005 and ADR-0007 links to the canonical filenames and removed the resolved open question about ADR slugs. |

@@ -147,7 +147,22 @@ func (h *SearchHandlers) CreateIndexer(ctx context.Context, in *CreateIndexerInp
 func (h *SearchHandlers) PatchIndexer(ctx context.Context, in *PatchIndexerInput) (*IndexerOutput, error)
 func (h *SearchHandlers) DeleteIndexer(ctx context.Context, in *IndexerIDInput) (*struct{}, error)
 func (h *SearchHandlers) IndexerCategories(ctx context.Context, in *struct{}) (*CategoriesOutput, error)
-func (h *SearchHandlers) ImportProvider(ctx context.Context, in *ImportProviderInput) (*ImportOutput, error)
+// ImportIndexer carries both accepted bodies of POST /indexers/import and switches on
+// Content-Type: application/json is the provider wizard implemented here;
+// multipart/form-data is a file upload, implemented by T059 and T060.
+type ImportIndexerInput struct {
+	ContentType string `header:"Content-Type"`
+	RawBody     []byte
+}
+
+type ImportOutput struct {
+	Body struct {
+		Indexer  IndexerDTO `json:"indexer"`
+		Warnings []string   `json:"warnings"`
+	}
+}
+
+func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInput) (*ImportOutput, error)
 ```
 
 ```go
@@ -176,7 +191,7 @@ Operation ids registered here: `list-indexers`, `create-indexer`, `patch-indexer
    and returns `403 /problems/ssrf-blocked` when the caps probe fails the guard.
 7. `IndexerCategories` merges every enabled indexer's cached `categories_json` over `DefaultCategories()`,
    de-duplicating on category id and sorting ascending.
-8. `ImportProvider` calls `EnumerateProvider`, then for each entry fetches `t=caps`, stores the flattened tree
+8. The `application/json` branch of `ImportIndexer` calls `EnumerateProvider`, then for each entry fetches `t=caps`, stores the flattened tree
    with `SetCaps` and creates the row with `enabled = false`, `legal_tier = 'user-supplied'`,
    `definition_source = 'imported'` and `provenance = 'imported:torznab-provider'`, with the originating
    host recorded in `settings_json.origin`. The settings document also carries
@@ -185,8 +200,8 @@ Operation ids registered here: `list-indexers`, `create-indexer`, `patch-indexer
    call it once from `NewServer` in `internal/api/server.go`.
 10. Create `internal/api/search_test.go` with `humatest`: `TestCreateIndexerRequiresURL`,
     `TestAPIKeyNeverReturned`, `TestPatchIndexerPartial`, `TestDuplicateDefinitionIDConflicts`,
-    `TestCategoriesMergeCapsOverDefaults`, `TestImportProviderCreatesDisabledRows` and
-    `TestImportProviderSkipsProwlarrIdZero`, each against a stub upstream `httptest` server.
+    `TestCategoriesMergeCapsOverDefaults`, `TestImportProviderCreatesDisabledRows`,
+    `TestImportProviderSkipsProwlarrIdZero` and `TestImportRejectsUnsupportedContentType`, each against a stub upstream `httptest` server.
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria

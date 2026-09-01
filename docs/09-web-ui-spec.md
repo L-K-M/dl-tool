@@ -295,8 +295,8 @@ column.getIsVisible: () => boolean
 column.toggleVisibility: (value?: boolean) => void
 ```
 
-Server-side persistence uses `GET /api/v1/prefs` and `PUT /api/v1/prefs`, mandated by the plan brief §15.4.
-See `## Open questions`.
+Server-side persistence uses `GET /api/v1/prefs` and `PUT /api/v1/prefs` →
+[`05-api-contract.md`](05-api-contract.md). `localStorage` is not used for the grid layout.
 
 ### 3.4 Sorting, resizing, reordering, visibility
 
@@ -907,20 +907,13 @@ The justification record for every choice above. Both tables are evidence, not d
 
 | ADR | Decision |
 |---|---|
-| [ADR-0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md) | Server-sent events with rid deltas for live updates — the grid's only data source |
-| [ADR-0007](decisions/0007-react-spa-embedded-in-the-go-binary.md) | React SPA embedded in the Go binary — one container, one artifact |
-| [ADR-0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md) | A native cross-protocol RSS rule engine — the rule editor edits dl-tool's own schema |
+| [ADR-0006](decisions/0006-sse-with-rid-deltas.md) | Server-sent events with rid deltas for live updates — the grid's only data source |
+| [ADR-0007](decisions/0007-react-spa-embedded-in-the-binary.md) | React SPA embedded in the Go binary — one container, one artifact |
+| [ADR-0009](decisions/0009-native-cross-protocol-rss-rules.md) | A native cross-protocol RSS rule engine — the rule editor edits dl-tool's own schema |
 | [ADR-0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication — hence `/setup` and `/login` |
 
 ## Open questions
 
-- `GET /api/v1/prefs` and `PUT /api/v1/prefs` are mandated by the plan brief §15.4 but are not yet listed in
-  [`05-api-contract.md`](05-api-contract.md) §2. Until they are, the grid layout persists to `localStorage`
-  only. [NEEDS CLARIFICATION: add the endpoint pair to `05-api-contract.md`.]
-- `infohash_v1` and `infohash_v2` are required on `tasks` by the plan brief §15.4 but the Task object in
-  [`05-api-contract.md`](05-api-contract.md) §3 does not list them. The `infoHashV1` and `infoHashV2` columns
-  and the General tab's info-hash rows depend on them.
-  [NEEDS CLARIFICATION: add both fields to the Task object.]
 - The Torznab category tree behind the search Category filter is `[INFERRED]` in the UI research; the
   client populates it from `GET /api/v1/indexers/categories` and hard-codes nothing, so a different tree
   needs no UI change.
@@ -936,3 +929,4 @@ The justification record for every choice above. Both tables are evidence, not d
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | Consistency review: corrected the ADR-0006, ADR-0007 and ADR-0009 links to the canonical filenames; dropped the two stale open questions about `/prefs` and `infohash_v1`/`infohash_v2`, both of which `05-api-contract.md` now specifies, and removed the `localStorage` fallback for the grid layout. |

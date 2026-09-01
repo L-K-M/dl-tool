@@ -95,7 +95,7 @@ Expected: no output, exit 1 from `grep`. The adapters are then proven against th
 
 ### Option D - fork Flood or qui
 
-- Good, because Flood already has multi-user and qui already has the reverse-proxy façade trick.
+- Good, because Flood already has multi-user and qui already proxies the qBittorrent WebAPI behind its own UI.
 - Bad, because both are BitTorrent-only by construction; adding HTTP, media URLs and a cross-protocol queue
   is a rewrite of the data model wearing someone else's licence and release cadence.
 
@@ -105,5 +105,5 @@ Expected: no output, exit 1 from `grep`. The adapters are then proven against th
   [`../16-prior-art-and-research.md`](../16-prior-art-and-research.md).
 - Depends on this decision: [`../01-vision-and-scope.md`](../01-vision-and-scope.md),
   [`../03-architecture.md`](../03-architecture.md), [`../06-download-engines.md`](../06-download-engines.md).
-- Engine selection is [ADR-0005](0005-aria2-qbittorrent-ytdlp-engines.md); the compatibility façades that
-  make dl-tool look like an engine to other software are [ADR-0014](0014-opt-in-qbittorrent-and-synology-compatibility-facades.md).
+- Engine selection is [ADR-0005](0005-aria2-qbittorrent-ytdlp-engines.md). dl-tool exposes no
+  compatibility surface: it serves `/api/v1` only and never presents itself as another product's API.

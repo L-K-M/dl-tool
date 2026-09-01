@@ -14,7 +14,7 @@ payloads, table columns or environment variables.
 - In scope: feed polling schedule and etiquette, conditional GET, the backoff ladder, item parsing and the
   download-URI extraction ladder, the rule document schema, the fourteen-step matching algorithm, the
   rejection-reason enum, episode-filter syntax, smart-episode-filter semantics, the dedup ladder, the dry-run
-  contract, the qBittorrent `rules.json` importer, and the feeds shipped as examples and fixtures.
+  contract, and the feeds shipped as examples and fixtures.
 - Out of scope (lives instead in): table columns and DDL → [`04-data-model.md`](04-data-model.md); request and
   response shapes, status codes → [`05-api-contract.md`](05-api-contract.md); URI normalisation and engine
   routing → [`06-download-engines.md`](06-download-engines.md); indexer search →
@@ -335,7 +335,7 @@ item does not appear in a dry run's `results`. Losers from step 13 are written w
 ### 5.1 Rejection reason codes
 
 Every rejection carries one of exactly these ten codes. The set is closed; the API repeats it but does not own
-it — see [`05-api-contract.md`](05-api-contract.md#103-postrulestest--the-dry-run).
+it — see [`05-api-contract.md`](05-api-contract.md#103-post-rulestest--the-dry-run).
 
 | Code | Emitted by step | `reason_detail` example |
 |---|---|---|
@@ -476,7 +476,7 @@ re-download the same item forever (Jackett issue 13312).
 ## 8. Dry run
 
 Endpoint and payloads are owned by
-[`05-api-contract.md`](05-api-contract.md#103-postrulestest--the-dry-run): `POST /rules/test` takes an
+[`05-api-contract.md`](05-api-contract.md#103-post-rulestest--the-dry-run): `POST /rules/test` takes an
 **unsaved** rule document plus optional `feeds`, `limit` (default 200 items per feed, newest first) and
 `ignore_state` (default `true`), and returns every evaluated item — matched and unmatched — with `matched`,
 `score`, `matched_by`, `reason` and `reason_detail`. It creates nothing and stores nothing.
@@ -505,56 +505,7 @@ UI requirements, in priority order (layout lives in [`09-web-ui-spec.md`](09-web
 
 ---
 
-## 9. qBittorrent `rules.json` importer
-
-Accept a qBittorrent RSS auto-download rules export — a JSON object mapping rule name to rule object — and
-convert each entry to a rule document. Report per-rule success or a named reason for rejection (FR-079).
-
-| qBittorrent key | dl-tool target | Conversion |
-|---|---|---|
-| *(map key)* | `name` | The map key is the rule name; the `name` member is read-only on the wire and often absent. |
-| `enabled` | `enabled` | Direct. Default `true`. |
-| `priority` | `priority` | Direct. Default `0`. Present in the file format only, not in the WebUI API docs. |
-| `useRegex` | `match.mode` | `true` → `regex`; `false` → `wildcard`. |
-| `mustContain` | `match.any_of` | Split on `\|` **only** when `useRegex` is false; when true the whole string is one entry. Drop empty entries. |
-| `mustNotContain` | `match.none_of` | Same splitting rule. Drop empty entries. |
-| `episodeFilter` | `episode.filter` | Direct; validated by §6.1 and rejected here if malformed. |
-| `smartFilter` | `episode.smart` | Direct. Default `false`. |
-| `affectedFeeds` | `feeds` | Feed **URLs**, not names. A bare string is accepted as a one-element array. |
-| `ignoreDays` | `throttle.cooldown_days` | Direct, days. |
-| `lastMatch` | `rules.last_match_at` | RFC 2822 date, e.g. `"20 Nov 2017 09:05:11"`. Column, not document. |
-| `savePath` | `action.destination` | Rejected if it escapes the configured data roots. |
-| `assignedCategory` | `action.category` | Direct; created if missing. |
-| `addPaused` | `action.paused` | `bool` **or** `null` = use default. Legacy integer form: `0`=default, `1`=always, `2`=never. |
-| `torrentContentLayout` | `action.content_layout` | `Original`→`original`, `Subfolder`→`subfolder`, `NoSubfolder`→`no_subfolder`. |
-| `createSubfolder` | `action.content_layout` | Legacy key, honoured only when `torrentContentLayout` is absent: `true`→`original`, `false`→`no_subfolder`. |
-| `previouslyMatchedEpisodes` | `rule_seen_episodes` rows | One row per entry, e.g. `["1x5","1x6-REPACK"]`. |
-| `torrentParams` | — | Not imported in v1. Report it as an unsupported key rather than dropping it silently. |
-
-Source rule:
-
-```json
-{"enabled": false, "mustContain": "The *Punisher*", "mustNotContain": "", "useRegex": false,
- "episodeFilter": "1x01-;", "smartFilter": false, "previouslyMatchedEpisodes": [],
- "affectedFeeds": ["http://showrss.info/user/134567.rss?magnets=true"], "ignoreDays": 0,
- "lastMatch": "20 Nov 2017 09:05:11", "addPaused": true, "assignedCategory": "",
- "savePath": "C:/Users/JohnDoe/Downloads/Punisher"}
-```
-
-Converted document (Windows `savePath` is not portable, so the importer drops it and reports the drop):
-
-```json
-{"name":"Punisher","enabled":false,"priority":0,
- "feeds":["http://showrss.info/user/134567.rss?magnets=true"],
- "match":{"mode":"wildcard","case_sensitive":false,"fields":["title"],
-          "any_of":["The *Punisher*"],"none_of":[]},
- "episode":{"smart":false,"filter":"1x01-;","allow_repack_proper":true},
- "action":{"paused":true},"throttle":{"cooldown_days":0}}
-```
-
----
-
-## 10. Feeds shipped as examples and used in tests
+## 9. Feeds shipped as examples and used in tests
 
 All probed with `curl` on 2026-09-01. The first three are offered in the "Add feed" dialog as one-click
 examples; all eight are golden fixtures in `internal/rss/testdata/`.
@@ -622,7 +573,7 @@ distribution or a public-domain catalogue.
 - Download Station's RSS update-interval dropdown values are UNVERIFIED; its documented default is
   "updates the lists of RSS feeds on a daily basis". dl-tool's 30-minute default is taken from qBittorrent
   instead and does not need to match.
-- Feed behaviours in §10 were observed on 2026-09-01 and may drift; the fixtures are committed bytes, so tests
+- Feed behaviours in §9 were observed on 2026-09-01 and may drift; the fixtures are committed bytes, so tests
   never re-fetch.
 
 ## Change log
@@ -630,3 +581,4 @@ distribution or a public-domain catalogue.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | §3.1 rebuilt as the four-tier extraction ladder matching qBittorrent's actual parser: an `application/x-bittorrent` enclosure and a `magnet:` `<link>` are document-order last-wins (tier A), then an empty- or absent-type enclosure (tier B), then dl-tool's synthesised sources (tier C), then `<link>`/`<guid>` (tier D); noted that Torznab enclosures resolve in tier A. Identity step 2 and the §7 dedup ladder now use the widened 40-or-64-hex `feed_items.info_hash` and `rule_matches.info_hash` columns, with the v1/v2 comparison and back-fill rules. §10 references retargeted to the tier names. ADR link filenames corrected to the canonical slugs. |
+| 2026-09-01 | Removed the qBittorrent `rules.json` importer section and its mention in the scope list: brief §18 cuts the migration subsystem, so no rule importer exists. Renumbered the former §10 to §9. Corrected the `POST /rules/test` anchor to `#103-post-rulestest--the-dry-run`. |

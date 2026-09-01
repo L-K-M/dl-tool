@@ -97,24 +97,9 @@ func ImportDefinitionFile(data []byte, filename string) (ImportResult, error)
 func analyseModule(php []byte, info DLMInfo) (*Definition, bool, []string)
 ```
 
-```go
-package api
-
-// ImportIndexerInput carries both accepted bodies. The handler switches on
-// Content-Type: application/json is T055's provider wizard, multipart/form-data is this
-// task's file upload. The uploaded part is named "file".
-type ImportIndexerInput struct {
-	ContentType string `header:"Content-Type"`
-	RawBody     []byte
-}
-
-type ImportOutput struct {
-	Body struct {
-		Indexer  IndexerDTO `json:"indexer"`
-		Warnings []string   `json:"warnings"`
-	}
-}
-```
+T055 already declares `ImportIndexerInput` and `ImportOutput` and registers the operation. This task adds
+the `multipart/form-data` branch to the existing `ImportIndexer` handler; the uploaded part is named `file`
+and its file name decides the importer.
 
 ## Steps
 1. Create `internal/search/dlm_import.go` with the constants, `DLMInfo`, `ImportResult`, `ImportDLM`,

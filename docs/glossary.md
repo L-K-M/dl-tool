@@ -86,10 +86,10 @@ only; it never owns a schema, a table, an endpoint or an env var.
 
 ## Open questions
 - [NEEDS CLARIFICATION: the `1220` multihash prefix on `xt=urn:btmh:` v2 magnets is documented by libtorrent and by the `webtorrent/magnet-uri` implementation, not by BEP 52 itself; treat the 68-character total length as implementation-derived until a v2 magnet fixture confirms it.]
-- [NEEDS CLARIFICATION: ADR filenames in the links above must match the slugs created under `docs/decisions/`; verify with the doc-lint script once those files exist.]
 
 ## Change log
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Migration subsystem cut: removed the `Compatibility façade` and `SID` terms and every `SYNO.*`, `_sid` and façade reference; `Foreign task` redefined as a task dl-tool did not create and therefore ignores. Corrected the ADR filenames to the canonical slugs and the operations runbook to `17-operations-and-runbook.md`. |
+| 2026-09-01 | Consistency review: removed the resolved open question about ADR filenames. |

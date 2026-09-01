@@ -53,7 +53,10 @@ reassigned:
 | `FR-130` – `FR-139` | Compatibility façades | Withdrawn with the façades; dl-tool serves `/api/v1` only. |
 | `FR-149` | One-time read-only import from a live Download Station | Withdrawn with the migration subsystem. dl-tool never speaks the Synology Web API. |
 
-dl-tool has no migration or import path from another product. Task identifiers `T112` and `T114` are
+dl-tool imports no tasks, feeds or rules from another download product, and never calls another
+product's API to fetch them. The one import that survives is the static, never-executed conversion of a
+`.dlm` or nova3 `.py` search definition ([FR-053](#fr-053-import-legacy-definitions-by-static-analysis-only)),
+which is a definition format, not a migration path. Task identifiers `T112` and `T114` are
 retired for the same reason. Task identifier `T102` is retired too: a foreign-task *policy* cannot exist
 when there is only one rule, so the ignore behaviour of FR-148 is asserted by T026 and T030 instead.
 
@@ -100,11 +103,11 @@ If a submitted URI uses the `ed2k://` scheme, then dl-tool shall reject it with 
 ### FR-005 Add tasks from an uploaded file
 When a client uploads a `.torrent` file, dl-tool shall create a BitTorrent task from its bytes; when a client uploads a `.txt` file, dl-tool shall treat each line as a URI and apply FR-001.
 
-**Verify:** T029 posts a fixture `.torrent` from `testdata/` and a two-line `.txt`, asserting one BitTorrent task and two URI tasks.
+**Verify:** T033 posts a fixture `.torrent` from `testdata/` and a two-line `.txt` as multipart parts, asserting one BitTorrent task and two URI tasks; T029 covers the engine half, handing the `.torrent` bytes to qBittorrent.
 
 | Covered by | Priority |
 |---|---|
-| T029 | must |
+| T033, T029 | must |
 
 ### FR-006 Inspect a submission before committing it
 When a client submits URIs or a blob to the inspect endpoint, dl-tool shall return a manifest containing `name`, `total_size` and a `files[]` array of `{index, path, size}` without creating any task or writing to disk.
@@ -199,7 +202,7 @@ When a client deletes a task with `delete_data=true`, dl-tool shall remove the t
 ### FR-016 Stream task changes as rid deltas over SSE
 While a client holds the events stream open, dl-tool shall emit `event: sync` messages whose `id` is the monotonically increasing `rid` and whose data carries only the fields changed since the client's previous `rid`.
 
-**Verify:** T025 opens the stream, mutates one task and asserts the next event contains that task ID and no unchanged task IDs; see [ADR-0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md).
+**Verify:** T025 opens the stream, mutates one task and asserts the next event contains that task ID and no unchanged task IDs; see [ADR-0006](decisions/0006-sse-with-rid-deltas.md).
 
 | Covered by | Priority |
 |---|---|
@@ -575,7 +578,7 @@ When an operator runs a saved rule against existing items, dl-tool shall evaluat
 ### FR-078 Route a rule's action to any engine
 The dl-tool rule engine shall route each grabbed item through the same normalisation and routing path as a manually added URI, so a single rule can land HTTP, FTP and BitTorrent items.
 
-**Verify:** T069 runs one rule over a feed mixing an `https://` enclosure and a magnet and asserts one aria2 task and one qBittorrent task; see [ADR-0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md).
+**Verify:** T069 runs one rule over a feed mixing an `https://` enclosure and a magnet and asserts one aria2 task and one qBittorrent task; see [ADR-0009](decisions/0009-native-cross-protocol-rss-rules.md).
 
 | Covered by | Priority |
 |---|---|
@@ -1223,15 +1226,15 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 
 | ADR | Decision |
 |---|---|
-| [0001](decisions/0001-build-a-control-plane-over-existing-download-engines.md) | Build a control plane over existing download engines |
+| [0001](decisions/0001-control-plane-over-existing-engines.md) | Build a control plane over existing download engines |
 | [0003](decisions/0003-chi-huma-code-first-openapi.md) | chi + Huma with code-first OpenAPI |
 | [0004](decisions/0004-sqlite-as-the-only-datastore.md) | SQLite as the only datastore |
-| [0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
-| [0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md) | Server-sent events with rid deltas for live updates |
-| [0008](decisions/0008-torznab-first-declarative-yaml-engines-second.md) | Torznab first, declarative YAML engines second |
-| [0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md) | A native cross-protocol RSS rule engine |
+| [0005](decisions/0005-aria2-qbittorrent-ytdlp-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
+| [0006](decisions/0006-sse-with-rid-deltas.md) | Server-sent events with rid deltas for live updates |
+| [0008](decisions/0008-torznab-first-declarative-yaml-second.md) | Torznab first, declarative YAML engines second |
+| [0009](decisions/0009-native-cross-protocol-rss-rules.md) | A native cross-protocol RSS rule engine |
 | [0010](decisions/0010-never-execute-third-party-definitions.md) | Never execute third-party definition code |
-| [0011](decisions/0011-alpine-runtime-image-with-puid-pgid-privilege-drop.md) | Alpine runtime image with PUID/PGID privilege drop |
+| [0011](decisions/0011-alpine-runtime-with-puid-pgid.md) | Alpine runtime image with PUID/PGID privilege drop |
 | [0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication |
 | [0015](decisions/0015-db-backed-in-process-job-queue.md) | DB-backed in-process job queue |
 | [0017](decisions/0017-exclusive-control-of-engines.md) | dl-tool assumes exclusive control of its engines |
@@ -1258,3 +1261,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Compatibility façades cut: FR-130 – FR-139 withdrawn and permanently unused, ADR-0014 link removed. Added FR-020 – FR-025, FR-033, FR-046 – FR-048, FR-096, FR-097, FR-107, FR-122 – FR-124, FR-144 – FR-149 and NFR-029. Corrected the FR-007 file-priority vocabulary, the FR-121 quota semantics and the NFR-007 acceptance mechanism; fixed the ADR-0003 and ADR-0010 slugs. |
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
+| 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |

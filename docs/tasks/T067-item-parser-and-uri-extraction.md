@@ -21,7 +21,7 @@ discards an item that yields no URI at all.
 Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/08-rss-automation.md` §3 Item parsing](../08-rss-automation.md#3-item-parsing) — the ladder, the
    deviations table, the identity chain, the format table and the date rules. This is the specification.
-2. [`docs/08-rss-automation.md` §10 Feeds shipped as examples and used in tests](../08-rss-automation.md#10-feeds-shipped-as-examples-and-used-in-tests)
+2. [`docs/08-rss-automation.md` §10 Feeds shipped as examples and used in tests](../08-rss-automation.md#9-feeds-shipped-as-examples-and-used-in-tests)
    — the eight feeds, the golden Academic Torrents item and the expected magnet.
 3. [`docs/06-download-engines.md` §3.5 BitTorrent v2 (BEP 52) identity](../06-download-engines.md#35-bittorrent-v2-bep-52-identity)
    — 40-hex versus 64-hex, and base32 decoding. Never truncate a v2 hash.
