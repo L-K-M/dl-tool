@@ -199,8 +199,8 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 | GET | `/feeds/{id}/items` | session\|token | Items of one feed. |
 | GET | `/rules[/{id}]` | session\|token | Rule reads. |
 | POST·PATCH·DELETE | `/rules[/{id}]` | admin | Rule writes — a rule creates tasks on someone's behalf, the same reason `/watch-folders` is admin (§15). |
-| POST | `/rules/test` | session\|token | Dry-run an unsaved rule; explains every item. |
-| POST | `/rules/{id}/run` | session\|token | Apply a saved rule to existing items. |
+| POST | `/rules/test` | session\|token | Dry-run an unsaved rule; takes an optional `owner_id` (default the caller) so the jail checks match the rule as it will run. Creates nothing. |
+| POST | `/rules/{id}/run` | admin | Applies a saved rule — it creates tasks as the rule's owner, so it carries the same privilege as a rule write. |
 | GET | `/settings` | session\|token | Read settings, secrets redacted. |
 | PATCH | `/settings` | admin | Partial settings update. |
 | GET | `/settings/schedule` | session\|token | The 24×7 bandwidth grid. |
@@ -971,6 +971,12 @@ to the job's results. To turn a result into a task, `POST /tasks` with
 `title`, `enabled`, `refresh_interval_s`, `item_cap`; `PATCH /feeds/{id}` accepts the same set;
 `DELETE /feeds/{id}` returns `204` and cascades to the feed's items.
 
+**Credential-bearing feeds are admin-only**, mirroring §9.1's key-bearing-indexer rule: a feed whose URL
+contains userinfo (`https://user:pass@…`) or a `passkey`, `apikey` or `token` query parameter — the same
+patterns the log redactor already matches — is invisible to a non-admin, along with its items, because
+both the URL and the item enclosure links embed the operator's per-user tracker passkey. Non-admins see
+the remaining feeds read-only (§2).
+
 `POST /feeds/{id}/refresh` forces one conditional GET now, bypassing the backoff ladder:
 
 ```json
@@ -1008,14 +1014,18 @@ silently ignored at match time.
 so writes are admin-only and every rule carries an `owner_id`:
 
 - `action.destination` is validated at save time against the **owner's** jail (§7.2), not merely against
-  the configured roots: a rule may not write outside the subtree its owner could reach by hand. A
-  destination outside the owner's jail is `403` `/problems/path-rejected`.
+  the configured roots: a rule may not write outside the subtree its owner could reach by hand. When the
+  member is omitted it resolves to the owner's `users.default_destination`, else the global default — the
+  resolved value, not just the submitted one, must lie inside the owner's jail or the save is `403`
+  `/problems/path-rejected`.
 - The check runs again at grab time on every item, because `PATCH /users/{id}` can move a jail after the
-  rule was saved.
+  rule was saved. `POST /rules/test` takes the same `owner_id` (default the caller) so the dry run's
+  destination checks target the jail the saved rule will actually run under.
 - Tasks a rule creates are owned by `owner_id`, count against that user's storage quota and concurrency
   limits (§5.11), and appear only in that user's listings — the grabbed item is processed through the
   ordinary task-creation path, so a quota breach leaves the item ungrabbed with `rule_matches.status =
-  'failed'`, never a task that escapes accounting.
+  'failed'`, never a task that escapes accounting. A `failed` row is retryable, like a failed hand-off:
+  it does not mark the episode seen, and the item re-enters the candidate set on later runs.
 
 `POST /rules/{id}/run` applies a saved rule to the items already stored:
 
@@ -1262,7 +1272,9 @@ so setting it is what makes a non-admin able to browse and download at all.
 
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (caller is not an admin, or the request would
 delete or disable the last enabled admin) · `404` · `409` `/problems/conflict` (username exists,
-case-insensitively) · `422` (short password, unknown role, `default_destination` outside the roots).
+case-insensitively, or the user still owns tasks or rules — both foreign keys are `ON DELETE RESTRICT`,
+so delete or re-assign those rows first) · `422` (short password, unknown role,
+`default_destination` outside the roots).
 
 ```json
 GET /api-tokens →
@@ -1472,3 +1484,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
 | 2026-09-01 | Privilege review: rule and feed **writes** are admin-only (a rule creates tasks on someone's behalf, mirroring the watch-folder rule), `POST /rules` gains `owner_id` with save-time and grab-time jail validation of `action.destination`, and rule-grabbed tasks are owned by and quota-accounted to that owner through §5.11. Indexers with a stored API key are admin-only across `GET /indexers`, `GET /indexers/categories` and `POST /search`, because their download URLs embed the operator's tracker passkey. |
+| 2026-09-01 | Review pass: `POST /rules/{id}/run` is admin-only like rule writes (it creates tasks as the owner); `POST /rules/test` takes `owner_id` so dry-run jail checks target the right jail; an omitted `action.destination` resolves to the owner's default destination and the resolved value must pass the jail check; credential-bearing feeds (URL userinfo or `passkey`/`apikey`/`token`) are admin-only like key-bearing indexers; `DELETE /users/{id}` is `409` while the user owns tasks or rules (`ON DELETE RESTRICT`). |

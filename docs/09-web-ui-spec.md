@@ -575,9 +575,10 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 
 - **Indexer multi-select**: a popover checkbox list with *All* / *None*; each row shows the indexer name, a
   health dot and its last error in a tooltip. Disabled indexers are greyed with a link to
-  `/settings/indexers`. The selection is persisted in the prefs document. The list is whatever
-  `GET /api/v1/indexers` returns: key-bearing indexers are absent for non-admins by server rule
-  ([`05-api-contract.md`](05-api-contract.md) §9.1), so the client adds no rule of its own.
+  `/settings/indexers`. The selection is persisted in the prefs document and pruned against
+  `GET /api/v1/indexers` on load, so an id the server has hidden (a key-bearing indexer,
+  [`05-api-contract.md`](05-api-contract.md) §9.1) or deleted never reaches `POST /search`: the list and
+  the effective selection are whatever the server returns, and the client adds no rule of its own.
 - **Category filter** is populated from `GET /api/v1/indexers/categories`; the client never hard-codes a
   category tree.
 - **Results grid** reuses the §3 grid component. Columns: checkbox · Name · Size · Seeders · Leechers ·
