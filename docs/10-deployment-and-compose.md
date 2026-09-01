@@ -996,8 +996,5 @@ document's change log.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |
 | 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |
-<<<<<<< HEAD
-| 2026-09-01 | Review pass: §7.3 item 6 now specifies the cookie prefix pair (`__Host-` at the root, `__Secure-` under a base path) instead of dropping prefixes; the earlier unprefixed wording weakened §12's hardening for no benefit. |
-=======
 | 2026-09-01 | Fixed the fresh-boot engine wiring: both `DLTOOL_*_URL` values now interpolate from `.env` with an empty default (an empty URL disables the lane) instead of being hardcoded, because [`11-config-reference.md`](11-config-reference.md) §8 makes a set URL with missing credentials a fatal `config_missing` — the hardcoded URLs made a fresh `docker compose up -d` crash-loop. The aria2 secret dropped the `:?` form (Compose resolves required variables before profile filtering, so it broke core-only starts) and is enforced by the entrypoint instead. Resolved the M0/M1 profile open question: aria2 stays behind its profile and M1 is verified with `COMPOSE_PROFILES=aria2`. |
->>>>>>> origin/main
+| 2026-09-01 | Review pass: §7.3 item 6 now specifies the cookie prefix pair (`__Host-` at the root, `__Secure-` under a base path) instead of dropping prefixes; the earlier unprefixed wording weakened §12's hardening for no benefit. |
