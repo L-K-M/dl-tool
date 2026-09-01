@@ -961,7 +961,8 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 The shipped `.env.example` leaves both engine URLs unset, so a fresh `cp .env.example .env && docker
 compose up -d` boots with both engine lanes disabled — the M0 checkpoint needs no secret. M1's exit
 checkpoint is verified with `COMPOSE_PROFILES=aria2` plus `DLTOOL_ARIA2_URL` and `ARIA2_RPC_SECRET` set in
-`.env`; the aria2 profile stays (resolved from the former open question below).
+`.env`; the aria2 profile stays — the rejected alternative, making it profile-less, is recorded in this
+document's change log.
 
 ## Decisions referenced
 | ADR | Decision |
