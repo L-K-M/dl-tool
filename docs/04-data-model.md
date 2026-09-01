@@ -1,0 +1,774 @@
+# 04 — Data Model
+
+> **Status:** draft
+> **Last reviewed:** 2026-09-01
+> **Audience:** implementing agent
+> **Read this before:** T001–T014 (M0), and every task that touches `internal/store/`
+
+## Purpose
+Define the complete SQLite schema of dl-tool: connection configuration, `CREATE TABLE` DDL, indices, enum
+vocabularies, migration policy, backup/restore and retention. It does not define HTTP payload shapes or
+environment variables.
+
+## Scope of this document
+- In scope: DSN and pragmas, every table and index, every DB-level enum, goose migration policy, `VACUUM INTO`
+  backup/restore, retention windows.
+- Out of scope (lives instead in): HTTP request/response JSON → [`05-api-contract.md`](05-api-contract.md);
+  environment variables → [`11-config-reference.md`](11-config-reference.md); the `Engine` Go interface and the
+  engine→dl-tool status normalisation tables → [`06-download-engines.md`](06-download-engines.md); the
+  `dlsearch/v1` YAML schema → [`07-search-and-indexers.md`](07-search-and-indexers.md); the RSS rule document
+  and matching algorithm → [`08-rss-automation.md`](08-rss-automation.md); volumes and compose paths →
+  [`10-deployment-and-compose.md`](10-deployment-and-compose.md).
+
+---
+
+## 1. SQLite configuration
+
+Driver `modernc.org/sqlite v1.57.0`, registered under the driver name `"sqlite"`. Query layer
+`github.com/jmoiron/sqlx v1.4.0` with `db:"col"` struct tags. Always write explicit column lists; never
+`SELECT *`.
+
+### 1.1 DSN (exact string)
+
+```
+file:/config/dl-tool.db?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_txlock=immediate
+```
+
+The path segment is `DLTOOL_DB_PATH` (default `/config/dl-tool.db`), see
+[`11-config-reference.md`](11-config-reference.md). `modernc.org/sqlite` parses `_pragma` (repeatable, executed
+verbatim) and `_txlock` with allowed values `deferred|immediate|exclusive`.
+
+### 1.2 The four pragmas
+
+| Pragma | Value | Reason |
+|---|---|---|
+| `journal_mode` | `WAL` | Readers do not block the writer. Persistent — survives reopen, unlike other modes. |
+| `synchronous` | `NORMAL` | Safe in combination with WAL. |
+| `foreign_keys` | `ON` | Per-connection; must be set on every connection, hence the DSN. |
+| `busy_timeout` | `5000` | Milliseconds. WAL fixes reader/writer blocking, not writer/writer contention. |
+
+### 1.3 Connection pool
+
+```go
+db.SetMaxOpenConns(1)   // serialise every statement; removes SQLITE_BUSY entirely
+db.SetMaxIdleConns(1)
+db.SetConnMaxLifetime(0)
+```
+
+One open connection is correct at dl-tool's write volume (order 10 writes/second). Combined with
+`_txlock=immediate` and short transactions it makes writer/writer contention structurally impossible.
+Do not raise it as a first optimisation.
+
+**IMPORTANT** The database file must live on a **local** volume (`/config`), never on NFS, SMB/CIFS or a FUSE
+mount. SQLite states: *"WAL does not work over a network filesystem. This is because WAL requires all processes
+to share a small amount of memory and processes on separate host machines obviously cannot share memory with
+each other."* Download destinations under `/data` may be network mounts; the database may not. At boot, read the
+filesystem type of the database directory (`statfs` `f_type`, or `/proc/self/mountinfo`); if it is `nfs`,
+`cifs`, `smb3` or `fuse.*`, refuse to start with a message naming the path and the mount type.
+
+### 1.4 Type and unit conventions
+
+| Concept | Storage | Note |
+|---|---|---|
+| Primary key | `TEXT` | Prefix + ULID (Crockford base32, 26 chars), e.g. `tsk_01J9Z3K7QF8N4V2XW6P0RSTBCD`. |
+| Timestamp | `INTEGER` | Unix **milliseconds**. Never seconds, never a string. |
+| Byte count | `INTEGER` | Bytes. |
+| Rate / limit | `INTEGER` | Bytes per second. `0` means unlimited. Never KB/s. |
+| Boolean | `INTEGER` | `0` or `1`, with `CHECK (col IN (0,1))`. |
+| Enum | `TEXT` | With a `CHECK` constraint listing every allowed value. |
+| Structured blob | `TEXT` | JSON document; column name ends in `_json`. |
+| Ratio / factor | `REAL` | |
+
+Every table except the join tables (`task_tags`, `rule_seen_episodes`) and goose's own version table has
+`id TEXT PRIMARY KEY`, `created_at INTEGER NOT NULL` and `updated_at INTEGER NOT NULL`.
+
+### 1.5 ID prefix allocation
+
+| Prefix | Table | Prefix | Table |
+|---|---|---|---|
+| `usr_` | `users` | `idx_` | `indexers` |
+| `ses_` | `sessions` | `sch_` | `search_jobs` |
+| `tok_` | `api_tokens` | `res_` | `search_results` |
+| `set_` | `settings` | `fed_` | `feeds` |
+| `eng_` | `engines` | `itm_` | `feed_items` |
+| `cat_` | `categories` | `rul_` | `rules` |
+| `tag_` | `tags` | `mat_` | `rule_matches` |
+| `tsk_` | `tasks` | `job_` | `jobs` |
+| `tfi_` | `task_files` | `bws_` | `bandwidth_schedule` |
+| `ttr_` | `task_trackers` | `uip_` | `ui_prefs` |
+| `evt_` | `task_events` | `wfd_` | `watch_folders` |
+
+---
+
+## 2. Entity relationships
+
+```mermaid
+erDiagram
+    users ||--o{ sessions : owns
+    users ||--o{ api_tokens : owns
+    users ||--o{ tasks : owns
+    users ||--o{ ui_prefs : has
+    users ||--o{ search_jobs : runs
+    categories ||--o{ tasks : classifies
+    categories ||--o{ watch_folders : assigns
+    tasks ||--o{ task_files : contains
+    tasks ||--o{ task_trackers : announces
+    tasks ||--o{ task_events : logs
+    tasks ||--o{ task_tags : tagged
+    tags ||--o{ task_tags : applies
+    tasks ||--o{ jobs : schedules
+    indexers ||--o{ search_results : produces
+    search_jobs ||--o{ search_results : collects
+    feeds ||--o{ feed_items : publishes
+    rules ||--o{ rule_matches : accepts
+    rules ||--o{ rule_seen_episodes : remembers
+    feed_items ||--o{ rule_matches : matched
+    tasks ||--o| rule_matches : created
+```
+
+Notes:
+- `tasks.engine` stores the engine *kind*; `tasks.engine_ref` stores the engine-side handle (aria2 GID,
+  qBittorrent infohash, yt-dlp job id). Engine-side IDs never appear in a URL.
+- Peers are **not** persisted. `GET /tasks/{id}/peers` proxies the engine live.
+- A rule's feed scope, patterns, episode filter, score and action live inside `rules.definition_json`; see
+  [`08-rss-automation.md`](08-rss-automation.md).
+
+---
+
+## 3. Schema DDL
+
+All of the following is migration `00001_init.sql`. Statements appear in dependency order; do not reorder them.
+
+### 3.1 Identity and access
+
+```sql
+CREATE TABLE users (
+  id                  TEXT PRIMARY KEY,
+  username            TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash       TEXT NOT NULL,                    -- argon2id PHC string: $argon2id$v=19$m=...$salt$hash
+  role                TEXT NOT NULL CHECK (role IN ('admin','user')),
+  enabled             INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+  default_destination TEXT,
+  quota_bytes         INTEGER NOT NULL DEFAULT 0,       -- 0 = unlimited
+  locale              TEXT NOT NULL DEFAULT 'en',
+  last_login_at       INTEGER,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+
+CREATE TABLE sessions (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash   TEXT NOT NULL UNIQUE,                    -- SHA-256 hex of the cookie value; the value itself is never stored
+  csrf_token   TEXT NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  ip           TEXT,
+  user_agent   TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX idx_sessions_user    ON sessions(user_id);
+CREATE INDEX idx_sessions_expires ON sessions(expires_at);
+
+CREATE TABLE api_tokens (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  token_hash   TEXT NOT NULL UNIQUE,                    -- SHA-256 hex; the bearer token is shown once, at creation
+  prefix       TEXT NOT NULL,                           -- first 8 chars, for display only
+  last_used_at INTEGER,
+  expires_at   INTEGER,
+  revoked_at   INTEGER,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX idx_api_tokens_user ON api_tokens(user_id);
+```
+
+### 3.2 Configuration
+
+```sql
+CREATE TABLE settings (
+  id         TEXT PRIMARY KEY,
+  key        TEXT NOT NULL UNIQUE,
+  value_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE engines (
+  id            TEXT PRIMARY KEY,
+  kind          TEXT NOT NULL UNIQUE CHECK (kind IN ('aria2','qbittorrent','ytdlp')),
+  name          TEXT NOT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+  url           TEXT,                                   -- aria2 JSON-RPC URL / qBittorrent base URL; NULL for ytdlp
+  username      TEXT,
+  secret_enc    TEXT,                                   -- encrypted at rest; never returned by any API, never logged
+  binary_path   TEXT,                                   -- ytdlp only
+  version       TEXT,
+  last_seen_at  INTEGER,
+  last_error    TEXT,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
+CREATE TABLE categories (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  save_path  TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE tags (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+```
+
+### 3.3 Tasks
+
+```sql
+CREATE TABLE tasks (
+  id                 TEXT PRIMARY KEY,
+  owner_id           TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  engine             TEXT NOT NULL CHECK (engine IN ('aria2','qbittorrent','ytdlp')),
+  engine_ref         TEXT,                              -- aria2 GID | qBittorrent infohash | yt-dlp job id; NULL until accepted
+  source_kind        TEXT NOT NULL CHECK (source_kind IN ('http','ftp','sftp','magnet','torrent','metalink','media')),
+  source_uri         TEXT,
+  name               TEXT NOT NULL,
+  state              TEXT NOT NULL CHECK (state IN (
+                       'queued','downloading','seeding','paused','checking',
+                       'extracting','moving','completed','error','removed')),
+  error_code         TEXT CHECK (error_code IS NULL OR error_code IN (
+                       'broken_link','destination_not_exist','destination_denied','disk_full',
+                       'quota_reached','timeout','exceed_max_file_system_size','exceed_max_destination_size',
+                       'exceed_max_temp_size','encrypted_name_too_long','name_too_long','torrent_duplicate',
+                       'file_not_exist','required_premium_account','not_supported_type','try_it_later',
+                       'task_encryption','missing_python','private_video','ftp_encryption_not_supported_type',
+                       'extract_failed','extract_failed_wrong_password','extract_failed_invalid_archive',
+                       'extract_failed_quota_reached','extract_failed_disk_full','unknown',
+                       'ssrf_blocked','path_rejected','quota_exceeded','engine_unavailable','unsupported_scheme')),
+  error_message      TEXT,
+  destination        TEXT NOT NULL,
+  content_path       TEXT,                              -- absolute path to the finished file or directory
+  category_id        TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  total_bytes        INTEGER,                           -- NULL while metadata is unknown
+  completed_bytes    INTEGER NOT NULL DEFAULT 0,
+  uploaded_bytes     INTEGER NOT NULL DEFAULT 0,
+  download_rate      INTEGER NOT NULL DEFAULT 0,
+  upload_rate        INTEGER NOT NULL DEFAULT 0,
+  eta_seconds        INTEGER,
+  ratio              REAL NOT NULL DEFAULT 0,
+  total_peers        INTEGER NOT NULL DEFAULT 0,
+  connected_seeders  INTEGER NOT NULL DEFAULT 0,
+  connected_leechers INTEGER NOT NULL DEFAULT 0,
+  dl_limit           INTEGER NOT NULL DEFAULT 0,        -- bytes/s, 0 = unlimited
+  ul_limit           INTEGER NOT NULL DEFAULT 0,
+  ratio_limit        REAL,
+  seeding_time_limit INTEGER,                           -- seconds
+  sequential         INTEGER NOT NULL DEFAULT 0 CHECK (sequential IN (0,1)),
+  queue_position     INTEGER,
+  unzip_progress     INTEGER,                           -- 0-100, only while state = 'extracting'
+  extract_password   TEXT,                              -- secret: never returned by any API, never logged
+  added_at           INTEGER NOT NULL,
+  started_at         INTEGER,
+  completed_at       INTEGER,
+  created_at         INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_tasks_engine_ref ON tasks(engine, engine_ref) WHERE engine_ref IS NOT NULL;
+CREATE INDEX idx_tasks_state    ON tasks(state, added_at DESC);
+CREATE INDEX idx_tasks_owner    ON tasks(owner_id, added_at DESC);
+CREATE INDEX idx_tasks_category ON tasks(category_id);
+CREATE INDEX idx_tasks_updated  ON tasks(updated_at);
+
+CREATE TABLE task_tags (
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  tag_id  TEXT NOT NULL REFERENCES tags(id)  ON DELETE CASCADE,
+  PRIMARY KEY (task_id, tag_id)
+);
+CREATE INDEX idx_task_tags_tag ON task_tags(tag_id);
+
+CREATE TABLE task_files (
+  id              TEXT PRIMARY KEY,
+  task_id         TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  file_index      INTEGER NOT NULL,                     -- engine-side index, 0-based
+  path            TEXT NOT NULL,                        -- relative to tasks.destination
+  size_bytes      INTEGER NOT NULL DEFAULT 0,
+  completed_bytes INTEGER NOT NULL DEFAULT 0,
+  selected        INTEGER NOT NULL DEFAULT 1 CHECK (selected IN (0,1)),
+  priority        INTEGER CHECK (priority IS NULL OR priority IN (0,1,4,7)),
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_task_files_idx ON task_files(task_id, file_index);
+
+CREATE TABLE task_trackers (
+  id                   TEXT PRIMARY KEY,
+  task_id              TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  url                  TEXT NOT NULL,
+  status               TEXT,                            -- engine-reported string, stored verbatim
+  update_timer_seconds INTEGER,
+  seeds                INTEGER,
+  peers                INTEGER,
+  message              TEXT,
+  created_at           INTEGER NOT NULL,
+  updated_at           INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_task_trackers_url ON task_trackers(task_id, url);
+
+CREATE TABLE task_events (
+  id          TEXT PRIMARY KEY,
+  task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  at          INTEGER NOT NULL,                         -- unix ms
+  level       TEXT NOT NULL CHECK (level IN ('info','warn','error')),
+  code        TEXT NOT NULL,                            -- stable i18n key, e.g. 'engine.accepted', 'postprocess.unrar.failed'
+  message     TEXT NOT NULL,
+  detail_json TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE INDEX idx_task_events_task ON task_events(task_id, at DESC);
+CREATE INDEX idx_task_events_at   ON task_events(at);
+```
+
+Every state transition and every job attempt writes one `task_events` row. `code` is a stable machine-readable
+enum so the UI can translate it with i18next.
+
+### 3.4 Search
+
+```sql
+CREATE TABLE indexers (
+  id                TEXT PRIMARY KEY,
+  name              TEXT NOT NULL,
+  kind              TEXT NOT NULL CHECK (kind IN ('torznab','newznab','dlsearch')),
+  enabled           INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+  url               TEXT,                               -- Torznab/Newznab base URL
+  api_key_enc       TEXT,                               -- encrypted at rest; never returned by any API
+  definition_id     TEXT,                               -- dlsearch engine id, e.g. 'internet-archive'
+  definition_source TEXT CHECK (definition_source IS NULL OR definition_source IN ('bundled','user','imported')),
+  provenance        TEXT,                               -- free text shown in the UI, e.g. 'imported from foo.dlm'
+  legal_tier        TEXT NOT NULL DEFAULT 'user-supplied' CHECK (legal_tier IN ('legitimate','user-supplied')),
+  priority          INTEGER NOT NULL DEFAULT 50,
+  seeders_unknown   INTEGER NOT NULL DEFAULT 0 CHECK (seeders_unknown IN (0,1)),
+  settings_json     TEXT,                               -- per-engine setting values
+  categories_json   TEXT,                               -- site category -> newznab id map
+  last_test_at      INTEGER,
+  last_error        TEXT,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_indexers_definition ON indexers(definition_id) WHERE definition_id IS NOT NULL;
+
+CREATE TABLE search_jobs (
+  id              TEXT PRIMARY KEY,
+  owner_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  query           TEXT NOT NULL,
+  indexer_ids_json TEXT NOT NULL,                       -- JSON array of indexers.id
+  categories_json TEXT,                                 -- JSON array of newznab category ids
+  finished        INTEGER NOT NULL DEFAULT 0 CHECK (finished IN (0,1)),
+  total           INTEGER NOT NULL DEFAULT 0,
+  last_error      TEXT,
+  started_at      INTEGER NOT NULL,
+  finished_at     INTEGER,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+CREATE INDEX idx_search_jobs_created ON search_jobs(created_at);
+
+CREATE TABLE search_results (
+  id                        TEXT PRIMARY KEY,
+  search_job_id             TEXT NOT NULL REFERENCES search_jobs(id) ON DELETE CASCADE,
+  indexer_id                TEXT NOT NULL REFERENCES indexers(id) ON DELETE CASCADE,
+  title                     TEXT NOT NULL,
+  download_url              TEXT,
+  magnet_uri                TEXT,
+  info_hash                 TEXT,
+  size_bytes                INTEGER,
+  seeders                   INTEGER,                    -- NULL when unknown; never -1, never a fabricated 1
+  leechers                  INTEGER,                    -- leechers = peers - seeders when only peers is given
+  grabs                     INTEGER,
+  published_at              INTEGER,
+  details_url               TEXT,
+  category_ids_json         TEXT,
+  category_desc             TEXT,
+  download_volume_factor    REAL NOT NULL DEFAULT 1.0,
+  upload_volume_factor      REAL NOT NULL DEFAULT 1.0,
+  minimum_ratio             REAL,
+  minimum_seed_time_seconds INTEGER,
+  imdb_id                   TEXT,
+  tmdb_id                   TEXT,
+  tvdb_id                   TEXT,
+  year                      INTEGER,
+  genre                     TEXT,
+  language                  TEXT,
+  publisher                 TEXT,
+  author                    TEXT,
+  album                     TEXT,
+  artist                    TEXT,
+  created_at                INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL
+);
+CREATE INDEX idx_search_results_job ON search_results(search_job_id);
+```
+
+### 3.5 RSS
+
+```sql
+CREATE TABLE feeds (
+  id                 TEXT PRIMARY KEY,
+  url                TEXT NOT NULL UNIQUE,
+  title              TEXT,
+  enabled            INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+  refresh_interval_s INTEGER NOT NULL DEFAULT 0,        -- 0 = use the global RSS interval setting
+  item_cap           INTEGER NOT NULL DEFAULT 50,       -- retained feed_items per feed
+  etag               TEXT,
+  last_modified      TEXT,                              -- verbatim HTTP-date string, replayed as If-Modified-Since
+  ttl_minutes        INTEGER,
+  last_fetch_at      INTEGER,
+  last_success_at    INTEGER,
+  next_fetch_at      INTEGER NOT NULL,
+  escalation_level   INTEGER NOT NULL DEFAULT 0,
+  disabled_till      INTEGER,
+  last_error         TEXT,
+  created_at         INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL
+);
+CREATE INDEX idx_feeds_next_fetch ON feeds(next_fetch_at) WHERE enabled = 1;
+
+CREATE TABLE feed_items (
+  id            TEXT PRIMARY KEY,
+  feed_id       TEXT NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+  guid          TEXT,                                   -- raw <guid>/<id>, NULL when absent
+  identity      TEXT NOT NULL,                          -- resolved dedup identity
+  title         TEXT NOT NULL,
+  title_norm    TEXT NOT NULL,                          -- lowercased, [._] -> space, whitespace collapsed
+  link          TEXT,
+  download_url  TEXT,                                   -- .torrent URL or magnet:
+  info_hash     TEXT,                                   -- 40-char lowercase hex, NULL when unknown
+  size_bytes    INTEGER,
+  published_at  INTEGER,
+  first_seen_at INTEGER NOT NULL,
+  raw_json      TEXT,                                   -- full parsed item, feeds the dry-run panel
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_feed_items_identity ON feed_items(feed_id, identity);
+CREATE INDEX idx_feed_items_hash ON feed_items(info_hash);
+CREATE INDEX idx_feed_items_norm ON feed_items(title_norm);
+CREATE INDEX idx_feed_items_pub  ON feed_items(feed_id, published_at DESC);
+
+CREATE TABLE rules (
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL UNIQUE,
+  enabled         INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+  priority        INTEGER NOT NULL DEFAULT 0,           -- lower is evaluated first; ties broken by name
+  definition_json TEXT NOT NULL,                        -- the rule document; schema in 08-rss-automation.md
+  last_match_at   INTEGER,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+
+CREATE TABLE rule_matches (
+  id           TEXT PRIMARY KEY,
+  rule_id      TEXT REFERENCES rules(id) ON DELETE SET NULL,
+  feed_item_id TEXT REFERENCES feed_items(id) ON DELETE SET NULL,
+  task_id      TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  info_hash    TEXT,                                    -- back-filled after the .torrent is fetched
+  content_key  TEXT,                                    -- e.g. 'tv:the-show:s01e05'
+  title        TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN ('queued','sent','failed','rejected','fallback')),
+  reason       TEXT,                                    -- rejection reason code; see 08-rss-automation.md
+  score        INTEGER NOT NULL DEFAULT 0,
+  matched_at   INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_rule_matches_hash ON rule_matches(info_hash) WHERE info_hash IS NOT NULL;
+CREATE INDEX idx_rule_matches_key  ON rule_matches(content_key) WHERE content_key IS NOT NULL;
+CREATE INDEX idx_rule_matches_rule ON rule_matches(rule_id, matched_at DESC);
+
+CREATE TABLE rule_seen_episodes (
+  rule_id     TEXT NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+  episode_key TEXT NOT NULL,                            -- '1x5', '1x5-REPACK', '2017.01.01'
+  seen_at     INTEGER NOT NULL,
+  PRIMARY KEY (rule_id, episode_key)
+);
+```
+
+`rule_matches` and `rule_seen_episodes` are the correctness boundary for dedup: never prune them
+automatically. Expose a per-row "forget" action instead.
+
+### 3.6 Jobs, schedule and preferences
+
+```sql
+CREATE TABLE jobs (
+  id           TEXT PRIMARY KEY,
+  kind         TEXT NOT NULL,                           -- 'postprocess' | 'extract' | 'move' | 'webhook' | 'rss_poll' | ...
+  task_id      TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL,
+  state        TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','running','done','failed')),
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  run_after    INTEGER NOT NULL,                        -- unix ms
+  locked_at    INTEGER,                                 -- unix ms, NULL when unclaimed
+  last_error   TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX idx_jobs_claim ON jobs(state, run_after);
+
+CREATE TABLE bandwidth_schedule (
+  id         TEXT PRIMARY KEY,
+  day        INTEGER NOT NULL CHECK (day BETWEEN 0 AND 6),    -- 0 = Monday
+  hour       INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
+  mode       TEXT NOT NULL CHECK (mode IN ('no_download','default','alternative')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_bandwidth_schedule_cell ON bandwidth_schedule(day, hour);
+
+CREATE TABLE ui_prefs (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key        TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_ui_prefs_key ON ui_prefs(user_id, key);
+
+CREATE TABLE watch_folders (
+  id                TEXT PRIMARY KEY,
+  path              TEXT NOT NULL UNIQUE,
+  enabled           INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+  owner_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  destination       TEXT NOT NULL,
+  category_id       TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  delete_after_load INTEGER NOT NULL DEFAULT 0 CHECK (delete_after_load IN (0,1)),
+  poll_interval_s   INTEGER NOT NULL DEFAULT 10,        -- polling fallback when inotify registration fails
+  last_scan_at      INTEGER,
+  last_error        TEXT,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL
+);
+```
+
+`bandwidth_schedule` holds exactly 168 rows, seeded by `00001_init.sql` with `mode = 'default'`.
+`PUT /settings/schedule` replaces all 168 in one transaction.
+
+Job worker rules (see [ADR-0015](decisions/0015-db-backed-in-process-job-queue.md)):
+1. **At-least-once.** Every handler must be idempotent, keyed on `(kind, task_id)`.
+2. **On boot**, run `UPDATE jobs SET state='pending', locked_at=NULL WHERE state='running';`.
+3. **Backoff:** `run_after = now_ms + min(600000, 5000 * 2^attempts)`. At `attempts >= max_attempts` set
+   `state='failed'` and write a `task_events` row. The `failed` rows are the dead-letter queue.
+
+Claim statement (SQLite supports `RETURNING` since 3.35):
+
+```sql
+UPDATE jobs
+   SET state = 'running', locked_at = :now, attempts = attempts + 1, updated_at = :now
+ WHERE id = (SELECT id FROM jobs
+              WHERE state = 'pending' AND run_after <= :now
+              ORDER BY run_after LIMIT 1)
+RETURNING id, kind, task_id, payload_json, attempts, max_attempts;
+```
+
+---
+
+## 4. Enum vocabularies
+
+### 4.1 `tasks.state`
+
+| Value | Meaning | Sidebar filter membership |
+|---|---|---|
+| `queued` | Accepted, not transferring. | All, Inactive |
+| `downloading` | Bytes are arriving. | All, Downloading, Active |
+| `seeding` | Complete, uploading. | All, Completed, Active |
+| `paused` | Paused by a user. | All, Inactive, Stopped |
+| `checking` | Hash-checking existing data. | All |
+| `extracting` | Post-processing archive extraction. | All |
+| `moving` | Post-processing move to the final destination. | All |
+| `completed` | Finished, not seeding. | All, Completed |
+| `error` | Terminal failure; `error_code` is set. | All, Inactive, Error |
+| `removed` | Soft-deleted; row retained for the event log. | none |
+
+Download Station status mapping: `waiting`→`queued`, `filehosting_waiting`→`queued`, `finishing`→`moving`,
+`finished`→`completed`, `hash_checking`→`checking`. The aria2 / qBittorrent / Transmission normalisation tables
+live in [`06-download-engines.md`](06-download-engines.md).
+
+### 4.2 `tasks.error_code`
+
+Twenty-six values adopted verbatim from Download Station's `error_detail` vocabulary:
+
+```
+broken_link                     destination_not_exist            destination_denied
+disk_full                       quota_reached                    timeout
+exceed_max_file_system_size     exceed_max_destination_size      exceed_max_temp_size
+encrypted_name_too_long         name_too_long                    torrent_duplicate
+file_not_exist                  required_premium_account         not_supported_type
+try_it_later                    task_encryption                  missing_python
+private_video                   ftp_encryption_not_supported_type
+extract_failed                  extract_failed_wrong_password    extract_failed_invalid_archive
+extract_failed_quota_reached    extract_failed_disk_full         unknown
+```
+
+Plus five dl-tool additions:
+
+| Value | Raised when |
+|---|---|
+| `ssrf_blocked` | The source URL resolved to a blocked address range. |
+| `path_rejected` | The destination failed path-safety validation. |
+| `quota_exceeded` | The owning user's `quota_bytes` would be exceeded. |
+| `engine_unavailable` | The routed engine did not respond. |
+| `unsupported_scheme` | The URI scheme has no engine (for example `ed2k://`). |
+
+`missing_python`, `required_premium_account` and `private_video` are retained for façade fidelity only; dl-tool
+never raises them.
+
+### 4.3 `task_files.priority`
+
+| Value | Meaning |
+|---|---|
+| `0` | skip — the file is not downloaded (this is how deselection is expressed) |
+| `1` | low |
+| `4` | normal |
+| `7` | high |
+
+<!-- INFERRED: the 0/1/4/7 normalisation is the research corpus's own libtorrent-style mapping, not a value set
+     quoted from a primary source. qBittorrent's WebAPI v2 uses 0 = do not download, 1 = normal, 6 = high,
+     7 = maximal; the adapter must translate. Confirm the wire values against qBittorrent at implementation time. -->
+
+aria2 has no per-file numeric priority — only `--select-file`, a selection. For aria2 tasks store `priority`
+as `NULL` and drive `selected` alone.
+
+### 4.4 `jobs.state`
+
+| Value | Meaning |
+|---|---|
+| `pending` | Claimable once `run_after <= now`. |
+| `running` | Claimed by a worker; reset to `pending` on boot. |
+| `done` | Handler returned without error. |
+| `failed` | `attempts >= max_attempts`; acts as the dead-letter queue. |
+
+### 4.5 `indexers.kind`
+
+| Value | Meaning |
+|---|---|
+| `torznab` | Torznab endpoint (Prowlarr, Jackett, bitmagnet). |
+| `newznab` | Newznab endpoint; same client, NZB result payloads. |
+| `dlsearch` | A `dlsearch/v1` YAML definition; `definition_id` names it. |
+
+### 4.6 `rules.definition_json` → `match.mode`
+
+| Value | Semantics |
+|---|---|
+| `wildcard` | Default. `*` → `.*`, `?` → `.`, unanchored; whitespace splits an entry into AND-ed tokens. |
+| `regex` | The entry is one regular expression, used as-is. |
+| `plain` | The entry is escaped literally; whitespace still splits into AND-ed tokens. |
+
+---
+
+## 5. Migration policy
+
+Library `github.com/pressly/goose/v3 v3.27.3`, embedded, run at boot before the HTTP listener starts.
+
+```go
+//go:embed migrations/*.sql
+var embedMigrations embed.FS
+
+goose.SetBaseFS(embedMigrations)
+goose.SetDialect("sqlite3")
+goose.Up(db, "migrations")
+```
+
+Rules:
+- Files live in `internal/store/migrations/`, named `00001_init.sql`, `00002_<change>.sql`, … Five digits,
+  monotonically increasing, never renumbered, never edited once merged.
+- Each file contains `-- +goose Up` and `-- +goose Down` markers. A `Down` section is mandatory even when it
+  only drops the tables the `Up` created.
+- Take a `VACUUM INTO` backup **before** running any migration, named
+  `/config/backups/dl-tool.db.pre-migration-<currentversion>.bak`. Abort the migration if the backup fails.
+- Refuse to start if the applied schema version is **newer** than the highest migration embedded in the binary.
+  Log the two version numbers and exit non-zero; do not attempt a downgrade.
+
+```sql
+SELECT MAX(version_id) FROM goose_db_version;
+```
+
+<!-- UNVERIFIED: the goose version-table name `goose_db_version` is not quoted in the research corpus. Confirm
+     it against goose v3.27.3 at implementation time before relying on this query. -->
+
+- Run `PRAGMA integrity_check;` after migrations and surface the result on `GET /system/info`.
+
+---
+
+## 6. Backup and restore
+
+### 6.1 Backup
+
+```sql
+VACUUM INTO '/config/backups/dl-tool.db.20260901T120000Z.bak';
+```
+
+- SQLite: *"The VACUUM INTO command is transactional in the sense that the generated output database is a
+  consistent snapshot of the original database."*
+- **The target file must not already exist**, or must be an empty file, or the command fails with an error.
+  Generate a fresh UTC timestamp per run; never reuse a name.
+- If `VACUUM INTO` is interrupted by an unplanned shutdown or power loss the output may be incomplete and
+  corrupt. Write to a temporary name in `/config/backups/` and `rename()` it into place within that same
+  directory once the statement returns.
+- Schedule: nightly via `github.com/robfig/cron/v3 v3.0.1`, retaining the newest 7 files. Also exposed at
+  `POST /system/backup`.
+
+### 6.2 Restore
+
+1. Stop the container.
+2. Delete `dl-tool.db`, `dl-tool.db-wal` and `dl-tool.db-shm` from `/config`.
+3. Copy the `.bak` file to `/config/dl-tool.db`, owned by `PUID:PGID`.
+4. Start the container. Migrations run at boot and bring the restored file forward.
+
+Copying `dl-tool.db` while dl-tool is running **loses the contents of `dl-tool.db-wal`** and can yield a
+corrupt copy. A clean shutdown checkpoints and removes the `-wal` and `-shm` files, leaving only
+`dl-tool.db`; that is the only state safe to copy by hand.
+
+---
+
+## 7. Retention
+
+| Table | Window | Job |
+|---|---|---|
+| `task_events` | 90 days | Nightly cron: `DELETE FROM task_events WHERE at < :cutoff_ms;` |
+| `feed_items` | Newest `feeds.item_cap` rows per feed (default 50) | After each successful feed poll |
+| `search_jobs` | 24 hours from `created_at` | Hourly cron; `search_results` follow by `ON DELETE CASCADE` |
+| `search_results` | 24 hours, via the `search_jobs` cascade | — |
+| `jobs` | `state IN ('done')` older than 7 days | Nightly cron; `failed` rows are kept |
+
+`rule_matches`, `rule_seen_episodes`, `tasks` and every configuration table are never pruned automatically.
+
+---
+
+## Decisions referenced
+| ADR | Decision |
+|---|---|
+| [ADR-0004](decisions/0004-sqlite-as-the-only-datastore.md) | SQLite as the only datastore |
+| [ADR-0015](decisions/0015-db-backed-in-process-job-queue.md) | DB-backed in-process job queue |
+| [ADR-0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
+| [ADR-0008](decisions/0008-torznab-first-declarative-yaml-engines-second.md) | Torznab first, declarative YAML engines second |
+| [ADR-0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md) | A native cross-protocol RSS rule engine |
+| [ADR-0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication |
+
+## Open questions
+- [NEEDS CLARIFICATION: goose's version-table name is unverified in the research corpus — confirm
+  `goose_db_version` before implementing the "schema newer than binary" refusal.]
+- [NEEDS CLARIFICATION: the `0/1/4/7` file-priority values are an inferred normalisation; confirm the exact
+  qBittorrent wire values (`0/1/6/7`) and the translation table in `06-download-engines.md`.]
+
+## Change log
+| Date | Change |
+|---|---|
+| 2026-09-01 | Initial version |
