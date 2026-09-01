@@ -1020,8 +1020,9 @@ so writes are admin-only and every rule carries an `owner_id`:
   `/problems/path-rejected`.
 - The check runs again at grab time on every item, because `PATCH /users/{id}` can move a jail after the
   rule was saved. `POST /rules/test` takes the same `owner_id` so the dry run's destination checks target
-  the jail the saved rule will actually run under — an admin-supplied `owner_id` on any other caller is
-  `403`; a non-admin always tests as themselves, so the dry run cannot probe another user's jail.
+  the jail the saved rule will actually run under. A non-admin supplying an `owner_id` other than their
+  own is `403` `/problems/forbidden` — a non-admin always tests as themselves, so the dry run cannot
+  probe another user's jail.
 - Tasks a rule creates are owned by `owner_id`, count against that user's storage quota and concurrency
   limits (§5.11), and appear only in that user's listings — the grabbed item is processed through the
   ordinary task-creation path, so a quota breach leaves the item ungrabbed with `rule_matches.status =
@@ -1487,3 +1488,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Privilege review: rule and feed **writes** are admin-only (a rule creates tasks on someone's behalf, mirroring the watch-folder rule), `POST /rules` gains `owner_id` with save-time and grab-time jail validation of `action.destination`, and rule-grabbed tasks are owned by and quota-accounted to that owner through §5.11. Indexers with a stored API key are admin-only across `GET /indexers`, `GET /indexers/categories` and `POST /search`, because their download URLs embed the operator's tracker passkey. |
 | 2026-09-01 | Review pass: `POST /rules/{id}/run` is admin-only like rule writes (it creates tasks as the owner); `POST /rules/test` takes `owner_id` so dry-run jail checks target the right jail; an omitted `action.destination` resolves to the owner's default destination and the resolved value must pass the jail check; credential-bearing feeds (URL userinfo or `passkey`/`apikey`/`token`) are admin-only like key-bearing indexers; `DELETE /users/{id}` is `409` while the user owns tasks or rules (`ON DELETE RESTRICT`). |
 | 2026-09-01 | Review pass 2: `POST /rules/test`'s `owner_id` is admin-only (a non-admin tests as themselves, so the dry run cannot probe another user's jail or read their resolved default destination). |
+| 2026-09-01 | Review pass 3: the `/rules/test` `owner_id` rejection is spelled out — a non-admin naming anyone but themselves gets `403 /problems/forbidden`. |
