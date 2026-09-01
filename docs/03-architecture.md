@@ -415,9 +415,8 @@ Engine-side identifiers — aria2 GID, qBittorrent infohash, yt-dlp job id — l
 
 - Every API error is RFC 9457 `application/problem+json`, the Huma default; shapes and status codes are in
   [`05-api-contract.md`](05-api-contract.md).
-- Every task failure also sets `tasks.error_code` from the canonical enum: Download Station's 26 values plus
-  `ssrf_blocked`, `path_rejected`, `quota_exceeded`, `concurrency_limit`, `disk_full`, `engine_unavailable`
-  and `unsupported_scheme`.
+- Every task failure also sets `tasks.error_code` from the canonical enum in
+  [`04-data-model.md`](04-data-model.md#42-taskserror_code).
 - Every state transition and job attempt writes one `task_events` row whose `code` is a stable machine
   string such as `engine.accepted` or `postprocess.extract.failed`, so the UI can translate it with i18next.
 - Go errors wrap with `fmt.Errorf("...: %w", err)`; see [`14-conventions.md`](14-conventions.md).
