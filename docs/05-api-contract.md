@@ -349,7 +349,12 @@ GET /api/v1/tasks?state=active&sort=-download_rate&limit=2
 {"items":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","state":"downloading"}],"next_cursor":null,"total":8}
 ```
 
-`items` entries are full Task objects; the fragment above is abbreviated. Statuses: `200` · `401` · `422`
+`items` entries are full Task objects; the fragment above is abbreviated.
+
+Normal task lists and every sidebar filter omit `removed` tombstones. An explicit `state=removed` query lists
+them; `GET /tasks/{id}` and its event endpoint remain available after removal.
+
+Statuses: `200` · `401` · `422`
 `/problems/validation-failed` (unknown `sort`, `limit` out of range, stale `cursor`).
 
 ### 5.2 `POST /tasks`
@@ -496,29 +501,29 @@ in this order, and never approximate any step:
 
 | # | Step | Rule |
 |---|---|---|
-| 1 | Stop the task at its engine | A `seeding` or `downloading` task is stopped and its engine handle removed **before** any unlink. Never unlink a file an engine still has open. |
-| 2 | Enumerate the targets | Only rows of `task_files` for this task, resolved against `tasks.destination`. Never a glob, never a directory walk, never `content_path` alone. |
-| 3 | Re-check every path, before unlinking any of them | Each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS` **and** inside the caller's jail (§7.2). One failing path aborts the whole request with `403` `/problems/path-rejected` and an `errors[]` entry naming it; nothing at all is unlinked. |
-| 4 | Unlink | One `unlink(2)` per recorded file. Then remove the task's own directory only while it is empty; a non-empty directory is left in place. |
-| 5 | Record it | Write one `task_events` row with `level:"warn"`, `code:"task.data_deleted"` and the file count and byte total in `detail`. The row survives the task row through the cascade window and is written before the response. |
-| 6 | Delete the row | `tasks`, and its `task_files`, `task_trackers` and `task_tags` rows by cascade. |
+| 1 | Enumerate the targets | Only rows of `task_files` for this task, resolved against `tasks.destination`. Never a glob, never a directory walk, never `content_path` alone. |
+| 2 | Validate every target | Before any side effect, each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS` **and** the caller's jail (§7.2). One failure returns `403` `/problems/path-rejected`; the engine and filesystem remain untouched. |
+| 3 | Remove the engine handle | Call `Engine.Remove`, which always instructs the engine to retain payload data. This must finish before any unlink so no file remains open by the engine. |
+| 4 | Unlink through `internal/fsx` | One `unlink(2)` per validated file. Then remove the task's own directory only while empty; leave a non-empty directory in place. Engine adapters never perform this step. |
+| 5 | Record it | In a database transaction write `task.removed`; for `delete_data=true`, also write `task.data_deleted` with the file count and byte total. |
+| 6 | Mark the tombstone | In the same transaction set `state="removed"`, clear `engine_ref`, zero both rates, clear ETA, and commit. Retain the task and all child rows. |
 
 - **Hardlinks are expected and safe.** A file dl-tool downloaded and then hardlinked into a media library is
   one inode with two names; unlinking dl-tool's name leaves the library copy byte-for-byte intact and fully
   readable. This is the normal outcome of the single `/data` mount
   ([ADR-0012](decisions/0012-single-data-mount.md)) and is not a partial deletion — do not warn about it and
   do not try to detect it.
-- `delete_data=false`, the default, unlinks nothing at all: the row goes, every byte stays.
+- `delete_data=false`, the default, skips steps 1, 2 and 4: the retained task enters `removed` and every byte stays.
 - A file recorded in `task_files` that no longer exists is not an error; it is counted in `missing`.
 - The response body reports what happened, so a client never has to guess:
 
 ```json
-{"deleted":true,"delete_data":true,"files_unlinked":3,"bytes_unlinked":5583457280,"missing":0}
+{"removed":true,"delete_data":true,"files_unlinked":3,"bytes_unlinked":5583457280,"missing":0}
 ```
 
 `200` with that body · `404` · `422` `/problems/validation-failed` when both flags are true · `403`
-`/problems/path-rejected` (step 3) · `503` `/problems/engine-unavailable` when step 1 could not be
-completed — the task is **not** deleted and no file is unlinked.
+`/problems/path-rejected` (step 2) · `503` `/problems/engine-unavailable` when step 3 could not be
+completed — the task is **not** removed and no file is unlinked.
 
 ### 5.7 `POST /tasks/actions`
 
@@ -1448,3 +1453,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
+| 2026-09-01 | Replaced destructive task-row deletion with retained tombstones and confined filesystem removal. |

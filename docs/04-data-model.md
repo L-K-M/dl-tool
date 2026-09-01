@@ -266,9 +266,9 @@ CREATE TABLE tasks (
   extract_password TEXT,                -- secret: never returned by an API, never logged
   added_at INTEGER NOT NULL, started_at INTEGER, completed_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-CREATE UNIQUE INDEX idx_tasks_engine_ref ON tasks(engine, engine_ref) WHERE engine_ref IS NOT NULL;
-CREATE UNIQUE INDEX idx_tasks_infohash_v1 ON tasks(infohash_v1) WHERE infohash_v1 IS NOT NULL;
-CREATE UNIQUE INDEX idx_tasks_infohash_v2 ON tasks(infohash_v2) WHERE infohash_v2 IS NOT NULL;
+CREATE UNIQUE INDEX idx_tasks_engine_ref ON tasks(engine, engine_ref) WHERE engine_ref IS NOT NULL AND state <> 'removed';
+CREATE UNIQUE INDEX idx_tasks_infohash_v1 ON tasks(infohash_v1) WHERE infohash_v1 IS NOT NULL AND state <> 'removed';
+CREATE UNIQUE INDEX idx_tasks_infohash_v2 ON tasks(infohash_v2) WHERE infohash_v2 IS NOT NULL AND state <> 'removed';
 CREATE INDEX idx_tasks_state ON tasks(state, added_at DESC);
 CREATE INDEX idx_tasks_owner ON tasks(owner_id, added_at DESC);
 CREATE INDEX idx_tasks_category ON tasks(category_id);
@@ -314,6 +314,11 @@ CREATE INDEX idx_task_events_at ON task_events(at);
 
 Every state transition and every job attempt writes one `task_events` row. `code` is machine-readable so the
 UI can translate it with i18next.
+
+Application-level removal never deletes a `tasks` row. In one transaction it inserts the removal event and
+sets `state = 'removed'`, `engine_ref = NULL`, both rates to zero and `eta_seconds = NULL`. Child rows remain
+attached so the event and file history stay queryable. Excluding tombstones from the unique indexes releases
+their engine and infohash identities, allowing the same transfer to be submitted again.
 
 **Infohash normalisation at ingest.** Every hash is stored lowercase hex, never base32 and never uppercase.
 
@@ -773,3 +778,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Initial version |
 | 2026-09-01 | File priority corrected to `IN (0,1,6,7)` with the qBittorrent names `skip/normal/high/maximum`; added `tasks.infohash_v1`/`infohash_v2` with partial unique indices and the ingest normalisation table; widened `feed_items.info_hash` and `rule_matches.info_hash` to 64 hex; added `notification_channels`; added `engines.foreign_task_policy` and the boot-probe meaning of `engines.version`; added the concurrency and `min_free_space` settings rows; separated the storage quota from the concurrency limit and added `concurrency_limit` and `js_runtime_missing` to `error_code`; added the table-reachability list; corrected the ADR-0005/0008/0009 filenames. |
 | 2026-09-01 | Migration subsystem cut: deleted the `engines.foreign_task_policy` column, its `CHECK` constraint and enum section §4.9, replacing them with the single exclusive-control rule; removed every link to the withdrawn migration document and the "imported task" framing of the inherited `error_code` values; §5 retitled "Schema migration policy" to keep goose migrations unambiguous. `notification_channels`, `infohash_v1`/`infohash_v2` and `priority IN (0,1,6,7)` are unchanged. |
+| 2026-09-01 | Made task removal durable and released unique identities held by removed rows. |

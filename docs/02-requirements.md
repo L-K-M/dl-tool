@@ -272,9 +272,15 @@ If a submission's `infohash_v1` or `infohash_v2` equals that of an existing task
 | T100 | must |
 
 ### FR-024 Delete downloaded data safely and only on request
-When a client deletes a task with `delete_data=true`, dl-tool shall stop the task at its engine first, unlink only the paths recorded in `task_files`, refuse any path that resolves outside the configured roots, and record the removal as a `task_events` row.
+When a client deletes a task with `delete_data=true`, dl-tool shall first enumerate and validate every path
+recorded in `task_files`, remove the engine handle while requiring the engine to retain all data, unlink the
+validated paths through the jailed filesystem layer, mark the task `removed`, and retain its removal event.
+No engine adapter shall delete payload data.
 
-**Verify:** T111 deletes a seeding task with `delete_data=true` and asserts the engine was stopped before any unlink, that only `task_files` paths are gone, that a recorded path outside the roots is refused with `path_rejected`, and that a hardlinked copy elsewhere still opens with its original contents — removing dl-tool's link leaves the library copy intact.
+**Verify:** T111 deletes a seeding task with `delete_data=true` and asserts path validation precedes every
+side effect, the engine retains data and is stopped before any unlink, only `task_files` paths are gone, an
+outside-root path is refused with `path_rejected`, the removal event remains readable, and a hardlinked copy
+elsewhere still opens with its original contents.
 
 | Covered by | Priority |
 |---|---|
@@ -1262,3 +1268,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | Required soft deletion and confined payload removal outside engine adapters. |
