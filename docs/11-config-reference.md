@@ -142,7 +142,7 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `rss_enabled` | boolean | `true` | `PATCH /settings` |
 | `rss_interval_s` | integer seconds, minimum `60` | `900` | `PATCH /settings` |
 | `auto_extract` | boolean | `false` | `PATCH /settings` |
-| `extract_passwords` | **secret** array of strings | `[]` | `PATCH /settings` |
+| `extract_passwords` | **secret** array of strings, encrypted at rest (§6) | `[]` | `PATCH /settings` |
 | `confirm_on_delete` | boolean | `true` | `PATCH /settings` |
 
 Seeding does not count toward any `max_active_*` limit. The 168-cell bandwidth grid is not a settings key: it
@@ -157,10 +157,18 @@ lives in its own table and is replaced through `PUT /settings/schedule`. Per-use
 |---|---|---|
 | `DLTOOL_ARIA2_SECRET` | env or `DLTOOL_ARIA2_SECRET_FILE` | logged, returned by any endpoint, or written to a backup export |
 | `DLTOOL_QBITTORRENT_PASSWORD` | env or `DLTOOL_QBITTORRENT_PASSWORD_FILE` | logged, returned by any endpoint, or written to a backup export |
-| `extract_passwords` | `settings` row | returned in clear by `GET /settings` — it renders as `"__redacted__"` |
-| indexer `api_key` | `indexers` row | returned by `GET /indexers`, or included in a log line or an error message |
-| notification channel `secret_enc` | `notification_channels` row | returned by `GET /notifications` |
-| session signing key, CSRF HMAC key | `<CONFIG_DIR>/secrets.env`, mode `0600` | exported, or exposed through any API |
+| `extract_passwords`, `tasks.extract_password` | encrypted at rest with `DLTOOL_SECRET_KEY` (see below) | returned in clear by `GET /settings` — it renders as `"__redacted__"` |
+| indexer `api_key` | `indexers.api_key_enc`, encrypted at rest | returned by `GET /indexers`, or included in a log line or an error message |
+| notification channel `secret_enc`, engine `secret_enc` | `notification_channels`/`engines` rows, encrypted at rest | returned by `GET /notifications` or `/engines` |
+| at-rest secret key `DLTOOL_SECRET_KEY`, `ARIA2_RPC_SECRET` | `<CONFIG_DIR>/secrets.env`, mode `0600` | exported, or exposed through any API |
+
+**At-rest encryption.** Every `*_enc` column and the extraction passwords are sealed with
+`DLTOOL_SECRET_KEY`: XChaCha20-Poly1305 with a 32-byte key and a fresh random nonce per value, the nonce
+stored alongside the ciphertext. The key lives only in `secrets.env` and in process memory; it is never
+logged, exported or returned. Sessions and CSRF tokens do **not** use it — session ids are opaque random
+values stored hashed in `sessions`, and the CSRF token is a per-session random value
+([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.1–6.2) — so no session or CSRF
+key exists.
 
 Rules:
 
@@ -183,13 +191,15 @@ Rules:
 
 1. Run `dl-tool gen-secrets` (or `openssl rand -base64 32`) before the first `docker compose up`. It writes
    `<CONFIG_DIR>/secrets.env` mode `0600`, owned by `PUID:PGID`, if that file does not already exist.
-2. The file contains three values, each 32 bytes from `crypto/rand`, base64url-encoded:
-   `ARIA2_RPC_SECRET`, `DLTOOL_SESSION_KEY`, `DLTOOL_CSRF_KEY`.
+2. The file contains two values, each 32 bytes from `crypto/rand`, base64url-encoded:
+   `ARIA2_RPC_SECRET` and `DLTOOL_SECRET_KEY` (the at-rest encryption key above).
 3. Copy `ARIA2_RPC_SECRET` into `.env` so Compose can interpolate it into both services.
-4. At every boot dl-tool regenerates any of the three that is missing from `secrets.env`. A regenerated
-   session key invalidates all sessions; a regenerated `ARIA2_RPC_SECRET` does **not** reconfigure the
-   running aria2 container, so dl-tool logs `aria2_secret_rotated` and marks the engine unhealthy until the
-   operator restarts it.
+4. At every boot dl-tool regenerates either value that is missing from `secrets.env`. A regenerated
+   `DLTOOL_SECRET_KEY` makes every stored `*_enc` value undecryptable: dl-tool logs
+   `secret_key_regenerated`, clears the affected columns and marks their indexers, channels and engines
+   with a `secret_lost` error so the operator re-enters them — silently keeping dead ciphertext would be
+   worse. A regenerated `ARIA2_RPC_SECRET` does **not** reconfigure the running aria2 container, so
+   dl-tool logs `aria2_secret_rotated` and marks the engine unhealthy until the operator restarts it.
 
 ---
 
@@ -312,3 +322,4 @@ stated fallback.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
+| 2026-09-01 | Secrets corrected: `DLTOOL_SESSION_KEY`/`DLTOOL_CSRF_KEY` removed (opaque server-side sessions and per-session CSRF tokens need no key) and replaced by `DLTOOL_SECRET_KEY`, the previously unspecified key behind every "encrypted at rest" `*_enc` column and the extraction passwords; its loss-and-regeneration behaviour is specified. |

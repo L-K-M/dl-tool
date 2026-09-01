@@ -193,7 +193,7 @@ Their presence after a stop means the shutdown was killed, not graceful.
 | Artefact | Mechanism | Covers |
 |---|---|---|
 | `/config/dl-tool.db` | `VACUUM INTO`, nightly and pre-migration | Everything: users, tasks, settings, indexers, feeds, rules, schedule. |
-| `/config/secrets.env` | Operator copies the file | Session key, CSRF key, `ARIA2_RPC_SECRET`. Losing it invalidates every session; the file is mode `0600`. |
+| `/config/secrets.env` | Operator copies the file | The at-rest secret key `DLTOOL_SECRET_KEY` and `ARIA2_RPC_SECRET`. Losing it makes every stored `*_enc` secret undecryptable (re-enter them) and forces an aria2 secret re-share; the file is mode `0600`. |
 | Portable settings | `GET /settings/export` | Configuration without identities — safe to attach to a bug report ([`05-api-contract.md` §11.5](05-api-contract.md#115-get-settingsexport-and-post-settingsimport)). |
 
 ### 3.2 The nightly job
@@ -306,7 +306,7 @@ including `debug`. Values are typed `secure.Secret`, whose `String`, `Format` an
 | Never logged | Where it lives |
 |---|---|
 | `DLTOOL_ARIA2_SECRET`, `DLTOOL_QBITTORRENT_PASSWORD` | Environment or `_FILE` |
-| Session signing key, CSRF HMAC key | `/config/secrets.env` |
+| At-rest secret key `DLTOOL_SECRET_KEY` | `/config/secrets.env` |
 | Password hashes, API token values | `users`, `api_tokens` |
 | Indexer `api_key`, notification `secret_enc`, engine `secret_enc` | Configuration tables |
 | `extract_passwords` | `settings` |
@@ -342,7 +342,7 @@ works whether or not the server is running.
 | Deliberately excluded | Reason |
 |---|---|
 | The database file itself, and any `/config/backups/*` | Contains password hashes, API tokens and every session. |
-| `/config/secrets.env` | Session and CSRF keys. |
+| `/config/secrets.env` | `DLTOOL_SECRET_KEY` and `ARIA2_RPC_SECRET`. |
 | `users`, `sessions`, `api_tokens` rows | Identities and credentials. |
 | Task names, source URIs, destinations, file names | A file list is the most privacy-sensitive data in the product. Only counts and state histograms are included. |
 | Indexer URLs and API keys, feed URLs, tracker URLs | Carry per-user passkeys. |
@@ -398,3 +398,4 @@ deliberate, local operator action.
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version. |
+| 2026-09-01 | `secrets.env` described correctly: `DLTOOL_SECRET_KEY` (the at-rest encryption key behind every `*_enc` column) and `ARIA2_RPC_SECRET` — no session or CSRF keys exist. |

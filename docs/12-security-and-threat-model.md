@@ -662,7 +662,7 @@ Chosen policy
 | qBittorrent credentials | `DLTOOL_QBITTORRENT_USERNAME` and `DLTOOL_QBITTORRENT_PASSWORD` (or its `_FILE` form); never the WebUI defaults, never a bypass-by-subnet rule |
 | Container flags | `security_opt: [no-new-privileges:true]` on every service |
 | Secret storage | `<CONFIG_DIR>/secrets.env`, mode `0600`, owned by the app user; never in `environment:`, where `docker inspect` and `docker compose config` expose it |
-| Rotation | a UI action regenerates each secret; rotating the session key invalidates every session |
+| Rotation | a UI action regenerates each secret. Rotating `DLTOOL_SECRET_KEY` makes every stored `*_enc` value undecryptable, so the action re-encrypts what it can from the operator's re-entered values and otherwise clears them with a visible `secret_lost` error; rotating `ARIA2_RPC_SECRET` marks aria2 unhealthy until the container restarts. Sessions survive both — session ids are opaque rows, not signed tokens |
 
 If a Transmission adapter is ever added it keeps `rpc-host-whitelist-enabled: true` and binds
 `rpc-bind-address` to the container address.
@@ -701,3 +701,4 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | The rotation row no longer names a session key (sessions are opaque rows, not signed tokens); it names `DLTOOL_SECRET_KEY` and its re-entry consequence. |
