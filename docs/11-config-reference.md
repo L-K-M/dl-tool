@@ -108,7 +108,8 @@ decides the result. See [ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.
 ## 4. Compose-level variables (interpolation only)
 
 Read by Docker Compose from `.env` while expanding `compose.yaml`. They never reach the application as
-environment; they only produce values for other fields.
+environment; most of them produce values for other fields, and the two `DLTOOL_*_URL` rows pass straight
+through to the application variables of the same name.
 
 | Name | Default in `compose.yaml` | Interpolated into |
 |---|---|---|

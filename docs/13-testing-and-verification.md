@@ -250,8 +250,10 @@ qBittorrent lane with `DLTOOL_QBITTORRENT_URL` plus `QBT_USERNAME`/`QBT_PASSWORD
 the image requires: set the **same** username and password in qBittorrent's own WebUI, because the
 linuxserver image does not read those variables
 ([`11-config-reference.md`](11-config-reference.md) §4). In CI this step is automated — the harness
-seeds the qBittorrent config volume with a committed `qBittorrent.conf` fixture carrying a known username
-and password hash before first start, because nobody can log into a WebUI on a fresh CI volume (the
+seeds the qBittorrent config volume with a committed `qBittorrent.conf` fixture whose username and
+password hash are exactly the throwaway CI values the lane's `QBT_USERNAME`/`QBT_PASSWORD` inject into
+dl-tool (CI-only credentials — never reuse a real pair in the fixture), because nobody can log into a
+WebUI on a fresh CI volume (the
 manual step is for operators standing the stack up by hand). Without it the lane is enabled but every
 RPC call fails authentication and `add-magnet.spec.ts` fails for a reason unrelated to the code under
 test.
