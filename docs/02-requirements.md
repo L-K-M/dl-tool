@@ -709,10 +709,10 @@ Where a notification channel is configured, dl-tool shall deliver an event to it
 |---|---|
 | T077 | must |
 
-### FR-105 Run a completion hook only when explicitly enabled
-Where the operator has installed an executable at `<DLTOOL_CONFIG_DIR>/hooks/on-complete`, dl-tool shall run it once per finished task as an argument vector with a fixed environment and a timeout; the hook shall be off while the file is absent, and no environment variable, settings key or API field shall exist that names or edits the command.
+### FR-105 Run a completion hook installed by the operator
+Where the operator has installed an executable at `<DLTOOL_CONFIG_DIR>/hooks/on-complete`, dl-tool shall run it once per finished task as an argument vector with a fixed environment and a timeout; the hook shall be off while the file is absent or not executable by the dropped user, the check shall be made per finished task rather than cached at boot, no environment variable, settings key or API field shall exist that names or edits the command, and no HTTP surface shall be able to write a file into the hooks directory.
 
-**Verify:** T078 asserts the hook is off by default, that a PATCH attempting to set the hook command returns 403, and that the executed process receives argv entries rather than a shell string.
+**Verify:** T078 asserts the hook is off by default, that a present-but-non-executable file is also off with a boot warning naming the path, that a hook installed while dl-tool runs takes effect on the next completion without a restart, that a PATCH attempting to set the hook command returns 403, and that the executed process receives argv entries rather than a shell string.
 
 | Covered by | Priority |
 |---|---|
@@ -1263,3 +1263,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
 | 2026-09-01 | FR-105 corrected: the hook is enabled by installing an executable at `<DLTOOL_CONFIG_DIR>/hooks/on-complete` (T078's mechanism), not "in the configuration file" — no configuration file exists in the design. |
+| 2026-09-01 | Review pass: FR-105 renamed to match its mechanism ("installed by the operator"), defines the third state (present but not executable = off, with a boot warning), evaluates the switch per finished task rather than at boot, and requires that no HTTP surface can write into the hooks directory — closing the gap between "no dedicated knob" and "no write path". |
