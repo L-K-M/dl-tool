@@ -87,6 +87,18 @@ column names the package that consumes the parsed field.
 
 Every variable marked **secret** also accepts a `_FILE` suffixed sibling — see §6.
 
+One deliberate absence: there is **no** variable, settings key or API field for the completion hook
+([FR-105](02-requirements.md#fr-105-run-a-completion-hook-installed-by-the-operator)). The hook is an
+executable the operator installs at `<DLTOOL_CONFIG_DIR>/hooks/on-complete`; its existence is the switch —
+absent means off, present but not executable by `PUID:PGID` also means off, with the warning emitted by
+the same per-finished-task evaluation that would run it. The check runs per finished task, so installing
+the hook takes effect on the next completion without a restart. The durable invariant behind the
+security claim is **path control, not payload format**: no HTTP endpoint writes any file into
+`<DLTOOL_CONFIG_DIR>` — uploads land in the data roots, settings import writes only database rows, and
+the only writers into the config directory are the process itself and the local `dl-tool restore` CLI,
+which needs host access — so a hijacked web session cannot plant or alter the command that runs. argv,
+environment, timeout and tests are owned by task [T078](tasks/T078-completion-hook.md).
+
 ---
 
 ## 3. Container-level variables (entrypoint, not the application)
@@ -341,6 +353,7 @@ stated fallback.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
+| 2026-09-01 | §2 now records the completion hook's deliberate absence from every configuration surface: the fixed path `<DLTOOL_CONFIG_DIR>/hooks/on-complete` is the switch (FR-105, T078). |
 | 2026-09-01 | Secrets corrected: `DLTOOL_SESSION_KEY`/`DLTOOL_CSRF_KEY` removed (opaque server-side sessions and per-session CSRF tokens need no key) and replaced by `DLTOOL_SECRET_KEY`, the previously unspecified key behind every "encrypted at rest" `*_enc` column and the extraction passwords; its loss-and-regeneration behaviour is specified. |
 | 2026-09-01 | Review pass: the `DLTOOL_SECRET_KEY` loss story names every affected surface (row-level `secret_lost` markers — not a `tasks.error_code` — plus the cleared `extract_passwords` setting and one `task_events` row per nulled per-task password); the two extraction-password carriers are split into their own rows; NFR-023 names each secret's file and mode. |
 | 2026-09-01 | Review pass 2: the `secret_key_regenerated` boot log is restored (the aria2 branch's `aria2_secret_rotated` keeps its twin), and a key-lost `extract_passwords` renders as the literal `"__lost__"` — distinct from `"__redacted__"` and a no-op on PATCH — so the wipe is assertable, not vague. |

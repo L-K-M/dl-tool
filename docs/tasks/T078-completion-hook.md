@@ -8,18 +8,22 @@
 | **Depends on** | T074 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/settings.go`, `internal/jobs/postprocess.go` |
-| **Implements** | [FR-105](../02-requirements.md#fr-105-run-a-completion-hook-only-when-explicitly-enabled), [NFR-015](../02-requirements.md#nfr-015-never-interpolate-configuration-into-a-shell) |
+| **Implements** | [FR-105](../02-requirements.md#fr-105-run-a-completion-hook-installed-by-the-operator), [NFR-015](../02-requirements.md#nfr-015-never-interpolate-configuration-into-a-shell) |
 | **Decisions** | [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md) |
 | **Est. size** | 2 new files, ~220 LOC |
 
 ## Goal
 When the operator has placed an executable at `<DLTOOL_CONFIG_DIR>/hooks/on-complete`, a finished task runs
-it once as an argument vector with a fixed environment and a wall-clock timeout. The hook is off when the
-file is absent, and its command can never be set, read or edited through the HTTP API.
+it once as an argument vector with a fixed environment and a wall-clock timeout. The switch is three-state
+and re-evaluated per finished task, never cached at boot: absent means off (the default), present and
+executable means on, present but not executable means off with a `warn` naming the path — emitted by the
+same per-task evaluation, so installing a broken hook at runtime still produces feedback. Its command can
+never be set, read or edited through the HTTP API, and no HTTP endpoint writes any file into
+`<DLTOOL_CONFIG_DIR>`.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
-1. [`docs/02-requirements.md` FR-105](../02-requirements.md#fr-105-run-a-completion-hook-only-when-explicitly-enabled)
+1. [`docs/02-requirements.md` FR-105](../02-requirements.md#fr-105-run-a-completion-hook-installed-by-the-operator)
 2. [`docs/12-security-and-threat-model.md` §6.7 Open redirects, configuration lock, exposure](../12-security-and-threat-model.md#67-open-redirects-configuration-lock-exposure)
 3. [`docs/11-config-reference.md` §2 `DLTOOL_` variables (application)](../11-config-reference.md#2-dltool_-variables-application)
 4. [`docs/14-conventions.md` §4 The `task_events` code vocabulary](../14-conventions.md#4-the-task_events-code-vocabulary)
