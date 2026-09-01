@@ -485,7 +485,7 @@ and 1.37.0 is feature-complete for HTTP/FTP/SFTP. dl-tool builds its aria2 image
 ```
 aria2c \
   --enable-rpc --rpc-listen-all --rpc-listen-port=6800 \
-  --rpc-secret=${ARIA2_RPC_SECRET} \
+  --rpc-secret="${ARIA2_RPC_SECRET}" \
   --dir=/data --continue=true \
   --max-concurrent-downloads=5 --max-connection-per-server=8 --split=8 \
   --file-allocation=falloc \
