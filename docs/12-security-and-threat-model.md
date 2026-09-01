@@ -661,7 +661,8 @@ Chosen policy
 | Metrics listener | binds `127.0.0.1:9090` inside the container and is never published |
 | qBittorrent credentials | `DLTOOL_QBITTORRENT_USERNAME` and `DLTOOL_QBITTORRENT_PASSWORD` (or its `_FILE` form); never the WebUI defaults, never a bypass-by-subnet rule |
 | Container flags | `security_opt: [no-new-privileges:true]` on every service |
-| Secret storage | `<CONFIG_DIR>/secrets.env`, mode `0600`, owned by the app user; never in `environment:`, where `docker inspect` and `docker compose config` expose it |
+| Secret storage | Host `.env` and `<CONFIG_DIR>/secrets.env` are mode `0600`; Compose mounts named secrets mode `0400`; no service receives secret values through `environment:` |
+| VPN credentials | Granted only to gluetun as its documented secret files; the project `.env` is never injected wholesale |
 | Rotation | a UI action regenerates each secret; rotating the session key invalidates every session |
 
 If a Transmission adapter is ever added it keeps `rpc-host-whitelist-enabled: true` and binds
@@ -701,3 +702,4 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | Security review: required least-privilege Compose secret grants and excluded secrets from build contexts. |

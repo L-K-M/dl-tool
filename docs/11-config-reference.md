@@ -105,18 +105,20 @@ decides the result. See [ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.
 
 ---
 
-## 4. Compose-level variables (interpolation only)
+## 4. Compose-level variables
 
-Read by Docker Compose from `.env` while expanding `compose.yaml`. They never reach the application as
-environment; they only produce values for other fields.
+Read by Docker Compose from `.env` while expanding `compose.yaml`. Non-secret values interpolate into named
+fields. Secret values source named file mounts and never enter a service environment.
 
 | Name | Default in `compose.yaml` | Interpolated into |
 |---|---|---|
 | `CONFIG_DIR` | `./config` | The host side of the `/config` bind mount for dl-tool and each engine. |
 | `DATA_DIR` | `/srv/data` | The host side of the single `/data` bind mount, identical in every service ([ADR-0012](decisions/0012-single-data-mount.md)). |
 | `DLTOOL_PORT` | `8091` | Published host port mapped to container `8080`. |
-| `ARIA2_RPC_SECRET` | *(none — must be set)* | The aria2 service's RPC secret **and** dl-tool's `DLTOOL_ARIA2_SECRET`. One value, two consumers. |
+| `ARIA2_RPC_SECRET` | *(none — must be set)* | Source of the `aria2_rpc_secret` Compose secret mounted into aria2 and dl-tool. |
 | `QBT_WEBUI_PORT` | `8080` | qBittorrent's in-container WebUI port, used to build `DLTOOL_QBITTORRENT_URL`. |
+| `QBT_USERNAME` | *(none — must be set)* | dl-tool's `DLTOOL_QBITTORRENT_USERNAME`. |
+| `QBT_PASSWORD` | *(none — must be set)* | Source of the `qbt_password` Compose secret mounted only into dl-tool. |
 
 ---
 
@@ -155,8 +157,8 @@ lives in its own table and is replaced through `PUT /settings/schedule`. Per-use
 
 | Secret | Carrier | Never |
 |---|---|---|
-| `DLTOOL_ARIA2_SECRET` | env or `DLTOOL_ARIA2_SECRET_FILE` | logged, returned by any endpoint, or written to a backup export |
-| `DLTOOL_QBITTORRENT_PASSWORD` | env or `DLTOOL_QBITTORRENT_PASSWORD_FILE` | logged, returned by any endpoint, or written to a backup export |
+| `DLTOOL_ARIA2_SECRET` | inline or `_FILE`; shipped Compose mounts `/run/secrets/aria2_rpc_secret` mode `0400` | logged, returned by any endpoint, or written to a backup export |
+| `DLTOOL_QBITTORRENT_PASSWORD` | inline or `_FILE`; shipped Compose mounts `/run/secrets/qbt_password` mode `0400` | logged, returned by any endpoint, or written to a backup export |
 | `extract_passwords` | `settings` row | returned in clear by `GET /settings` — it renders as `"__redacted__"` |
 | indexer `api_key` | `indexers` row | returned by `GET /indexers`, or included in a log line or an error message |
 | notification channel `secret_enc` | `notification_channels` row | returned by `GET /notifications` |
@@ -168,6 +170,9 @@ Rules:
   the Docker-secrets and linuxserver.io style: `DLTOOL_ARIA2_SECRET_FILE=/run/secrets/aria2_rpc_secret`. The
   file is read once at boot and its trailing newline stripped. Setting both forms is a fatal
   `config_conflict`.
+- **Shipped Compose.** Sensitive `.env` values source top-level Compose secrets. Grants are service-specific,
+  mounts are mode `0400`, and no secret value enters a service environment. The host `.env` itself is mode
+  `0600`.
 - **Never baked into an image.** No `ARG` carrying a secret (it survives in `docker history`), no
   `COPY .env`. A build-time credential, if ever unavoidable, uses BuildKit `RUN --mount=type=secret,id=…`.
 - **Never logged.** Secret fields are typed `secure.Secret`, whose `String`, `Format` and `MarshalJSON`
@@ -185,7 +190,8 @@ Rules:
    `<CONFIG_DIR>/secrets.env` mode `0600`, owned by `PUID:PGID`, if that file does not already exist.
 2. The file contains three values, each 32 bytes from `crypto/rand`, base64url-encoded:
    `ARIA2_RPC_SECRET`, `DLTOOL_SESSION_KEY`, `DLTOOL_CSRF_KEY`.
-3. Copy `ARIA2_RPC_SECRET` into `.env` so Compose can interpolate it into both services.
+3. Copy `ARIA2_RPC_SECRET` and the qBittorrent WebUI password into `.env`, then set that file to mode `0600`.
+   Compose converts both values into named, service-scoped secret files.
 4. At every boot dl-tool regenerates any of the three that is missing from `secrets.env`. A regenerated
    session key invalidates all sessions; a regenerated `ARIA2_RPC_SECRET` does **not** reconfigure the
    running aria2 container, so dl-tool logs `aria2_secret_rotated` and marks the engine unhealthy until the
@@ -208,6 +214,8 @@ CONFIG_DIR=./config
 DATA_DIR=/srv/data
 DLTOOL_PORT=8091
 
+QBT_USERNAME=admin
+QBT_PASSWORD=replace-with-the-configured-webui-password
 ARIA2_RPC_SECRET=Zk8s1QmF3rT9vN2xJ7bH5cW0aY4pL6dE8gU1oI3sK5M
 ```
 
@@ -254,8 +262,8 @@ DLTOOL_WATCH_DIR=/data/watch
 DLTOOL_NOTIFY_URL=
 ```
 
-`.env.example` in the repository root is this second file with every secret replaced by a placeholder. `.env`,
-`config/`, `secrets.env`, `*.key` and `*.pem` are in `.gitignore`.
+`.env.example` in the repository root is this second file with every secret replaced by a placeholder.
+The real `.env` is mode `0600`; `.gitignore` and `.dockerignore` exclude it, `config/`, databases and keys.
 
 ---
 
@@ -312,3 +320,4 @@ stated fallback.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
+| 2026-09-01 | Security review: specified scoped Compose secret mounts and protected host secret inputs. |

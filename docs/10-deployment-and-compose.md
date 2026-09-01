@@ -78,6 +78,20 @@ x-service-defaults: &service-defaults
   security_opt:
     - no-new-privileges:true
 
+secrets:
+  aria2_rpc_secret:
+    environment: "ARIA2_RPC_SECRET"
+  qbt_password:
+    environment: "QBT_PASSWORD"
+  wireguard_private_key:
+    environment: "WIREGUARD_PRIVATE_KEY"
+  wireguard_addresses:
+    environment: "WIREGUARD_ADDRESSES"
+  openvpn_user:
+    environment: "OPENVPN_USER"
+  openvpn_password:
+    environment: "OPENVPN_PASSWORD"
+
 services:
 
   dl-tool:
@@ -96,9 +110,20 @@ services:
       DLTOOL_LOG_FORMAT: "${DLTOOL_LOG_FORMAT:-json}"
       DLTOOL_QBITTORRENT_URL: "http://qbittorrent:8080"
       DLTOOL_QBITTORRENT_USERNAME: "${QBT_USERNAME:-}"
-      DLTOOL_QBITTORRENT_PASSWORD: "${QBT_PASSWORD:-}"
+      DLTOOL_QBITTORRENT_PASSWORD_FILE: "/run/secrets/qbt_password"
       DLTOOL_ARIA2_URL: "http://aria2:6800/jsonrpc"
-      DLTOOL_ARIA2_SECRET: "${ARIA2_RPC_SECRET:-}"
+      DLTOOL_ARIA2_SECRET_FILE: "/run/secrets/aria2_rpc_secret"
+    secrets:
+      - source: aria2_rpc_secret
+        target: aria2_rpc_secret
+        uid: "${PUID:-1000}"
+        gid: "${PGID:-1000}"
+        mode: 0400
+      - source: qbt_password
+        target: qbt_password
+        uid: "${PUID:-1000}"
+        gid: "${PGID:-1000}"
+        mode: 0400
     volumes:
       - ${CONFIG_DIR:-./config}/dl-tool:/config
       - ${DATA_DIR:-/srv/data}:/data          # ONE mount — see §3
@@ -146,7 +171,13 @@ services:
     container_name: aria2
     environment:
       <<: *common-env
-      ARIA2_RPC_SECRET: "${ARIA2_RPC_SECRET:?set ARIA2_RPC_SECRET in .env}"
+      ARIA2_RPC_SECRET_FILE: "/run/secrets/aria2_rpc_secret"
+    secrets:
+      - source: aria2_rpc_secret
+        target: aria2_rpc_secret
+        uid: "${PUID:-1000}"
+        gid: "${PGID:-1000}"
+        mode: 0400
     volumes:
       - ${CONFIG_DIR:-./config}/aria2:/config
       - ${DATA_DIR:-/srv/data}:/data
@@ -167,10 +198,34 @@ services:
     container_name: gluetun
     cap_add: [NET_ADMIN]
     devices: ["/dev/net/tun:/dev/net/tun"]
-    env_file: [.env]                               # VPN_*, WIREGUARD_*, FIREWALL_* — see section 8
     environment:
       TZ: "${TZ:-Etc/UTC}"
       VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:?required for the vpn profile}"
+      VPN_TYPE: "${VPN_TYPE:-wireguard}"
+      FIREWALL_OUTBOUND_SUBNETS: "${FIREWALL_OUTBOUND_SUBNETS:-}"
+      FIREWALL_VPN_INPUT_PORTS: "${FIREWALL_VPN_INPUT_PORTS:-}"
+      VPN_PORT_FORWARDING: "${VPN_PORT_FORWARDING:-off}"
+    secrets:
+      - source: wireguard_private_key
+        target: wireguard_private_key
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: wireguard_addresses
+        target: wireguard_addresses
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: openvpn_user
+        target: openvpn_user
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: openvpn_password
+        target: openvpn_password
+        uid: "0"
+        gid: "0"
+        mode: 0400
     volumes:
       - ${CONFIG_DIR:-./config}/gluetun:/gluetun
     ports:
@@ -201,6 +256,11 @@ Notes a reader must not lose:
   only public entry point is Caddy.
 - Both `image:` and `build:` are set on `aria2`: `docker compose up -d` pulls the published image,
   `docker compose build aria2` rebuilds it locally under the same tag.
+- Compose sources secret values from the host environment or `.env`, then mounts them only into the services
+  that list them, mode `0400`. Secret values never enter a service's environment or rendered container
+  configuration.
+- Gluetun receives only its explicit VPN settings and its four documented default secret files. It never
+  receives the complete project `.env`.
 
 ---
 
@@ -421,6 +481,23 @@ ENTRYPOINT ["/entrypoint.sh"]
 CMD ["serve"]
 ```
 
+The root `.dockerignore` is mandatory because the build stage uses `COPY . .`:
+
+```dockerignore
+.git
+.env
+.env.*
+config/
+**/secrets.env
+**/*.db
+**/*.db-*
+**/*.bak
+**/*.key
+**/*.pem
+```
+
+This keeps runtime configuration and credentials out of the build context, intermediate layers and cache.
+
 - `su-exec` performs the privilege drop; `ca-certificates` for HTTPS indexers; `tzdata` for `TZ`; `7zip`
   provides `/usr/bin/7zz` for auto-extract; `nodejs` is the JavaScript runtime `yt-dlp-ejs` requires for full
   YouTube support ([ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md)).
@@ -448,16 +525,20 @@ ENTRYPOINT ["/entrypoint.sh"]
 `entrypoint.sh` applies the same PUID/PGID/UMASK/TZ sequence as §4 and then:
 
 ```sh
+: "${ARIA2_RPC_SECRET_FILE:?missing aria2 RPC secret file}"
+aria2_rpc_secret="$(tr -d '\r\n' < "$ARIA2_RPC_SECRET_FILE")"
+[ -n "$aria2_rpc_secret" ] || { echo "empty aria2 RPC secret" >&2; exit 1; }
+
 exec su-exec "$PUID:$PGID" aria2c \
   --enable-rpc --rpc-listen-all --rpc-listen-port=6800 \
-  --rpc-secret="$ARIA2_RPC_SECRET" \
+  --rpc-secret="$aria2_rpc_secret" \
   --dir=/data --continue=true --disk-cache=64M \
   --conf-path=/config/aria2.conf --save-session=/config/aria2.session \
   --input-file=/config/aria2.session --save-session-interval=30
 ```
 
 The aria2 manual states it is "strongly recommended to set secret authorization token using the
-`--rpc-secret` option"; the container refuses to start when `ARIA2_RPC_SECRET` is empty. Never reference
+`--rpc-secret` option"; the container refuses to start when its secret file is missing or empty. Never reference
 `p3terx/aria2-pro` — its last push was 2022-09-06.
 
 ---
@@ -509,8 +590,10 @@ FIREWALL_VPN_INPUT_PORTS=
 VPN_PORT_FORWARDING=off
 ```
 
-`.env` is never committed. `ARIA2_RPC_SECRET` uses the `:?` form in `compose.yaml`, so an empty value fails
-the `up` with a named error instead of starting an unauthenticated RPC endpoint.
+`.env` is mode `0600` and never committed. Compose uses its sensitive values only as sources for named
+secrets mounted mode `0400`; `docker compose config` and `docker inspect` therefore expose names and file
+paths, not values. A missing secret source fails before a container starts. Gluetun receives only the
+explicitly listed VPN values, never qBittorrent or aria2 credentials.
 
 ---
 
@@ -970,3 +1053,4 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |
 | 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |
+| 2026-09-01 | Security review: delivered sidecar and VPN credentials through scoped Compose secrets, removed broad `.env` injection, and required a secret-safe build context. |

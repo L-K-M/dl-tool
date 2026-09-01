@@ -482,10 +482,12 @@ and 1.37.0 is feature-complete for HTTP/FTP/SFTP. dl-tool builds its aria2 image
 
 ### 4.1 Daemon flags
 
+The entrypoint reads `/run/secrets/aria2_rpc_secret` into an unexported shell variable immediately before:
+
 ```
 aria2c \
   --enable-rpc --rpc-listen-all --rpc-listen-port=6800 \
-  --rpc-secret=${ARIA2_RPC_SECRET} --rpc-allow-origin-all \
+  --rpc-secret="${aria2_rpc_secret}" \
   --dir=/data --continue=true \
   --max-concurrent-downloads=5 --max-connection-per-server=8 --split=8 \
   --file-allocation=falloc \
@@ -500,6 +502,7 @@ aria2c \
 | `--enable-rpc` | `false` | Required; upstream "strongly recommended" pairing with `--rpc-secret`. |
 | `--rpc-listen-all` | `false` | Otherwise aria2 listens only on loopback and dl-tool cannot reach it. |
 | `--rpc-listen-port` | `6800` | Left at the default. |
+| `--rpc-allow-origin-all` | `false` | Keep the default; no browser calls the private RPC endpoint. |
 | `--dir` | (cwd) | Must be the single `/data` mount ([ADR-0012](decisions/0012-single-data-mount.md)). |
 | `--file-allocation` | **`prealloc`** | `prealloc` blocks for a long time on large files on some filesystems; `falloc` suits ext4/xfs. *(Inferred from the option list, not an upstream recommendation.)* |
 | `--save-session` + `--input-file`, same path | (none) | The documented restart-persistence idiom: "You can pass this output file to aria2c with `--input-file` option on restart." |
@@ -1265,3 +1268,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | File-priority vocabulary corrected to `skip=0 normal=1 high=6 maximum=7` with the per-engine translation table (§1.1) and the §5.7 identity mapping; added the `engine_ref` rule for BitTorrent v1/v2/hybrid identity (§3.5); added §8 engine ownership and the foreign-task policy, §9 engine conformance at boot, and §10 the bandwidth precedence chain with its per-engine fan-out calls; rewrote §7.6 for the pinned `yt-dlp_musllinux` binary, disabled self-update, the weekly rebuild, the boot capability probe and `js_runtime_missing`; renumbered the contract test suite to §11; corrected the ADR filenames. |
 | 2026-09-01 | Migration subsystem cut: §8 restated as one rule with no options — a transfer dl-tool did not create is ignored; the `adopt` mode and `engines.foreign_task_policy` are deleted, as is every link to the withdrawn migration document. §9 engine conformance is unchanged. |
 | 2026-09-01 | M2 task allocation: §11 now attributes the §8 ownership assertion to T026 and T030; task identifier T102 is retired with the foreign-task policy. |
+| 2026-09-01 | Security review: used a file-backed aria2 RPC secret and kept RPC CORS disabled. |
