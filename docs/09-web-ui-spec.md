@@ -196,7 +196,7 @@ Segments, left to right:
 | 3 | Counts | `8 active / 42 total` | |
 | 4 | Free space | `Free: 412 GB of 2 TB` | For the destination of the currently selected task, else the default destination. |
 | 5 | Schedule | `Sched: OFF` / `Default` / `Alt` / `No-DL` | Click navigates to `/settings/bandwidth`. |
-| 6 | Alt-speed toggle | turtle icon, `aria-pressed` | Toggles the global alternative-speed limits. |
+| 6 | Alt-speed indicator | turtle icon | Shown only while `schedule_enabled` is true; indicates whether the active cell applies the alternative pair, and click navigates to `/settings/bandwidth`. There is no manual override toggle: the grid is the only source of alternative speed, and no settings key backs one. |
 
 ---
 
@@ -259,9 +259,9 @@ row shows `error_code` in the cell and `error_message` in the tooltip.
 
 ### 3.3 Persistence
 
-One document, persisted server-side per user and mirrored into `localStorage` under the single key
-`dl.ui.prefs.v1` for instant first paint. Write on a 500 ms debounce; never write during an active drag or
-resize gesture.
+One document, persisted server-side per user through `GET`/`PUT /api/v1/prefs`. Write on a 500 ms debounce; never write during an active drag or
+resize gesture. Render the built-in defaults immediately and patch them once `GET /api/v1/prefs` resolves,
+accepting a brief default→saved flash in exchange for dropping the client-side cache.
 
 ```json
 {
@@ -575,7 +575,10 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 
 - **Indexer multi-select**: a popover checkbox list with *All* / *None*; each row shows the indexer name, a
   health dot and its last error in a tooltip. Disabled indexers are greyed with a link to
-  `/settings/indexers`. The selection is persisted in the prefs document.
+  `/settings/indexers`. The selection is persisted in the prefs document and pruned against
+  `GET /api/v1/indexers` on load, so an id the server has hidden (a key-bearing indexer,
+  [`05-api-contract.md`](05-api-contract.md) §9.1) or deleted never reaches `POST /search`: the list and
+  the effective selection are whatever the server returns, and the client adds no rule of its own.
 - **Category filter** is populated from `GET /api/v1/indexers/categories`; the client never hard-codes a
   category tree.
 - **Results grid** reuses the §3 grid component. Columns: checkbox · Name · Size · Seeders · Leechers ·
@@ -602,11 +605,10 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 ```
 ┌ RSS ──────────────────────────────────────────────────────────────────────┐
 │ ┌ Feeds ──────────┐┌ Items ────────────────────────────────────────────┐  │
-│ │ [+ Feed][+ Fld] ││ ☐  Title                          Feed    Age  Rule│  │
-│ │ ▾ 📁 Linux   12 ││ ●  archlinux-2026.09.01-x86_64…   Arch    1h  [ISO]│  │
-│ │   ● Arch      9 ││ ○  archlinux-2026.08.01-x86_64…   Arch    1d  [ISO]│  │
-│ │   ● Academic  3 ││ ○  Some.Dataset.2026                Acad  2d   —  │  │
-│ │ ⚠ BrokenFeed  ! ││                                                    │  │
+│ │ [+ Feed]        ││ ☐  Title                          Feed    Age  Rule│  │
+│ │ ● Arch        9 ││ ●  archlinux-2026.09.01-x86_64…   Arch    1h  [ISO]│  │
+│ │ ● Academic    3 ││ ○  archlinux-2026.08.01-x86_64…   Arch    1d  [ISO]│  │
+│ │ ⚠ BrokenFeed  ! ││ ○  Some.Dataset.2026                Acad  2d   —  │  │
 │ └─────────────────┘│ ┌ Preview ────────────────────────────────────────┐│  │
 │  [Update] [Update all]│ Title · pubDate · size · category · torrent URL ││  │
 │                    │ │ [ Download ] [ Mark read ] [ Open link ]        ││  │
@@ -614,10 +616,23 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Feed tree**: folders and feeds, each with an unread count. Feed states: OK `●`, loading `◐`, error `⚠`
+- **Feed list**: a flat list of feeds, each with an unread count; there are no feed folders, because the
+  API and schema carry no folder concept. Feed states: OK `●`, loading `◐`, error `⚠`
   with the HTTP status or parse error in the tooltip. Context menu: Update · Rename… · Edit URL… ·
-  Mark all read · Move to folder ▸ · Copy feed URL · Remove.
-- **Add feed** dialog fields: URL · Name · Folder · `☐ Automatically download all items`.
+  Mark all read · Copy feed URL · Remove.
+- **Add feed** dialog fields: URL · Name · `☐ Automatically download all items`. Ticking the checkbox also
+  creates an enabled rule named `auto:<feed_id>`, scoped to that feed's URL, whose `any_of` is empty — every
+  item passes — reusing the rules engine as the only auto-download path ([`05-api-contract.md`](05-api-contract.md)
+  §10.1). The result is an ordinary rule: it is edited and deleted like any other, and editing the feed's
+  URL afterwards does not rewrite it, because rules scope feeds by URL.
+  Mark all read · Copy feed URL · Remove.
+- **Feed and rule management is admin-only** ([`05-api-contract.md`](05-api-contract.md) §2); a
+  non-admin sees this screen read-only, with Update/Refresh actions but no create, edit or remove.
+- **Add feed** dialog fields: URL · Name · `☐ Automatically download all items`. Ticking the checkbox also
+  creates an enabled rule named `auto:<feed_id>`, scoped to that feed's URL, whose `any_of` is empty — every
+  item passes — reusing the rules engine as the only auto-download path ([`05-api-contract.md`](05-api-contract.md)
+  §10.1). The result is an ordinary rule: it is edited and deleted like any other, and editing the feed's
+  URL afterwards does not rewrite it, because rules scope feeds by URL.
 - **Item list** columns: checkbox · Title (unread bold with a filled dot, read muted) · Feed · Age ·
   matched-rule chips. Hovering a chip explains why the rule matched. Multi-select plus *Download selected*,
   *Mark read*, *Mark all read*, and a filter box.
@@ -683,15 +698,24 @@ appears only when the form is dirty and announces `3 unsaved changes` through `a
 | Section | Contents |
 |---|---|
 | **General** | UI language · Theme (System / Light / Dark) · Density (Comfortable / Compact) · Date format (Browser default / ISO 8601) · Confirm on delete · Alternating row colours · Action on double-click, set separately for downloading and completed tasks · Default sidebar filter on startup · Remember last destination · Process order (**By date created** / **By user (one task at a time)**) |
-| **Connection** | Engine endpoints, read-only when supplied by the environment · Global maximum connections · Maximum connections per task · `max_active_total`, `max_active_per_engine`, `max_active_per_user` · Proxy settings |
+| **Connection** | Engine endpoints, read-only when supplied by the environment · `max_active_total`, `max_active_per_engine`, `max_active_per_user` |
 | **Bandwidth** | Global download and upload limits in bytes per second, `0` = unlimited · Alternative download and upload limits · radio *Immediately* / *Advanced schedule* · the 24×7 grid (§9.1) |
-| **BitTorrent** | DHT · PeX · LSD · Encryption (**Disable** / **Auto** / **Always**) · Maximum peers per task · Default share-ratio limit, seeding-time limit and the action when reached · Auto-append trackers |
-| **Downloads** | Default destination (folder browser) · Incomplete folder · Content layout default · Watch folders, each with a path and *Delete loaded .torrent files* · Auto-extract archives plus a shared password list · Category → path mapping table · Per-root `min_free_space` |
-| **RSS** | Enable RSS fetching · Update interval · Maximum articles kept per feed · Enable the auto-downloader · Smart-episode-filter patterns |
+| **BitTorrent** | Default share-ratio limit, seeding-time limit and the action when reached |
+| **Downloads** | Default destination (folder browser) · Watch folders, each with a path and *Delete loaded .torrent files* · Auto-extract archives plus a shared password list · Category → path mapping table · Per-root `min_free_space` |
+| **RSS** | Enable RSS fetching · Update interval · Maximum articles kept per feed (the per-feed `item_cap`, edited feed by feed) |
 | **Indexers** | Table: Name · Type · URL · Categories · Enabled · Priority · Last test result. Actions: Add · Edit · Test · Test all · Reorder · Import. Imported definitions arrive **disabled** and show their provenance. |
-| **Users & Auth** | Users table (username, role, quota, default destination, enabled) · Add / Edit / Delete · Change password · Session lifetime · API tokens with a create-once reveal |
+| **Users & Auth** | Users table (username, role, quota, default destination, enabled) · Add / Edit / Delete · Change password · API tokens with a create-once reveal |
 | **Notifications** | A per-event × per-channel checkbox matrix. Channels: Webhook, ntfy, Gotify, Apprise. Every channel has **Send test**, which shows the **raw upstream status line and body**. |
-| **Advanced** | Log level and retention · Database maintenance and vacuum · Settings export and import · Reset to defaults · Version and build info |
+| **Advanced** | Log level (read-only; `DLTOOL_LOG_LEVEL` is environment-only) · Settings export and import · Version and build info |
+
+Every control above is backed by a settings key in [`11-config-reference.md`](11-config-reference.md) §5 or
+by a CRUD endpoint in [`05-api-contract.md`](05-api-contract.md). Controls that have no backing are cut,
+not deferred with a placeholder: proxy settings (the SSRF client is a direct dialer by design), global and
+per-task connection counts, DHT/PeX/LSD/encryption and per-task peer ceilings (engine-side preferences
+dl-tool does not fan out), auto-append trackers, an incomplete folder and a content-layout default, a
+global auto-downloader switch and smart-episode patterns (the rule engine owns both behaviours), log
+retention, database vacuum and a reset-to-defaults action (no endpoints), and session lifetime
+(`DLTOOL_SESSION_TTL` is infrastructure, environment-only).
 
 ### 9.1 The 24×7 schedule grid
 
@@ -852,12 +876,15 @@ Every truncated element gets a native `title` and a tooltip that opens after 400
 The live transport is `GET /api/v1/events` (SSE), with `GET /api/v1/sync?rid=` as the identical-payload
 polling fallback — see [`05-api-contract.md`](05-api-contract.md) §6.
 
-1. On the first missed heartbeat, more than twice the 1 s tick, the connection dot turns amber and the grid
-   dims to 70 % opacity.
-2. After 5 s disconnected a full-width banner slides in beneath the toolbar, `role="alert"`:
-   `⚠ Lost connection to the server. Reconnecting in 3s…  [Retry now]`.
+1. When nothing has arrived for two heartbeat intervals — no `sync` event, no heartbeat comment and no
+   successful polling response (the server emits a heartbeat every 15 s while idle, so about 30 s of
+   silence) — the connection dot turns amber and the grid dims to 70 % opacity.
+2. After 5 s of the transport being known down — an SSE `error` event or a closed connection — or once
+   silence passes the amber threshold, a full-width banner slides in beneath the toolbar, `role="alert"`:
+   `⚠ Lost connection to the server. Reconnecting in 3s…  [Retry now]`. The ladder is monotonic:
+   amber can never fire after the banner.
 3. Reconnect backoff: 1, 2, 4, 8, 15, 30 s, then every 30 s.
-4. After three consecutive SSE failures, fall back to polling `GET /api/v1/sync?rid=` every 3 s and say so
+4. After three consecutive SSE failures, fall back to polling `GET /api/v1/sync?rid=` every 2 s and say so
    in the banner; keep attempting SSE in the background.
 5. On reconnect, **refetch the full state** with `rid=0` rather than replaying deltas, show a brief
    `Reconnected` success toast, and clear the banner.
@@ -930,3 +957,5 @@ The justification record for every choice above. Both tables are evidence, not d
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: corrected the ADR-0006, ADR-0007 and ADR-0009 links to the canonical filenames; dropped the two stale open questions about `/prefs` and `infohash_v1`/`infohash_v2`, both of which `05-api-contract.md` now specifies, and removed the `localStorage` fallback for the grid layout. |
+| 2026-09-01 | Privilege review: the RSS screens are read-only for non-admins (feed and rule writes are admin-only), and the search indexer list notes that key-bearing indexers are absent for non-admins by server rule. |
+| 2026-09-01 | The add-feed dialog's *Automatically download all items* checkbox is now wired: `auto_download` on `POST /feeds` creates the `auto:<feed_id>` rule (`05-api-contract.md` §10.1). |
