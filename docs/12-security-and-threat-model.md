@@ -497,8 +497,9 @@ built-in account, no default password, no anonymous mode, no "disabled for local
    characters; on success the token file is deleted and the endpoint returns `409` thereafter. While it
    is callable it sits behind the same per-source-IP token bucket as login (§6.3), with the identical
    `429` + `Retry-After`, because a guessed setup token creates the admin account outright and there is
-   no account to lock out afterwards. A failed attempt writes the same stable event code as a failed
-   login, so one fail2ban filter covers both.
+   no account to lock out afterwards. A failed attempt writes its own stable event code,
+   `auth.setup_failed`, so log-based alerting can tell a fresh-install takeover attempt from routine
+   password spraying; the shipped fail2ban filter matches both codes.
 4. No admin password is ever accepted from an environment variable in the shipped compose file — it
    would land in `docker inspect`, `docker compose config` and shell history.
 
@@ -709,3 +710,4 @@ the repository owner decides.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
 | 2026-09-01 | Setup-token hardening: §6.4 pins the token at 256 bits from `crypto/rand` (base64url), regenerates it on every boot while unused, and puts `POST /auth/setup` behind the §6.3 throttle — a guessed token mints the admin account and there is no account to lock out afterwards. |
+| 2026-09-01 | Review pass: failed setup attempts carry their own `auth.setup_failed` event code (a fresh-install takeover attempt is a different signal from password spraying) while the shipped filter still matches both. |
