@@ -94,10 +94,12 @@ services:
       DLTOOL_TRUSTED_PROXIES: "${DLTOOL_TRUSTED_PROXIES:-}"
       DLTOOL_LOG_LEVEL: "${DLTOOL_LOG_LEVEL:-info}"
       DLTOOL_LOG_FORMAT: "${DLTOOL_LOG_FORMAT:-json}"
-      DLTOOL_QBITTORRENT_URL: "http://qbittorrent:8080"
+      # An engine lane is enabled by setting its URL; leave the URL empty to disable
+      # the lane (11-config-reference.md §8: a set URL with missing credentials is fatal).
+      DLTOOL_QBITTORRENT_URL: "${DLTOOL_QBITTORRENT_URL:-}"
       DLTOOL_QBITTORRENT_USERNAME: "${QBT_USERNAME:-}"
       DLTOOL_QBITTORRENT_PASSWORD: "${QBT_PASSWORD:-}"
-      DLTOOL_ARIA2_URL: "http://aria2:6800/jsonrpc"
+      DLTOOL_ARIA2_URL: "${DLTOOL_ARIA2_URL:-}"
       DLTOOL_ARIA2_SECRET: "${ARIA2_RPC_SECRET:-}"
     volumes:
       - ${CONFIG_DIR:-./config}/dl-tool:/config
@@ -146,7 +148,11 @@ services:
     container_name: aria2
     environment:
       <<: *common-env
-      ARIA2_RPC_SECRET: "${ARIA2_RPC_SECRET:?set ARIA2_RPC_SECRET in .env}"
+      # Interpolated with a default, not `:?`: Compose resolves required
+      # variables for every service in the file, before profile filtering, so a
+      # `:?` here breaks a core-only `docker compose up -d`. The entrypoint
+      # refuses an empty secret when this profile is active (§5.1).
+      ARIA2_RPC_SECRET: "${ARIA2_RPC_SECRET:-}"
     volumes:
       - ${CONFIG_DIR:-./config}/aria2:/config
       - ${DATA_DIR:-/srv/data}:/data
@@ -486,11 +492,17 @@ DATA_DIR=/srv/data
 DLTOOL_PORT=8091
 
 # ---- engines (compose-level) ----
-# Required whenever the aria2 profile is active. Generate: openssl rand -hex 32
-ARIA2_RPC_SECRET=
-QBT_WEBUI_PORT=8080
+# An engine lane is disabled until its URL is set. Set a URL without its
+# credentials and dl-tool exits with config_missing (11-config-reference.md §8).
+# For qBittorrent also set the same username/password in its own WebUI once:
+# the linuxserver image does not read these variables.
+#   DLTOOL_QBITTORRENT_URL=http://qbittorrent:8080
 QBT_USERNAME=admin
 QBT_PASSWORD=
+# Required when the aria2 profile is active. Generate: openssl rand -hex 32
+ARIA2_RPC_SECRET=
+#   DLTOOL_ARIA2_URL=http://aria2:6800/jsonrpc
+QBT_WEBUI_PORT=8080
 
 # ---- app settings surfaced through compose ----
 # Leave DLTOOL_BASE_PATH empty for a subdomain; set /dl-tool to serve under a subfolder (section 7.3).
@@ -511,8 +523,10 @@ FIREWALL_VPN_INPUT_PORTS=
 VPN_PORT_FORWARDING=off
 ```
 
-`.env` is never committed. `ARIA2_RPC_SECRET` uses the `:?` form in `compose.yaml`, so an empty value fails
-the `up` with a named error instead of starting an unauthenticated RPC endpoint.
+`.env` is never committed. An engine without its `DLTOOL_*_URL` set is disabled: dl-tool boots with
+the lane off and reports it in `GET /system/info`. The aria2 secret is guarded twice — an empty value is
+rejected by the aria2 entrypoint when that profile is active (§5.1), and by dl-tool's `config_missing`
+boot check whenever `DLTOOL_ARIA2_URL` is set.
 
 ---
 
@@ -946,6 +960,12 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 
 ---
 
+The shipped `.env.example` leaves both engine URLs unset, so a fresh `cp .env.example .env && docker
+compose up -d` boots with both engine lanes disabled — the M0 checkpoint needs no secret. M1's exit
+checkpoint is verified with `COMPOSE_PROFILES=aria2` plus `DLTOOL_ARIA2_URL` and `ARIA2_RPC_SECRET` set in
+`.env`; the aria2 profile stays — the rejected alternative, making it profile-less, is recorded in this
+document's change log.
+
 ## Decisions referenced
 | ADR | Decision |
 |---|---|
@@ -958,10 +978,6 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 | [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | yt-dlp is pinned by version and SHA-256 and never self-updates. |
 
 ## Open questions
-- [NEEDS CLARIFICATION: the brief allows only the `aria2`, `vpn` and `proxy` profiles, so a bare
-  `docker compose up -d` starts no HTTP/FTP engine, while milestone M0/M1's exit checkpoint expects a pasted
-  HTTPS URL to download. Either M1 is verified with `COMPOSE_PROFILES=aria2`, or `aria2` becomes
-  profile-less. `02-requirements.md` and `13-testing-and-verification.md` should agree on one.]
 - [NEEDS CLARIFICATION: `deploy/entrypoint.sh` and `deploy/aria2/entrypoint.sh` are not listed in the
   settled repository layout in the brief section 5, which names only `deploy/aria2/Dockerfile`. Confirm the
   two entrypoint paths before T124 creates them.]
@@ -972,3 +988,4 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |
 | 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |
+| 2026-09-01 | Fixed the fresh-boot engine wiring: both `DLTOOL_*_URL` values now interpolate from `.env` with an empty default (an empty URL disables the lane) instead of being hardcoded, because [`11-config-reference.md`](11-config-reference.md) §8 makes a set URL with missing credentials a fatal `config_missing` — the hardcoded URLs made a fresh `docker compose up -d` crash-loop. The aria2 secret dropped the `:?` form (Compose resolves required variables before profile filtering, so it broke core-only starts) and is enforced by the entrypoint instead. Resolved the M0/M1 profile open question: aria2 stays behind its profile and M1 is verified with `COMPOSE_PROFILES=aria2`. |
