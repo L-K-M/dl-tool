@@ -195,6 +195,8 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 | DELETE | `/search/{id}` | session\|token | Discard a search job and its results. |
 | GET·POST·PATCH·DELETE | `/feeds[/{id}]` | session\|token | Feed CRUD. |
 | POST | `/feeds/{id}/refresh` | session\|token | Force one poll now. |
+| PATCH | `/feeds/{id}/items` | session\|token | Mark items read or unread. |
+| POST | `/feeds/{id}/items/read-all` | session\|token | Mark every item of the feed read. |
 | GET | `/feeds/{id}/items` | session\|token | Items of one feed. |
 | GET·POST·PATCH·DELETE | `/rules[/{id}]` | session\|token | Rule CRUD. |
 | POST | `/rules/test` | session\|token | Dry-run an unsaved rule; explains every item. |
@@ -977,6 +979,27 @@ to the job's results. To turn a result into a task, `POST /tasks` with
 ```
 
 `GET /feeds/{id}/items` is cursor-paginated, newest first, with an optional `unread` (boolean) query.
+`unread_count` on the feed object counts the feed's items with `read = 0`, and the `unread` filter selects
+exactly those rows.
+
+`PATCH /feeds/{id}/items` marks a batch of items read or unread; `POST /feeds/{id}/items/read-all` marks
+every item of the feed read. Both are idempotent.
+
+```http
+PATCH /api/v1/feeds/fed_01JKQ7.../items
+X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
+
+{"ids":["itm_01JKQ8...","itm_01JKQ9..."],"read":true}
+```
+
+```json
+{"updated":2}
+```
+
+`PATCH` body: `ids` (string[], required, 1–500) and `read` (boolean, required). `POST /read-all` takes no
+body. Both return `{"updated":n}`, where `n` counts the rows whose state actually changed; an id that does
+not exist, or belongs to another feed, is silently skipped. Statuses: `200` · `404` · `422` (empty `ids`,
+more than 500).
 
 ```json
 {"items":[{"id":"itm_01JKQ8...","feed_id":"fed_01JKQ7...","title":"archlinux-2026.09.01-x86_64.iso",
