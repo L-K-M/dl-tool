@@ -3,7 +3,7 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** T015–T019, T026–T030, T037, T038, T087–T090, T100–T102, T110, T113, and any task under `internal/engine/` or `internal/uri/`
+> **Read this before:** T015–T019, T026–T030, T037, T038, T087–T090, T100, T101, T110, T113, and any task under `internal/engine/` or `internal/uri/`
 
 ## Purpose
 Define the Go `Engine` interface every download adapter implements, the URI-to-engine routing table, the URI
@@ -1213,7 +1213,8 @@ func RunContract(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 - `StateNormalisationCoversEveryEngineState` is a pure table test with no container, driving every row of §4.6,
   §5.6 and §6 and asserting the unknown-state fallback to `queued` plus a warning log.
 - Engine ownership (§8), the boot conformance probe (§9) and the bandwidth fan-out (§10) are asserted per
-  engine by T101, T102 and T110 rather than by `RunContract`, because each needs an engine-specific fixture.
+  engine by T026 and T030, by T101, and by T110 rather than by `RunContract`, because each needs an
+  engine-specific fixture.
 
 **Golden-file fixture policy.** Capture one real response per engine into `internal/engine/<x>/testdata/*.json`
 and compare parser output with `github.com/google/go-cmp v0.7.0`:
@@ -1263,3 +1264,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | Initial version |
 | 2026-09-01 | File-priority vocabulary corrected to `skip=0 normal=1 high=6 maximum=7` with the per-engine translation table (§1.1) and the §5.7 identity mapping; added the `engine_ref` rule for BitTorrent v1/v2/hybrid identity (§3.5); added §8 engine ownership and the foreign-task policy, §9 engine conformance at boot, and §10 the bandwidth precedence chain with its per-engine fan-out calls; rewrote §7.6 for the pinned `yt-dlp_musllinux` binary, disabled self-update, the weekly rebuild, the boot capability probe and `js_runtime_missing`; renumbered the contract test suite to §11; corrected the ADR filenames. |
 | 2026-09-01 | Migration subsystem cut: §8 restated as one rule with no options — a transfer dl-tool did not create is ignored; the `adopt` mode and `engines.foreign_task_policy` are deleted, as is every link to the withdrawn migration document. §9 engine conformance is unchanged. |
+| 2026-09-01 | M2 task allocation: §11 now attributes the §8 ownership assertion to T026 and T030; task identifier T102 is retired with the foreign-task policy. |

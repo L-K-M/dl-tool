@@ -63,7 +63,7 @@ creates. Behaviour table: [`../06-download-engines.md`](../06-download-engines.m
 
 ### Confirmation
 
-Both halves are integration-tested against a real qBittorrent by tasks T101 and T102:
+Both halves are integration-tested against a real qBittorrent by tasks T030 and T101:
 
 ```bash
 make test-integration

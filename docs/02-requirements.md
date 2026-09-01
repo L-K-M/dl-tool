@@ -54,7 +54,8 @@ reassigned:
 | `FR-149` | One-time read-only import from a live Download Station | Withdrawn with the migration subsystem. dl-tool never speaks the Synology Web API. |
 
 dl-tool has no migration or import path from another product. Task identifiers `T112` and `T114` are
-retired for the same reason.
+retired for the same reason. Task identifier `T102` is retired too: a foreign-task *policy* cannot exist
+when there is only one rule, so the ignore behaviour of FR-148 is asserted by T026 and T030 instead.
 
 ---
 
@@ -905,11 +906,11 @@ When dl-tool connects to an engine, it shall assert that the engine's own compet
 ### FR-148 Ignore engine tasks dl-tool did not create
 If an engine holds a task dl-tool has no row for, then dl-tool shall ignore it: the task shall not appear in any listing, delta or count, and dl-tool shall neither modify nor delete it. There is no adopt mode and no configurable policy.
 
-**Verify:** T102 adds a torrent directly in qBittorrent, asserts it never appears in `GET /tasks`, in an SSE delta or in the task counts, and asserts its state at the engine is unchanged after a full poll cycle; see [ADR-0017](decisions/0017-exclusive-control-of-engines.md).
+**Verify:** T026 asserts it for aria2 and T030 asserts it for qBittorrent: a torrent added directly in the engine never appears in `GET /tasks`, in an SSE delta or in the task counts, and its state at the engine is unchanged after a full poll cycle; see [ADR-0017](decisions/0017-exclusive-control-of-engines.md).
 
 | Covered by | Priority |
 |---|---|
-| T102 | must |
+| T026, T030 | must |
 
 ---
 
@@ -1256,3 +1257,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades cut: FR-130 – FR-139 withdrawn and permanently unused, ADR-0014 link removed. Added FR-020 – FR-025, FR-033, FR-046 – FR-048, FR-096, FR-097, FR-107, FR-122 – FR-124, FR-144 – FR-149 and NFR-029. Corrected the FR-007 file-priority vocabulary, the FR-121 quota semantics and the NFR-007 acceptance mechanism; fixed the ADR-0003 and ADR-0010 slugs. |
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
+| 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |

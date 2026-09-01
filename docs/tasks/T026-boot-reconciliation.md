@@ -8,7 +8,7 @@
 | **Depends on** | T019, T024, T025 |
 | **Blocks** | T098 |
 | **Parallel-safe** | yes — touches only `internal/engine/reconcile*.go` |
-| **Implements** | [NFR-003](../02-requirements.md#nfr-003-resume-every-task-after-a-restart); the aria2 half of [FR-148](../02-requirements.md#fr-148-ignore-engine-tasks-dl-tool-did-not-create), which T102 verifies against qBittorrent |
+| **Implements** | [NFR-003](../02-requirements.md#nfr-003-resume-every-task-after-a-restart); the aria2 half of [FR-148](../02-requirements.md#fr-148-ignore-engine-tasks-dl-tool-did-not-create), whose qBittorrent half is T030 |
 | **Decisions** | [ADR-0017](../decisions/0017-exclusive-control-of-engines.md), [ADR-0006](../decisions/0006-sse-with-rid-deltas.md) |
 | **Est. size** | 2 new files, ~300 LOC |
 

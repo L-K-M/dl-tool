@@ -3,7 +3,7 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** T001, T004, T015, T019, T028, T039, T065, T098, T101, T102 — and before adding any package under `internal/`
+> **Read this before:** T001, T004, T015, T019, T028, T039, T065, T098, T101 — and before adding any package under `internal/`
 
 ## Purpose
 
@@ -544,3 +544,4 @@ The D-list in §4 is the full map, D14 excluded. ADRs that shape this document d
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades cut: removed D14, ADR-0014, `internal/compat`, the façade actor and its context row. Added §6.4 admission control, §8.7 engine conformance, §8.8 foreign-task policy, ADR-0017 and ADR-0018, and risk R6 (JS runtime). Hardened R2 (pinned yt-dlp) and R4 (refuse to start on a network filesystem). ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: removed the Download Station NAS actor and its migration edge from the §3 context diagram, its external-interface row, and every link to the withdrawn migration document. §8.8 restated as one rule with no setting — foreign tasks are always ignored; `engines.foreign_task_policy` deleted. |
+| 2026-09-01 | M2 task allocation: task identifier T102 retired with the foreign-task policy; the §8.8 rule is asserted by T026 and T030. |

@@ -130,7 +130,7 @@ Expected: exactly the paths in the Files table.
 ## Out of scope — do NOT
 - Do NOT add `PATCH /tasks/{id}` or `POST /tasks/actions`; T022 owns them.
 - Do NOT add `DELETE /tasks/{id}`; T023 owns it.
-- Do NOT add the `files`, `trackers` or `peers` sub-resources; T032 and T034 own them.
+- Do NOT add the `files`, `trackers` or `peers` sub-resources; T032, T034 and T035 own them.
 - Do NOT add `offset` paging anywhere.
 
 ## Forbidden shortcuts

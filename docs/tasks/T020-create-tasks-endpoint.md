@@ -55,7 +55,7 @@ func ResolveDestination(roots []string, jail, requested string) (string, error)
 ```go
 package api
 
-// CreateTasksInput is the JSON body of POST /tasks. The multipart form is added by T029.
+// CreateTasksInput is the JSON body of POST /tasks. The multipart form is added by T033.
 type CreateTasksInput struct {
 	Body struct {
 		URIs            []string        `json:"uris"             maxItems:"50"`
@@ -156,7 +156,7 @@ git diff --name-only | sort
 Expected: exactly the paths in the Files table.
 
 ## Out of scope — do NOT
-- Do NOT accept `multipart/form-data`, a `blob` field or an uploaded `.torrent` or `.txt`; T029 owns
+- Do NOT accept `multipart/form-data`, a `blob` field or an uploaded `.torrent` or `.txt`; T033 owns
   uploads.
 - Do NOT implement `POST /tasks/inspect`; T031 owns it.
 - Do NOT implement `sanitiseSegment`, `safeJoin` or the 30-row hostile-path table; T046 extends

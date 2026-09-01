@@ -157,7 +157,7 @@ Expected: exactly the paths in the Files table.
 
 ## Out of scope — do NOT
 - Do NOT create `internal/engine/enginetest/contract.go` or `internal/engine/aria2/contract_test.go`; T028
-  owns the shared adapter contract suite and both call sites.
+  owns the shared adapter contract suite and the aria2 call site, and T038 adds the qBittorrent one.
 - Do NOT add the boot conformance probe or raise `max-concurrent-downloads`; T101 owns conformance.
 - Do NOT wire the client into the HTTP server; T027 owns `GET /engines` and the registry wiring.
 - Do NOT add the WebSocket notification transport; T026 owns it.
