@@ -325,7 +325,7 @@ For each enabled rule, ordered by `(priority ASC, name ASC)`, over the candidate
 10. **Dedup ladder** (§7): identity → info-hash → content key.
 11. **Score.** Sum the weights of every `score.formats` entry whose `pattern` matches the haystack. If `total < score.minimum`, reject `below_minimum_score`.
 12. **Collect.** Do **not** grab yet.
-13. **Per-run resolution.** Group all accepted candidates by `content_key`; within each group sort by `(score DESC, rule.priority ASC, feed_priority ASC, published_at DESC)` and grab only the winner. Record the losers as `fallback` rows so a failed hand-off to the download client can be retried with the runner-up.
+13. **Per-run resolution.** Group all accepted candidates by `content_key`; within each group sort by `(score DESC, rule.priority ASC, feed_priority ASC, published_at DESC)` and grab only the winner. `feed_priority` is `feeds.priority` (default `0`, lower preferred); when two feeds carry the same content, the lower-priority feed's copy wins the group. Record the losers as `fallback` rows so a failed hand-off to the download client can be retried with the runner-up.
 14. **Commit.** Insert `rule_matches`, insert `rule_seen_episodes`, set `rule.last_match_at = item.published_at`, enforce `throttle.max_per_run`.
 
 Steps 1 and 3 remove an item from the candidate set before evaluation; they produce no reason code and the
@@ -565,8 +565,9 @@ distribution or a public-domain catalogue.
 - [NEEDS CLARIFICATION: no Go equivalent of Python's `guessit` is pinned, so step 9 computes episode keys from
   the four regexes in §6.4 only. Titles using none of those four notations are rejected
   `unparseable_episode`. Confirm that is acceptable for v1 or allocate a task to add a richer parser.]
-- [NEEDS CLARIFICATION: step 13 sorts by `feed_priority`, but `04-data-model.md`'s `feeds` table has no
-  priority column. Either add one or drop that sort key and fall back to `feeds.created_at`.]
+- (resolved 2026-09-01: `feed_priority` is `feeds.priority`, added to the DDL in
+  [`04-data-model.md`](04-data-model.md) §3.5 and to the feed object in
+  [`05-api-contract.md`](05-api-contract.md) §10.1.)
 - [NEEDS CLARIFICATION: `content_key` construction is unspecified for non-TV content. §7 assumes a form like
   `tv:the-show:s01e05`; a rule with no `episode` block currently has no content key, so step 13 degenerates to
   one group per item.]
@@ -582,3 +583,4 @@ distribution or a public-domain catalogue.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | §3.1 rebuilt as the four-tier extraction ladder matching qBittorrent's actual parser: an `application/x-bittorrent` enclosure and a `magnet:` `<link>` are document-order last-wins (tier A), then an empty- or absent-type enclosure (tier B), then dl-tool's synthesised sources (tier C), then `<link>`/`<guid>` (tier D); noted that Torznab enclosures resolve in tier A. Identity step 2 and the §7 dedup ladder now use the widened 40-or-64-hex `feed_items.info_hash` and `rule_matches.info_hash` columns, with the v1/v2 comparison and back-fill rules. §10 references retargeted to the tier names. ADR link filenames corrected to the canonical slugs. |
 | 2026-09-01 | Removed the qBittorrent `rules.json` importer section and its mention in the scope list: brief §18 cuts the migration subsystem, so no rule importer exists. Renumbered the former §10 to §9. Corrected the `POST /rules/test` anchor to `#103-post-rulestest--the-dry-run`. |
+| 2026-09-01 | Closed the `feed_priority` open question: it is `feeds.priority` (`04-data-model.md` §3.5), default 0, lower preferred. |

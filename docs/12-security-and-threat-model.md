@@ -513,7 +513,7 @@ protection"; its `settings.json` keys are `rpc-host-whitelist-enabled` (default 
 |---|---|
 | Enabled | always; no switch turns it off |
 | Implicitly allowed | `localhost`, `localhost.`, and any literal IPv4 or IPv6 address, port stripped |
-| Additionally allowed | the names the operator configures |
+| Additionally allowed | the names the operator configures through `DLTOOL_ALLOWED_HOSTS` ([`11-config-reference.md`](11-config-reference.md) §2) — a reverse proxy's public hostname belongs here |
 | Mismatch | `421 Misdirected Request`, logged with the offending `Host` value |
 
 ### 6.6 Response headers
@@ -701,3 +701,4 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | §6.5 now names the configuration knob (`DLTOOL_ALLOWED_HOSTS`) behind "the names the operator configures". |

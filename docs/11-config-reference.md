@@ -70,6 +70,7 @@ column names the package that consumes the parsed field.
 | `DLTOOL_LOG_LEVEL` | enum `debug\|info\|warn\|error` | `info` | no | infrastructure | Minimum `log/slog` level. | `internal/obs/log.go` |
 | `DLTOOL_LOG_FORMAT` | enum `json\|text` | `json` | no | infrastructure | `json` selects `slog.NewJSONHandler`; `text` selects the `tint` handler for local development. | `internal/obs/log.go` |
 | `DLTOOL_TRUSTED_PROXIES` | `,`-separated CIDRs | *(empty)* | no | infrastructure | Sources whose `X-Forwarded-For` and `X-Forwarded-Proto` are honoured. Empty means no forwarded header is trusted and the peer address is used. | `internal/api/server.go` |
+| `DLTOOL_ALLOWED_HOSTS` | `,`-separated hostnames | *(empty)* | no | infrastructure | Additional `Host` names accepted by the DNS-rebinding defence ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.5). `localhost`, `localhost.` and literal IP addresses are always allowed and need not be listed. Empty plus a reverse proxy means the proxy's hostname must be listed or requests are rejected with `421`. | `internal/api/server.go` |
 | `DLTOOL_SESSION_TTL` | duration | `720h` | no | infrastructure | Lifetime of a session cookie and its `sessions` row. | `internal/secure/session.go` |
 | `DLTOOL_METRICS_ADDR` | listen addr | `127.0.0.1:9090` | no | infrastructure | Separate listener exposing `GET /metrics`. Set to an empty string to disable metrics entirely. | `internal/obs/metrics.go` |
 | `DLTOOL_ARIA2_URL` | url | *(empty)* | no | infrastructure | aria2 JSON-RPC endpoint, e.g. `http://aria2:6800/jsonrpc`. Empty disables the aria2 lane and every HTTP/FTP/SFTP/Metalink task fails with `engine_unavailable`. | `internal/engine/aria2/client.go` |
@@ -312,3 +313,4 @@ stated fallback.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
+| 2026-09-01 | Added `DLTOOL_ALLOWED_HOSTS`, the previously unspecified knob behind the Host-allowlist defence in `12-security-and-threat-model.md` §6.5. |

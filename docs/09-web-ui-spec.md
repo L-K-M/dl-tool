@@ -617,7 +617,9 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 - **Feed tree**: folders and feeds, each with an unread count. Feed states: OK `●`, loading `◐`, error `⚠`
   with the HTTP status or parse error in the tooltip. Context menu: Update · Rename… · Edit URL… ·
   Mark all read · Move to folder ▸ · Copy feed URL · Remove.
-- **Add feed** dialog fields: URL · Name · Folder · `☐ Automatically download all items`.
+- **Add feed** dialog fields: URL · Name · Folder · `☐ Automatically download all items` — the checkbox is
+  `auto_download` on `POST /feeds`, which creates the `auto:<feed_id>` rule
+  ([`05-api-contract.md`](05-api-contract.md) §10.1); it is not a per-feed toggle in the poller.
 - **Item list** columns: checkbox · Title (unread bold with a filled dot, read muted) · Feed · Age ·
   matched-rule chips. Hovering a chip explains why the rule matched. Multi-select plus *Download selected*,
   *Mark read*, *Mark all read*, and a filter box.
@@ -930,3 +932,4 @@ The justification record for every choice above. Both tables are evidence, not d
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: corrected the ADR-0006, ADR-0007 and ADR-0009 links to the canonical filenames; dropped the two stale open questions about `/prefs` and `infohash_v1`/`infohash_v2`, both of which `05-api-contract.md` now specifies, and removed the `localStorage` fallback for the grid layout. |
+| 2026-09-01 | The add-feed dialog's *Automatically download all items* checkbox is now wired: `auto_download` on `POST /feeds` creates the `auto:<feed_id>` rule (`05-api-contract.md` §10.1). |
