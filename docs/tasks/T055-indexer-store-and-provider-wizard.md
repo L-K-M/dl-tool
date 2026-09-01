@@ -6,7 +6,7 @@
 | **Milestone** | M4 |
 | **Status** | todo |
 | **Depends on** | T006, T007, T008, T054 |
-| **Blocks** | T057, T058, T059, T061 |
+| **Blocks** | T057, T058, T059, T060, T061 |
 | **Parallel-safe** | no — creates `internal/api/search.go` and registers routes in `internal/api/server.go` |
 | **Implements** | — (storage and CRUD behind [FR-050](../02-requirements.md#fr-050-query-torznab-and-newznab-indexers) and [FR-056](../02-requirements.md#fr-056-test-an-indexer-on-demand), covered by T054 and T058) |
 | **Decisions** | [ADR-0008](../decisions/0008-torznab-first-declarative-yaml-second.md), [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |

@@ -6,7 +6,7 @@
 | **Milestone** | M2 |
 | **Status** | todo |
 | **Depends on** | T020, T031, T032 |
-| **Blocks** | — |
+| **Blocks** | T049 |
 | **Parallel-safe** | no — extends `internal/api/tasks.go` and `internal/api/server.go` |
 | **Implements** | [FR-005](../02-requirements.md#fr-005-add-tasks-from-an-uploaded-file), [FR-008](../02-requirements.md#fr-008-save-selected-files-in-a-subfolder-named-after-the-list), the create-time half of [FR-007](../02-requirements.md#fr-007-select-and-prioritise-individual-files) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0012](../decisions/0012-single-data-mount.md) |

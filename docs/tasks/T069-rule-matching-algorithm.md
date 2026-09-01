@@ -6,7 +6,7 @@
 | **Milestone** | M5 |
 | **Status** | todo |
 | **Depends on** | T015, T016, T067, T068 |
-| **Blocks** | T070, T071, T073 |
+| **Blocks** | T070, T071 |
 | **Parallel-safe** | yes — creates `internal/rss/match.go` and `internal/rss/episode.go` only |
 | **Implements** | [FR-073](../02-requirements.md#fr-073-evaluate-rules-with-the-documented-algorithm), [FR-078](../02-requirements.md#fr-078-route-a-rules-action-to-any-engine) |
 | **Decisions** | [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md), [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |

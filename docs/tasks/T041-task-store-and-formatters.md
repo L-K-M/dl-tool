@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T014, T025, T039 |
-| **Blocks** | T042, T044, T048, T051 |
+| **Blocks** | T042, T044, T051, T063 |
 | **Parallel-safe** | yes — touches only `web/src/store/` and `web/src/lib/` |
 | **Implements** | — (client half of [FR-016](../02-requirements.md#fr-016-stream-task-changes-as-rid-deltas-over-sse) and [FR-017](../02-requirements.md#fr-017-serve-the-identical-delta-payload-by-polling), both covered by T025) |
 | **Decisions** | [ADR-0006](../decisions/0006-sse-with-rid-deltas.md) |

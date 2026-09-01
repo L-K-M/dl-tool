@@ -6,7 +6,7 @@
 | **Milestone** | M2 |
 | **Status** | todo |
 | **Depends on** | T015, T020 |
-| **Blocks** | T033, T038, T100 |
+| **Blocks** | T033, T038, T049, T083, T100 |
 | **Parallel-safe** | no — extends `internal/api/tasks_test.go` and `internal/api/server.go` |
 | **Implements** | [FR-006](../02-requirements.md#fr-006-inspect-a-submission-before-committing-it); the parsing half of [FR-022](../02-requirements.md#fr-022-record-both-bittorrent-infohash-forms) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |

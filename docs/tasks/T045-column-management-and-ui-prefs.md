@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T042, T044 |
-| **Blocks** | T053, T104 |
+| **Blocks** | T053, T064, T104 |
 | **Parallel-safe** | no — extends T042's `TaskGrid.tsx` and T044's `Toolbar.tsx` |
 | **Implements** | — (client half of [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences-per-user), covered by T107) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |

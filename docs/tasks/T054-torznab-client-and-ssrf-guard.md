@@ -6,7 +6,7 @@
 | **Milestone** | M4 |
 | **Status** | todo |
 | **Depends on** | T005 |
-| **Blocks** | T055, T058, T062 |
+| **Blocks** | T055, T058, T062, T066, T077 |
 | **Parallel-safe** | yes — creates `internal/secure/ssrf.go` and `internal/search/` |
 | **Implements** | [FR-050](../02-requirements.md#fr-050-query-torznab-and-newznab-indexers), [FR-059](../02-requirements.md#fr-059-report-unknown-result-fields-as-null), [NFR-017](../02-requirements.md#nfr-017-block-server-side-request-forgery) |
 | **Decisions** | [ADR-0008](../decisions/0008-torznab-first-declarative-yaml-second.md) |

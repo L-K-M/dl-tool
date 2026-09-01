@@ -6,7 +6,7 @@
 | **Milestone** | M2 |
 | **Status** | todo |
 | **Depends on** | T016, T019 |
-| **Blocks** | T038, T101 |
+| **Blocks** | T038, T090, T101 |
 | **Parallel-safe** | yes — adds `internal/engine/enginetest/` and one aria2 test file |
 | **Implements** | infrastructure for [FR-011](../02-requirements.md#fr-011-maintain-the-canonical-task-state-machine) and [FR-014](../02-requirements.md#fr-014-apply-lifecycle-and-queue-actions-to-a-selection) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |

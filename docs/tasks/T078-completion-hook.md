@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T074 |
-| **Blocks** | T108 |
+| **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/settings.go`, `internal/jobs/postprocess.go` |
 | **Implements** | [FR-105](../02-requirements.md#fr-105-run-a-completion-hook-only-when-explicitly-enabled), [NFR-015](../02-requirements.md#nfr-015-never-interpolate-configuration-into-a-shell) |
 | **Decisions** | [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md) |

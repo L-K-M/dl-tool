@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T002, T007, T013 |
-| **Blocks** | T039, T051 |
+| **Blocks** | T040, T041, T063, T072 |
 | **Parallel-safe** | no — it also edits the shared file `web/package.json` |
 | **Implements** | — (closes the loop on [NFR-027](../02-requirements.md#nfr-027-keep-the-generated-api-contract-in-step-with-the-code); the CI gate is T002's) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |

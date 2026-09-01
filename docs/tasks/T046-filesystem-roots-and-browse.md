@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T007, T008, T020 |
-| **Blocks** | T047, T049, T053 |
+| **Blocks** | T047, T109 |
 | **Parallel-safe** | no — extends `internal/fsx/safepath.go` and `internal/api/server.go` |
 | **Implements** | [FR-040](../02-requirements.md#fr-040-browse-the-server-filesystem-jailed-to-configured-roots), [FR-042](../02-requirements.md#fr-042-reject-a-destination-outside-the-configured-roots), [NFR-014](../02-requirements.md#nfr-014-never-build-a-filesystem-path-from-a-request-parameter) |
 | **Decisions** | [ADR-0012](../decisions/0012-single-data-mount.md) |

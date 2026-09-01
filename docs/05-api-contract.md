@@ -401,9 +401,16 @@ HTTP/1.1 201 Created
 was created, even if others were rejected.
 
 Statuses: `201` · `403` `/problems/path-rejected` · `403` `/problems/quota-exceeded` · `403`
-`/problems/ssrf-blocked` · `413` `/problems/payload-too-large` · `422` `/problems/validation-failed` (empty
+`/problems/ssrf-blocked` (see the note below) · `413` `/problems/payload-too-large` · `422` `/problems/validation-failed` (empty
 submission, over 50 URIs, unknown category, `select_files` on an incapable engine) · `422`
 `/problems/unsupported-scheme` when **every** URI was rejected · `503` `/problems/engine-unavailable`.
+
+`/problems/ssrf-blocked` on this endpoint and on §5.3 is **not yet implemented by any task**: T020 and T031
+land in M1/M2, before `internal/secure/ssrf.go` exists (T054, M4), and no later task wires the guard into
+either handler. See the "Missing tasks" table in
+[`tasks/00-task-index.md`](tasks/00-task-index.md#missing-tasks--must-be-written-before-m3-and-m4-close),
+suggested ID T122. Do not delete the status: it is required by
+[`12-security-and-threat-model.md` §2.3](12-security-and-threat-model.md#23-private-addresses-and-the-engine-sidecars).
 
 ### 5.3 `POST /tasks/inspect`
 

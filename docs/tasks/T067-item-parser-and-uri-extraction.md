@@ -6,7 +6,7 @@
 | **Milestone** | M5 |
 | **Status** | todo |
 | **Depends on** | T015, T066 |
-| **Blocks** | T069, T072 |
+| **Blocks** | T069 |
 | **Parallel-safe** | yes — creates `internal/rss/parse.go` and its fixtures only |
 | **Implements** | [FR-072](../02-requirements.md#fr-072-extract-a-download-uri-from-each-item) |
 | **Decisions** | [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |

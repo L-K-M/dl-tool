@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T001 |
-| **Blocks** | T005, T006, T007, T011, T012 |
+| **Blocks** | T005, T006, T011, T015, T016, T056, T093, T096 |
 | **Parallel-safe** | no — every later Go task builds on `go.mod` |
 | **Implements** | — (foundation; version pinning is a hard rule in [`14-conventions.md`](../14-conventions.md#7-repository-wide-hard-rules)) |
 | **Decisions** | [ADR-0002](../decisions/0002-go-for-the-backend.md) |

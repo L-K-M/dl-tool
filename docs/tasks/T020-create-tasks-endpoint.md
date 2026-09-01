@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T007, T008, T015, T016, T017, T019 |
-| **Blocks** | T021, T022, T023, T098, T099 |
+| **Blocks** | T021, T022, T023, T024, T027, T031, T033, T046, T049, T050, T071, T083, T085, T098, T099, T100 |
 | **Parallel-safe** | no — adds the shared `internal/api/tasks.go` |
 | **Implements** | [FR-001](../02-requirements.md#fr-001-add-tasks-from-a-batch-of-pasted-uris), [FR-009](../02-requirements.md#fr-009-supply-ftp-credentials-for-a-single-task), [FR-010](../02-requirements.md#fr-010-recurse-an-ftp-directory-when-the-uri-ends-in-a-slash) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0012](../decisions/0012-single-data-mount.md) |

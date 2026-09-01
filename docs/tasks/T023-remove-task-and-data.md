@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T020, T021, T022 |
-| **Blocks** | T024, T111 |
+| **Blocks** | T024, T044, T111 |
 | **Parallel-safe** | no — extends the shared `internal/api/tasks.go` |
 | **Implements** | [FR-015](../02-requirements.md#fr-015-remove-a-task-with-or-without-its-data) |
 | **Decisions** | [ADR-0012](../decisions/0012-single-data-mount.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |

@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T004 |
-| **Blocks** | T006, T007, T010 |
+| **Blocks** | T006, T007, T029, T054, T056, T087, T092 |
 | **Parallel-safe** | no — it edits `cmd/dl-tool/main.go` |
 | **Implements** | [FR-141](../02-requirements.md#fr-141-resolve-settings-from-environment-then-database), [NFR-023](../02-requirements.md#nfr-023-generate-secrets-on-first-run-and-support-file-based-secrets) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0012](../decisions/0012-single-data-mount.md) |

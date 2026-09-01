@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T006, T016 |
-| **Blocks** | T020, T021, T022, T023, T024, T098 |
+| **Blocks** | T020, T021, T024, T050, T074, T098, T100 |
 | **Parallel-safe** | yes — touches only `internal/store/` |
 | **Implements** | infrastructure for [FR-011](../02-requirements.md#fr-011-maintain-the-canonical-task-state-machine); the engine half of FR-011 is verified by T018 |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |

@@ -6,7 +6,7 @@
 | **Milestone** | M2 |
 | **Status** | todo |
 | **Depends on** | T021, T029 |
-| **Blocks** | T035 |
+| **Blocks** | T035, T048 |
 | **Parallel-safe** | no — extends `internal/store/tasks.go` and `internal/api/server.go` |
 | **Implements** | the tracker half of [FR-018](../02-requirements.md#fr-018-manage-trackers-and-list-peers-for-bittorrent-tasks) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |

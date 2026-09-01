@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T004, T005 |
-| **Blocks** | T007, T008, T010, T012 |
+| **Blocks** | T007, T008, T010, T012, T017, T055, T065, T091 |
 | **Parallel-safe** | yes — touches only `internal/store/` |
 | **Implements** | [NFR-026](../02-requirements.md#nfr-026-store-data-durably-in-one-sqlite-database) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |

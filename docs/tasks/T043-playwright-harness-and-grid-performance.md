@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T040, T042 |
-| **Blocks** | T103, T104 |
+| **Blocks** | T064, T103, T104 |
 | **Parallel-safe** | no — it also edits the shared file `web/package.json` |
 | **Implements** | [NFR-001](../02-requirements.md#nfr-001-render-a-10-000-row-grid-smoothly) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |

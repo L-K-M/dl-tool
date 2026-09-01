@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T004 |
-| **Blocks** | T016, T020 |
+| **Blocks** | T016, T020, T031, T067, T069 |
 | **Parallel-safe** | yes — touches only `internal/uri/` |
 | **Implements** | [FR-003](../02-requirements.md#fr-003-decode-obfuscated-chinese-download-manager-schemes), [FR-004](../02-requirements.md#fr-004-reject-ed2k-links-with-a-clear-message) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |

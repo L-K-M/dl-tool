@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T019, T020, T021 |
-| **Blocks** | T023, T025 |
+| **Blocks** | T023, T025, T036, T037, T044, T082, T085 |
 | **Parallel-safe** | no — extends the shared `internal/api/tasks.go` |
 | **Implements** | [FR-014](../02-requirements.md#fr-014-apply-lifecycle-and-queue-actions-to-a-selection) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |

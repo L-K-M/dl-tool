@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T020, T021, T022, T084 |
-| **Blocks** | T086, T109 |
+| **Blocks** | T086, T109, T111 |
 | **Parallel-safe** | no — extends `internal/api/tasks.go` and `internal/store/tasks_list.go` |
 | **Implements** | [FR-119](../02-requirements.md#fr-119-filter-tasks-by-owner-for-non-admins), [FR-121](../02-requirements.md#fr-121-enforce-the-per-user-storage-quota), [FR-122](../02-requirements.md#fr-122-re-check-the-storage-quota-when-metadata-resolves) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |

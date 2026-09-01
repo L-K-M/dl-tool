@@ -6,7 +6,7 @@
 | **Milestone** | M7 |
 | **Status** | todo |
 | **Depends on** | T005, T016 |
-| **Blocks** | T088, T089, T090, T113 |
+| **Blocks** | T088, T089 |
 | **Parallel-safe** | yes — creates `internal/engine/ytdlp/` and touches nothing else |
 | **Implements** | [FR-002](../02-requirements.md#fr-002-route-each-uri-to-an-engine-by-scheme), [NFR-015](../02-requirements.md#nfr-015-never-interpolate-configuration-into-a-shell), [NFR-020](../02-requirements.md#nfr-020-execute-no-third-party-code) |
 | **Decisions** | [ADR-0002](../decisions/0002-go-for-the-backend.md), [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0018](../decisions/0018-pin-ytdlp-by-version-and-hash.md) |

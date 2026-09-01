@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T001 |
-| **Blocks** | T007, T014 |
+| **Blocks** | T014, T097 |
 | **Parallel-safe** | yes — touches only `.github/workflows/` and `scripts/gen.sh` |
 | **Implements** | [NFR-027](../02-requirements.md#nfr-027-keep-the-generated-api-contract-in-step-with-the-code) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md) |

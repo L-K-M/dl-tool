@@ -210,6 +210,27 @@ The yt-dlp engine, the runtime image, compose, the release pipeline and the docu
 | [T113](T113-ytdlp-pin-and-capability-probe.md) | Enforce the yt-dlp pin and probe the runtime at boot | T090, T093, T097 | todo |
 | [T115](T115-aria2-image-build-and-publish.md) | Build and publish the aria2 image | T093, T094, T097 | todo |
 
+## Missing tasks — must be written before M3 and M4 close
+
+[`09-web-ui-spec.md` §9](../09-web-ui-spec.md#9-settings-screens) specifies ten settings sections and
+[§9.1](../09-web-ui-spec.md#91-the-247-schedule-grid) specifies the painting grid in full. T053 builds only
+**General** and **Connection** and defers the rest to "M4, M5, M6 and M7"; no task in those milestones
+touches `web/src/components/Settings/`. `docs/09-web-ui-spec.md` §2.1 also routes `/logs`, which no task
+renders. The M6 exit checkpoint ("the 24×7 grid … works end to end") cannot be met until these exist.
+
+| Suggested ID | Milestone | Title | Scope |
+|---|---|---|---|
+| T116 | M4 | Build the Indexers settings section | The doc 09 §9 Indexers table — Name/Type/URL/Categories/Enabled/Priority/Last test — with Add, Edit, Test, Test all, Reorder and Import over `/indexers` and `/indexers/import`; imported definitions render disabled with their provenance. Depends on T053, T055, T058. |
+| T117 | M5 | Build the RSS settings section | Enable fetching, update interval, maximum articles per feed, auto-downloader toggle and smart-episode patterns, over `PATCH /settings`. Depends on T053, T066, T092. |
+| T118 | M6 | Build the Bandwidth settings section and the 24×7 schedule grid | Global and alternative limits in B/s; the *Immediately* / *Advanced schedule* radio; the 24 × 7 `<table>` of doc 09 §9.1 with the three brushes, drag and rectangle painting, row/column header painting, the arrow/Space keyboard map, the four bulk buttons, the pattern-plus-colour legend, the displayed `TZ`, over `GET`/`PUT /settings/schedule`. Depends on T053, T079, T080, T110. |
+| T119 | M6 | Build the Downloads and BitTorrent settings sections | Default and incomplete destinations through the folder browser, content layout, watch-folder table, auto-extract plus the shared password list, the category→path table, per-root `min_free_space`; and the BitTorrent row of doc 09 §9. Depends on T053, T074, T083, T107. |
+| T120 | M6 | Build the Users & Auth and Notifications settings sections | The users table with quota and default destination, add/edit/delete, change password, session lifetime, the API-token create-once reveal; and the per-event × per-channel matrix with **Send test** rendering the raw upstream status line and body. Depends on T053, T084, T086, T106. |
+| T122 | M4 | Apply the SSRF guard to user-submitted URIs | [`05-api-contract.md`](../05-api-contract.md) §5.2 and §5.3 both list `403 /problems/ssrf-blocked`, and [`12-security-and-threat-model.md`](../12-security-and-threat-model.md) §2.3 says the guard governs "URLs originating from a user", but T020 and T031 predate the guard (T054, M4) and neither applies it; no later task wires it in. Scope: pre-resolve every `http`/`https`/`ftp`/`sftp` URI through `secure.Guard.Check` at `POST /tasks` and `POST /tasks/inspect`, reject with `403 /problems/ssrf-blocked` and `tasks.error_code = 'ssrf_blocked'`, and honour `DLTOOL_SSRF_ALLOW_PRIVATE`. Depends on T020, T031, T054. |
+| T121 | M7 | Build the Advanced settings section and the system log viewer | Log level and retention, database maintenance and vacuum, settings export/import, reset to defaults, version and build info; plus the `/logs` route of doc 09 §2.1 over `GET /system/logs`. Depends on T053, T091, T092, T096, T108. |
+
+These IDs are suggestions only; they are outside the ranges in the brief §8 and must be confirmed before a
+file is created. Until then T053's and T080's "M6 owns it" / "T053 owns it" pointers refer to this table.
+
 ## Deferral register
 A `should` or `could` requirement may be deferred only by adding a row here, naming the requirement, the
 reason and the task that will carry it.

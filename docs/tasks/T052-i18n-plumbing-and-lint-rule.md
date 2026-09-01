@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T039, T044, T048, T049 |
-| **Blocks** | T053 |
+| **Blocks** | T053, T072 |
 | **Parallel-safe** | no — extends T039's `i18n.ts` and `format.ts` |
 | **Implements** | [NFR-008](../02-requirements.md#nfr-008-ship-translation-plumbing-with-english-only) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |

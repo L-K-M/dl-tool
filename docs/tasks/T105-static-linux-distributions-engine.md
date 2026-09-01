@@ -73,7 +73,10 @@ definition:
 | `published` | `PublishedAt` | coerced with the declared `format`, else nil |
 
 ## Steps
-1. Re-probe the two directory indexes named in doc 07 §6.2 and read the current filenames:
+1. This task needs outbound HTTPS to `releases.ubuntu.com` and `cdimage.debian.org`. If the sandbox has no
+   network, STOP and write that under `## Blocked`: do **not** invent, guess or reuse a stale URL, and do not
+   fall back to whatever T057 shipped. Re-probe the two directory indexes named in doc 07 §6.2 and read the
+   current filenames:
    `curl -sS https://releases.ubuntu.com/24.04/ | grep -o '[^"]*\.iso\.torrent'` and
    `curl -sS https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/ | grep -o '[^"]*\.iso\.torrent'`.
 2. Fetch each candidate `.torrent` with `curl -sI` and keep only those answering `200` with

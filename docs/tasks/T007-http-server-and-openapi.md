@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T005, T006 |
-| **Blocks** | T008, T010, T013, T014 |
+| **Blocks** | T008, T010, T013, T014, T020, T046, T055, T065, T068, T095 |
 | **Parallel-safe** | no — it edits `cmd/dl-tool/main.go` |
 | **Implements** | — (the surface [FR-152](../02-requirements.md#fr-152-expose-health-and-readiness-endpoints) and [FR-116](../02-requirements.md#fr-116-authenticate-with-a-session-cookie-or-a-bearer-token) mount on; the drift gate is [NFR-027](../02-requirements.md#nfr-027-keep-the-generated-api-contract-in-step-with-the-code)) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md) |

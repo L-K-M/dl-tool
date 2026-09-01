@@ -6,7 +6,7 @@
 | **Milestone** | M2 |
 | **Status** | todo |
 | **Depends on** | T021, T029, T030 |
-| **Blocks** | T033, T038 |
+| **Blocks** | T033, T038, T048 |
 | **Parallel-safe** | no — extends `internal/store/tasks.go` and `internal/api/server.go` |
 | **Implements** | [FR-007](../02-requirements.md#fr-007-select-and-prioritise-individual-files) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |

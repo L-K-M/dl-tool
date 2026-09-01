@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T046, T099 |
-| **Blocks** | T049, T053 |
+| **Blocks** | T049, T053, T073, T109 |
 | **Parallel-safe** | no — extends T046's `internal/api/fs.go` |
 | **Implements** | [FR-041](../02-requirements.md#fr-041-create-a-directory-and-report-free-space) |
 | **Decisions** | [ADR-0012](../decisions/0012-single-data-mount.md) |

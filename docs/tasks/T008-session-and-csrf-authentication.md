@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T006, T007 |
-| **Blocks** | T009, T084, T085 |
+| **Blocks** | T009, T020, T046, T055, T065, T068, T084 |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
 | **Implements** | [FR-116](../02-requirements.md#fr-116-authenticate-with-a-session-cookie-or-a-bearer-token), [NFR-012](../02-requirements.md#nfr-012-protect-against-csrf-with-a-synchroniser-token) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |

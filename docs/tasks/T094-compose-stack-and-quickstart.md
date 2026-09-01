@@ -6,7 +6,7 @@
 | **Milestone** | M7 |
 | **Status** | todo |
 | **Depends on** | T093 |
-| **Blocks** | T095, T097 |
+| **Blocks** | T095, T097, T115 |
 | **Parallel-safe** | no — it edits `README.md` |
 | **Implements** | [NFR-009](../02-requirements.md#nfr-009-collect-and-transmit-no-telemetry), [NFR-005](../02-requirements.md#nfr-005-publish-a-multi-architecture-image) |
 | **Decisions** | [ADR-0012](../decisions/0012-single-data-mount.md), [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md) |

@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T009, T013, T014, T039 |
-| **Blocks** | T042, T043, T044, T048, T049, T051, T052, T053, T103 |
+| **Blocks** | T042, T043, T072, T103 |
 | **Parallel-safe** | no — it also edits the shared files `web/src/locales/en/common.json`, `web/src/main.tsx` |
 | **Implements** | — (renders [FR-115](../02-requirements.md#fr-115-complete-a-first-run-setup-using-a-one-time-token) and [FR-116](../02-requirements.md#fr-116-authenticate-with-a-session-cookie-or-a-bearer-token), both covered by T009; carries [NFR-012](../02-requirements.md#nfr-012-protect-against-csrf-with-a-synchroniser-token)'s token client-side) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |

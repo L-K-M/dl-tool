@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T016, T018 |
-| **Blocks** | T020, T026, T027, T098 |
+| **Blocks** | T020, T022, T026, T027, T028, T029, T079, T098, T101 |
 | **Parallel-safe** | no — adds `internal/engine/registry.go` beside T016's files |
 | **Implements** | infrastructure for [FR-001](../02-requirements.md#fr-001-add-tasks-from-a-batch-of-pasted-uris) and [FR-014](../02-requirements.md#fr-014-apply-lifecycle-and-queue-actions-to-a-selection) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |

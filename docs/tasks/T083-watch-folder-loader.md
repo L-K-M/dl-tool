@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T020, T031, T066, T081 |
-| **Blocks** | T107, T108 |
+| **Blocks** | T107 |
 | **Parallel-safe** | no — it also edits the shared files `internal/jobs/cron.go`, `internal/store/settings.go` |
 | **Implements** | [FR-043](../02-requirements.md#fr-043-import-torrent-files-from-a-watch-folder), [FR-044](../02-requirements.md#fr-044-report-the-effective-destination) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0012](../decisions/0012-single-data-mount.md) |

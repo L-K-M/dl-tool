@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T008 |
-| **Blocks** | T039, T084 |
+| **Blocks** | T040, T084 |
 | **Parallel-safe** | no — it edits `internal/api/auth.go` |
 | **Implements** | [FR-115](../02-requirements.md#fr-115-complete-a-first-run-setup-using-a-one-time-token), [NFR-011](../02-requirements.md#nfr-011-ship-no-default-credentials) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |

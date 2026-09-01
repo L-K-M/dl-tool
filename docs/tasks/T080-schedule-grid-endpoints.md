@@ -135,7 +135,10 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Out of scope — do NOT
 - Do NOT evaluate the grid or act on the active cell; T081 owns the per-minute evaluation.
 - Do NOT implement the DST repeated-hour and skipped-hour rules; T110 owns them.
-- Do NOT build the painting grid UI; T053 owns the settings screens and doc 09 §9.1 specifies it.
+- Do NOT build the painting grid UI. T053 explicitly excludes it, so **no task currently owns it**: the
+  suggested task **T118** in
+  [`00-task-index.md` "Missing tasks"](00-task-index.md#missing-tasks--must-be-written-before-m3-and-m4-close)
+  does, against doc 09 §9.1.
 - Do NOT store the grid as a JSON blob in `settings`; it has its own 168-row table.
 - Do NOT accept a `timezone` from the client; the container's `TZ` is the only source.
 

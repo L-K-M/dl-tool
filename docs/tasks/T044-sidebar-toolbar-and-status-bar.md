@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T022, T023, T041, T042 |
-| **Blocks** | T045, T049, T051, T052, T053, T104 |
+| **Blocks** | T045, T049, T051, T052, T063, T072, T104 |
 | **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/locales/en/common.json` |
 | **Implements** | — (renders [FR-013](../02-requirements.md#fr-013-resolve-the-sidebar-filter-sets), [FR-014](../02-requirements.md#fr-014-apply-lifecycle-and-queue-actions-to-a-selection) and [FR-015](../02-requirements.md#fr-015-remove-a-task-with-or-without-its-data), covered by T021, T022 and T023) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |

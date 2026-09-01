@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T006 |
-| **Blocks** | T074, T076, T077 |
+| **Blocks** | T061, T066, T074, T091 |
 | **Parallel-safe** | no — it edits `cmd/dl-tool/main.go` |
 | **Implements** | — (the mechanism behind [FR-100](../02-requirements.md#fr-100-auto-extract-the-supported-archive-formats) and [FR-103](../02-requirements.md#fr-103-move-completed-data-across-filesystems), both verified in M6) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |

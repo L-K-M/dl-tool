@@ -137,9 +137,13 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Out of scope — do NOT
 - Do NOT call `GET /settings` or `PATCH /settings`; T092 owns those endpoints and the sections that need
   them arrive with their own milestone.
-- Do NOT build the 24×7 schedule grid or the bandwidth section; M6 owns
-  [FR-092](../02-requirements.md#fr-092-store-and-edit-a-247-schedule-grid).
-- Do NOT build the Indexers, RSS, Users, Notifications or Advanced forms; M4, M5, M6 and M7 own them.
+- Do NOT build the 24×7 schedule grid or the bandwidth section; the suggested task **T118** in
+  [`00-task-index.md` "Missing tasks"](00-task-index.md#missing-tasks--must-be-written-before-m3-and-m4-close) owns
+  them, against [FR-092](../02-requirements.md#fr-092-store-and-edit-a-247-schedule-grid).
+- Do NOT build the Indexers, RSS, Downloads, BitTorrent, Users, Notifications or Advanced forms; the
+  suggested tasks **T116, T117, T119, T120 and T121** in that same table own them. No task in M4–M7 as
+  currently written touches `web/src/components/Settings/`, so if you find yourself needing one of these
+  forms, STOP and write it under "Blocked".
 - Do NOT render an engine password, secret or token field, even disabled.
 - Do NOT reorder or rename a section; a Download Station user must find them where doc 09 §9 puts them.
 

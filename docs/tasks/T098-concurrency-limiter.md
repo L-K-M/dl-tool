@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T017, T019, T020, T024, T026 |
-| **Blocks** | T099, T085 |
+| **Blocks** | T086, T099 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/tasks_actions.go`, `internal/store/tasks.go` |
 | **Implements** | [FR-020](../02-requirements.md#fr-020-cap-the-number-of-concurrently-active-tasks), [FR-021](../02-requirements.md#fr-021-exclude-seeding-tasks-from-every-concurrency-limit), [FR-123](../02-requirements.md#fr-123-enforce-a-per-user-concurrency-limit) |
 | **Decisions** | [ADR-0017](../decisions/0017-exclusive-control-of-engines.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |

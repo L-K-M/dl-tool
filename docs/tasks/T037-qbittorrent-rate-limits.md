@@ -6,7 +6,7 @@
 | **Milestone** | M2 |
 | **Status** | todo |
 | **Depends on** | T022, T029, T030 |
-| **Blocks** | T038, T079, T110 |
+| **Blocks** | T038, T079, T082 |
 | **Parallel-safe** | no — it also edits the shared file `internal/engine/qbittorrent/client.go` |
 | **Implements** | the engine half of [FR-090](../02-requirements.md#fr-090-enforce-global-rate-limits-in-bytes-per-second) and [FR-094](../02-requirements.md#fr-094-apply-per-task-limits-to-already-running-tasks) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |

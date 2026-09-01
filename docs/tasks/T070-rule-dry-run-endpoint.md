@@ -6,7 +6,7 @@
 | **Milestone** | M5 |
 | **Status** | todo |
 | **Depends on** | T068, T069 |
-| **Blocks** | T073 |
+| **Blocks** | T071, T073 |
 | **Parallel-safe** | no — extends T068's `internal/api/rules.go` |
 | **Implements** | [FR-075](../02-requirements.md#fr-075-dry-run-a-rule-and-explain-every-item), [FR-076](../02-requirements.md#fr-076-dry-run-reproducibly-by-ignoring-stored-state) |
 | **Decisions** | [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md) |

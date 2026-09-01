@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T003 |
-| **Blocks** | T040, T041, T042, T044, T045, T047, T048, T049, T052, T053, T103 |
+| **Blocks** | T040, T041, T052, T103 |
 | **Parallel-safe** | no — it also edits the shared files `web/package.json`, `web/src/main.tsx`, `web/vite.config.ts` |
 | **Implements** | [NFR-022](../02-requirements.md#nfr-022-load-no-third-party-runtime-assets) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |

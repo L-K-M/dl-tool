@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T004, T015 |
-| **Blocks** | T017, T018, T019, T020 |
+| **Blocks** | T017, T018, T019, T020, T028, T029, T069, T079, T087, T088 |
 | **Parallel-safe** | yes — touches only `internal/engine/` |
 | **Implements** | [FR-002](../02-requirements.md#fr-002-route-each-uri-to-an-engine-by-scheme) |
 | **Decisions** | [ADR-0001](../decisions/0001-control-plane-over-existing-engines.md), [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |

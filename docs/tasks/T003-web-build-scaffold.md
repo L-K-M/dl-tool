@@ -6,7 +6,7 @@
 | **Milestone** | M0 |
 | **Status** | todo |
 | **Depends on** | T001 |
-| **Blocks** | T013, T014, T039 |
+| **Blocks** | T013, T039, T093 |
 | **Parallel-safe** | yes — touches only `web/` |
 | **Implements** | — (foundation for [NFR-022](../02-requirements.md#nfr-022-load-no-third-party-runtime-assets), verified by T039) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |

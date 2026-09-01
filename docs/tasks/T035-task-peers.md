@@ -6,7 +6,7 @@
 | **Milestone** | M2 |
 | **Status** | todo |
 | **Depends on** | T029, T030, T034 |
-| **Blocks** | — |
+| **Blocks** | T048 |
 | **Parallel-safe** | no — extends `internal/api/tasks_swarm.go` from T034 |
 | **Implements** | the peer half of [FR-018](../02-requirements.md#fr-018-manage-trackers-and-list-peers-for-bittorrent-tasks) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |

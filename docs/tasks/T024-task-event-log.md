@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T017, T020, T023 |
-| **Blocks** | T025, T048 |
+| **Blocks** | T025, T026, T048, T071, T074, T096, T098, T099 |
 | **Parallel-safe** | no — extends the shared `internal/api/tasks.go` |
 | **Implements** | [FR-150](../02-requirements.md#fr-150-record-a-per-task-event-log) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |

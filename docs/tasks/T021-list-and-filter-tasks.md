@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T017, T020 |
-| **Blocks** | T022, T025, T039 |
+| **Blocks** | T022, T023, T025, T032, T034, T042, T050, T085 |
 | **Parallel-safe** | no — extends the shared `internal/api/tasks.go` |
 | **Implements** | [FR-012](../02-requirements.md#fr-012-list-and-filter-tasks), [FR-013](../02-requirements.md#fr-013-resolve-the-sidebar-filter-sets) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |

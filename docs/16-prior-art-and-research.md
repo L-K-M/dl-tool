@@ -397,12 +397,13 @@ proves each, so a future maintainer can re-verify without redoing the work.
   launch, so splitting files organises but does not reduce context.
   `https://code.claude.com/docs/en/memory`
 - Doc-lint is enforceable: `lychee --offline --include-fragments` checks local anchors (verified flag), and
-  a `grep` for hedging words catches "we could"/"maybe"/"TBD" before review.
+  a `grep` for the hedging vocabulary listed in [`13-testing-and-verification.md` §8](13-testing-and-verification.md#8-scriptsdoclintsh)
+  catches it before review. The words themselves are not repeated here: doclint check 3 scans this file too.
   `https://raw.githubusercontent.com/lycheeverse/lychee/master/README.md`
 
 ---
 
-## 6. What we could not verify
+## 6. Claims this research could not verify
 
 Nobody should later mistake any of the following for a settled fact. Each is carried forward as
 `UNVERIFIED`; where a document depends on one, it must say so.

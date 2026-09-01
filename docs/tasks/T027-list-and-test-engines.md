@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T019, T020 |
-| **Blocks** | T053, T101 |
+| **Blocks** | T029, T053, T079, T080, T092, T101 |
 | **Parallel-safe** | no — it also edits the shared file `internal/api/server.go` |
 | **Implements** | [FR-143](../02-requirements.md#fr-143-list-engines-and-test-connectivity) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |

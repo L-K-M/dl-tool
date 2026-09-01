@@ -6,7 +6,7 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T074 |
-| **Blocks** | T108 |
+| **Blocks** | — |
 | **Parallel-safe** | no — extends `internal/jobs/handlers_extract.go` |
 | **Implements** | [FR-101](../02-requirements.md#fr-101-try-a-shared-password-list-and-per-task-passwords) |
 | **Decisions** | [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |

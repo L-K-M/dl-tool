@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T021, T040, T041 |
-| **Blocks** | T043, T044, T045, T048, T051, T104 |
+| **Blocks** | T043, T044, T045, T048, T063, T104 |
 | **Parallel-safe** | no — it also edits the shared file `web/src/App.tsx` |
 | **Implements** | — (renders [FR-012](../02-requirements.md#fr-012-list-and-filter-tasks), covered by T021; the performance and accessibility gates are T043 and T104) |
 | **Decisions** | [ADR-0006](../decisions/0006-sse-with-rid-deltas.md), [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
