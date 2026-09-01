@@ -194,14 +194,16 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 | POST | `/search` | session\|token | Start an asynchronous search job. |
 | GET | `/search/{id}` | session\|token | Poll partial results and per-engine status. |
 | DELETE | `/search/{id}` | session\|token | Discard a search job and its results. |
-| GET·POST·PATCH·DELETE | `/feeds[/{id}]` | session\|token | Feed CRUD. |
+| GET | `/feeds[/{id}]` | session\|token | Feed and item reads — feeds are global. |
+| POST·PATCH·DELETE | `/feeds[/{id}]` | admin | Feed writes; a feed is shared state every rule can see. |
 | POST | `/feeds/{id}/refresh` | session\|token | Force one poll now. |
 | PATCH | `/feeds/{id}/items` | session\|token | Mark items read or unread. |
 | POST | `/feeds/{id}/items/read-all` | session\|token | Mark every item of the feed read. |
 | GET | `/feeds/{id}/items` | session\|token | Items of one feed. |
-| GET·POST·PATCH·DELETE | `/rules[/{id}]` | session\|token | Rule CRUD. |
-| POST | `/rules/test` | session\|token | Dry-run an unsaved rule; explains every item. |
-| POST | `/rules/{id}/run` | session\|token | Apply a saved rule to existing items. |
+| GET | `/rules[/{id}]` | session\|token | Rule reads. |
+| POST·PATCH·DELETE | `/rules[/{id}]` | admin | Rule writes — a rule creates tasks on someone's behalf, the same reason `/watch-folders` is admin (§15). |
+| POST | `/rules/test` | session\|token | Dry-run an unsaved rule; takes an optional `owner_id` (**admins only** — a non-admin tests as themselves) so the jail checks match the rule as it will run. Creates nothing. |
+| POST | `/rules/{id}/run` | admin | Applies a saved rule — it creates tasks as the rule's owner, so it carries the same privilege as a rule write. |
 | GET | `/settings` | session\|token | Read settings, secrets redacted. |
 | PATCH | `/settings` | admin | Partial settings update. |
 | GET | `/settings/schedule` | session\|token | The 24×7 bandwidth grid. |
@@ -852,6 +854,13 @@ flag is not rejected at save time; the failure surfaces at probe and search time
 [`07-search-and-indexers.md`](07-search-and-indexers.md) §2.7 sets the flag automatically on the rows it
 discovers. Imported indexers are created with `enabled: false`.
 
+**Key-bearing indexers are admin-only.** An indexer with a stored `api_key` is invisible to a non-admin:
+it does not appear in `GET /indexers` or `GET /indexers/categories`, its id in `POST /search` returns
+`404`, and its results never reach a non-admin search job. Private-tracker download URLs and enclosure
+links embed the operator's per-user passkey ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §1
+lists tracker passkeys as an asset); a shared household account must not be able to read one. Keyless
+indexers — the four bundled engines, bitmagnet — stay searchable by every authenticated user.
+
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (non-admin write) · `403`
 `/problems/ssrf-blocked` · `404` · `409` `/problems/conflict` (duplicate `definition_id`) · `422` (unknown
 `kind`, missing `url` for a Torznab indexer, invalid definition).
@@ -973,6 +982,12 @@ to the job's results. To turn a result into a task, `POST /tasks` with
 `title`, `enabled`, `refresh_interval_s`, `item_cap`; `PATCH /feeds/{id}` accepts the same set;
 `DELETE /feeds/{id}` returns `204` and cascades to the feed's items.
 
+**Credential-bearing feeds are admin-only**, mirroring §9.1's key-bearing-indexer rule: a feed whose URL
+contains userinfo (`https://user:pass@…`) or a `passkey`, `apikey` or `token` query parameter — the same
+patterns the log redactor already matches — is invisible to a non-admin, along with its items, because
+both the URL and the item enclosure links embed the operator's per-user tracker passkey. Non-admins see
+the remaining feeds read-only (§2).
+
 `POST /feeds/{id}/refresh` forces one conditional GET now, bypassing the backoff ladder:
 
 ```json
@@ -1021,10 +1036,30 @@ The rule document's schema, the matching algorithm and the rejection-reason enum
 [`08-rss-automation.md`](08-rss-automation.md); this file fixes only how the document travels over HTTP — it
 is a JSON object in the `definition` member, never a YAML string.
 
-`POST /rules` requires `name` and `definition`; `PATCH /rules/{id}` accepts `name`, `enabled`, `priority`
-and `definition`; `DELETE /rules/{id}` → `204`. A malformed `episode.filter` is rejected **at save time**
+`POST /rules` requires `name` and `definition` and accepts `owner_id` (a `usr_` id, default the calling
+admin); `PATCH /rules/{id}` accepts `name`, `enabled`, `priority`, `owner_id` and `definition`;
+`DELETE /rules/{id}` → `204`. A malformed `episode.filter` is rejected **at save time**
 with `422` and an `errors[]` entry pointing at `body.definition.episode.filter` — never accepted and
 silently ignored at match time.
+
+**Ownership and the jail.** A rule creates tasks on someone's behalf, exactly like a watch folder (§15),
+so writes are admin-only and every rule carries an `owner_id`:
+
+- `action.destination` is validated at save time against the **owner's** jail (§7.2), not merely against
+  the configured roots: a rule may not write outside the subtree its owner could reach by hand. When the
+  member is omitted it resolves to the owner's `users.default_destination`, else the global default — the
+  resolved value, not just the submitted one, must lie inside the owner's jail or the save is `403`
+  `/problems/path-rejected`.
+- The check runs again at grab time on every item, because `PATCH /users/{id}` can move a jail after the
+  rule was saved. `POST /rules/test` takes the same `owner_id` so the dry run's destination checks target
+  the jail the saved rule will actually run under. A non-admin supplying an `owner_id` other than their
+  own is `403` `/problems/forbidden` — a non-admin always tests as themselves, so the dry run cannot
+  probe another user's jail.
+- Tasks a rule creates are owned by `owner_id`, count against that user's storage quota and concurrency
+  limits (§5.11), and appear only in that user's listings — the grabbed item is processed through the
+  ordinary task-creation path, so a quota breach leaves the item ungrabbed with `rule_matches.status =
+  'failed'`, never a task that escapes accounting. A `failed` row is retryable, like a failed hand-off:
+  it does not mark the episode seen, and the item re-enters the candidate set on later runs.
 
 `POST /rules/{id}/run` applies a saved rule to the items already stored:
 
@@ -1271,7 +1306,9 @@ so setting it is what makes a non-admin able to browse and download at all.
 
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (caller is not an admin, or the request would
 delete or disable the last enabled admin) · `404` · `409` `/problems/conflict` (username exists,
-case-insensitively) · `422` (short password, unknown role, `default_destination` outside the roots).
+case-insensitively, or the user still owns tasks or rules — both foreign keys are `ON DELETE RESTRICT`,
+so delete or re-assign those rows first) · `422` (short password, unknown role,
+`default_destination` outside the roots).
 
 ```json
 GET /api-tokens →
@@ -1480,3 +1517,7 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
+| 2026-09-01 | Privilege review: rule and feed **writes** are admin-only (a rule creates tasks on someone's behalf, mirroring the watch-folder rule), `POST /rules` gains `owner_id` with save-time and grab-time jail validation of `action.destination`, and rule-grabbed tasks are owned by and quota-accounted to that owner through §5.11. Indexers with a stored API key are admin-only across `GET /indexers`, `GET /indexers/categories` and `POST /search`, because their download URLs embed the operator's tracker passkey. |
+| 2026-09-01 | Review pass: `POST /rules/{id}/run` is admin-only like rule writes (it creates tasks as the owner); `POST /rules/test` takes `owner_id` so dry-run jail checks target the right jail; an omitted `action.destination` resolves to the owner's default destination and the resolved value must pass the jail check; credential-bearing feeds (URL userinfo or `passkey`/`apikey`/`token`) are admin-only like key-bearing indexers; `DELETE /users/{id}` is `409` while the user owns tasks or rules (`ON DELETE RESTRICT`). |
+| 2026-09-01 | Review pass 2: `POST /rules/test`'s `owner_id` is admin-only (a non-admin tests as themselves, so the dry run cannot probe another user's jail or read their resolved default destination). |
+| 2026-09-01 | Review pass 3: the `/rules/test` `owner_id` rejection is spelled out — a non-admin naming anyone but themselves gets `403 /problems/forbidden`. |

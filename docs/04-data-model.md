@@ -418,11 +418,17 @@ CREATE INDEX idx_feed_items_pub ON feed_items(feed_id, published_at DESC);
 
 CREATE TABLE rules (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+                                         -- tasks a rule creates are owned by this user and
+                                         -- count against their quota and jail (05 §10.2); RESTRICT, not
+                                         -- CASCADE: deleting a user must not silently destroy shared
+                                         -- automation and match history (05 §12 returns 409 instead)
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
   priority INTEGER NOT NULL DEFAULT 0,  -- lower is evaluated first; ties broken by name
   definition_json TEXT NOT NULL,        -- the rule document; schema in 08-rss-automation.md
   last_match_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX idx_rules_owner ON rules(owner_id);
 
 CREATE TABLE rule_matches (
   id TEXT PRIMARY KEY,
@@ -776,3 +782,5 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Initial version |
 | 2026-09-01 | File priority corrected to `IN (0,1,6,7)` with the qBittorrent names `skip/normal/high/maximum`; added `tasks.infohash_v1`/`infohash_v2` with partial unique indices and the ingest normalisation table; widened `feed_items.info_hash` and `rule_matches.info_hash` to 64 hex; added `notification_channels`; added `engines.foreign_task_policy` and the boot-probe meaning of `engines.version`; added the concurrency and `min_free_space` settings rows; separated the storage quota from the concurrency limit and added `concurrency_limit` and `js_runtime_missing` to `error_code`; added the table-reachability list; corrected the ADR-0005/0008/0009 filenames. |
 | 2026-09-01 | Migration subsystem cut: deleted the `engines.foreign_task_policy` column, its `CHECK` constraint and enum section §4.9, replacing them with the single exclusive-control rule; removed every link to the withdrawn migration document and the "imported task" framing of the inherited `error_code` values; §5 retitled "Schema migration policy" to keep goose migrations unambiguous. `notification_channels`, `infohash_v1`/`infohash_v2` and `priority IN (0,1,6,7)` are unchanged. |
+| 2026-09-01 | Added `rules.owner_id`: a rule creates tasks on someone's behalf (the watch-folder privilege rule), so rule-grabbed tasks are owned, quota-accounted and jailed to that user. |
+| 2026-09-01 | Review pass: `rules.owner_id` is `ON DELETE RESTRICT`, not CASCADE — deleting a user must not silently destroy shared automation and match history; `DELETE /users/{id}` answers `409` instead. |
