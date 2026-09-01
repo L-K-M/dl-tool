@@ -1158,7 +1158,7 @@ The dl-tool web UI shall load every script, stylesheet, font and icon from the d
 | T039 | must |
 
 ### NFR-023 Generate secrets on first run and support file-based secrets
-When dl-tool starts with no generated secrets, it shall create the at-rest secret-encryption key (`DLTOOL_SECRET_KEY`) and the setup token from a cryptographic random source, write them with mode `0600`, and shall additionally accept any secret through a `_FILE`-suffixed variable pointing at a mounted file.
+When dl-tool starts with no generated secrets, it shall create the at-rest secret-encryption key (`DLTOOL_SECRET_KEY`, written to `<CONFIG_DIR>/secrets.env` with mode `0600`) and, while no user exists, the one-time setup token (written to `<CONFIG_DIR>/setup-token` with mode `0600`, per FR-115) from a cryptographic random source, and shall additionally accept any secret through a `_FILE`-suffixed variable pointing at a mounted file.
 
 **Verify:** T005 asserts a fresh config directory yields distinct secrets on two separate instances and that a `_FILE` variable is honoured in preference to its inline form.
 

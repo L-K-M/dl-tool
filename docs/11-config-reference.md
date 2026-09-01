@@ -157,7 +157,8 @@ lives in its own table and is replaced through `PUT /settings/schedule`. Per-use
 |---|---|---|
 | `DLTOOL_ARIA2_SECRET` | env or `DLTOOL_ARIA2_SECRET_FILE` | logged, returned by any endpoint, or written to a backup export |
 | `DLTOOL_QBITTORRENT_PASSWORD` | env or `DLTOOL_QBITTORRENT_PASSWORD_FILE` | logged, returned by any endpoint, or written to a backup export |
-| `extract_passwords`, `tasks.extract_password` | encrypted at rest with `DLTOOL_SECRET_KEY` (see below) | returned in clear by `GET /settings` — it renders as `"__redacted__"` |
+| `extract_passwords` (the shared list) | `settings` row, encrypted at rest with `DLTOOL_SECRET_KEY` (see below) | returned in clear by `GET /settings` — it renders as `"__redacted__"` |
+| `tasks.extract_password` (per task) | `tasks` column, encrypted at rest with `DLTOOL_SECRET_KEY` | returned by any API at all — it is absent from every Task object ([`05-api-contract.md`](05-api-contract.md) §3) |
 | indexer `api_key` | `indexers.api_key_enc`, encrypted at rest | returned by `GET /indexers`, or included in a log line or an error message |
 | notification channel `secret_enc`, engine `secret_enc` | `notification_channels`/`engines` rows, encrypted at rest | returned by `GET /notifications` or `/engines` |
 | at-rest secret key `DLTOOL_SECRET_KEY`, `ARIA2_RPC_SECRET` | `<CONFIG_DIR>/secrets.env`, mode `0600` | exported, or exposed through any API |
@@ -195,11 +196,13 @@ Rules:
    `ARIA2_RPC_SECRET` and `DLTOOL_SECRET_KEY` (the at-rest encryption key above).
 3. Copy `ARIA2_RPC_SECRET` into `.env` so Compose can interpolate it into both services.
 4. At every boot dl-tool regenerates either value that is missing from `secrets.env`. A regenerated
-   `DLTOOL_SECRET_KEY` makes every stored `*_enc` value undecryptable: dl-tool logs
-   `secret_key_regenerated`, clears the affected columns and marks their indexers, channels and engines
-   with a `secret_lost` error so the operator re-enters them — silently keeping dead ciphertext would be
-   worse. A regenerated `ARIA2_RPC_SECRET` does **not** reconfigure the running aria2 container, so
-   dl-tool logs `aria2_secret_rotated` and marks the engine unhealthy until the operator restarts it.
+   `DLTOOL_SECRET_KEY` makes every encrypted value undecryptable, and every affected surface says so:
+   indexers, channels and engines get `last_error = 'secret_lost'` (a row-level error string, not a
+   `tasks.error_code`), the `extract_passwords` settings row is cleared with the same marker surfaced on
+   `GET /settings`, and each affected task's `extract_password` is nulled with one `task_events` row —
+   nothing is wiped silently. A regenerated `ARIA2_RPC_SECRET` does **not** reconfigure the running aria2
+   container, so dl-tool logs `aria2_secret_rotated` and marks the engine unhealthy until the operator
+   restarts it.
 
 ---
 
@@ -323,3 +326,4 @@ stated fallback.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
 | 2026-09-01 | Secrets corrected: `DLTOOL_SESSION_KEY`/`DLTOOL_CSRF_KEY` removed (opaque server-side sessions and per-session CSRF tokens need no key) and replaced by `DLTOOL_SECRET_KEY`, the previously unspecified key behind every "encrypted at rest" `*_enc` column and the extraction passwords; its loss-and-regeneration behaviour is specified. |
+| 2026-09-01 | Review pass: the `DLTOOL_SECRET_KEY` loss story names every affected surface (row-level `secret_lost` markers — not a `tasks.error_code` — plus the cleared `extract_passwords` setting and one `task_events` row per nulled per-task password); the two extraction-password carriers are split into their own rows; NFR-023 names each secret's file and mode. |
