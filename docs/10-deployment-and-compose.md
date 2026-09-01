@@ -584,14 +584,16 @@ following hold. Each is a hard requirement on the implementation.
    and `new URL(base + '/api/v1/', document.baseURI)`. Never a hardcoded `/api/v1`.
 6. **Cookie `Path` equals the base.** MDN: "If omitted, this attribute defaults to the path component of the
    request URL" — too fragile to rely on. Set it explicitly, with `HttpOnly`, `Secure` and `SameSite=Lax`.
-   The cookie name carries a prefix only when it will be `Secure` — browsers reject a prefixed cookie
-   without `Secure`, and plain-HTTP LAN access is a supported mode (the `Secure` row of §6.1): over TLS at
-   the root the name is `__Host-dltool_session` (`__Host-` pins `Path=/`, no `Domain`, `Secure` — the
-   strongest form); over TLS under a base path it is `__Secure-dltool_session` (`__Host-` is impossible
-   there because its `Path` must be `/`); on plain HTTP it is the unprefixed `dltool_session`, with the
-   existing startup warning. The name is chosen at boot; changing the base path or TLS state changes the
-   name and therefore logs every session out — acceptable for a deployment-level change the operator is
-   making anyway. [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.1 owns the name.
+   The cookie name carries a prefix only when the **listener itself** terminates TLS — a static condition
+   decidable at boot, because the name cannot flap per request (browsers reject a prefixed cookie without
+   `Secure`, and plain-HTTP LAN access is a supported mode): TLS listener at the root →
+   `__Host-dltool_session` (`__Host-` pins `Path=/`, no `Domain`, `Secure` — the strongest form); TLS
+   listener under a base path → `__Secure-dltool_session` (`__Host-` is impossible there because its
+   `Path` must be `/`); plain listener, including one behind a TLS-terminating proxy where the cookie is
+   still marked `Secure` per-request → the unprefixed `dltool_session`. Changing the base path or TLS
+   state changes the name and therefore logs every session out — acceptable for a deployment-level change
+   the operator is making anyway. [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.1
+   owns the name.
 7. **Redirects preserve the base.** Never `Location: /login`; always `Location: {base}/login`. This includes
    the first-run wizard redirect, the post-login redirect and the trailing-slash normalisation.
 8. **SPA fallback stays inside the base.** `GET {base}/anything` serves `index.html`; `GET /anything` outside

@@ -441,7 +441,7 @@ Imported engines start disabled and record their provenance.
 
 | Attribute | Value |
 |---|---|
-| Name | `__Host-dltool_session` when served over TLS at the root, `__Secure-dltool_session` when served over TLS under a base path, plain `dltool_session` on plain HTTP (browsers reject a prefixed cookie without `Secure`, so the prefix is conditional on the same TLS judgement as the `Secure` row below) — chosen at boot from `DLTOOL_BASE_PATH` and the listener's TLS state ([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §7.3) |
+| Name | `__Host-dltool_session` when the listener itself terminates TLS at the root, `__Secure-dltool_session` when the listener itself terminates TLS under a base path, plain `dltool_session` otherwise — browsers reject a prefixed cookie without `Secure`, and the name is fixed at boot, so the prefix can only follow the listener's static TLS state. This is deliberately a **stronger** condition than the `Secure` row's per-request `X-Forwarded-Proto` judgement: behind a TLS-terminating proxy the cookie is therefore `Secure` yet unprefixed (valid, one notch less hardened). Chosen at boot from `DLTOOL_BASE_PATH` and the listener's TLS state ([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §7.3) |
 | Flags | `HttpOnly`, `SameSite=Lax`, `Path=<base path>/` |
 | `Secure` | set whenever the request arrived over TLS, judged from the listener or from `X-Forwarded-Proto` sent by a `DLTOOL_TRUSTED_PROXIES` peer; otherwise omitted and a startup warning is logged |
 | Value | ≥ 128 bits from `crypto/rand`, opaque, stored server-side in `sessions` |
@@ -705,3 +705,4 @@ the repository owner decides.
 | 2026-09-01 | Contradiction fix: §2.4 splits the body cap — feed polls 16 MiB (owned by `08-rss-automation.md` §2.1) from the 8 MiB metadata-fetch cap. |
 | 2026-09-01 | Review pass: §6.1 names the cookie with its prefix (`__Host-dltool_session` at the root, `__Secure-dltool_session` under a base path, chosen at boot), and §2.4 splits the feed body cap from the metadata-fetch cap. |
 | 2026-09-01 | Review pass 2: the cookie prefix is conditional on TLS — `__Host-`/`__Secure-` only when the cookie is `Secure`, plain `dltool_session` on plain HTTP, because browsers reject a prefixed cookie without `Secure` and plain-HTTP LAN access is supported. |
+| 2026-09-01 | Review pass 3: the prefix condition is the listener's static TLS state, not the `Secure` row's per-request `X-Forwarded-Proto` judgement — behind a TLS-terminating proxy the cookie is `Secure` yet unprefixed, which is valid and stated. |
