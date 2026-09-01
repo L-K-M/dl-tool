@@ -115,12 +115,12 @@ environment; they only produce values for other fields.
 | `CONFIG_DIR` | `./config` | The host side of the `/config` bind mount for dl-tool and each engine. |
 | `DATA_DIR` | `/srv/data` | The host side of the single `/data` bind mount, identical in every service ([ADR-0012](decisions/0012-single-data-mount.md)). |
 | `DLTOOL_PORT` | `8091` | Published host port mapped to container `8080`. |
-| `DLTOOL_QBITTORRENT_URL` | *(empty — lane disabled)* | `DLTOOL_QBITTORRENT_URL`. Setting it enables the BitTorrent lane; set `QBT_USERNAME`/`QBT_PASSWORD` with it or boot fails with `config_missing`. |
+| `DLTOOL_QBITTORRENT_URL` | *(empty — lane disabled; an empty string counts as unset, §1)* | `DLTOOL_QBITTORRENT_URL`. A non-empty value enables the BitTorrent lane, and `QBT_USERNAME`/`QBT_PASSWORD` must then be set or boot fails with `config_missing`. |
 | `QBT_USERNAME` | *(empty)* | `DLTOOL_QBITTORRENT_USERNAME`. The same credentials must be set in qBittorrent's own WebUI; the linuxserver image does not read them. |
-| `QBT_PASSWORD` | *(empty)* | `DLTOOL_QBITTORRENT_PASSWORD`, or `DLTOOL_QBITTORRENT_PASSWORD_FILE` via a compose secret. |
-| `DLTOOL_ARIA2_URL` | *(empty — lane disabled)* | `DLTOOL_ARIA2_URL`. Set together with `ARIA2_RPC_SECRET` when the `aria2` profile is active. |
+| `QBT_PASSWORD` | *(empty)* | `DLTOOL_QBITTORRENT_PASSWORD`. The `_FILE` variant (`DLTOOL_QBITTORRENT_PASSWORD_FILE`) is supported by the application (§2) but is not wired by the shipped compose — using it means adding a `secrets:` stanza by hand. |
+| `DLTOOL_ARIA2_URL` | *(empty — lane disabled)* | `DLTOOL_ARIA2_URL`. Set together with `ARIA2_RPC_SECRET` **and** the `aria2` profile (`COMPOSE_PROFILES=aria2`); a URL without the profile enables a lane whose backend container is not running, and every HTTP/FTP task fails at runtime with `engine_unavailable`. |
 | `ARIA2_RPC_SECRET` | *(none)* | The aria2 service's RPC secret **and** dl-tool's `DLTOOL_ARIA2_SECRET`. One value, two consumers. The aria2 entrypoint refuses an empty value when that profile is active. |
-| `QBT_WEBUI_PORT` | `8080` | qBittorrent's in-container WebUI port, used to build `DLTOOL_QBITTORRENT_URL`. |
+| `QBT_WEBUI_PORT` | `8080` | qBittorrent's in-container WebUI port. The URL is no longer derived from it — changing the port means updating `DLTOOL_QBITTORRENT_URL` to match. |
 
 ---
 
