@@ -161,9 +161,10 @@ test named in steps 8 and 9 listed as passing, and the final line of stdout exac
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add a fifth definition, an engine marketplace, or a link to any third-party definition repository.

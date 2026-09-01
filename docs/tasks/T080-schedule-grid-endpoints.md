@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T027, T079 |
 | **Blocks** | T081, T108, T110 |
-| **Parallel-safe** | yes — adds `internal/api/settings_schedule.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/api/server.go`, `internal/store/settings.go` |
 | **Implements** | [FR-092](../02-requirements.md#fr-092-store-and-edit-a-247-schedule-grid) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |
 | **Est. size** | 2 new files, ~250 LOC |
@@ -127,9 +127,10 @@ with `TestScheduleRoundTrips`, `TestWrongLengthRejected`, `TestCellOutOfRangeRej
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT evaluate the grid or act on the active cell; T081 owns the per-minute evaluation.

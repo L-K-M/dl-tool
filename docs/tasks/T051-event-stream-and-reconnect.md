@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T011, T025, T041, T044 |
 | **Blocks** | T104 |
-| **Parallel-safe** | yes — touches only `web/src/api/` and one shell component |
+| **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/locales/en/common.json` |
 | **Implements** | [NFR-002](../02-requirements.md#nfr-002-recover-cleanly-from-a-dropped-event-stream) |
 | **Decisions** | [ADR-0006](../decisions/0006-sse-with-rid-deltas.md) |
 | **Est. size** | 3 new files, ~300 LOC |
@@ -126,9 +126,10 @@ above appears as passing, and the final line of stdout is exactly `TRANSPORT_OK`
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT change the reducer; T041 owns `applySync` and this task only feeds it.

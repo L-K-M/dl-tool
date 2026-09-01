@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T002, T007, T013 |
 | **Blocks** | T039, T051 |
-| **Parallel-safe** | yes — touches only `web/` |
+| **Parallel-safe** | no — it also edits the shared file `web/package.json` |
 | **Implements** | — (closes the loop on [NFR-027](../02-requirements.md#nfr-027-keep-the-generated-api-contract-in-step-with-the-code); the CI gate is T002's) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 1 new source file, 1 test file, 1 generated file, ~140 LOC |
@@ -121,9 +121,10 @@ Expected: `make gen` leaves both generated files unchanged, `tsc` prints nothing
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add `@tanstack/react-query`, `zustand` or `msw`; T039 and T051 add them with the shell and the SSE

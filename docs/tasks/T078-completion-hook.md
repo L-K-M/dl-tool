@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T074 |
 | **Blocks** | T108 |
-| **Parallel-safe** | yes — adds `internal/jobs/hook.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/api/settings.go`, `internal/jobs/postprocess.go` |
 | **Implements** | [FR-105](../02-requirements.md#fr-105-run-a-completion-hook-only-when-explicitly-enabled), [NFR-015](../02-requirements.md#nfr-015-never-interpolate-configuration-into-a-shell) |
 | **Decisions** | [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md) |
 | **Est. size** | 2 new files, ~220 LOC |
@@ -125,9 +125,10 @@ of stdout is exactly `HOOK_OK`. No `FAIL`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add a `DLTOOL_HOOK_*` environment variable or a `hook` settings key; the file's presence is the

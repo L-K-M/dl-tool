@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T022, T023, T041, T042 |
 | **Blocks** | T045, T049, T051, T052, T053, T104 |
-| **Parallel-safe** | yes — touches only `web/src/components/Shell/` |
+| **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/locales/en/common.json` |
 | **Implements** | — (renders [FR-013](../02-requirements.md#fr-013-resolve-the-sidebar-filter-sets), [FR-014](../02-requirements.md#fr-014-apply-lifecycle-and-queue-actions-to-a-selection) and [FR-015](../02-requirements.md#fr-015-remove-a-task-with-or-without-its-data), covered by T021, T022 and T023) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 4 new files, ~400 LOC. The three chrome regions share one layout and one test file. |
@@ -131,9 +131,10 @@ test named above appears as passing, and the final line of stdout is exactly `SH
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT implement the add dialog behind `+ Add`; T049 owns it.

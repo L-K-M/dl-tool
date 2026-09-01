@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T020, T024, T098 |
 | **Blocks** | T047, T076 |
-| **Parallel-safe** | yes — adds `internal/fsx/space*.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/engine/admission.go`, `internal/store/tasks.go` |
 | **Implements** | [FR-047](../02-requirements.md#fr-047-reserve-committed-but-unwritten-bytes-and-keep-a-free-space-floor), [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) |
 | **Decisions** | [ADR-0012](../decisions/0012-single-data-mount.md), [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |
 | **Est. size** | 2 new files, ~300 LOC |
@@ -134,9 +134,10 @@ Expected: `make lint` prints nothing, then `ok` lines for
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add `GET /fs/free-space`, `GET /fs/roots`, `GET /fs/browse` or `POST /fs/mkdir`; T046 and T047 own

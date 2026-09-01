@@ -158,9 +158,10 @@ Expected: three `ok  	github.com/L-K-M/dl-tool/internal/…` lines, no `FAIL`, a
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT implement `POST /auth/setup`, `POST /auth/login`, `POST /auth/logout` or `GET /auth/me`; T009 owns

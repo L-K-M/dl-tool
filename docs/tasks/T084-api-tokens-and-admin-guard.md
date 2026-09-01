@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T008, T009 |
 | **Blocks** | T085, T086, T106, T107 |
-| **Parallel-safe** | yes — adds `internal/api/tokens.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/api/auth.go`, `internal/api/server.go`, `internal/store/users.go` |
 | **Implements** | [FR-117](../02-requirements.md#fr-117-issue-and-revoke-api-tokens), [FR-118](../02-requirements.md#fr-118-restrict-administrative-endpoints-to-admins), [NFR-016](../02-requirements.md#nfr-016-keep-api-tokens-revocable-and-out-of-the-logs) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |
 | **Est. size** | 2 new files, ~290 LOC |
@@ -137,9 +137,10 @@ with `TestTokenRevealedOnce`, `TestListHasNoSecret`, `TestRevokedTokenIs401`, `T
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add user CRUD; T086 owns `/users`.

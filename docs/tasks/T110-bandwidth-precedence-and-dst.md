@@ -130,9 +130,10 @@ Expected: `ok` lines for `github.com/L-K-M/dl-tool/internal/engine`,
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT re-implement the fan-out calls; T079 owns `ApplyGlobal` and T082 owns `ApplyTask`.

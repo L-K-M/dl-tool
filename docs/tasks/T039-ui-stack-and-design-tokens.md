@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T003 |
 | **Blocks** | T040, T041, T042, T044, T045, T047, T048, T049, T052, T053, T103 |
-| **Parallel-safe** | yes — touches only `web/` |
+| **Parallel-safe** | no — it also edits the shared files `web/package.json`, `web/src/main.tsx`, `web/vite.config.ts` |
 | **Implements** | [NFR-022](../02-requirements.md#nfr-022-load-no-third-party-runtime-assets) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 12 rows, 4 of them `npx shadcn` copy-ins, ~260 LOC. Larger than the usual cap on purpose: `make typecheck` and `make lint` stay red until Tailwind, the copy-in primitives and the token sheet all exist, so this cannot be split. |
@@ -142,9 +142,10 @@ Expected: the build prints `built in`, the grep finds no external origin, Vitest
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT create `web/src/App.tsx`, a router, a provider tree or any screen; T040 owns them.

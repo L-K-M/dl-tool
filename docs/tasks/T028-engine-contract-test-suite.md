@@ -10,7 +10,7 @@
 | **Parallel-safe** | yes — adds `internal/engine/enginetest/` and one aria2 test file |
 | **Implements** | infrastructure for [FR-011](../02-requirements.md#fr-011-maintain-the-canonical-task-state-machine) and [FR-014](../02-requirements.md#fr-014-apply-lifecycle-and-queue-actions-to-a-selection) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |
-| **Est. size** | 2 new files, ~330 LOC |
+| **Est. size** | 3 new files, ~335 LOC |
 
 ## Goal
 `enginetest.RunContract` exercises the whole `engine.Engine` interface against a real daemon started by
@@ -29,6 +29,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 |---|---|---|
 | `internal/engine/enginetest/contract.go` | create | `RunContract` and its five subtests. |
 | `internal/engine/aria2/contract_test.go` | create | The aria2 call site plus its testcontainers fixture. |
+| `deploy/aria2/Dockerfile` | create | Two lines: `FROM alpine:3.22` and `RUN apk add --no-cache aria2`. Nothing else — T115 turns it into the published image. |
 
 No other file may be modified.
 
@@ -82,11 +83,19 @@ Subtest obligations, exactly these:
 6. Map each undeclared capability to its method in a table: `CapPerFileSelect`→`SetFiles`,
    `CapPerFilePriority`→`SetFiles` with a non-nil `priorities` map, `CapSetLocation`→`SetLocation`,
    `CapRename`→`Rename`, `CapCategories`→`SetCategory`, `CapShareLimits`→`SetShareLimits`.
-7. Create `internal/engine/aria2/contract_test.go` with `//go:build integration`, building the container
+7. Create `deploy/aria2/Dockerfile` with exactly `FROM alpine:3.22` and `RUN apk add --no-cache aria2`.
+   [`13-testing-and-verification.md` §4](../13-testing-and-verification.md#4-adapter-contract-tests) makes the
+   contract test build its container from this path, and no earlier task creates it. T115 later adds the
+   entrypoint, the flags and the publish matrix; do not add them here.
+8. Create `internal/engine/aria2/contract_test.go` with `//go:build integration`, building the container
    with `testcontainers.FromDockerfile` over `deploy/aria2/Dockerfile` and an explicit
    `wait.ForListeningPort("6800/tcp")`; the default wait deadline is 60 s.
-8. Have the fixture pass `--enable-rpc`, `--rpc-listen-all` and `--rpc-secret` matching the `Config.Secret`
-   the test constructs, and call `enginetest.RunContract(t, newAria2)`.
+9. Reach the `Fixture` server from inside the container by binding `httptest` to `0.0.0.0`, resolving the
+   host with `testcontainers.DaemonHost(ctx)` and rewriting the fixture URL's host to it, plus
+   `testcontainers.WithHostPortAccess(port)`. A URL of `127.0.0.1:<port>` is the container's own loopback and
+   the download will hang until the subtest deadline.
+10. Have the container `Cmd` pass `--enable-rpc`, `--rpc-listen-all`, `--dir=/downloads` and `--rpc-secret`
+    matching the `Config.Secret` the test constructs, and call `enginetest.RunContract(t, newAria2)`.
 
 ## Acceptance criteria
 - [ ] `go test ./internal/engine/...` with no build tag compiles and runs without starting a container.
@@ -108,12 +117,14 @@ Expected: `ok  github.com/L-K-M/dl-tool/internal/engine/aria2` with
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add `internal/engine/qbittorrent/contract_test.go`; T038 adds that call site with the adapter.
+- Do NOT add `deploy/aria2/entrypoint.sh`, the PUID/PGID drop or the publish matrix; T115 owns them.
 - Do NOT add a `StateNormalisationCoversEveryEngineState` subtest here. It needs no container, so it lives
   beside each adapter's mapping table — T018 for aria2, T029 for qBittorrent.
 - Do NOT assert the boot conformance probe or engine ownership; T101 and T030 own them.

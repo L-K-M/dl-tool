@@ -63,9 +63,24 @@ Job-to-target mapping — the job names are load-bearing and are referenced by l
 | `ci.yml` | `lint` | `make lint`, `make vet`, `make typecheck` |
 | `ci.yml` | `test` | `make test` |
 | `ci.yml` | `gen-drift` | `make gen`, then the `git diff --exit-code` step above |
-| `ci.yml` | `integration` | `make test-integration` |
-| `ci.yml` | `compose` | `make compose-check`, `make docker-build` |
-| `docs-lint.yml` | `doclint` | `make doclint` |
+| `ci.yml` | `integration` | `make test-integration`, behind the guard below |
+| `ci.yml` | `compose` | `make compose-check`, `make docker-build`, behind the guard below |
+| `docs-lint.yml` | `doclint` | `cargo install --locked lychee --version <pin>`, then `make doclint` |
+
+The `compose` and `integration` jobs have no input files until M7 and M2 respectively — `Dockerfile`,
+`compose.yaml` and `compose.dev.yaml` are T093/T094, and the first adapter under test is T028. Both jobs
+therefore start with a guard step, which becomes a no-op as soon as the files land. This is a guard, not
+`continue-on-error`: once the file exists the job fails on a real failure.
+
+```yaml
+      - id: probe
+        run: |
+          test -f compose.yaml && echo "ready=yes" >> "$GITHUB_OUTPUT" || echo "ready=no" >> "$GITHUB_OUTPUT"
+      - if: steps.probe.outputs.ready == 'yes'
+        run: make compose-check && make docker-build
+```
+
+The `integration` job uses the same shape with `test -d internal/engine/enginetest`.
 
 Action versions, read from the official READMEs on 2026-09-01 and fixed by doc 13 §7:
 `actions/checkout@v4`, `docker/setup-qemu-action@v4`, `docker/setup-buildx-action@v4`,
@@ -79,9 +94,15 @@ Action versions, read from the official READMEs on 2026-09-01 and fixed by doc 1
 3. In the `lint`, `test` and `gen-drift` jobs, check out with `actions/checkout@v4`, then set up Go 1.26 and
    Node 24 with `actions/setup-go` and `actions/setup-node` at versions you pin now.
 4. In `gen-drift`, add the two steps from the Interface contract in that order, and no others.
-5. Create `.github/workflows/docs-lint.yml` with a single `doclint` job running `make doclint`.
-6. Mark every job blocking; do not add `continue-on-error` and do not add a `release.yml` file.
-7. Run the verification command and paste its output under `## Evidence`.
+5. Create `.github/workflows/docs-lint.yml` with a single `doclint` job that checks out, installs `lychee`
+   with `cargo install --locked lychee --version <the LYCHEE_VERSION T001 pinned>`, then runs `make doclint`.
+   It must **not** run `make setup`: `go.mod` and `web/package-lock.json` do not exist yet, and `doclint`
+   needs neither. `scripts/doclint.sh` reports a missing `lychee` as a violation, so without this step the
+   job is red from its first run.
+6. Add the guard step from the Interface contract to the `compose` and `integration` jobs, and to no other
+   job.
+7. Mark every job blocking; do not add `continue-on-error` and do not add a `release.yml` file.
+8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `.github/workflows/ci.yml` defines exactly the job ids `lint`, `test`, `gen-drift`, `integration` and
@@ -101,9 +122,10 @@ Expected: no `doclint:` line on stderr, no output from `bash -n`, and the final 
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT run `make gen`. `cmd/dl-tool` does not exist yet, so the `gen-drift` job is first exercised by T007,

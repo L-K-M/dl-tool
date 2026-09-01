@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T021, T040, T041 |
 | **Blocks** | T043, T044, T045, T048, T051, T104 |
-| **Parallel-safe** | yes — touches only `web/src/components/TaskGrid/` |
+| **Parallel-safe** | no — it also edits the shared file `web/src/App.tsx` |
 | **Implements** | — (renders [FR-012](../02-requirements.md#fr-012-list-and-filter-tasks), covered by T021; the performance and accessibility gates are T043 and T104) |
 | **Decisions** | [ADR-0006](../decisions/0006-sse-with-rid-deltas.md), [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 4 new files, ~420 LOC. The card list ships here because it renders the same rows through the same virtualiser with a different row renderer. |
@@ -142,9 +142,10 @@ of stdout is exactly `GRID_OK`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT build the `Columns ▾` popover, column resizing, reordering or persistence; T045 owns them.

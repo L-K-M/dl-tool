@@ -115,9 +115,10 @@ reported as `--- PASS`. The final line of stdout is exactly `EXTRACT_PW_OK`. No 
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT change the three-pass recipe, the caps or the failure mapping; T074 owns them.

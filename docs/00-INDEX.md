@@ -3,133 +3,129 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** every other document, and any task file
+> **Read this before:** anything else in this repository
 
 ## Purpose
-Map the document set: what each file owns, the order to read them in, and where to go next. It is the only
-place that records which fact lives where; it restates no fact of its own.
+
+The map of the plan. It tells you which file answers which question, what order to read them in, and how
+to pick the next piece of work. It contains no facts of its own — every row links to the document that
+owns the fact.
 
 ## Scope of this document
-- In scope: the file map, the single-source table, reading order, the numbering gaps, and the status table.
-- Out of scope (lives instead in): every fact — see the single-source table below; the task roster →
-  [`tasks/00-task-index.md`](tasks/00-task-index.md); the decision index →
-  [`decisions/README.md`](decisions/README.md).
+
+- In scope: the document roster, the fact-ownership table, the reading order, the rule for choosing the
+  next task, and the register of permanently unused identifiers.
+- Out of scope (lives instead in): the tasks themselves → [`tasks/00-task-index.md`](tasks/00-task-index.md);
+  the Definition of Done → [`13-testing-and-verification.md`](13-testing-and-verification.md);
+  every *why* → [`decisions/`](decisions/).
 
 ## What dl-tool is
-A self-hosted download manager that reproduces Synology Download Station's user experience on hardware the
-operator chooses, deployed with plain `docker compose`. It is a control plane over aria2, qBittorrent and
-yt-dlp ([ADR-0001](decisions/0001-control-plane-over-existing-engines.md)); it serves `/api/v1` only and
-implements no third-party compatibility API.
 
-## The document set
+A self-hosted replacement for Synology Download Station, deployed with Docker Compose. It is a **control
+plane, not a download engine**: it owns the unified queue, users, destinations, search, RSS, scheduling
+and the web UI, and delegates transferring to aria2, qBittorrent-nox and yt-dlp.
 
-| File | Owns |
-|---|---|
-| [`01-vision-and-scope.md`](01-vision-and-scope.md) | The problem, the personas, the Download Station parity list, and what is deliberately out of scope. arc42 §1–2. |
-| [`02-requirements.md`](02-requirements.md) | Every `FR-###` and `NFR-###` in EARS notation, with a verification statement and a covering task. |
-| [`03-architecture.md`](03-architecture.md) | Processes, Go packages, runtime flows and cross-cutting concepts. arc42 §3–8 and §11. |
-| [`04-data-model.md`](04-data-model.md) | The SQLite schema: DDL, indices, enum vocabularies, migration policy, backup and retention. |
-| [`05-api-contract.md`](05-api-contract.md) | Every HTTP path, query parameter, request body, response body, status code and error slug. |
-| [`06-download-engines.md`](06-download-engines.md) | The Go `Engine` interface, URI routing and normalisation, engine ownership and conformance, bandwidth precedence, and each adapter's wire protocol. |
-| [`07-search-and-indexers.md`](07-search-and-indexers.md) | The Torznab client, the `dlsearch/v1` YAML schema, the `.dlm` import path, and the bundled engines. |
-| [`08-rss-automation.md`](08-rss-automation.md) | Feed polling, URI extraction, the rule document, the matching algorithm, dedup and dry-run. |
-| [`09-web-ui-spec.md`](09-web-ui-spec.md) | Every screen, grid column, dialog field and detail tab, plus theming, i18n and accessibility rules. |
-| [`10-deployment-and-compose.md`](10-deployment-and-compose.md) | Service names, ports, volumes, compose profiles, image builds, the release pipeline, reverse proxy and VPN. |
-| [`11-config-reference.md`](11-config-reference.md) | Every environment variable and database-backed setting, and the boot validation rules. |
-| [`12-security-and-threat-model.md`](12-security-and-threat-model.md) | Trust boundaries, SSRF, path safety, extraction safety, untrusted-definition parsing, and the incidents that justify each control. |
-| [`13-testing-and-verification.md`](13-testing-and-verification.md) | The test layers, the Makefile targets every task verifies with, and the Definition of Done. |
-| [`14-conventions.md`](14-conventions.md) | Repository layout, naming, the error model, logging, and Git conventions. |
-| [`16-prior-art-and-research.md`](16-prior-art-and-research.md) | The evidence record: the landscape survey, the parity matrix, and the primary source behind each claim. |
-| [`17-operations-and-runbook.md`](17-operations-and-runbook.md) | Boot and shutdown, refusal-to-start conditions, backup and restore, upgrade and rollback, diagnostics, and the symptom table. |
-| [`glossary.md`](glossary.md) | Every term of art, defined once. |
-| [`decisions/`](decisions/) | Every *why*. MADR-minimal records plus a mandatory `## Confirmation` section. |
-| [`tasks/`](tasks/) | One file per implementable task, each self-contained. |
+The product goal, in the repository owner's words, is the acceptance test for every decision:
 
-## Single-source rule
-Each fact has exactly one home. Every other document links to it and never restates it. A short recap
-sentence plus a link is fine; a copied table is a defect.
+> "I just want a tool that basically does the same thing from the user's pov and that I can host wherever
+> I want using docker compose."
+
+So: **does this make dl-tool feel like Download Station to the person using it, and does it stay a plain
+docker compose deployment?** If not, it is out of scope.
+
+## Start here
+
+1. Read [`01-vision-and-scope.md`](01-vision-and-scope.md) — what this is and what it deliberately is not.
+2. Read [`13-testing-and-verification.md`](13-testing-and-verification.md) — the **Definition of Done**,
+   which every task is measured against.
+3. Open [`tasks/00-task-index.md`](tasks/00-task-index.md) and take the next unblocked task.
+4. Read only that task file and the documents its **Context you need** section names. Do not explore.
+
+## How to pick the next task
+
+Work milestones in order; **M0 is blocking**. Within a milestone, take the lowest-numbered row in
+[`tasks/00-task-index.md`](tasks/00-task-index.md) whose `Depends on` tasks are all `done`. Open that
+file and follow it. Do not read other task files.
+
+## Document roster
+
+| # | Document | Answers |
+|---|---|---|
+| 01 | [Vision and scope](01-vision-and-scope.md) | What is this, who is it for, what does it deliberately not do, and how does it map onto Download Station? |
+| 02 | [Requirements](02-requirements.md) | What exactly must it do? `FR-###` and `NFR-###` in EARS notation. |
+| 03 | [Architecture](03-architecture.md) | How do the pieces fit together? Context, containers, runtime flows, the task state machine. |
+| 04 | [Data model](04-data-model.md) | What is stored? Exact DDL, indices, enums, migration and backup policy. |
+| 05 | [API contract](05-api-contract.md) | Every endpoint: request, response, status codes, the SSE stream. |
+| 06 | [Download engines](06-download-engines.md) | The `Engine` interface and the aria2, qBittorrent and yt-dlp adapters. |
+| 07 | [Search and indexers](07-search-and-indexers.md) | Torznab client, the `dlsearch/v1` YAML format, `.dlm` import, bundled engines. |
+| 08 | [RSS automation](08-rss-automation.md) | Feed polling, the rule schema, the matching algorithm, the dry run. |
+| 09 | [Web UI specification](09-web-ui-spec.md) | Every screen, dialog, column and interaction. **The centrepiece.** |
+| 10 | [Deployment and compose](10-deployment-and-compose.md) | `compose.yaml`, volumes, ports, images, reverse proxy, NAS notes. |
+| 11 | [Configuration reference](11-config-reference.md) | Every environment variable and runtime setting. |
+| 12 | [Security and threat model](12-security-and-threat-model.md) | SSRF, path safety, extraction, auth, the CVE-derived rules. |
+| 13 | [Testing and verification](13-testing-and-verification.md) | Test layout, Makefile targets, the **Definition of Done**. |
+| 14 | [Conventions](14-conventions.md) | Layout, naming, error model, logging, commits. |
+| 16 | [Prior art and research](16-prior-art-and-research.md) | What already exists, what was rejected, and the evidence behind the plan. |
+| 17 | [Operations and runbook](17-operations-and-runbook.md) | Startup, shutdown, backup, upgrade, and what to do when it breaks. |
+| — | [Glossary](glossary.md) | Every term of art, one line each. |
+| — | [Decisions](decisions/) | One ADR per decision, each with a `Confirmation` section naming an executable check. |
+| — | [Task index](tasks/00-task-index.md) | The ordered, dependency-annotated roster of work. |
+
+`15` is **permanently unused** — see below.
+
+## Who owns which fact
+
+Each fact has exactly one home. Everything else links to it. Never copy a table between documents;
+duplication is how plans rot.
 
 | Fact | Home |
 |---|---|
-| Environment variables | [`11-config-reference.md`](11-config-reference.md) |
-| HTTP request/response shapes, status codes, error slugs | [`05-api-contract.md`](05-api-contract.md) |
-| Table columns, DDL, enums | [`04-data-model.md`](04-data-model.md) |
-| Ports, volumes, compose service names | [`10-deployment-and-compose.md`](10-deployment-and-compose.md) |
-| The `Engine` Go interface | [`06-download-engines.md`](06-download-engines.md) |
-| The `dlsearch/v1` YAML schema | [`07-search-and-indexers.md`](07-search-and-indexers.md) |
+| Requirement text and IDs | [`02-requirements.md`](02-requirements.md) |
+| Table columns, DDL, enum values | [`04-data-model.md`](04-data-model.md) |
+| HTTP request and response shapes, status codes | [`05-api-contract.md`](05-api-contract.md) |
+| The `Engine` interface and per-engine wire details | [`06-download-engines.md`](06-download-engines.md) |
+| The `dlsearch/v1` definition schema | [`07-search-and-indexers.md`](07-search-and-indexers.md) |
 | The RSS rule schema and matching algorithm | [`08-rss-automation.md`](08-rss-automation.md) |
-| Grid columns, dialog fields | [`09-web-ui-spec.md`](09-web-ui-spec.md) |
-| Definition of Done, Makefile targets | [`13-testing-and-verification.md`](13-testing-and-verification.md) |
-| Requirement text | [`02-requirements.md`](02-requirements.md) |
+| Screens, grid columns, dialog fields | [`09-web-ui-spec.md`](09-web-ui-spec.md) |
+| Ports, volumes, compose service names | [`10-deployment-and-compose.md`](10-deployment-and-compose.md) |
+| Environment variables and settings | [`11-config-reference.md`](11-config-reference.md) |
+| Makefile targets and the Definition of Done | [`13-testing-and-verification.md`](13-testing-and-verification.md) |
 | Any *why* | [`decisions/`](decisions/) |
-| Term definitions | [`glossary.md`](glossary.md) |
 
-## Reading order
+## Permanently unused identifiers
 
-| If you are | Read, in this order |
+Identifiers are never reused and never renumbered. Two scope cuts left gaps; the gaps stay.
+
+| Identifier | Why |
 |---|---|
-| New to the plan | `01` → `03` → [`decisions/README.md`](decisions/README.md) → `glossary.md` |
-| Implementing a task | The task file, then only the sections it names under `## Context you need` |
-| Adding an endpoint | `05` → `04` → `02` → [`14-conventions.md`](14-conventions.md) |
-| Adding an engine adapter | `06` → `04` → [`13-testing-and-verification.md`](13-testing-and-verification.md) §4 |
-| Building a screen | `09` → `05` → `02` |
-| Deploying or operating | `10` → `11` → `17` |
-| Reviewing security | `12` → `07` → `06` |
+| `docs/15-*` | Held the compatibility-API document, then the migration document. Both cut. |
+| `ADR-0014` | Opt-in qBittorrent and Synology compatibility façades. Withdrawn before it was written. |
+| `FR-130`–`FR-139` | The compatibility-façade requirement range. Withdrawn. |
+| `T102` | Foreign-task policy. dl-tool always ignores tasks it did not create — [ADR-0017](decisions/0017-exclusive-control-of-engines.md). |
+| `T112` | Façade authentication mapping. Withdrawn with the façades. |
+| `T114` | Migration importers. Withdrawn with the migration subsystem. |
 
-## What to do next
-1. Read [`tasks/00-task-index.md`](tasks/00-task-index.md).
-2. Take the lowest-numbered task in the earliest milestone whose `Depends on` tasks are all `done`.
-   **M0 is blocking** — nothing else starts until every M0 row is `done`.
-3. Read only the documents that task's `## Context you need` names. Do not explore the rest of the repo.
-4. Close the task against the Definition of Done in
-   [`13-testing-and-verification.md`](13-testing-and-verification.md), and set its row in
-   [`tasks/00-task-index.md`](tasks/00-task-index.md) to `done` in the same commit.
+Two things dl-tool deliberately does **not** do, so nobody re-adds them: it exposes no compatibility
+surface (it serves `/api/v1` only and never presents itself as another product's API), and it has no
+migration tooling. Note that `/api/v2` paths in [`06-download-engines.md`](06-download-engines.md) and
+the qBittorrent task files are qBittorrent's *own* API, which dl-tool calls as a client — those are
+correct and must stay.
 
-## Numbering gaps — deliberate and permanent
-Identifiers are never reused. Three gaps exist and are expected:
+## Milestones
 
-| Gap | Why |
-|---|---|
-| `docs/15-*.md` | The slot held the compatibility-API document, then the migration document. Both were cut from the product; the number is retired rather than reused. A link to any `docs/15-*.md` is a bug. |
-| `decisions/0014-*.md` | Opt-in qBittorrent and Synology compatibility façades — withdrawn before it was written. |
-| Tasks `T102`, `T112`, `T114` | Foreign-task policy, façade authentication mapping and the migration importers — all withdrawn. |
-
-There is no `docs/18-*.md`. The operations runbook is `17-operations-and-runbook.md`.
-
-## Status
-| Area | File | Status |
+| Milestone | Theme | Exit checkpoint |
 |---|---|---|
-| Vision and scope | `01` | draft |
-| Requirements | `02` | draft |
-| Architecture | `03` | draft |
-| Data model | `04` | draft |
-| API contract | `05` | draft |
-| Download engines | `06` | draft |
-| Search and indexers | `07` | draft |
-| RSS automation | `08` | draft |
-| Web UI | `09` | draft |
-| Deployment | `10` | draft |
-| Configuration | `11` | draft |
-| Security | `12` | draft |
-| Testing | `13` | draft |
-| Conventions | `14` | draft |
-| Prior art | `16` | draft |
-| Operations | `17` | draft |
-| Glossary | `glossary.md` | draft |
-| Decisions | `decisions/` | 0001–0013, 0015–0018 accepted; 0016 proposed |
-| Tasks | `tasks/` | 112 files, all `todo` |
-
-## Decisions referenced
-| ADR | Decision |
-|---|---|
-| [0001](decisions/0001-control-plane-over-existing-engines.md) | Build a control plane over existing download engines |
-| [0016](decisions/0016-relicense-to-apache-2.md) | Relicense from the Unlicense to Apache-2.0 — the only `proposed` record |
-
-## Open questions
-- (none)
+| **M0** | Foundations: repo, CI, config, store, auth, health, SSE skeleton | `docker compose up -d` serves a login page; `/healthz` returns `{"status":"ok"}`; CI green |
+| **M1** | Task core and the aria2 engine | A pasted HTTPS URL downloads to `/data`, progress streams over SSE, pause/resume/remove work |
+| **M2** | BitTorrent via qBittorrent | A magnet added with a file-selection step downloads and seeds; per-file priorities apply |
+| **M3** | Web UI | The full Download-Station-equivalent screen works in a browser; Playwright E2E green |
+| **M4** | Search | The bundled engines return results; a result becomes a task in one click |
+| **M5** | RSS | A rule auto-downloads the Arch Linux release feed; the dry run explains every non-match |
+| **M6** | Post-processing, scheduling, multi-user | Auto-extract, the 24×7 grid, and per-user destinations and quotas all work end to end |
+| **M7** | Media downloads, packaging, release | yt-dlp works; a signed multi-arch image is published |
 
 ## Change log
+
 | Date | Change |
 |---|---|
-| 2026-09-01 | Initial version: document map, single-source table, reading order and the permanent numbering gaps. |
-| 2026-09-01 | Consistency review: step 4 of "What to do next" now names `tasks/00-task-index.md` as the file whose row is set to `done`. |
+| 2026-09-01 | Initial version. |

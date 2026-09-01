@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T054, T074 |
 | **Blocks** | T106 |
-| **Parallel-safe** | yes — adds `internal/jobs/handlers_notify.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/jobs/postprocess.go`, `internal/store/settings.go` |
 | **Implements** | [FR-104](../02-requirements.md#fr-104-send-notifications-and-offer-a-per-channel-test) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
 | **Est. size** | 2 new files, ~330 LOC |
@@ -145,9 +145,10 @@ No `FAIL`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add the `/notifications` CRUD endpoints or `POST /notifications/{id}/test`; T106 owns both and

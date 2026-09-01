@@ -211,7 +211,7 @@ adapter is not precluded.
 | `per_file_priority` | ❌ selection only, no numeric priority | ✅ `0/1/6/7` | ❌ |
 | `categories` `tags` `sequential` `share_limits` | ❌ | ✅ | ❌ |
 | `set_location` | ✅ but restarts the transfer (§4.6) | ✅ | ❌ |
-| `rename` | ✅ at add time only (`out`) | ✅ | ✅ via `-o` |
+| `rename` | ❌ — `out` names the output at add time only, so `Rename` on a running transfer returns `ErrNotSupported` and aria2 does **not** declare `CapRename` | ✅ | ✅ — `Rename` rewrites the `-o` template for the next spawn (T090) |
 | `push_events` | ✅ WebSocket notifications | ❌ poll `sync/maindata` | ✅ subprocess stdout |
 | `nzb` `search` `rss_rules` | ❌ | ❌ | ❌ |
 

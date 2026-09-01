@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T009, T013, T014, T039 |
 | **Blocks** | T042, T043, T044, T048, T049, T051, T052, T053, T103 |
-| **Parallel-safe** | yes — touches only `web/src/` |
+| **Parallel-safe** | no — it also edits the shared files `web/src/locales/en/common.json`, `web/src/main.tsx` |
 | **Implements** | — (renders [FR-115](../02-requirements.md#fr-115-complete-a-first-run-setup-using-a-one-time-token) and [FR-116](../02-requirements.md#fr-116-authenticate-with-a-session-cookie-or-a-bearer-token), both covered by T009; carries [NFR-012](../02-requirements.md#nfr-012-protect-against-csrf-with-a-synchroniser-token)'s token client-side) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |
 | **Est. size** | 4 new files, ~340 LOC. `App.tsx` cannot compile against routes whose screens do not exist, so the router and the two screens land together. |
@@ -129,9 +129,10 @@ appears as passing, and the final line of stdout is exactly `AUTH_UI_OK`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT build the sidebar, toolbar or status bar; T042 and T044 own them, and this task leaves the three

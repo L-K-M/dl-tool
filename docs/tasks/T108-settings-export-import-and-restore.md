@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T080, T086, T106, T107 |
 | **Blocks** | — |
-| **Parallel-safe** | yes — adds `internal/api/settings_export.go` |
+| **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/api/server.go`, `internal/store/db.go` |
 | **Implements** | [FR-145](../02-requirements.md#fr-145-export-and-import-portable-settings), [FR-146](../02-requirements.md#fr-146-restore-a-backup-from-the-command-line) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
 | **Est. size** | 2 new files, ~390 LOC |
@@ -160,9 +160,10 @@ with `TestExportExcludesEverySecret`, `TestExportImportRoundTrip`, `TestDryRunWr
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT import from Download Station, qBittorrent or any other product. There is no migration subsystem,

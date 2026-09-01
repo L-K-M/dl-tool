@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T019, T024, T025 |
 | **Blocks** | T098 |
-| **Parallel-safe** | yes — touches only `internal/engine/reconcile*.go` |
+| **Parallel-safe** | no — it also edits the shared file `internal/engine/aria2/client.go` |
 | **Implements** | [NFR-003](../02-requirements.md#nfr-003-resume-every-task-after-a-restart); the aria2 half of [FR-148](../02-requirements.md#fr-148-ignore-engine-tasks-dl-tool-did-not-create), whose qBittorrent half is T030 |
 | **Decisions** | [ADR-0017](../decisions/0017-exclusive-control-of-engines.md), [ADR-0006](../decisions/0006-sse-with-rid-deltas.md) |
 | **Est. size** | 2 new files, ~300 LOC |
@@ -119,9 +119,10 @@ Expected: `make lint` prints nothing, then `ok` lines for
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add an adopt mode, a policy column or any setting about transfers dl-tool did not create.

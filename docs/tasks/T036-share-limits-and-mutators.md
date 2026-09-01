@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T022, T029 |
 | **Blocks** | T038 |
-| **Parallel-safe** | yes — adds `internal/engine/qbittorrent/mutate*.go` |
+| **Parallel-safe** | no — it also edits the shared file `internal/api/tasks_actions.go` |
 | **Implements** | [FR-019](../02-requirements.md#fr-019-offer-sequential-download-and-share-limits) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |
 | **Est. size** | 2 new files, ~330 LOC |
@@ -129,9 +129,10 @@ Expected: `make lint` prints nothing, then `ok` for
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT implement `SetRateLimits`; T037 owns per-task and global bandwidth.

@@ -142,10 +142,12 @@ the final line of stdout is exactly `PARSE_OK`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
 Expected: exactly the paths in the Files table, expanded to the individual files under
 `internal/rss/testdata/`.
+Use `git status`, not `git diff`: a file this task creates is untracked, and `git diff --name-only`
+never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT fetch a feed, a `.torrent` file or anything else from this file; T066 owns every request.

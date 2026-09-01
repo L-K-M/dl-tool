@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T006, T007, T008 |
 | **Blocks** | T066, T068, T072 |
-| **Parallel-safe** | yes — creates `internal/store/feeds.go` and `internal/api/feeds.go`, touching `internal/api/server.go` only to register the group |
+| **Parallel-safe** | no — it also edits the shared file `internal/api/server.go` |
 | **Implements** | [FR-070](../02-requirements.md#fr-070-manage-feeds-and-refresh-on-demand) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md) |
 | **Est. size** | 3 new files, ~380 LOC |
@@ -160,9 +160,10 @@ every test named above reported as `--- PASS`, and the final line of stdout is e
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT fetch anything. `POST /feeds/{id}/refresh` and every HTTP call belong to T066.

@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T074, T099 |
 | **Blocks** | T111 |
-| **Parallel-safe** | yes — adds `internal/fsx/move.go` and `internal/jobs/handlers_move.go` |
+| **Parallel-safe** | no — it also edits the shared file `internal/jobs/postprocess.go` |
 | **Implements** | [FR-103](../02-requirements.md#fr-103-move-completed-data-across-filesystems), [FR-045](../02-requirements.md#fr-045-pre-check-free-space-and-pause-on-exhaustion) |
 | **Decisions** | [ADR-0012](../decisions/0012-single-data-mount.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
 | **Est. size** | 3 new files, ~340 LOC |
@@ -125,9 +125,10 @@ of stdout is exactly `MOVE_OK`. No `FAIL`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT re-implement free-space or reservation arithmetic; T099 owns `internal/fsx/space.go`.

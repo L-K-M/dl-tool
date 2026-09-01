@@ -141,9 +141,10 @@ with `naming to ghcr.io/l-k-m/dl-tool:t113`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT rename `js_runtime_missing`; doc 06 §7.6 and doc 11 §2 spell it exactly this way.

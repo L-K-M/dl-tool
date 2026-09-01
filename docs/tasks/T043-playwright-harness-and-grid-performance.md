@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T040, T042 |
 | **Blocks** | T103, T104 |
-| **Parallel-safe** | yes — touches only `web/` |
+| **Parallel-safe** | no — it also edits the shared file `web/package.json` |
 | **Implements** | [NFR-001](../02-requirements.md#nfr-001-render-a-10-000-row-grid-smoothly) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 3 new files, ~230 LOC |
@@ -132,9 +132,10 @@ final line of stdout is exactly `E2E_OK`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT write `web/e2e/add-url.spec.ts` or `web/e2e/add-magnet.spec.ts`; both scenarios in doc 13 §6.1

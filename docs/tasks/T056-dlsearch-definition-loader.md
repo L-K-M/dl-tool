@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T004, T005 |
 | **Blocks** | T057, T058, T059, T060, T105 |
-| **Parallel-safe** | yes — touches only `internal/search/definition*.go` |
+| **Parallel-safe** | no — it also edits the shared file `internal/search/testdata/` |
 | **Implements** | [FR-051](../02-requirements.md#fr-051-load-declarative-dlsearchv1-engines), [NFR-019](../02-requirements.md#nfr-019-parse-untrusted-definitions-and-regexes-defensively) |
 | **Decisions** | [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md), [ADR-0008](../decisions/0008-torznab-first-declarative-yaml-second.md) |
 | **Est. size** | 2 new files, ~430 LOC |
@@ -220,9 +220,10 @@ and the final line of stdout exactly `DEFINITION_OK`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT expand a template or run a transform here; T058 owns `Expand` and `ApplyTransforms`.

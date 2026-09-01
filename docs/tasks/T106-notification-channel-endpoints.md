@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T077, T084 |
 | **Blocks** | T108 |
-| **Parallel-safe** | yes — adds `internal/api/notifications.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/api/server.go`, `internal/store/settings.go` |
 | **Implements** | [FR-107](../02-requirements.md#fr-107-manage-notification-channels), [FR-104](../02-requirements.md#fr-104-send-notifications-and-offer-a-per-channel-test) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md) |
 | **Est. size** | 2 new files, ~330 LOC |
@@ -137,9 +137,10 @@ stdout is exactly `NOTIFY_API_OK`. No `FAIL`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT re-implement delivery, the per-kind request shapes or the SSRF-guarded client; T077 owns

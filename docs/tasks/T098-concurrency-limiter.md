@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T017, T019, T020, T024, T026 |
 | **Blocks** | T099, T085 |
-| **Parallel-safe** | yes — adds `internal/engine/admission*.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/api/tasks_actions.go`, `internal/store/tasks.go` |
 | **Implements** | [FR-020](../02-requirements.md#fr-020-cap-the-number-of-concurrently-active-tasks), [FR-021](../02-requirements.md#fr-021-exclude-seeding-tasks-from-every-concurrency-limit), [FR-123](../02-requirements.md#fr-123-enforce-a-per-user-concurrency-limit) |
 | **Decisions** | [ADR-0017](../decisions/0017-exclusive-control-of-engines.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
 | **Est. size** | 2 new files, ~330 LOC |
@@ -138,9 +138,10 @@ Expected: `make lint` prints nothing, then `ok` lines for
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT enforce the storage quota here; it is `users.quota_bytes` and T085 owns it.

@@ -52,12 +52,9 @@ LYCHEE_VERSION        ?= PINME   # pin at implementation time; make setup fails 
         build docker-build compose-check doclint ci
 ```
 
-`setup` gains one line beyond the body in doc 13 §2, because `scripts/doclint.sh` fails when `lychee` is
-absent (doc 13 `## Open questions`):
-
-```makefile
-	cargo install --locked lychee --version $(LYCHEE_VERSION)
-```
+Doc 13 §2 already carries `LYCHEE_VERSION` and the `cargo install --locked lychee` line in `setup`, because
+`scripts/doclint.sh` treats a missing `lychee` as a violation. Copy them with the rest; add nothing beyond
+doc 13 §2.
 
 `.gitignore`:
 
@@ -81,7 +78,8 @@ as `doclint: <reason>`.
 1. Create `Makefile` with the head above, then the target bodies copied verbatim from doc 13 §2. Change
    nothing about `test`, `test-go`, `test-web`, `test-integration`, `e2e`, `build`, `docker-build`,
    `compose-check`, `doclint` or `ci`.
-2. Add the `cargo install` line to `setup`, after the `npx playwright install` line.
+2. Install `lychee` at the version you pin, and confirm `lychee --version` runs, before step 6 — a missing
+   `lychee` makes `make doclint` exit 1.
 3. Create `scripts/doclint.sh` with the script from doc 13 §8, byte for byte, and `chmod 0755` it.
 4. Create `.gitignore` with the block above.
 5. Install `lychee` locally at a version you pin into `LYCHEE_VERSION`, replacing `PINME`.
@@ -104,9 +102,10 @@ Expected: no `doclint:` line on stderr, and the final line of stdout is exactly 
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT create `scripts/gen.sh` or any file under `.github/`; T002 owns those.

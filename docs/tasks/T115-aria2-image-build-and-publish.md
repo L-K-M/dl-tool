@@ -28,7 +28,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
-| `deploy/aria2/Dockerfile` | create | `alpine:3.22` plus `aria2`, `su-exec`, `ca-certificates`, `tzdata`, `curl`. |
+| `deploy/aria2/Dockerfile` | edit | T028 created the two-line build for the contract test; add `su-exec`, `ca-certificates`, `tzdata`, `curl`, the `ENTRYPOINT` and the `HEALTHCHECK`. |
 | `deploy/aria2/entrypoint.sh` | create | Privilege drop, then `exec su-exec … aria2c` with the documented flags. |
 | `.github/workflows/release.yml` | edit | Add the `dl-tool-aria2` entry to the build matrix. |
 
@@ -132,9 +132,10 @@ Expected: both builds complete with no error, and the final line begins with `ar
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT edit `compose.yaml`; T094 already declares the `aria2` service with both `image:` and `build:`.

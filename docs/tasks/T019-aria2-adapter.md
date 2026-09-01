@@ -85,7 +85,12 @@ func (r *Registry) Names() []string
 ```
 
 Declared capabilities, exactly this set and no other:
-`http`, `ftp`, `sftp`, `metalink`, `per_file_select`, `set_location`, `rename`, `push_events`.
+`http`, `ftp`, `sftp`, `metalink`, `per_file_select`, `set_location`, `push_events`.
+
+`CapRename` is **not** declared. aria2 can only name an output at add time through the `out` option, and
+the interface's `Rename` renames a running transfer; declaring the capability while `Rename` always
+returns `ErrNotSupported` is exactly what T028's `UnsupportedCapabilityReturnsErrNotSupported` subtest
+fails on. `AddRequest.Filename` still maps to `out`.
 
 Method mapping, exactly this and no other:
 
@@ -120,7 +125,10 @@ Method mapping, exactly this and no other:
    `req.SaveDir`, `out` from `req.Filename`, `pause` from `req.StartPaused`, `select-file` from
    `req.SelectFiles`. Return `engine.ErrNotSupported` for a `torrent` blob.
 7. Implement `List` as one JSON-RPC batch array of the three `tell*` calls, decoding each result with
-   `toTaskInfo` from T018, and drop every GID the caller does not know — foreign transfers never surface.
+   `toTaskInfo` from T018, and return **every** GID the daemon reports. The adapter has no access to the
+   `tasks` table, so it cannot tell a foreign transfer from one of ours; the foreign-transfer filter of
+   [§8](../06-download-engines.md#8-engine-ownership) is applied by the reconciler (T026), which holds the
+   `engine_ref` → task-id map. Do not add a store dependency to this package.
 8. Implement `Get`, `Files`, `Pause`, `Resume` and `Remove`; map an aria2 "not found" error to
    `engine.ErrNotFound`.
 9. Return `engine.ErrNotSupported` unchanged from `Rename`, `SetCategory`, `SetShareLimits`, and from
@@ -134,7 +142,8 @@ Method mapping, exactly this and no other:
 ## Acceptance criteria
 - [ ] Every request body carries `token:s3cret` as `params[0]`.
 - [ ] `Add` with two URIs sends one `aria2.addUri` call and returns the GID string.
-- [ ] `Capabilities()` returns exactly the eight names listed above, sorted and stable.
+- [ ] `Capabilities()` returns exactly the seven names listed above, sorted and stable, and does **not**
+      include `rename`.
 - [ ] `SetFiles` with a non-nil `priorities` map returns `engine.ErrNotSupported` and sends no request.
 - [ ] A transport failure returns `engine.ErrUnavailable`; an unknown GID returns `engine.ErrNotFound`.
 - [ ] `Registry.Get("aria2")` returns the registered client and `Names()` includes `aria2`.
@@ -151,9 +160,10 @@ Expected: `make lint` prints nothing, then `ok` lines for
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT create `internal/engine/enginetest/contract.go` or `internal/engine/aria2/contract_test.go`; T028

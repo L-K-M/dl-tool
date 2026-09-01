@@ -147,9 +147,11 @@ by its elapsed time, with `TestToState`, `TestToErrorCode` and `TestToTaskInfoGo
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
 Expected: exactly the paths in the Files table, plus `internal/engine/aria2/testdata/README.md`.
+Use `git status`, not `git diff`: a file this task creates is untracked, and `git diff --name-only`
+never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT open a socket or start a daemon; T019 owns the JSON-RPC client.

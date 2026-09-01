@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T027, T045, T047, T050, T052 |
 | **Blocks** | T104 |
-| **Parallel-safe** | yes — touches only `web/src/components/Settings/` |
+| **Parallel-safe** | no — it also edits the shared file `web/src/App.tsx` |
 | **Implements** | — (renders [FR-143](../02-requirements.md#fr-143-list-engines-and-test-connectivity), covered by T027, and the client half of [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences-per-user), covered by T107) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |
 | **Est. size** | 4 new files, ~400 LOC. The shell cannot compile without at least the two sections it routes to. |
@@ -129,9 +129,10 @@ line of stdout is exactly `SETTINGS_OK`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT call `GET /settings` or `PATCH /settings`; T092 owns those endpoints and the sections that need

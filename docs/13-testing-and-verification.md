@@ -46,6 +46,7 @@ PKG     ?= ./...
 IMAGE   ?= ghcr.io/l-k-m/dl-tool
 VERSION ?= dev
 GOLANGCI_LINT_VERSION ?= PINME   # pin at implementation time; make setup fails until it is set
+LYCHEE_VERSION        ?= PINME   # pin at implementation time; scripts/doclint.sh fails without lychee
 
 .PHONY: setup gen lint vet typecheck test test-go test-web test-integration e2e \
         build docker-build compose-check doclint ci
@@ -55,6 +56,7 @@ setup:
 	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	cd web && npm ci
 	cd web && npx playwright install --with-deps chromium
+	cargo install --locked lychee --version $(LYCHEE_VERSION)
 
 gen:
 	./scripts/gen.sh
@@ -108,7 +110,7 @@ ci: lint vet typecheck test compose-check doclint
 
 | Target | Runs | Exit behaviour |
 |---|---|---|
-| `setup` | Go module download, `golangci-lint` install, `npm ci`, Playwright chromium install. | 0 once the toolchain is present; non-zero on any download failure. |
+| `setup` | Go module download, `golangci-lint` install, `npm ci`, Playwright chromium install, `lychee` install. | 0 once the toolchain is present; non-zero on any download failure. |
 | `gen` | `scripts/gen.sh`: regenerates `api/openapi.json` and `web/src/api/schema.d.ts`. | 0 always if generation succeeds; it does **not** check for drift — CI does (§7). |
 | `lint` | `gofmt -l`, `golangci-lint run`, ESLint, Prettier `--check`. | Non-zero on any unformatted file or any lint finding. |
 | `vet` | `go vet ./...`. | Non-zero on any vet diagnostic. |
@@ -139,7 +141,10 @@ here rather than restating it.
 6. `make test-integration` exits 0, if the task touched `internal/engine/`.
 7. Every checkbox under `## Acceptance criteria` is ticked, and the real command output is pasted verbatim
    under `## Evidence` in the task file. Asserted success without pasted output is not evidence.
-8. `git diff --name-only | sort` matches the task's `## Files` table exactly — no extra path, no missing path.
+8. `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort` matches the task's
+   `## Files` table exactly — no extra path, no missing path. `git diff` is **not** usable here: a file the
+   task creates is untracked and never appears in `git diff --name-only`. The `docs` exclusion is what lets
+   rules 7 and 9 (pasting Evidence, flipping the index row) coexist with this rule.
 9. The task's row in [`tasks/00-task-index.md`](tasks/00-task-index.md) is set to `done`, in the same commit
    as the work.
 
@@ -262,7 +267,7 @@ sources only (Arch Linux, Debian, Ubuntu). See [`10-deployment-and-compose.md`](
 | | `gen-drift` | the drift gate below | yes |
 | | `integration` | `make test-integration` | yes |
 | | `compose` | `make compose-check`, `make docker-build` | yes |
-| `.github/workflows/docs-lint.yml` | `doclint` | `make doclint` | yes |
+| `.github/workflows/docs-lint.yml` | `doclint` | `cargo install --locked lychee --version $LYCHEE_VERSION`, then `make doclint` | yes |
 | `.github/workflows/release.yml` | `image` | multi-arch buildx publish to `ghcr.io/l-k-m/dl-tool` | tags only |
 
 Action versions read from the official READMEs on 2026-09-01: `actions/checkout@v4`,

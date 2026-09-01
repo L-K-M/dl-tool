@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T039, T040, T043 |
 | **Blocks** | — |
-| **Parallel-safe** | yes — touches only `web/` |
+| **Parallel-safe** | no — it also edits the shared files `web/index.html`, `web/src/main.tsx` |
 | **Implements** | [NFR-029](../02-requirements.md#nfr-029-ship-an-installable-progressive-web-app) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 5 new files, ~150 LOC. Two of the five are binary icon assets, not code. |
@@ -138,9 +138,10 @@ final line of stdout is exactly `PWA_OK`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add `vite-plugin-pwa`, `workbox`, `lighthouse` or `@lhci/cli`; doc 09 §1 pins none of them, and

@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T050, T083, T084 |
 | **Blocks** | T108 |
-| **Parallel-safe** | yes — adds `internal/api/prefs.go` and `internal/api/watchfolders.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/api/server.go`, `internal/store/settings.go` |
 | **Implements** | [FR-033](../02-requirements.md#fr-033-list-rename-and-delete-tags), [FR-046](../02-requirements.md#fr-046-manage-watch-folders-and-scan-one-on-demand), [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences-per-user), [FR-031](../02-requirements.md#fr-031-assign-free-form-tags-and-filter-by-them) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md) |
 | **Est. size** | 3 new files, ~390 LOC |
@@ -160,9 +160,10 @@ final line of stdout is exactly `REACHABILITY_OK`. No `FAIL`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add `POST /tags`; tags are created implicitly by `POST /tasks` and `PATCH /tasks/{id}`.

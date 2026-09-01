@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T084, T085, T098 |
 | **Blocks** | T108, T109 |
-| **Parallel-safe** | yes — adds `internal/api/users.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/api/tasks.go`, `internal/engine/admission.go`, `internal/store/users.go` |
 | **Implements** | [FR-120](../02-requirements.md#fr-120-apply-a-per-user-default-destination), [FR-095](../02-requirements.md#fr-095-order-the-queue-by-creation-date-or-by-owner) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |
 | **Est. size** | 2 new files, ~330 LOC |
@@ -150,9 +150,10 @@ reported as `--- PASS`. The final line of stdout is exactly `USERS_OK`. No `FAIL
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT implement the filesystem jail derived from `default_destination`; T109 owns it.

@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T012, T017, T024 |
 | **Blocks** | T075, T076, T077, T078 |
-| **Parallel-safe** | yes — adds `internal/jobs/postprocess.go` and `internal/jobs/handlers_extract.go` |
+| **Parallel-safe** | no — it also edits the shared file `internal/store/tasks.go` |
 | **Implements** | [FR-100](../02-requirements.md#fr-100-auto-extract-the-supported-archive-formats), [FR-102](../02-requirements.md#fr-102-report-extraction-state-progress-and-failures), [FR-106](../02-requirements.md#fr-106-remove-completed-tasks-automatically), [NFR-018](../02-requirements.md#nfr-018-extract-archives-safely) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |
 | **Est. size** | 3 new files, ~380 LOC |
@@ -156,9 +156,10 @@ line of stdout is exactly `EXTRACT_OK`. No `FAIL`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT implement the password candidate loop; T075 owns `internal/jobs/passwords.go`.

@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T019, T020 |
 | **Blocks** | T053, T101 |
-| **Parallel-safe** | yes — adds `internal/api/settings.go` |
+| **Parallel-safe** | no — it also edits the shared file `internal/api/server.go` |
 | **Implements** | [FR-143](../02-requirements.md#fr-143-list-engines-and-test-connectivity) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |
 | **Est. size** | 2 new files, ~260 LOC |
@@ -29,7 +29,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 |---|---|---|
 | `internal/api/settings.go` | create | The `GET /engines` and `POST /engines/{id}/test` handlers. |
 | `internal/api/settings_test.go` | create | Cases for a healthy engine, a stopped engine and a non-admin caller. |
-| `internal/store/settings.go` | modify | Add `ListEngines` and `TouchEngine` over the `engines` table. |
+| `internal/store/settings.go` | create | New file. `ListEngines` and `TouchEngine` over the `engines` table; every later task that adds a settings-table query extends this file. |
 | `internal/api/server.go` | modify | Register `list-engines` and `test-engine`. |
 
 No other file may be modified.
@@ -89,7 +89,7 @@ func (s *Store) TouchEngine(ctx context.Context, id string, version, lastErr *st
 ```
 
 ## Steps
-1. Add `ListEngines` and `TouchEngine` to `internal/store/settings.go`; never put `secret_enc` in a
+1. Create `internal/store/settings.go` — no earlier task creates it — with `ListEngines` and `TouchEngine`; never put `secret_enc` in a
    `SELECT` list.
 2. Create `internal/api/settings.go` with `SettingsHandlers`, its constructor taking the store and the
    engine registry, and the structs above.
@@ -126,9 +126,10 @@ running. No `FAIL`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT implement `GET /settings` or `PATCH /settings`; T092 owns them.

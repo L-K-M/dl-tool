@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T042, T043, T044, T045, T048, T049, T051, T053 |
 | **Blocks** | — |
-| **Parallel-safe** | yes — touches only `web/e2e/` and `web/package.json` |
+| **Parallel-safe** | no — it also edits the shared file `web/package.json` |
 | **Implements** | [NFR-007](../02-requirements.md#nfr-007-meet-wcag-22-aa-with-a-keyboard-navigable-grid) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 2 new files, ~260 LOC |
@@ -130,9 +130,10 @@ of stdout is exactly `A11Y_OK`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT change a component to make a violation disappear; if a screen fails, STOP and record which task

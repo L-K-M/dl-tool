@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T024, T032, T034, T035, T042 |
 | **Blocks** | T049, T052, T104 |
-| **Parallel-safe** | yes — touches only `web/src/components/DetailPane/` and `FileTree/` |
+| **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/locales/en/common.json` |
 | **Implements** | — (renders [FR-018](../02-requirements.md#fr-018-manage-trackers-and-list-peers-for-bittorrent-tasks), [FR-044](../02-requirements.md#fr-044-report-the-effective-destination) and [FR-150](../02-requirements.md#fr-150-record-a-per-task-event-log), covered by T034, T083 and T024) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 3 new files, ~420 LOC. The file tree ships here because the Files tab and T049's selection step are one component. |
@@ -143,9 +143,10 @@ line of stdout is exactly `DETAIL_OK`.
 
 Also confirm scope:
 ```bash
-git diff --name-only | sort
+git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table.
+Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT build the file-selection dialog or its multi-item paging; T049 wraps this tree for that.
