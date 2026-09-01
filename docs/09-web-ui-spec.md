@@ -105,7 +105,7 @@ mobile sheets use shadcn/ui's `drawer`.
 │  Completed 30│ │  Big.Buck.Bunny.2160p… 14 GB  [██████████100%]  Seeding      —    1.2M  ∞  │ │
 │  Active    8 │ │  archive-2019.tar.zst  912 MB [██░░░░░░░░ 19%]  Error        —     —    —  │ │
 │  Inactive  4 │ │  …                                                                          │ │
-│  Stopped   2 │ │  (virtualized rows, 32 px each, 10 000+ rows)                              │ │
+│  Stopped   2 │ │  (virtualised rows, 32 px each, 10 000+ rows)                              │ │
 │  Error     2 │ └────────────────────────────────────────────────────────────────────────────┘ │
 │              ├────────────────────────────────────────────────────────────────────────────────┤ ← drag handle
 │ SEARCH       │ ubuntu-26.04-desktop-amd64.iso                                            [ ✕ ] │
@@ -239,9 +239,9 @@ Deferred to v2 because no v1 field carries them — do not add a column that ren
 
 ### 3.2 Status renderer
 
-`status` sorts by this ordinal, not alphabetically.
+`status` sorts by this ordinal, not alphabetically. Icons are `lucide-react` names.
 
-| Ordinal | `state` | Label | Dot token | Icon (`lucide-react`) |
+| Ordinal | `state` | Label | Dot token | Icon |
 |---|---|---|---|---|
 | 0 | `downloading` | Downloading | `--accent` | `arrow-down` |
 | 1 | `seeding` | Seeding | `--ok` | `arrow-up` |
@@ -345,24 +345,12 @@ qBittorrent's own guard, and its absence is why its `Escape` handling misfires i
 
 ### 3.7 Context menu
 
-Built from shadcn/ui's `context-menu` (Radix) so it is keyboard- and touch-reachable. Order:
-
-```
-Start · Force start · Pause
-──
-Remove ▸ (Remove task / Remove task and files)
-Move ▸ (Top / Up / Down / Bottom)
-──
-Set destination… · Rename… · Category ▸ · Tags ▸
-──
-Limit download rate… · Limit upload rate… · Share-ratio limit… · Sequential download (✓)
-──
-Force recheck · Force reannounce
-──
-Copy ▸ (Name / Source URL / Magnet link / Info hash / Content path)
-──
-Open detail pane
-```
+Built from shadcn/ui's `context-menu` (Radix) so it is keyboard- and touch-reachable. Order, with `—`
+marking a separator: Start · Force start · Pause — Remove ▸ (*Remove task* / *Remove task and files*) ·
+Move ▸ (*Top* / *Up* / *Down* / *Bottom*) — Set destination… · Rename… · Category ▸ · Tags ▸ — Limit
+download rate… · Limit upload rate… · Share-ratio limit… · Sequential download (✓) — Force recheck ·
+Force reannounce — Copy ▸ (*Name* / *Source URL* / *Magnet link* / *Info hash* / *Content path*) —
+Open detail pane.
 
 BitTorrent-only entries (*Force reannounce*, *Share-ratio limit…*, *Copy magnet link*, *Copy info hash*) are
 hidden, not disabled, for non-BitTorrent tasks.
@@ -933,19 +921,16 @@ The justification record for every choice above. Both tables are evidence, not d
   [`05-api-contract.md`](05-api-contract.md) §3 does not list them. The `infoHashV1` and `infoHashV2` columns
   and the General tab's info-hash rows depend on them.
   [NEEDS CLARIFICATION: add both fields to the Task object.]
-- The Torznab category tree behind the search Category filter is marked `[INFERRED]` in the UI research. The
-  client populates it from `GET /api/v1/indexers/categories` and hard-codes nothing, so no UI change is
-  needed if the tree differs.
-- The Download Station add dialog's "Show dialog to select files for download" checkbox has a second
-  documented meaning for file-hosting URLs. dl-tool ships no file-hosting support, so §4 enables the
-  checkbox for `.torrent` files and magnets only — stricter than Download Station, deliberately.
-- Download Station's "End incomplete or erroneous download tasks" action, which moves partial data to the
-  destination irreversibly, has no equivalent in this specification. It maps to the `force_complete` action
-  in `POST /api/v1/tasks/actions`; the toolbar and context menu do not yet surface it.
-  [NEEDS CLARIFICATION: decide whether v1 exposes `force_complete` in the UI.]
-- The research's claim that the Download Station destination field is read-only is marked
-  `[INFERRED]`, not `[READ]`. §4 keeps it read-only anyway, because a free-text destination bypasses the
-  folder browser's jail feedback.
+- The Torznab category tree behind the search Category filter is `[INFERRED]` in the UI research; the
+  client populates it from `GET /api/v1/indexers/categories` and hard-codes nothing, so a different tree
+  needs no UI change.
+- Download Station also enables "Show dialog to select files for download" for supported file-hosting URLs.
+  dl-tool ships no file-hosting support, so §4 enables it for `.torrent` files and magnets only.
+- Download Station's irreversible "End incomplete or erroneous download tasks" action maps to the
+  `force_complete` action in `POST /api/v1/tasks/actions`, which no toolbar or context menu currently
+  surfaces. [NEEDS CLARIFICATION: decide whether v1 exposes `force_complete` in the UI.]
+- The research marks the Download Station destination field's read-only behaviour `[INFERRED]`, not
+  `[READ]`. §4 keeps it read-only regardless, because free text bypasses the folder browser's jail feedback.
 
 ## Change log
 | Date | Change |
