@@ -973,14 +973,26 @@ to the job's results. To turn a result into a task, `POST /tasks` with
 
 ```json
 {"id":"fed_01JKQ7...","url":"https://archlinux.org/feeds/releases/","title":"Arch Linux releases",
- "enabled":true,"refresh_interval_s":0,"item_cap":50,"unread_count":3,
+ "enabled":true,"refresh_interval_s":0,"item_cap":50,"priority":0,"unread_count":3,
  "last_fetch_at":"2026-09-01T09:30:00Z","last_success_at":"2026-09-01T09:30:00Z",
  "next_fetch_at":"2026-09-01T10:30:00Z","escalation_level":0,"disabled_till":null,"last_error":null}
 ```
 
 `refresh_interval_s: 0` means "use the global RSS interval". `POST /feeds` requires `url` and accepts
-`title`, `enabled`, `refresh_interval_s`, `item_cap`; `PATCH /feeds/{id}` accepts the same set;
-`DELETE /feeds/{id}` returns `204` and cascades to the feed's items.
+`title`, `enabled`, `refresh_interval_s`, `item_cap`, `priority` and `auto_download`;
+`PATCH /feeds/{id}` accepts the same set. On both verbs `auto_download: true` creates the
+`auto:<feed_id>` rule when it does not exist and `false` deletes it, so a misticked box is undone without
+deleting the feed and its read state; `DELETE /feeds/{id}` returns `204`, deletes the `auto:` rule and
+cascades to the feed's items. `priority` is only the per-run tie-break of the rule engine
+([`08-rss-automation.md`](08-rss-automation.md) §5 step 13): when two feeds carry the same content, the
+lower `priority` feed's copy wins; it affects neither polling nor display.
+
+The add-dialog's *Automatically download all items* checkbox
+([`09-web-ui-spec.md`](09-web-ui-spec.md) §8.1, Download Station's own option) is **not** a `feeds`
+column: `POST /feeds` accepts it as `auto_download` (boolean, default `false`) and, when true, creates an
+enabled rule named `auto:<feed_id>` scoped to that one feed, with an empty `match` block — which passes
+every item ([`08-rss-automation.md`](08-rss-automation.md) §4.2) — and the caller's default destination
+as `action.destination`.
 
 **Credential-bearing feeds are admin-only**, mirroring §9.1's key-bearing-indexer rule: a feed whose URL
 contains userinfo (`https://user:pass@…`) or a `passkey`, `apikey` or `token` query parameter — the same
@@ -1215,6 +1227,15 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 Both verbs return `200` with the stored document. `401` · `413` `/problems/payload-too-large` above 64 KiB ·
 `422` `/problems/validation-failed` when the body is not a JSON object.
 
+Saved searches ([FR-057](02-requirements.md#fr-057-save-and-re-run-a-search)) ride in this document
+rather than owning endpoints: the SPA stores them under the `search` member (`{indexerIds, categories,
+saved[]}`), the server stores and returns it verbatim like every unknown member, and re-running is
+`POST /search` with the stored selection. The 50-entry cap is client-enforced (T064's
+`TestFiftyEntryCap`); the server's only bound on the whole document is the 64 KiB cap above. The member's
+shape is owned by [`09-web-ui-spec.md`](09-web-ui-spec.md) §3.3 and built by task T064; no `/search/saved`
+surface exists. Like the rest of `/prefs`, the member is per-user UI state and is **not** part of the
+`GET /settings/export` document (§11.5).
+
 ### 11.5 `GET /settings/export` and `POST /settings/import`
 
 A portable, versioned settings document, so an instance can be rebuilt without carrying a database file
@@ -1303,6 +1324,11 @@ per-user limit on how many tasks may run at once is the separate global setting 
 independently and report different error codes — see §5.11 and
 [`04-data-model.md`](04-data-model.md). `default_destination` doubles as the user's filesystem jail (§7.2),
 so setting it is what makes a non-admin able to browse and download at all.
+
+`tasks.owner_id` is `ON DELETE RESTRICT` ([`04-data-model.md`](04-data-model.md) §3.1), so
+`DELETE /users/{id}` for a user who still owns tasks is `409` `/problems/conflict` naming the task count;
+the caller deletes or re-assigns the tasks first. A user may always be disabled instead
+(`{"enabled":false}` on `PATCH`), which keeps the rows and revokes access at once.
 
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (caller is not an admin, or the request would
 delete or disable the last enabled admin) · `404` · `409` `/problems/conflict` (username exists,
@@ -1502,12 +1528,9 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 
 ## Open questions
 
-- [NEEDS CLARIFICATION: `04-data-model.md` gives `tasks` a single `destination` column, while
-  [FR-044](02-requirements.md#fr-044-report-the-effective-destination) requires the requested and effective
-  destinations to be distinguishable. This file returns both `destination` (effective) and
-  `requested_destination`; the second needs a column, or 04 must say where it is derived from.]
-- [NEEDS CLARIFICATION: [FR-057](02-requirements.md#fr-057-save-and-re-run-a-search) requires saved
-  searches, but the canonical API surface lists no endpoint for them, so no shape is defined here.]
+- (none — the two former items were resolved 2026-09-01: `requested_destination` is a `tasks` column in
+  [`04-data-model.md`](04-data-model.md) §3.3, and saved searches are a `search` member of the `/prefs`
+  document per §11.4, built by T064)
 
 ## Change log
 
@@ -1523,3 +1546,6 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Review pass 3: the `/rules/test` `owner_id` rejection is spelled out — a non-admin naming anyone but themselves gets `403 /problems/forbidden`. |
 | 2026-09-01 | Contradiction fix: the `POST /system/backup` example path now uses the `dl-tool.db.<UTC>.bak` form owned by `04-data-model.md` §6. |
 | 2026-09-01 | Review pass: the two settings examples carry `rss_interval_s: 1800`, matching the corrected default. |
+| 2026-09-01 | Closed both open questions: `requested_destination` became a `tasks` column, and saved searches are specified as a `search` member of the `/prefs` document (§11.4, task T064) — no `/search/saved` surface. The feed object gains `priority` (the rule engine's per-run tie-break) and `POST /feeds` gains `auto_download`, which creates the `auto:<feed_id>` rule behind the dialog's Download-Station checkbox. `DELETE /users/{id}` for a user who still owns tasks is `409`, matching `ON DELETE RESTRICT`. |
+| 2026-09-01 | Review pass: the users-group `409` enumeration now names the owned-rows case; the saved-search 50-entry cap is stated as client-enforced (the server's bound is the 64 KiB document cap) and `/prefs` is excluded from the settings export; `PATCH /feeds/{id}` accepts `auto_download` so the checkbox is reversible without deleting the feed. |
+| 2026-09-01 | Review pass 2: both feed verbs list `auto_download` explicitly — the earlier "plus" wording read as if `POST /feeds` rejected the field the add dialog sends. |

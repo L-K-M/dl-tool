@@ -519,7 +519,7 @@ protection"; its `settings.json` keys are `rpc-host-whitelist-enabled` (default 
 |---|---|
 | Enabled | always; no switch turns it off |
 | Implicitly allowed | `localhost`, `localhost.`, and any literal IPv4 or IPv6 address, port stripped |
-| Additionally allowed | the names the operator configures |
+| Additionally allowed | the names the operator configures through `DLTOOL_ALLOWED_HOSTS` ([`11-config-reference.md`](11-config-reference.md) §2) — a reverse proxy's public hostname belongs here |
 | Mismatch | `421 Misdirected Request`, logged with the offending `Host` value |
 
 ### 6.6 Response headers
@@ -711,3 +711,4 @@ the repository owner decides.
 | 2026-09-01 | Review pass: §6.1 names the cookie with its prefix (`__Host-dltool_session` at the root, `__Secure-dltool_session` under a base path, chosen at boot), and §2.4 splits the feed body cap from the metadata-fetch cap. |
 | 2026-09-01 | Review pass 2: the cookie prefix is conditional on TLS — `__Host-`/`__Secure-` only when the cookie is `Secure`, plain `dltool_session` on plain HTTP, because browsers reject a prefixed cookie without `Secure` and plain-HTTP LAN access is supported. |
 | 2026-09-01 | Review pass 3: the prefix condition is the listener's static TLS state, not the `Secure` row's per-request `X-Forwarded-Proto` judgement — behind a TLS-terminating proxy the cookie is `Secure` yet unprefixed, which is valid and stated. |
+| 2026-09-01 | §6.5 now names the configuration knob (`DLTOOL_ALLOWED_HOSTS`) behind "the names the operator configures". |

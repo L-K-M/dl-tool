@@ -1247,9 +1247,8 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
   mechanism must be settled in [`06-download-engines.md`](06-download-engines.md).
 - FR-050 and FR-055: the Torznab category tree used by the search category filter is **INFERRED** from
   convention; confirm the concrete category IDs in [`07-search-and-indexers.md`](07-search-and-indexers.md).
-- [`05-api-contract.md`](05-api-contract.md) links FR-121 by its former anchor
-  `#fr-121-enforce-a-per-user-task-quota`; FR-121 is now the storage quota and FR-123 is the concurrency
-  limit, so that link and the open question beside it must be updated there.
+- (resolved 2026-09-01: the stale FR-121 anchor in [`05-api-contract.md`](05-api-contract.md) is gone; FR-121
+  is the storage quota and FR-123 the concurrency limit, as written above.)
 - This document exceeds the 700-line budget suggested for it because the mandated coverage list does not fit
   in fewer requirements at the required block format.
 
@@ -1262,3 +1261,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | Dropped the resolved FR-121-anchor open question; `05-api-contract.md` no longer carries the stale anchor. |

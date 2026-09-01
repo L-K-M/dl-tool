@@ -250,6 +250,8 @@ CREATE TABLE tasks (
     'ssrf_blocked','path_rejected','quota_exceeded','engine_unavailable','unsupported_scheme',
     'concurrency_limit','js_runtime_missing')),
   error_message TEXT, destination TEXT NOT NULL,
+  requested_destination TEXT,             -- what the client asked for, when the server resolved a
+                                         -- different effective destination (FR-044); NULL when identical
   content_path TEXT,                    -- absolute path to the finished file or directory
   category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
   total_bytes INTEGER,                  -- NULL while metadata is unknown
@@ -388,6 +390,7 @@ CREATE TABLE feeds (
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
   refresh_interval_s INTEGER NOT NULL DEFAULT 0,   -- 0 = use the global RSS interval setting
   item_cap INTEGER NOT NULL DEFAULT 50,            -- retained feed_items per feed
+  priority INTEGER NOT NULL DEFAULT 0,             -- per-run tie-break in 08 §5 step 13; lower wins
   etag TEXT,
   last_modified TEXT,                   -- verbatim HTTP-date string, replayed as If-Modified-Since
   ttl_minutes INTEGER, last_fetch_at INTEGER, last_success_at INTEGER,
@@ -784,3 +787,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Migration subsystem cut: deleted the `engines.foreign_task_policy` column, its `CHECK` constraint and enum section §4.9, replacing them with the single exclusive-control rule; removed every link to the withdrawn migration document and the "imported task" framing of the inherited `error_code` values; §5 retitled "Schema migration policy" to keep goose migrations unambiguous. `notification_channels`, `infohash_v1`/`infohash_v2` and `priority IN (0,1,6,7)` are unchanged. |
 | 2026-09-01 | Added `rules.owner_id`: a rule creates tasks on someone's behalf (the watch-folder privilege rule), so rule-grabbed tasks are owned, quota-accounted and jailed to that user. |
 | 2026-09-01 | Review pass: `rules.owner_id` is `ON DELETE RESTRICT`, not CASCADE — deleting a user must not silently destroy shared automation and match history; `DELETE /users/{id}` answers `409` instead. |
+| 2026-09-01 | Added `tasks.requested_destination` (the column behind FR-044 and the Task object's field of the same name in `05-api-contract.md` §3) and `feeds.priority` (the per-run tie-break `08-rss-automation.md` §5 step 13 sorts on). |
