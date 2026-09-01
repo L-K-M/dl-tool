@@ -394,7 +394,7 @@ Enforce every one of these in `internal/search/dlsearch.go`; they are not config
 | Selector/regex input cap | 2 MiB of parsed document | bounds parser and matcher cost |
 | Redirects | 5 maximum, SSRF checks re-run on **every** hop | redirect-based SSRF bypass |
 | Schemes | `http`, `https` only, including after redirect | |
-| Ports | 80 and 443 for public destinations; unrestricted where the engine's `allow_private_network` flag or `DLTOOL_SSRF_ALLOW_PRIVATE` applies |
+| Ports | 80 and 443 for public destinations; unrestricted for the configured origin where the engine's `allow_private_network` flag or `DLTOOL_SSRF_ALLOW_PRIVATE` applies |
 | Rate limit | `request.rate_limit_per_minute`, default 30, maximum 120, per engine | politeness and back-off |
 | Total deadline | 15 s per engine per search, including all redirects and parsing | one hostile definition cannot starve the pool |
 | Results per page | 1000 maximum | matches Jackett's own per-indexer cap |

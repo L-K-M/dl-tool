@@ -841,9 +841,13 @@ DELETE /tags/{name} → 204
 `api_key`, `definition_id`, `priority`, `allow_private_network` and `settings` (per-engine values, schema in
 [`07-search-and-indexers.md`](07-search-and-indexers.md)). `allow_private_network` is required for an
 indexer on a private-network address such as a Prowlarr, Jackett or bitmagnet instance on the same host or
-LAN; it lifts the SSRF private-range denial and the 80/443 port restriction for that indexer's fetches
-only ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §2.3). Imported indexers are created with
-`enabled: false`.
+LAN; it lifts the SSRF private-range denial and, for that indexer's configured origin only, the 80/443
+port restriction — a redirect hop to any other host stays limited to 80 and 443
+([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §2.3). A private-network `url` without the
+flag is not rejected at save time; the failure surfaces at probe and search time as `403`
+`/problems/ssrf-blocked` whose `detail` names `allow_private_network` as the remedy, and the import flow of
+[`07-search-and-indexers.md`](07-search-and-indexers.md) §2.7 sets the flag automatically on the rows it
+discovers. Imported indexers are created with `enabled: false`.
 
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (non-admin write) · `403`
 `/problems/ssrf-blocked` · `404` · `409` `/problems/conflict` (duplicate `definition_id`) · `422` (unknown
