@@ -3,7 +3,7 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** every task T001–T097
+> **Read this before:** every task T001–T111 and T113–T115
 
 ## Purpose
 
@@ -38,7 +38,11 @@ only by recording the deferral in [`docs/tasks/00-task-index.md`](tasks/00-task-
 Vocabulary used below and owned by the brief: task states are
 `queued downloading seeding paused checking extracting moving completed error removed`; error codes are
 Download Station's 26 `error_detail` values plus `ssrf_blocked`, `path_rejected`, `quota_exceeded`,
-`engine_unavailable` and `unsupported_scheme`; all rates and sizes are bytes or bytes/second.
+`engine_unavailable`, `unsupported_scheme` and `concurrency_limit`; all rates and sizes are bytes or
+bytes/second.
+
+The identifier range `FR-130` – `FR-139` was allocated to compatibility façades, which are cut from v1.
+Those identifiers are permanently unused and are never reassigned; dl-tool serves `/api/v1` only.
 
 ---
 
@@ -99,9 +103,9 @@ When a client submits URIs or a blob to the inspect endpoint, dl-tool shall retu
 | T031 | must |
 
 ### FR-007 Select and prioritise individual files
-Where the target engine declares the `per_file_select` and `per_file_priority` capabilities, dl-tool shall accept a `files:[{index, selected, priority}]` list at creation and on an existing task, mapping priority to `skip=0`, `low=1`, `normal=4`, `high=7`.
+Where the target engine declares the `per_file_select` and `per_file_priority` capabilities, dl-tool shall accept a `files:[{index, selected, priority}]` list at creation and on an existing task, mapping priority to the qBittorrent vocabulary `skip=0`, `normal=1`, `high=6`, `maximum=7`, with no distinct `low` level.
 
-**Verify:** T032 creates a multi-file torrent with file 1 deselected, then patches file 2 to `high`, and asserts the engine reports priorities `0` and `7`.
+**Verify:** T032 creates a multi-file torrent with file 1 deselected, then patches file 2 to `high`, and asserts the engine reports priorities `0` and `6`, and that a request carrying priority `4` is rejected.
 
 | Covered by | Priority |
 |---|---|
@@ -215,6 +219,60 @@ Where the target engine declares `sequential` and `share_limits`, dl-tool shall 
 |---|---|
 | T036 | should |
 
+### FR-020 Cap the number of concurrently active tasks
+The dl-tool queue admission control shall start no more tasks than `max_active_total` overall and no more than `max_active_per_engine` on any one engine, holding the remainder in state `queued`.
+
+**Verify:** T098 sets `max_active_total=2` and `max_active_per_engine=1`, submits six tasks split across aria2 and qBittorrent, and asserts exactly two are `downloading` with at most one per engine while the rest stay `queued`.
+
+| Covered by | Priority |
+|---|---|
+| T098 | must |
+
+### FR-021 Exclude seeding tasks from every concurrency limit
+The dl-tool queue admission control shall exclude tasks in state `seeding` from `max_active_total`, `max_active_per_engine` and `max_active_per_user`, so a seeding torrent never blocks a queued download.
+
+**Verify:** T098 fills `max_active_total` with tasks in state `seeding`, submits one download and asserts it starts immediately.
+
+| Covered by | Priority |
+|---|---|
+| T098 | must |
+
+### FR-022 Record both BitTorrent infohash forms
+When dl-tool ingests a magnet link, a `.torrent` file or a bare infohash, it shall store `infohash_v1` as 40 lowercase hexadecimal characters and `infohash_v2` as 64 lowercase hexadecimal characters, decoding a 32-character base32 v1 magnet to hexadecimal first.
+
+**Verify:** T100 ingests a v1 magnet, the same magnet in base32 form, a BEP 52 v2 magnet and a hybrid `.torrent`, and asserts the stored columns match the fixtures with the casing and lengths above.
+
+| Covered by | Priority |
+|---|---|
+| T100 | must |
+
+### FR-023 Reject a duplicate torrent by either infohash
+If a submission's `infohash_v1` or `infohash_v2` equals that of an existing task whose state is not `removed`, then dl-tool shall reject the submission with error code `torrent_duplicate` and shall not create a second task.
+
+**Verify:** T100 adds a hybrid torrent by its v1 magnet and then by its v2 magnet and asserts one task exists and the second call returned `torrent_duplicate`.
+
+| Covered by | Priority |
+|---|---|
+| T100 | must |
+
+### FR-024 Delete downloaded data safely and only on request
+When a client deletes a task with `delete_data=true`, dl-tool shall stop the task at its engine first, unlink only the paths recorded in `task_files`, refuse any path that resolves outside the configured roots, and record the removal as a `task_events` row.
+
+**Verify:** T111 deletes a seeding task with `delete_data=true` and asserts the engine was stopped before any unlink, that only `task_files` paths are gone, that a recorded path outside the roots is refused with `path_rejected`, and that a hardlinked copy elsewhere still opens with its original contents — removing dl-tool's link leaves the library copy intact.
+
+| Covered by | Priority |
+|---|---|
+| T111 | must |
+
+### FR-025 Bulk-import torrent files and URL lists from disk
+When an operator imports a directory of `.torrent` files or a `.txt` URL list, dl-tool shall create one task per entry, return a per-entry result naming the reason for every rejection, and leave the source files in place.
+
+**Verify:** T114 imports a fixture directory of three `.torrent` files and a four-line `.txt` and asserts seven tasks, seven per-entry results and that no source file was deleted; see [`15-migration-and-import.md`](15-migration-and-import.md).
+
+| Covered by | Priority |
+|---|---|
+| T114 | must |
+
 ---
 
 ## Categories and tags (FR-030 – FR-039)
@@ -245,6 +303,15 @@ Where the target engine declares the `categories` or `tags` capability, dl-tool 
 | Covered by | Priority |
 |---|---|
 | T029 | should |
+
+### FR-033 List, rename and delete tags
+The dl-tool tag API shall list every tag in use with the number of tasks carrying it, rename a tag across every one of those tasks, and delete a tag by detaching it from every task without deleting any task.
+
+**Verify:** T107 tags three tasks, renames the tag and asserts all three carry the new name, then deletes it and asserts the three tasks still exist with no tags.
+
+| Covered by | Priority |
+|---|---|
+| T107 | must |
 
 ---
 
@@ -304,6 +371,33 @@ If the free space at a task's destination falls below the task's remaining bytes
 |---|---|
 | T076 | should |
 
+### FR-046 Manage watch folders and scan one on demand
+The dl-tool watch-folder API shall create, update, delete and list watch folders — each with a directory, an enabled flag, a destination and an optional category — and shall scan a single watch folder immediately on request.
+
+**Verify:** T107 creates a watch folder, drops a fixture `.torrent` into it, triggers a scan and asserts the task appears without waiting for the poll interval; a watch folder outside every configured root is rejected with `path_rejected`.
+
+| Covered by | Priority |
+|---|---|
+| T107 | must |
+
+### FR-047 Reserve committed-but-unwritten bytes and keep a free-space floor
+Before starting a task, dl-tool shall require the destination filesystem to hold that task's remaining bytes plus the sum of `total_bytes - completed_bytes` over every active task sharing the same filesystem plus that root's `min_free_space`, and shall otherwise hold the task in state `queued`.
+
+**Verify:** T099 runs two tasks whose remaining bytes already commit a small tmpfs root, submits a third and asserts it stays `queued` instead of starting and failing, and asserts the default floor is `2147483648` bytes per [`11-config-reference.md`](11-config-reference.md).
+
+| Covered by | Priority |
+|---|---|
+| T099 | must |
+
+### FR-048 Never destroy partial data when a filesystem fills
+If a write fails with `ENOSPC`, then dl-tool shall pause the task with error code `disk_full`, shall leave every partially downloaded file on disk untouched, and shall resume the task once free space is above `min_free_space` again.
+
+**Verify:** T099 fills the destination mid-download, asserts the task is `paused` with `disk_full` and the partial file is byte-for-byte unchanged, then frees space and asserts the task resumes and completes.
+
+| Covered by | Priority |
+|---|---|
+| T099 | must |
+
 ---
 
 ## Search and indexers (FR-050 – FR-069)
@@ -338,7 +432,7 @@ The dl-tool image shall bundle exactly the engines `internet-archive`, `arch-lin
 ### FR-053 Import legacy definitions by static analysis only
 Where a user uploads a Synology `.dlm` archive or a qBittorrent nova3 `.py` plugin, dl-tool shall extract and statically analyse it into a `dlsearch/v1` draft, store the original as an inert blob, create the engine **disabled** with its provenance recorded, and shall never execute the uploaded code.
 
-**Verify:** T059 imports the `jackett.dlm` fixture, asserts the resulting engine row is `enabled=0` with `provenance='imported:dlm'`, and asserts no PHP or Python interpreter is invoked; see [ADR-0010](decisions/0010-never-execute-third-party-definition-code.md).
+**Verify:** T059 imports the `jackett.dlm` fixture, asserts the resulting engine row is `enabled=0` with `provenance='imported:dlm'`, and asserts no PHP or Python interpreter is invoked; see [ADR-0010](decisions/0010-never-execute-third-party-definitions.md).
 
 | Covered by | Priority |
 |---|---|
@@ -550,6 +644,24 @@ The dl-tool queue shall support a process order of `by_date_created` or `by_user
 |---|---|
 | T085 | should |
 
+### FR-096 Combine schedule, global and per-task limits by minimum
+The dl-tool bandwidth governor shall resolve a task's effective rate as the minimum of the active schedule cell's limit, the global limit and the task's own limit, and shall **pause** every task while the active cell is `0` rather than throttling it to a near-zero rate.
+
+**Verify:** T110 sets a global limit of 10 485 760 B/s, a per-task limit of 1 048 576 B/s and an alternative-speed cell of 5 242 880 B/s and asserts the engine receives 1 048 576 B/s; it then sets the cell to `0` and asserts the task is `paused`. The precedence chain is stated once in [`06-download-engines.md`](06-download-engines.md).
+
+| Covered by | Priority |
+|---|---|
+| T110 | must |
+
+### FR-097 Evaluate the schedule in the container time zone
+The dl-tool scheduler shall evaluate the 168-cell grid in the time zone given by the container's `TZ`, applying the repeated cell twice during a daylight-saving fall-back hour and not applying the absent cell during a spring-forward hour, and shall report the active time-zone name together with the grid.
+
+**Verify:** T110 fakes the clock across both daylight-saving transitions in `Europe/Zurich`, asserts the cell is applied twice and then not at all, and asserts the schedule response carries the active time-zone name.
+
+| Covered by | Priority |
+|---|---|
+| T110 | must |
+
 ---
 
 ## Post-processing (FR-100 – FR-114)
@@ -617,6 +729,15 @@ Where auto-remove-on-complete is enabled, dl-tool shall remove a task's row once
 |---|---|
 | T074 | could |
 
+### FR-107 Manage notification channels
+The dl-tool notification API shall create, update, delete and list channels of kind `webhook`, `ntfy`, `gotify` or `apprise`, each carrying a name, an enabled flag, a channel configuration, a stored secret that is never returned, and an event mask drawn from the `task_events` code vocabulary.
+
+**Verify:** T106 creates one channel of each kind, asserts no read response contains the stored secret, sets an event mask holding `completed` only, and asserts an `error` event is not delivered to that channel while a `completed` event is.
+
+| Covered by | Priority |
+|---|---|
+| T106 | must |
+
 ---
 
 ## Users, authentication and quotas (FR-115 – FR-129)
@@ -675,54 +796,41 @@ Where a user has a default destination configured, dl-tool shall use it for that
 |---|---|
 | T086 | must |
 
-### FR-121 Enforce a per-user task quota
-If creating a task would take a user above their configured concurrent-task quota, then dl-tool shall reject the request with error code `quota_exceeded` and shall not create the task.
+### FR-121 Enforce the per-user storage quota
+If creating a task would take the sum of `total_bytes` over a user's non-`removed` tasks above that user's `quota_bytes`, then dl-tool shall reject the request with error code `quota_exceeded` and shall not create the task.
 
-**Verify:** T085 sets a quota of two, creates two tasks and asserts the third returns `quota_exceeded`.
+**Verify:** T085 sets `quota_bytes` to 1 073 741 824, creates a 700 MiB task and asserts a second 700 MiB task is rejected with `quota_exceeded`, and asserts `quota_bytes = 0` means unlimited.
 
 | Covered by | Priority |
 |---|---|
 | T085 | must |
 
----
+### FR-122 Re-check the storage quota when metadata resolves
+When a task's total size first becomes known after creation, dl-tool shall re-evaluate the owner's `quota_bytes` and, if it is now exceeded, shall pause the task with error code `quota_exceeded` and shall neither delete the task nor its data.
 
-## Compatibility façades (FR-130 – FR-139)
-
-### FR-130 Expose the qBittorrent WebAPI v2 subset when enabled
-Where the qBittorrent façade is enabled, dl-tool shall serve `auth/login`, `app/version`, `app/webapiVersion`, `torrents/info`, `torrents/add`, `torrents/delete`, `torrents/pause`, `torrents/stop`, `torrents/resume`, `torrents/start`, `torrents/setLocation` and `torrents/files` under `/api/v2/`, and shall keep the façade **off** by default.
-
-**Verify:** T087 asserts `/api/v2/app/version` returns 404 by default, and that with the façade enabled Sonarr's Download Station and qBittorrent client tests both succeed against dl-tool.
+**Verify:** T085 adds a magnet with no size at creation for a user 100 MiB below their quota, resolves metadata to a 4 GiB torrent, and asserts the task is `paused` with `quota_exceeded` and still present after a restart.
 
 | Covered by | Priority |
 |---|---|
-| T087 | must |
+| T085 | must |
 
-### FR-131 Accept and emit both qBittorrent parameter spellings
-The dl-tool qBittorrent façade shall accept both `stopped` and `paused` on `torrents/add`, and shall report task state using the 5.x spellings `stoppedDL`/`stoppedUP` while also accepting `pausedDL`/`pausedUP` from clients.
+### FR-123 Enforce a per-user concurrency limit
+The dl-tool queue admission control shall start no more than `max_active_per_user` tasks for any one user and shall report the reason for holding the remainder as `concurrency_limit`, which is distinct from `quota_exceeded`.
 
-**Verify:** T087 posts each spelling and asserts identical behaviour, and asserts `torrents/info` returns `stoppedUP` for a completed paused task.
-
-| Covered by | Priority |
-|---|---|
-| T087 | must |
-
-### FR-132 Expose the Synology DownloadStation subset when enabled
-Where the Synology façade is enabled, dl-tool shall serve `query.cgi` (`SYNO.API.Info.query`), `auth.cgi` (`SYNO.API.Auth.login`/`logout`), `DownloadStation/task.cgi` (`SYNO.DownloadStation.Task.list`/`getinfo`/`create`/`delete`/`pause`/`resume`) and `DownloadStation/info.cgi` (`SYNO.DownloadStation.Info.getinfo`/`getconfig`) under `/webapi/`, reporting Download Station's own status and `error_detail` vocabularies, and shall keep the façade **off** by default.
-
-**Verify:** T088 asserts `/webapi/query.cgi` returns 404 by default, and that with the façade enabled `SYNO.DownloadStation.Task.list` returns tasks whose `status` values come from Download Station's ten-value enum.
+**Verify:** T098 sets `max_active_per_user=1`, queues three tasks for user A and one for user B, and asserts exactly one task per user is active and that every held task carries `concurrency_limit`.
 
 | Covered by | Priority |
 |---|---|
-| T088 | must |
+| T098 | must |
 
-### FR-133 Authenticate every façade request
-The dl-tool compatibility façades shall require the same credentials as the native API and shall never provide an anonymous path to task creation, reading or deletion.
+### FR-124 Jail non-admins to their own destination subtree
+While a non-admin session is active, dl-tool shall confine filesystem browsing, free-space queries, directory creation and every task destination to the subtree of that user's `default_destination`, and shall grant admins every configured root.
 
-**Verify:** T087 and T088 assert that an unauthenticated call to each façade endpoint returns the façade's own authentication failure rather than data.
+**Verify:** T109 asserts a non-admin browsing a path outside their subtree receives 403, that a task destination outside it is rejected with `path_rejected`, and that no response lists another user's directory names.
 
 | Covered by | Priority |
 |---|---|
-| T087 | must |
+| T109 | must |
 
 ---
 
@@ -763,6 +871,60 @@ The dl-tool engines endpoint shall list each configured engine with its declared
 | Covered by | Priority |
 |---|---|
 | T027 | must |
+
+### FR-144 Persist server-side UI preferences per user
+The dl-tool preferences API shall read and replace a per-user preference document holding the task-grid column layout and the UI preferences listed in [`09-web-ui-spec.md`](09-web-ui-spec.md), so one account sees the same grid in every browser.
+
+**Verify:** T107 stores a column order, width set and visibility set, reads it back from a second client authenticated as the same user and asserts equality under `go-cmp`, and asserts a second user's document is unaffected.
+
+| Covered by | Priority |
+|---|---|
+| T107 | must |
+
+### FR-145 Export and import portable settings
+The dl-tool settings API shall export a versioned document containing settings, categories, indexers, feeds, rules, watch folders and the schedule, shall import such a document, and shall exclude sessions, password hashes and API tokens from the export.
+
+**Verify:** T108 exports from a populated instance, greps the document for a session identifier, a password hash and a token prefix and asserts none appear, then imports into an empty instance and asserts the seven collections match the source.
+
+| Covered by | Priority |
+|---|---|
+| T108 | must |
+
+### FR-146 Restore a backup from the command line
+When an operator runs `dl-tool restore --from <file>`, dl-tool shall refuse to proceed while a server process holds the database, shall refuse a backup whose schema version does not match the binary, and shall otherwise replace the database in place.
+
+**Verify:** T108 runs the command against a running instance and asserts a named refusal, stamps a backup with a foreign schema version and asserts a second named refusal, then restores against a stopped instance and asserts the task count matches the source.
+
+| Covered by | Priority |
+|---|---|
+| T108 | must |
+
+### FR-147 Assert engine conformance at boot
+When dl-tool connects to an engine, it shall assert that the engine's own competing automation is off — for qBittorrent `rss_processing_enabled=false`, `scheduler_enabled=false`, `auto_tmm_enabled=false` and no search plugins installed — shall raise a visible warning offering a one-click correction when it is not, and shall never exit because of it.
+
+**Verify:** T101 starts qBittorrent with Automatic Torrent Management enabled, asserts dl-tool boots, asserts the warning names `auto_tmm_enabled`, applies the offered correction and asserts the setting is then false; see [ADR-0017](decisions/0017-dl-tool-assumes-exclusive-control-of-its-engines.md).
+
+| Covered by | Priority |
+|---|---|
+| T101 | must |
+
+### FR-148 Apply the foreign-task policy to tasks dl-tool did not create
+Where an engine holds a task dl-tool has no row for, dl-tool shall apply `engines.foreign_task_policy`: `ignore`, the default, hides it from every endpoint, and `adopt` creates a task owned by the admin who configured that engine, preserving its save path, category and tags.
+
+**Verify:** T102 adds a torrent directly in qBittorrent, asserts it is absent from the task list under `ignore`, switches to `adopt` and asserts a task appears with the original save path, category, tags and the configuring admin as owner; see [ADR-0017](decisions/0017-dl-tool-assumes-exclusive-control-of-its-engines.md).
+
+| Covered by | Priority |
+|---|---|
+| T102 | must |
+
+### FR-149 Import once from a live Download Station, read-only
+When an operator supplies a DSM host, account and password, dl-tool shall log in with `SYNO.API.Auth` using `session=DownloadStation`, enumerate tasks with `SYNO.DownloadStation.Task.list` and `additional=detail,transfer`, fetch each BitTorrent task's source with `SYNO.DownloadStation2.Task.Source`, import RSS sites and feeds with `SYNO.DownloadStation.RSS.Site` and `SYNO.DownloadStation.RSS.Feed`, present a dry run before creating anything, and shall never create, modify or delete anything on the NAS.
+
+**Verify:** T114 runs the wizard against a recorded DSM fixture and asserts the dry run lists every task and feed while creating no row, that the committed run creates them, and that the only calls made are the login, the read methods above and the logout — dl-tool never reads Download Station's on-disk database. See [`15-migration-and-import.md`](15-migration-and-import.md).
+
+| Covered by | Priority |
+|---|---|
+| T114 | must |
 
 ---
 
@@ -863,13 +1025,13 @@ Where a base path is configured, dl-tool shall serve every route, asset, event s
 | T095 | must |
 
 ### NFR-007 Meet WCAG 2.2 AA with a keyboard-navigable grid
-The dl-tool web UI shall expose the task list with `role="grid"`, `aria-rowcount` set to the total row count, `role="row"`/`role="gridcell"` descendants, one roving `tabindex="0"`, arrow-key navigation within the grid and Tab navigation out of it.
+The dl-tool web UI shall expose the task list with `role="grid"`, `aria-rowcount` set to the **total** number of rows rather than the number currently in the DOM, `role="row"`/`role="gridcell"` descendants, one roving `tabindex="0"`, arrow-key navigation within the grid and Tab navigation out of it.
 
-**Verify:** T052 runs axe-core over the four main screens with zero serious or critical violations and asserts the roving-tabindex behaviour by keyboard.
+**Verify:** T104 runs `@axe-core/playwright` over the five main screens — Tasks, Search, RSS, Settings and the setup wizard — asserting zero serious or critical violations; one keyboard-map test walks the documented shortcuts and tab order with no pointer events; and one assertion compares `aria-rowcount` against the total task count while 10 000 tasks are loaded and fewer than 50 rows are rendered. See [`13-testing-and-verification.md`](13-testing-and-verification.md).
 
 | Covered by | Priority |
 |---|---|
-| T052 | must |
+| T104 | must |
 
 ### NFR-008 Ship translation plumbing with English only
 The dl-tool web UI shall route every user-visible string through the translation layer and format all numbers, byte sizes and dates through the `Intl` APIs, shipping a complete `en` catalogue and no other complete locale in v1.
@@ -982,7 +1144,7 @@ The dl-tool definition loader shall reject any YAML document larger than 512 KiB
 ### NFR-020 Execute no third-party code
 The dl-tool runtime shall contain no scripting interpreter for user- or definition-supplied code, and shall treat every imported `.dlm`, `.py` or YAML definition as data only.
 
-**Verify:** T059 and T060 assert the process never spawns a PHP or Python interpreter for a definition, and that the image contains no PHP runtime; see [ADR-0010](decisions/0010-never-execute-third-party-definition-code.md).
+**Verify:** T059 and T060 assert the process never spawns a PHP or Python interpreter for a definition, and that the image contains no PHP runtime; see [ADR-0010](decisions/0010-never-execute-third-party-definitions.md).
 
 | Covered by | Priority |
 |---|---|
@@ -1045,7 +1207,7 @@ The dl-tool store shall use a single SQLite database in the configuration direct
 ### NFR-027 Keep the generated API contract in step with the code
 The dl-tool build shall generate the OpenAPI document from the handler definitions and shall fail continuous integration when the committed document differs from the generated one.
 
-**Verify:** T002 asserts the CI job regenerates the document and that a deliberate handler change without regeneration fails the job; see [ADR-0003](decisions/0003-chi-huma-with-code-first-openapi.md).
+**Verify:** T002 asserts the CI job regenerates the document and that a deliberate handler change without regeneration fails the job; see [ADR-0003](decisions/0003-chi-huma-code-first-openapi.md).
 
 | Covered by | Priority |
 |---|---|
@@ -1060,6 +1222,15 @@ The dl-tool release pipeline shall pin base images by digest, pin third-party ac
 |---|---|
 | T097 | should |
 
+### NFR-029 Ship an installable progressive web app
+The dl-tool web UI shall ship a web app manifest with maskable icons, `display: standalone` and a `theme-color` matching the dark theme, together with a service worker whose only jobs are meeting the install criterion and caching static assets; no dl-tool feature works offline.
+
+**Verify:** T103 runs the Lighthouse installability check and asserts the manifest, the maskable icons, `display: standalone`, `theme-color` and a registered service worker, and asserts that cutting the network shows the reconnect banner rather than any offline mode.
+
+| Covered by | Priority |
+|---|---|
+| T103 | must |
+
 ---
 
 ## Decisions referenced
@@ -1067,17 +1238,17 @@ The dl-tool release pipeline shall pin base images by digest, pin third-party ac
 | ADR | Decision |
 |---|---|
 | [0001](decisions/0001-build-a-control-plane-over-existing-download-engines.md) | Build a control plane over existing download engines |
-| [0003](decisions/0003-chi-huma-with-code-first-openapi.md) | chi + Huma with code-first OpenAPI |
+| [0003](decisions/0003-chi-huma-code-first-openapi.md) | chi + Huma with code-first OpenAPI |
 | [0004](decisions/0004-sqlite-as-the-only-datastore.md) | SQLite as the only datastore |
 | [0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
 | [0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md) | Server-sent events with rid deltas for live updates |
 | [0008](decisions/0008-torznab-first-declarative-yaml-engines-second.md) | Torznab first, declarative YAML engines second |
 | [0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md) | A native cross-protocol RSS rule engine |
-| [0010](decisions/0010-never-execute-third-party-definition-code.md) | Never execute third-party definition code |
+| [0010](decisions/0010-never-execute-third-party-definitions.md) | Never execute third-party definition code |
 | [0011](decisions/0011-alpine-runtime-image-with-puid-pgid-privilege-drop.md) | Alpine runtime image with PUID/PGID privilege drop |
 | [0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication |
-| [0014](decisions/0014-opt-in-qbittorrent-and-synology-compatibility-facades.md) | Opt-in qBittorrent and Synology compatibility façades |
 | [0015](decisions/0015-db-backed-in-process-job-queue.md) | DB-backed in-process job queue |
+| [0017](decisions/0017-dl-tool-assumes-exclusive-control-of-its-engines.md) | dl-tool assumes exclusive control of its engines |
 
 ## Open questions
 
@@ -1087,6 +1258,9 @@ The dl-tool release pipeline shall pin base images by digest, pin third-party ac
   mechanism must be settled in [`06-download-engines.md`](06-download-engines.md).
 - FR-050 and FR-055: the Torznab category tree used by the search category filter is **INFERRED** from
   convention; confirm the concrete category IDs in [`07-search-and-indexers.md`](07-search-and-indexers.md).
+- [`05-api-contract.md`](05-api-contract.md) links FR-121 by its former anchor
+  `#fr-121-enforce-a-per-user-task-quota`; FR-121 is now the storage quota and FR-123 is the concurrency
+  limit, so that link and the open question beside it must be updated there.
 - This document exceeds the 700-line budget suggested for it because the mandated coverage list does not fit
   in fewer requirements at the required block format.
 
@@ -1095,3 +1269,4 @@ The dl-tool release pipeline shall pin base images by digest, pin third-party ac
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | Compatibility façades cut: FR-130 – FR-139 withdrawn and permanently unused, ADR-0014 link removed. Added FR-020 – FR-025, FR-033, FR-046 – FR-048, FR-096, FR-097, FR-107, FR-122 – FR-124, FR-144 – FR-149 and NFR-029. Corrected the FR-007 file-priority vocabulary, the FR-121 quota semantics and the NFR-007 acceptance mechanism; fixed the ADR-0003 and ADR-0010 slugs. |

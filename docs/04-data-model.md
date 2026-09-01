@@ -90,7 +90,7 @@ Every table except the join tables (`task_tags`, `rule_seen_episodes`) and goose
 | `eng_` | `engines` | `fed_` | `feeds` | `uip_` | `ui_prefs` |
 | `cat_` | `categories` | `itm_` | `feed_items` | `wfd_` | `watch_folders` |
 | `tag_` | `tags` | `tsk_` | `tasks` | `tfi_` | `task_files` |
-| `ttr_` | `task_trackers` | | | | |
+| `ttr_` | `task_trackers` | `ntf_` | `notification_channels` | | |
 
 ---
 
@@ -125,6 +125,9 @@ erDiagram
   qBittorrent infohash, yt-dlp job id). Engine-side IDs never appear in a URL.
 - Peers are **not** persisted; `GET /tasks/{id}/peers` proxies the engine live.
 - A rule's feed scope, patterns, episode filter, score and action all live inside `rules.definition_json`.
+- `settings`, `engines`, `bandwidth_schedule` and `notification_channels` are standalone configuration tables
+  with no foreign keys, so they carry no edge in the diagram.
+- A task's BitTorrent identity is the pair `(infohash_v1, infohash_v2)`; a hybrid torrent populates both.
 
 ---
 
@@ -141,7 +144,8 @@ CREATE TABLE users (
   password_hash TEXT NOT NULL,          -- argon2id PHC string: $argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>
   role TEXT NOT NULL CHECK (role IN ('admin','user')),
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
-  default_destination TEXT, quota_bytes INTEGER NOT NULL DEFAULT 0,   -- 0 = unlimited
+  default_destination TEXT,
+  quota_bytes INTEGER NOT NULL DEFAULT 0,   -- STORAGE quota, 0 = unlimited; see §4.7
   locale TEXT NOT NULL DEFAULT 'en', last_login_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 
@@ -181,7 +185,10 @@ CREATE TABLE engines (
   username TEXT,
   secret_enc TEXT,                      -- encrypted at rest; never returned by an API, never logged
   binary_path TEXT,                     -- ytdlp only
-  version TEXT, last_seen_at INTEGER, last_error TEXT,
+  foreign_task_policy TEXT NOT NULL DEFAULT 'ignore' CHECK (foreign_task_policy IN ('ignore','adopt')),
+  version TEXT,                         -- written by the boot capability probe: the resolved engine version,
+                                        -- and for 'ytdlp' the yt-dlp version and the JS runtime version
+  last_seen_at INTEGER, last_error TEXT,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 
 CREATE TABLE categories (
@@ -191,7 +198,34 @@ CREATE TABLE categories (
 CREATE TABLE tags (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+
+CREATE TABLE notification_channels (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('webhook','ntfy','gotify','apprise')),
+  name TEXT NOT NULL UNIQUE,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+  config_json TEXT NOT NULL,            -- non-secret channel configuration; shape per kind, see §4.8
+  secret_enc TEXT,                      -- encrypted at rest; never returned by an API, never logged
+  event_mask TEXT NOT NULL DEFAULT '["*"]',  -- JSON array of task_events.code values; ["*"] = every code
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX idx_notification_channels_enabled ON notification_channels(enabled);
 ```
+
+`engines.foreign_task_policy` decides what happens to a transfer dl-tool did not create: `ignore` (default)
+hides it everywhere, `adopt` imports it and assigns it to the admin who configured that engine →
+[ADR-0017](decisions/0017-exclusive-control-of-engines.md).
+
+Four `settings` rows carry the concurrency and disk-reservation limits. `00001_init.sql` seeds all four:
+
+| `settings.key` | `value_json` shape | Seeded value |
+|---|---|---|
+| `max_active_total` | integer, `0` = unlimited | `5` |
+| `max_active_per_engine` | integer, `0` = unlimited | `3` |
+| `max_active_per_user` | integer, `0` = unlimited | `3` |
+| `min_free_space` | object, data-root path → bytes | `2147483648` (2 GiB) for every configured root |
+
+Tasks in state `seeding` count toward no `max_active_*` limit. The complete settings key list and its
+defaults live in [`11-config-reference.md`](11-config-reference.md#5-database-backed-settings).
 
 ### 3.3 Tasks
 
@@ -203,6 +237,8 @@ CREATE TABLE tasks (
   engine_ref TEXT,                      -- aria2 GID | qBittorrent infohash | yt-dlp job id; NULL until accepted
   source_kind TEXT NOT NULL CHECK (source_kind IN ('http','ftp','sftp','magnet','torrent','metalink','media')),
   source_uri TEXT, name TEXT NOT NULL,
+  infohash_v1 TEXT,                     -- exactly 40 lowercase hex chars, or NULL
+  infohash_v2 TEXT,                     -- exactly 64 lowercase hex chars, or NULL
   state TEXT NOT NULL CHECK (state IN ('queued','downloading','seeding','paused','checking',
                                        'extracting','moving','completed','error','removed')),
   error_code TEXT CHECK (error_code IS NULL OR error_code IN (
@@ -212,7 +248,8 @@ CREATE TABLE tasks (
     'required_premium_account','not_supported_type','try_it_later','task_encryption','missing_python',
     'private_video','ftp_encryption_not_supported_type','extract_failed','extract_failed_wrong_password',
     'extract_failed_invalid_archive','extract_failed_quota_reached','extract_failed_disk_full','unknown',
-    'ssrf_blocked','path_rejected','quota_exceeded','engine_unavailable','unsupported_scheme')),
+    'ssrf_blocked','path_rejected','quota_exceeded','engine_unavailable','unsupported_scheme',
+    'concurrency_limit','js_runtime_missing')),
   error_message TEXT, destination TEXT NOT NULL,
   content_path TEXT,                    -- absolute path to the finished file or directory
   category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
@@ -231,6 +268,8 @@ CREATE TABLE tasks (
   added_at INTEGER NOT NULL, started_at INTEGER, completed_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX idx_tasks_engine_ref ON tasks(engine, engine_ref) WHERE engine_ref IS NOT NULL;
+CREATE UNIQUE INDEX idx_tasks_infohash_v1 ON tasks(infohash_v1) WHERE infohash_v1 IS NOT NULL;
+CREATE UNIQUE INDEX idx_tasks_infohash_v2 ON tasks(infohash_v2) WHERE infohash_v2 IS NOT NULL;
 CREATE INDEX idx_tasks_state ON tasks(state, added_at DESC);
 CREATE INDEX idx_tasks_owner ON tasks(owner_id, added_at DESC);
 CREATE INDEX idx_tasks_category ON tasks(category_id);
@@ -249,7 +288,7 @@ CREATE TABLE task_files (
   path TEXT NOT NULL,                   -- relative to tasks.destination
   size_bytes INTEGER NOT NULL DEFAULT 0, completed_bytes INTEGER NOT NULL DEFAULT 0,
   selected INTEGER NOT NULL DEFAULT 1 CHECK (selected IN (0,1)),
-  priority INTEGER CHECK (priority IS NULL OR priority IN (0,1,4,7)),
+  priority INTEGER CHECK (priority IS NULL OR priority IN (0,1,6,7)),
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX idx_task_files_idx ON task_files(task_id, file_index);
 
@@ -276,6 +315,22 @@ CREATE INDEX idx_task_events_at ON task_events(at);
 
 Every state transition and every job attempt writes one `task_events` row. `code` is machine-readable so the
 UI can translate it with i18next.
+
+**Infohash normalisation at ingest.** Every hash is stored lowercase hex, never base32 and never uppercase.
+
+| Input | Stored |
+|---|---|
+| `xt=urn:btih:<40 hex>` | `infohash_v1` verbatim, lowercased |
+| `xt=urn:btih:<32 base32 chars>` | base32-decoded to 20 bytes, hex-encoded → `infohash_v1` |
+| `xt=urn:btmh:1220<64 hex>` | the 64 hex digits after the `1220` multihash prefix → `infohash_v2` |
+| `.torrent` file, v1 | `infohash_v1` from the bencoded info dictionary |
+| `.torrent` file, v2 or hybrid | `infohash_v2`, plus `infohash_v1` when the file is hybrid |
+
+A hybrid torrent is one task carrying both columns, so a later submission by either magnet form resolves to
+the same row and is rejected with `torrent_duplicate`. Resolve both hashes from metadata before inserting;
+adding a hybrid torrent by its v2 magnet alone must not create a second row. Parsing is
+`github.com/anacrolix/torrent/metainfo` in `internal/uri/`; the engine-side mapping is in
+[`06-download-engines.md`](06-download-engines.md).
 
 ### 3.4 Search
 
@@ -350,7 +405,7 @@ CREATE TABLE feed_items (
   title_norm TEXT NOT NULL,             -- lowercased, [._] -> space, whitespace collapsed
   link TEXT,
   download_url TEXT,                    -- .torrent URL or magnet:
-  info_hash TEXT,                       -- 40-char lowercase hex, NULL when unknown
+  info_hash TEXT,                       -- lowercase hex: 40 chars (v1) or 64 chars (v2); NULL when unknown
   size_bytes INTEGER, published_at INTEGER, first_seen_at INTEGER NOT NULL,
   raw_json TEXT,                        -- full parsed item; feeds the dry-run panel
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
@@ -372,7 +427,7 @@ CREATE TABLE rule_matches (
   rule_id TEXT REFERENCES rules(id) ON DELETE SET NULL,
   feed_item_id TEXT REFERENCES feed_items(id) ON DELETE SET NULL,
   task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
-  info_hash TEXT,                       -- back-filled after the .torrent is fetched
+  info_hash TEXT,                       -- back-filled after the .torrent is fetched; 40 or 64 lowercase hex
   content_key TEXT,                     -- e.g. 'tv:the-show:s01e05'
   title TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued','sent','failed','rejected','fallback')),
@@ -392,6 +447,11 @@ CREATE TABLE rule_seen_episodes (
 
 `rule_matches` and `rule_seen_episodes` are the correctness boundary for dedup; never prune them
 automatically. Expose a per-row "forget" action instead.
+
+`feed_items.info_hash` and `rule_matches.info_hash` accept both widths so a v2-only or hybrid release
+deduplicates against `tasks.infohash_v1` and `tasks.infohash_v2`. Compare a 40-hex value against
+`infohash_v1` and a 64-hex value against `infohash_v2`; never truncate a v2 hash to 40 characters for
+comparison.
 
 ### 3.6 Jobs, schedule and preferences
 
@@ -495,34 +555,38 @@ extract_failed                 extract_failed_wrong_password  extract_failed_inv
 extract_failed_quota_reached   extract_failed_disk_full       unknown
 ```
 
-Plus five dl-tool additions:
+Plus seven dl-tool additions:
 
 | Value | Raised when |
 |---|---|
 | `ssrf_blocked` | The source URL resolved to a blocked address range. |
 | `path_rejected` | The destination failed path-safety validation. |
-| `quota_exceeded` | The owning user's `quota_bytes` would be exceeded. |
+| `quota_exceeded` | The owning user's storage quota `quota_bytes` would be exceeded, at creation or when metadata resolves. |
+| `concurrency_limit` | A `max_active_*` limit holds the task in `queued`; distinct from `quota_exceeded`. |
 | `engine_unavailable` | The routed engine did not respond. |
 | `unsupported_scheme` | The URI scheme has no engine, for example `ed2k://`. |
+| `js_runtime_missing` | The yt-dlp JS runtime (`DLTOOL_JS_RUNTIME_PATH`) is absent, so the media lane is disabled. |
 
-`missing_python`, `required_premium_account` and `private_video` exist only for compatibility-façade fidelity;
-dl-tool never raises them.
+`missing_python`, `required_premium_account` and `private_video` are inherited from Download Station's
+vocabulary so an imported task keeps its original code; dl-tool itself never raises them.
 
 ### 4.3 `task_files.priority`
 
-| Value | Meaning |
-|---|---|
-| `0` | skip — the file is not downloaded; this is how deselection is expressed |
-| `1` | low |
-| `4` | normal |
-| `7` | high |
+The stored values are the qBittorrent WebAPI vocabulary, verified in `release-5.2.3`
+`src/base/bittorrent/downloadpriority.h` (`Ignored = 0, Normal = 1, High = 6, Maximum = 7, Mixed = -1`).
+That enum's fifth member, `Mixed = -1`, is never stored by dl-tool.
 
-<!-- INFERRED: the 0/1/4/7 mapping is the research corpus's own libtorrent-style normalisation, not a value set
-     quoted from a primary source. qBittorrent's WebAPI v2 uses 0 = do not download, 1 = normal, 6 = high,
-     7 = maximal, so the adapter must translate. Confirm the wire values at implementation time. -->
+| Value | Canonical name | Meaning |
+|---|---|---|
+| `0` | `skip` | The file is not downloaded; this is how deselection is expressed. |
+| `1` | `normal` | Default priority. |
+| `6` | `high` | Downloaded ahead of `normal` files. |
+| `7` | `maximum` | Downloaded first. |
 
-aria2 has no per-file numeric priority — only `--select-file`, which is a selection. For aria2 tasks store
-`priority` as `NULL` and drive `selected` alone.
+There is no distinct `low`. Download Station's four-level skip/low/normal/high collapses `low` → `normal`
+on import → [`15-migration-and-import.md`](15-migration-and-import.md). aria2 has no per-file numeric
+priority — only `--select-file`, which is a selection — so an aria2 task stores `priority` as `NULL` and
+drives `selected` alone. The per-engine mapping is in [`06-download-engines.md`](06-download-engines.md).
 
 ### 4.4 `jobs.state`
 
@@ -548,6 +612,38 @@ aria2 has no per-file numeric priority — only `--select-file`, which is a sele
 | `wildcard` | Default. `*` → `.*`, `?` → `.`, unanchored; whitespace splits an entry into AND-ed tokens. |
 | `regex` | The entry is one regular expression, used as-is. |
 | `plain` | The entry is escaped literally; whitespace still splits it into AND-ed tokens. |
+
+### 4.7 Storage quota versus concurrency limit
+
+Two independent limits, two error codes. Never conflate them.
+
+| Dimension | Storage quota | Concurrency limit |
+|---|---|---|
+| Where it lives | `users.quota_bytes` (`0` = unlimited) | `settings` keys `max_active_total`, `max_active_per_engine`, `max_active_per_user` |
+| What it measures | `SELECT COALESCE(SUM(total_bytes),0) FROM tasks WHERE owner_id = :user AND state <> 'removed'` | Count of started tasks, that is states `downloading`, `checking`, `extracting` and `moving`; `seeding` is excluded |
+| Breach at creation | Reject the task, `error_code = 'quota_exceeded'` | Accept the task and hold it in `queued`, `error_code = 'concurrency_limit'` |
+| Breach later | When a magnet's metadata resolves `total_bytes`, **pause** the task with `quota_exceeded`; never delete it | The task starts as soon as a slot frees |
+| Scope | Per user | Global, per engine and per user |
+
+### 4.8 `notification_channels.kind`
+
+| Value | `config_json` keys | `secret_enc` holds |
+|---|---|---|
+| `webhook` | `url`, `method`, `headers`, `body_template` | Any secret header value or bearer token |
+| `ntfy` | `server_url`, `topic`, `priority`, `tags`, `click_url` | The access token |
+| `gotify` | `server_url`, `priority` | The application token |
+| `apprise` | `base_url`, `config_key`, `urls`, `tag`, `type`, `format` | Credentials embedded in `urls` |
+
+`event_mask` is a JSON array of `task_events.code` values; `["*"]` selects every code. The column has no
+`CHECK` because `task_events.code` is an open, additive vocabulary. Delivery is one `jobs` row per channel
+per event, so a failing channel retries on the standard backoff without blocking the others.
+
+### 4.9 `engines.foreign_task_policy`
+
+| Value | Meaning |
+|---|---|
+| `ignore` | Default. A transfer dl-tool did not create is never listed by any endpoint. |
+| `adopt` | It is imported as a task owned by the admin who configured that engine, preserving save path, category and tags. |
 
 ---
 
@@ -625,23 +721,62 @@ corrupt copy. A clean shutdown checkpoints and removes the `-wal` and `-shm` fil
 
 ---
 
+## 8. Table reachability
+
+Every table is reachable from [`05-api-contract.md`](05-api-contract.md) or is marked internal-only here. A
+new table added by a later migration must be added to this list in the same change.
+
+| Table | Reached through |
+|---|---|
+| `users` | `/users`, `/auth/me` |
+| `sessions` | **internal-only** — written by `/auth/login` and expired by the reaper; no endpoint enumerates rows |
+| `api_tokens` | `/api-tokens` |
+| `settings` | `/settings`, `/settings/export`, `/settings/import` |
+| `engines` | `/engines`, `/engines/{id}/test` |
+| `categories` | `/categories` |
+| `tags` | `/tags` |
+| `notification_channels` | `/notifications`, `/notifications/{id}/test` |
+| `tasks` | `/tasks`, `/tasks/{id}` |
+| `task_tags` | `/tasks` and `PATCH /tasks/{id}`, through the Task object's `tags[]` |
+| `task_files` | `/tasks/{id}/files` |
+| `task_trackers` | `/tasks/{id}/trackers` |
+| `task_events` | `/tasks/{id}/events` |
+| `indexers` | `/indexers`, `/indexers/{id}/test`, `/indexers/import` |
+| `search_jobs` | `/search`, `/search/{id}` |
+| `search_results` | `GET /search/{id}` |
+| `feeds` | `/feeds`, `/feeds/{id}/refresh` |
+| `feed_items` | `/feeds/{id}/items` |
+| `rules` | `/rules`, `/rules/{id}/run` |
+| `rule_matches` | `POST /rules/test`, `GET /feeds/{id}/items` |
+| `rule_seen_episodes` | `POST /rules/test`, as `previouslyMatchedEpisodes` |
+| `jobs` | **internal-only** — worker state; only aggregate counts leave the process, on `GET /system/info` |
+| `bandwidth_schedule` | `GET /settings/schedule`, `PUT /settings/schedule` |
+| `ui_prefs` | `GET /prefs`, `PUT /prefs` |
+| `watch_folders` | `/watch-folders`, `/watch-folders/{id}/scan` |
+| `goose_db_version` | **internal-only** — owned by goose; the applied version is reported by `GET /system/info` |
+
+---
+
 ## Decisions referenced
 | ADR | Decision |
 |---|---|
 | [ADR-0004](decisions/0004-sqlite-as-the-only-datastore.md) | SQLite as the only datastore |
-| [ADR-0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
-| [ADR-0008](decisions/0008-torznab-first-declarative-yaml-engines-second.md) | Torznab first, declarative YAML engines second |
-| [ADR-0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md) | A native cross-protocol RSS rule engine |
+| [ADR-0005](decisions/0005-aria2-qbittorrent-ytdlp-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
+| [ADR-0008](decisions/0008-torznab-first-declarative-yaml-second.md) | Torznab first, declarative YAML engines second |
+| [ADR-0009](decisions/0009-native-cross-protocol-rss-rules.md) | A native cross-protocol RSS rule engine |
 | [ADR-0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication |
 | [ADR-0015](decisions/0015-db-backed-in-process-job-queue.md) | DB-backed in-process job queue |
+| [ADR-0017](decisions/0017-exclusive-control-of-engines.md) | dl-tool assumes exclusive control of its engines |
+| [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | Pin yt-dlp by version and hash; never self-update at runtime |
 
 ## Open questions
 - [NEEDS CLARIFICATION: goose's version-table name is unverified in the research corpus — confirm
   `goose_db_version` before implementing the "schema newer than binary" refusal.]
-- [NEEDS CLARIFICATION: the `0/1/4/7` file-priority values are an inferred normalisation; confirm the exact
-  qBittorrent wire values (`0/1/6/7`) and the translation table in `06-download-engines.md`.]
+- [NEEDS CLARIFICATION: `rule_seen_episodes` has a documented per-row "forget" action but no endpoint in
+  [`05-api-contract.md`](05-api-contract.md); it is currently read-only through `POST /rules/test`.]
 
 ## Change log
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | File priority corrected to `IN (0,1,6,7)` with the qBittorrent names `skip/normal/high/maximum`; added `tasks.infohash_v1`/`infohash_v2` with partial unique indices and the ingest normalisation table; widened `feed_items.info_hash` and `rule_matches.info_hash` to 64 hex; added `notification_channels`; added `engines.foreign_task_policy` and the boot-probe meaning of `engines.version`; added the concurrency and `min_free_space` settings rows; separated the storage quota from the concurrency limit and added `concurrency_limit` and `js_runtime_missing` to `error_code`; added the table-reachability list; corrected the ADR-0005/0008/0009 filenames. |

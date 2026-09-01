@@ -3,7 +3,7 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** T054, T055, T056, T057, T058, T059, T060, T061, T062, T063, T064
+> **Read this before:** T054, T055, T056, T057, T058, T059, T060, T061, T062, T063, T064, T105
 
 ## Purpose
 Define the whole indexer subsystem: the Torznab/Newznab client, the `dlsearch/v1` declarative YAML
@@ -31,12 +31,12 @@ Implementation lives in `internal/search/`: `torznab.go`, `dlsearch.go`, `defini
 
 **dl-tool never executes third-party code.** No PHP, no Python, no Lua, no JavaScript, no shell, no
 scripting runtime of any kind. Every extension point in this document is data that dl-tool *parses*.
-See [ADR-0010](decisions/0010-never-execute-third-party-definition-code.md).
+See [ADR-0010](decisions/0010-never-execute-third-party-definitions.md).
 
 | Tier | Mechanism | Role | Code path |
 |---|---|---|---|
 | Primary | Torznab/Newznab HTTP client | Speaks the ecosystem lingua franca; inherits Prowlarr, Jackett, NZBHydra2 and bitmagnet for free | `internal/search/torznab.go` |
-| Secondary | `dlsearch/v1` declarative YAML | Covers sites that do not speak Torznab: RSS feeds, JSON APIs, simple HTML index pages | `internal/search/dlsearch.go` |
+| Secondary | `dlsearch/v1` declarative YAML | Covers sources that do not speak Torznab: RSS feeds, JSON APIs, curated static lists, and HTML result pages | `internal/search/dlsearch.go` |
 | Import only | `.dlm` (Synology), `.py` (qBittorrent nova3) | Statically analysed, mechanically converted where possible, otherwise metadata-only and disabled | `internal/search/dlm_import.go` |
 
 ```mermaid
@@ -46,14 +46,14 @@ flowchart LR
   FANOUT --> TZ["torznab.go"]
   FANOUT --> DS["dlsearch.go"]
   TZ --> P1["Prowlarr / Jackett / NZBHydra2 / bitmagnet"]
-  DS --> P2["RSS feed, JSON API or HTML index"]
+  DS --> P2["RSS feed, JSON API or curated static list"]
   TZ --> NORM["normalize.go — SearchResult"]
   DS --> NORM
   NORM --> STORE["rows read by GET /api/v1/search/{id}"]
 ```
 
-The search job model is asynchronous and copies Download Station's `SYNO.DownloadStation.BTSearch`
-shape: start a job, poll until `finished` is true, then delete it.
+The search job model is asynchronous and copies Download Station's BT-search shape, which is the
+shape its users already know: start a job, poll until `finished` is true, then delete it.
 `POST /search` → `{id}`; `GET /search/{id}` → `{finished, total, results[]}`; `DELETE /search/{id}`.
 Endpoint details: [`05-api-contract.md`](05-api-contract.md).
 
@@ -291,7 +291,7 @@ model. There are no expressions beyond the closed template set in §3.3 and no r
 | `name` | string | yes | display name |
 | `description` | string | yes | one or two sentences, shown in the engine list |
 | `homepage` | string (URL) | yes | `http`/`https` only |
-| `kind` | enum | yes | `torznab` \| `rss` \| `json` \| `html` |
+| `kind` | enum | yes | `torznab` \| `rss` \| `json` \| `html` \| `static` |
 | `version` | string | yes | semver, used for update comparison |
 | `legal_tier` | enum | yes | `legitimate` \| `user-supplied` |
 | `maintainer` | string | no | free text |
@@ -301,17 +301,19 @@ model. There are no expressions beyond the closed template set in §3.3 and no r
 | `caps.categories` | map | yes | site value → newznab id (integer) |
 | `caps.seeders_unknown` | boolean | no | default `false`; `true` means the engine cannot report seeders |
 | `settings[]` | list | no | `{name, type, label, default, options}`; `type ∈ {info, text, password, checkbox, select}` |
-| `request.base_url` | string (URL) | yes for `rss`/`json`/`html` | `http`/`https` only |
+| `request.base_url` | string (URL) | yes for `rss`/`json`/`html` | `http`/`https` only; the whole `request` block is forbidden for `torznab` and `static` |
 | `request.path` | string | no | appended to `base_url` |
 | `request.method` | enum | no | `GET` only in v1 |
 | `request.query` | map | no | values are templates (§3.3) |
 | `request.headers` | map | no | values are templates; `Authorization` and `Cookie` are rejected |
 | `request.rate_limit_per_minute` | integer | no | default `30`, hard maximum `120` |
 | `request.timeout_seconds` | integer | no | default `20`, hard maximum `30` |
-| `response.rows` | string | yes for `rss`/`json`/`html` | JSONPath (`json`), CSS selector (`html`), element path (`rss`) |
+| `response.rows` | string | yes for `rss`/`json`/`html` | JSONPath (`json`), CSS selector (`html`), element path (`rss`); forbidden for `torznab` and `static` |
 | `response.total` | string | no | same dialect as `rows`; absent means "count the rows" |
-| `response.fields` | map | yes | see below |
+| `response.fields` | map | yes for `rss`/`json`/`html` | see below |
 | `response.transforms` | map | no | field name → ordered list of ops (§3.4) |
+| `entries[]` | list | yes for `static` | the curated result records, §3.8; forbidden for every other kind |
+| `refresh_note` | string | yes for `static` | one line naming the event that invalidates `entries[]` and who refreshes it |
 
 `response.fields.<name>` is one of `{path: …}`, `{path: …, attr: …}`, `{template: …}` or
 `{const: …}`, plus optional `type`, `format`, `optional`, `default`. Field names beginning with `_`
@@ -335,7 +337,11 @@ Prowlarr validates Cardigann definitions.
 | `torznab` | not used | §2 client. The whole definition is metadata plus two settings — `{name: base_url, type: text}` and `{name: api_key, type: password}` — and `caps.modes`; `response` is forbidden. |
 | `rss` | element path, e.g. `rss > channel > item` | `github.com/mmcdole/gofeed` for feed shape, `encoding/xml` for extension elements |
 | `json` | JSONPath, e.g. `$.response.docs` | `encoding/json` + a JSONPath evaluator |
-| `html` | CSS selector | `github.com/PuerkitoBio/goquery` |
+| `html` | CSS selector | `github.com/PuerkitoBio/goquery`. User-supplied definitions only — **no bundled engine may use `kind: html`** (§6.1). |
+| `static` | not used | no HTTP request at search time; `entries[]` is filtered in process. `request` and `response` are forbidden. |
+
+`dlsearch/v1` has exactly one `request.path`, so a scraper that walks several directory indexes is not
+expressible. `request.paths[]` and a dedicated directory-index kind are v2.
 
 ### 3.3 Template placeholders — a FIXED CLOSED SET
 
@@ -513,52 +519,93 @@ response:
 The upstream Cardigann definition writes `seeders: {text: 1}`. dl-tool does not: it sets
 `caps.seeders_unknown: true` and emits `seeders: null`. See §5.
 
-### 3.8 Worked example — `kind: html`
+### 3.8 Worked example — `kind: static`
 
-`definitions/engines/linux-distributions.yaml`. Endpoints verified 2026-09-01:
-`https://releases.ubuntu.com/24.04/` (contains `ubuntu-24.04.4-desktop-amd64.iso.torrent` and
-`ubuntu-24.04.4-live-server-amd64.iso.torrent`) and
-`https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/` (contains
-`debian-13.6.0-amd64-netinst.iso.torrent`). Both are plain Apache-style directory indexes.
+A `static` engine carries its results inside the definition file. dl-tool makes **no HTTP request at
+search time**: it filters `entries[]` in process by `{{ .Keywords }}` (case-insensitive substring over
+`title`), so every `static` engine is browse-style in the UI. `request` and `response` are forbidden.
+
+**Why the bundled `linux-distributions` engine is static and not a scraper.** The post-mortem of the
+`.dlm` ecosystem in §4.1 is that per-site scrapers rot: the site changes its markup, the definition
+silently returns zero rows, and the user blames the downloader. Shipping a scraper as a *default*
+would contradict that finding. A curated list of the publishers' own torrent URLs cannot silently
+mis-parse; it can only 404, which is loud, testable and fixed by a one-line edit. Scraping a
+directory index is deferred to v2 together with `request.paths[]` (§3.2).
+
+`entries[]` record fields — no templates, no transforms, no private `_` temporaries:
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `title` | string | yes | shown verbatim; the client-side keyword filter matches against it |
+| `download` | string (URL) | at least one of `download` / `magnet` / `infohash` | `https` only |
+| `magnet` | string | see `download` | `magnet:` scheme |
+| `infohash` | string | see `download` | 40 or 64 lowercase hex |
+| `size` | bytes | no | default `0` = unknown, rendered `—` |
+| `category` | string | yes | must be a key of `caps.categories` |
+| `details` | string (URL) | no | `https` only |
+| `published` | datetime | no | `format` as in §3.1 |
+
+Limits: at most 500 `entries[]` per definition, and every URL is re-checked against the SSRF rules at
+grab time, never trusted from the file. `POST /indexers/{id}/test` on a `static` engine validates the
+definition and issues one request per distinct `download` URL, reporting each URL that no longer
+resolves.
+
+`definitions/engines/linux-distributions.yaml`:
 
 ```yaml
 dlsearch: 1
 id: linux-distributions
 name: Linux Distributions
-description: "Official Ubuntu and Debian installation-image torrents, read from the projects' own indexes."
+description: "Official Ubuntu and Debian installation-image torrents, curated per release."
 homepage: https://releases.ubuntu.com/
 version: "1.0.0"
 legal_tier: legitimate
-kind: html
+kind: static
+refresh_note: "Refreshed by the maintainer on each Ubuntu and Debian point release."
 caps:
   modes: {search: [q]}
   categories: {iso: 4020}       # PC/ISO
   seeders_unknown: true
-request:
-  base_url: https://releases.ubuntu.com/
-  path: "24.04/"
-  method: GET
-  rate_limit_per_minute: 6
-  timeout_seconds: 20
-response:
-  rows: 'a[href$=".torrent"]'
-  fields:
-    _href:    {path: ".", attr: "href"}
-    title:    {path: ".", attr: "href"}
-    download: {template: "https://releases.ubuntu.com/24.04/{{ .Result._href }}"}
-    details:  {const: "https://releases.ubuntu.com/24.04/"}
-    size:     {const: 0}
-    category: {const: "iso"}
-  transforms:
-    title:
-      - {op: replace, args: [".torrent", ""]}
-      - {op: trim}
+entries:
+  - title: "Ubuntu 24.04.4 LTS Desktop (amd64)"
+    download: "https://releases.ubuntu.com/24.04/ubuntu-24.04.4-desktop-amd64.iso.torrent"
+    details: "https://releases.ubuntu.com/24.04/"
+    category: iso
+    size: 0
+  - title: "Ubuntu 24.04.4 LTS Live Server (amd64)"
+    download: "https://releases.ubuntu.com/24.04/ubuntu-24.04.4-live-server-amd64.iso.torrent"
+    details: "https://releases.ubuntu.com/24.04/"
+    category: iso
+    size: 0
+  - title: "Debian 13.6.0 netinst (amd64)"
+    download: "https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.6.0-amd64-netinst.iso.torrent"
+    details: "https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/"
+    category: iso
+    size: 0
 ```
 
-Directory indexes publish no size, seeders or date; `size: {const: 0}` renders as an em dash, exactly
-like a `null` seeder count. The Debian index at
-`https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/` has the identical shape and ships as a
-second definition file until `request.paths[]` exists. See `## Open questions`.
+<!-- UNVERIFIED: the three `download` URLs are constructed from directory indexes probed 2026-09-01
+(`https://releases.ubuntu.com/24.04/` lists `ubuntu-24.04.4-desktop-amd64.iso.torrent` and
+`ubuntu-24.04.4-live-server-amd64.iso.torrent`; `https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/`
+lists `debian-13.6.0-amd64-netinst.iso.torrent`). The `.torrent` files themselves were not fetched.
+Re-probe each URL in T105 before shipping the definition. -->
+
+Neither publisher exposes a size, seeder count or publication date next to the torrent, so `size: 0`
+renders as an em dash exactly like a `null` seeder count, and `caps.seeders_unknown` is `true`.
+
+### 3.9 Refreshing the curated list
+
+Ubuntu and Debian rewrite these filenames at every point release, and Debian's `current/` path
+repoints, so an unmaintained entry 404s. The refresh is a maintenance task, not a runtime feature —
+definitions are never auto-downloaded (§7).
+
+| Step | Action |
+|---|---|
+| Trigger | An Ubuntu release or point release, or a Debian point release. |
+| 1 | Re-probe `https://releases.ubuntu.com/<version>/` and `https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/` and read the current `*.iso.torrent` filenames. |
+| 2 | Replace `entries[]` in `definitions/engines/linux-distributions.yaml` and bump `version` by one semver minor. |
+| 3 | Run the definition fixture test, which asserts every entry parses, every `download` URL is unique, `https` and ends in `.torrent`, and every `category` is a declared `caps.categories` key. Target and command: [`13-testing-and-verification.md`](13-testing-and-verification.md). |
+| 4 | Ship in the next image. Users on an older image keep the older list; nothing breaks except the removed URLs. |
 
 ---
 
@@ -675,7 +722,7 @@ always an engine record with `enabled = false` and a message pointing the user a
 
 The qBittorrent project says of its own plugins: *"Install only from sources you trust, and review
 the script before installing."* dl-tool removes that decision by never running them.
-See [ADR-0010](decisions/0010-never-execute-third-party-definition-code.md).
+See [ADR-0010](decisions/0010-never-execute-third-party-definitions.md).
 
 ---
 
@@ -747,7 +794,11 @@ the queue reuses `POST /tasks` and normal scheme routing
 - Ship **zero** piracy indexers. Not disabled, not commented out — absent.
 - Ship no "engine marketplace" and no pointer to any third-party definition repository.
 - Bundle exactly four engines, all `legal_tier: legitimate`, all enabled by default.
-- Adding any other engine is a deliberate, documented user action. Imported engines start disabled.
+- Adding any other engine is a deliberate, documented user action. Every imported engine is created
+  with `enabled = false` and displays its provenance (§7).
+- No bundled engine may use `kind: html`. A default that scrapes someone else's markup rots exactly
+  the way the `.dlm` modules did (§4.1); the bundled set uses `torznab`, `rss`, `json` and `static`
+  only.
 - No telemetry and no phone-home update check for definitions.
 - Honour politeness: per-engine rate limit, an honest `User-Agent`, back off on 429 and 503.
 
@@ -758,7 +809,7 @@ the queue reuses `POST /tasks` and normal scheme routing
 | `internet-archive` | `json` | `https://archive.org/advancedsearch.php` → 200 `application/json`, `"numFound": 46032028` torrent-bearing items; per-item torrent at `https://archive.org/download/<id>/<id>_archive.torrent` → 200 `application/x-bittorrent` | Highest-value default; real `btih`, `item_size`, `publicdate`. `seeders_unknown: true`. |
 | `arch-linux` | `rss` | `https://archlinux.org/feeds/releases/` → 200 `application/rss+xml`; items carry `<enclosure length="…" type="application/x-bittorrent" url="…"/>` | Reference fixture for `kind: rss`. Browse-style feed, no query parameter. `seeders_unknown: true`. |
 | `academic-torrents` | `rss` | `https://academictorrents.com/rss.xml` → 200 `text/xml`; items carry `<title>`, `<category>Dataset</category>`, `<infohash>`, `<guid>`, `<link>`, `<description>`, `<size>` — **no `<enclosure>`, no seeders**. Fetch via `https://academictorrents.com/download/<infohash>.torrent` → 200 `application/x-bittorrent` (verified with `dcb9178653b651c7ca4526e11fa8e22f74e2fd7a`) | `download` is templated from the infohash. Recent-items feed, so expose it as browse/latest. `seeders_unknown: true`. |
-| `linux-distributions` | `html` | `https://releases.ubuntu.com/24.04/` → 200 HTML index containing `ubuntu-24.04.4-desktop-amd64.iso.torrent`; `https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/` → 200 HTML index containing `debian-13.6.0-amd64-netinst.iso.torrent` | Directory-index scrape of `*.torrent` hrefs. No API key, no sizes, no seeders. |
+| `linux-distributions` | `static` | `https://releases.ubuntu.com/24.04/` → 200 HTML index containing `ubuntu-24.04.4-desktop-amd64.iso.torrent` and `ubuntu-24.04.4-live-server-amd64.iso.torrent`; `https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/` → 200 HTML index containing `debian-13.6.0-amd64-netinst.iso.torrent` | Curated static list of those three torrent URLs (§3.8), **not** a scraper. No HTTP request at search time, no API key, no sizes, no seeders. Refreshed per release (§3.9); task T105. |
 
 Sources deliberately **not** bundled because their machine-readable endpoints could not be confirmed
 on 2026-09-01: Fedora (`https://torrent.fedoraproject.org/` renders client-side, no `.torrent` links
@@ -810,15 +861,14 @@ Documentation ships as a commented-out Compose snippet the user must deliberatel
 ## Decisions referenced
 | ADR | Decision |
 |---|---|
-| [ADR-0008](decisions/0008-torznab-first-declarative-yaml-engines-second.md) | Torznab first, declarative YAML engines second |
-| [ADR-0010](decisions/0010-never-execute-third-party-definition-code.md) | Never execute third-party definition code |
+| [ADR-0008](decisions/0008-torznab-first-declarative-yaml-second.md) | Torznab first, declarative YAML engines second |
+| [ADR-0010](decisions/0010-never-execute-third-party-definitions.md) | Never execute third-party definition code |
 | [ADR-0004](decisions/0004-sqlite-as-the-only-datastore.md) | SQLite as the only datastore — cited for why bitmagnet's PostgreSQL stays external |
 
 ## Open questions
-- [NEEDS CLARIFICATION: `dlsearch/v1` has a single `request.path`, so the bundled `linux-distributions`
-  engine can cover only one directory index per definition file. Either add a `request.paths[]` list
-  in v1 or ship Ubuntu and Debian as two definition files; the brief names one bundled file, so the
-  multi-path form is assumed and must be confirmed before T057.]
+- [NEEDS CLARIFICATION: the `linux-distributions` `entries[]` list must be re-probed and, at each
+  Ubuntu or Debian point release, refreshed by hand (§3.9). Confirm who owns that recurring task and
+  whether CI should probe the three URLs on a schedule so a 404 is caught before a user hits it.]
 - [NEEDS CLARIFICATION: `Prowlarr/Indexers` ships no LICENSE file and its content is machine-synced
   from GPLv2 Jackett. dl-tool vendors none of it and supports only the format, but a human should
   confirm that reading the schema to build `dlsearch/v1` raises no licensing concern.]
@@ -829,3 +879,4 @@ Documentation ships as a commented-out Compose snippet the user must deliberatel
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | Bundled `linux-distributions` changed from an HTML directory-index scraper to a curated `kind: static` list (§3.8) with a documented per-release refresh (§3.9); `static` added to the `dlsearch/v1` kind set; bundled engines forbidden from using `kind: html`; directory-index scraping and `request.paths[]` deferred to v2; ADR link slugs corrected to the canonical filenames. |

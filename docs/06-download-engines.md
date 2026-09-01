@@ -3,22 +3,28 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** T015–T019, T026–T030, T037, T038, T087–T090, and any task under `internal/engine/` or `internal/uri/`
+> **Read this before:** T015–T019, T026–T030, T037, T038, T087–T090, T100–T102, T110, T113, and any task under `internal/engine/` or `internal/uri/`
 
 ## Purpose
 Define the Go `Engine` interface every download adapter implements, the URI-to-engine routing table, the URI
-normalisation algorithms, and the exact wire protocol of each v1 adapter (aria2, qBittorrent, yt-dlp). It does
-not define HTTP payloads, DB columns or environment variables.
+normalisation algorithms, the ownership and conformance rules dl-tool imposes on an engine, the bandwidth
+precedence chain, and the exact wire protocol of each v1 adapter (aria2, qBittorrent, yt-dlp). It does not
+define HTTP payloads, DB columns or environment variables.
 
 ## Scope of this document
-- In scope: the `Engine` interface and its value types, capability names, the routing table, obfuscated-scheme
-  decoding, magnet/bencode/BEP 52 parsing, aria2 JSON-RPC, qBittorrent WebAPI v2, the yt-dlp subprocess
-  contract, engine→dl-tool state normalisation, and the shared adapter contract test suite.
+- In scope: the `Engine` interface and its value types, capability names, the file-priority vocabulary, the
+  routing table, obfuscated-scheme decoding, magnet/bencode/BEP 52 parsing, aria2 JSON-RPC, qBittorrent
+  WebAPI v2, the yt-dlp subprocess contract, engine→dl-tool state normalisation, engine ownership and the
+  foreign-task policy, the boot conformance probe, the bandwidth precedence chain and its per-engine fan-out
+  calls, and the shared adapter contract test suite.
 - Out of scope (lives instead in): columns and enums → [`04-data-model.md`](04-data-model.md); HTTP shapes →
   [`05-api-contract.md`](05-api-contract.md); env vars → [`11-config-reference.md`](11-config-reference.md);
   compose services, ports, volumes → [`10-deployment-and-compose.md`](10-deployment-and-compose.md); search →
   [`07-search-and-indexers.md`](07-search-and-indexers.md); RSS → [`08-rss-automation.md`](08-rss-automation.md);
-  Definition of Done → [`13-testing-and-verification.md`](13-testing-and-verification.md).
+  one-time import from a live Download Station or an existing qBittorrent →
+  [`15-migration-and-import.md`](15-migration-and-import.md); operator procedures, boot reconciliation order
+  and shutdown → [`17-operations-and-runbook.md`](17-operations-and-runbook.md); Definition of Done →
+  [`13-testing-and-verification.md`](13-testing-and-verification.md).
 
 ---
 
@@ -106,7 +112,7 @@ type FileEntry struct {
 	Size      int64
 	Completed int64
 	Selected  bool
-	Priority  *int // normalised 0=skip 1=low 4=normal 7=high; nil when unsupported
+	Priority  *int // 0=skip 1=normal 6=high 7=maximum (§1.1); nil when the engine has no priorities
 }
 
 // TaskInfo is one engine task, normalised. Pointer fields are nil when the engine does not know yet.
@@ -192,8 +198,8 @@ overwrite the engine state while a job holds the task. Adapters return only the 
 
 Capabilities are **declared, not guessed**, so the UI can grey out what an engine cannot do. `CapSearch` and
 `CapRSSRules` stay in the enum but no v1 adapter declares them — dl-tool implements both natively
-([ADR-0008](decisions/0008-torznab-first-declarative-yaml-engines-second.md),
-[ADR-0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md)). `CapNZB` is reserved so a v2 Usenet
+([ADR-0008](decisions/0008-torznab-first-declarative-yaml-second.md),
+[ADR-0009](decisions/0009-native-cross-protocol-rss-rules.md)). `CapNZB` is reserved so a v2 Usenet
 adapter is not precluded.
 
 | Capability | aria2 | qBittorrent | yt-dlp |
@@ -212,6 +218,43 @@ adapter is not precluded.
 
 `internal/engine/registry.go` holds `map[string]Engine` keyed by `Name()`; adding an engine touches one
 directory plus one registry line. `internal/engine/router.go` implements §2.
+
+### 1.1 File priority vocabulary
+
+The canonical vocabulary is qBittorrent's, verified in `release-5.2.3`
+`src/base/bittorrent/downloadpriority.h`: `Ignored = 0, Normal = 1, High = 6, Maximum = 7, Mixed = -1`.
+
+| `FileEntry.Priority` | Name | Meaning |
+|---|---|---|
+| `0` | `skip` | Not downloaded. `Selected = false`. |
+| `1` | `normal` | Downloaded at normal priority. |
+| `6` | `high` | Downloaded before `normal` files. |
+| `7` | `maximum` | Downloaded first. |
+
+- There is **no distinct `low`** level. Download Station's four-level skip/low/normal/high collapses
+  `low` → `normal` on import ([`15-migration-and-import.md`](15-migration-and-import.md)).
+- `4` is libtorrent's *internal* scale, not the WebAPI vocabulary: **never send `4`**, and reject a request
+  carrying it ([FR-007](02-requirements.md#fr-007-select-and-prioritise-individual-files)). The DDL constraint
+  is `priority IN (0,1,6,7)` → [`04-data-model.md`](04-data-model.md).
+- `-1` (`Mixed`) is a read-only aggregate qBittorrent may return for a folder row; never send it and never
+  treat it as an error (§5.7).
+
+Per-engine translation, applied by each adapter:
+
+| Priority | qBittorrent `torrents/filePrio` | aria2 `select-file` | yt-dlp |
+|---|---|---|---|
+| `0` skip | `0` | index **omitted** from the list | n/a |
+| `1` normal | `1` | index **included** | n/a |
+| `6` high | `6` | index included — value discarded | n/a |
+| `7` maximum | `7` | index included — value discarded | n/a |
+
+- qBittorrent is an identity mapping in both directions; it is the only engine that declares
+  `per_file_priority`.
+- **aria2 supports only skip versus selected.** It has no numeric per-file priority, so `FileEntry.Priority`
+  is `nil` for every aria2 file, a submitted priority of `0` deselects the index at add time, any other value
+  selects it, and `SetFiles` returns `ErrNotSupported` when its `priorities` map is non-nil (§4.3).
+- yt-dlp has no per-file model at all: it declares neither `per_file_select` nor `per_file_priority`, and
+  `Files` returns the single output file with `Priority = nil`.
 
 ---
 
@@ -407,6 +450,26 @@ generated to describe the same data in the same order". New info-dict keys: `fil
 - qBittorrent's `hash` field is the *TorrentID*, which for a v2-only torrent is **not** the v1 infohash. Fill
   `InfohashV1`/`InfohashV2` from the `infohash_v1`/`infohash_v2` keys of `torrents/info`, not from `hash`.
 
+**What `engine_ref` holds for qBittorrent.** `tasks.engine_ref` stores the value the engine's own API keys on,
+because every mutating call takes `hashes=` and must round-trip verbatim: the **`hash` (TorrentID)** returned
+by `torrents/info`. Store it exactly as returned; never reconstruct or re-case it.
+
+| Torrent kind | `engine_ref` mirrors | `tasks.infohash_v1` | `tasks.infohash_v2` |
+|---|---|---|---|
+| v1-only | `infohash_v1` (40 hex) | set | empty |
+| hybrid | `infohash_v1` (40 hex) | set | set |
+| v2-only | the 40-hex truncation of `infohash_v2` | empty | set (64 hex) |
+
+<!-- INFERRED: BEP 52 documents the 20-byte truncation of the v2 hash "for some uses as torrent identifier";
+     that qBittorrent's TorrentID for a v2-only torrent is exactly that truncation was not read verbatim.
+     T100 must confirm it against a v2-only fixture. -->
+
+Deduplication, lookup and the `torrent_duplicate` decision run on `infohash_v1`/`infohash_v2`
+([FR-022](02-requirements.md#fr-022-record-both-bittorrent-infohash-forms),
+[FR-023](02-requirements.md#fr-023-reject-a-duplicate-torrent-by-either-infohash)) — **never on `engine_ref`**,
+which is an opaque engine handle. aria2 `engine_ref` is the GID and yt-dlp `engine_ref` is the job id; neither
+is an infohash.
+
 ---
 
 ## 4. aria2 adapter (`internal/engine/aria2/`)
@@ -416,7 +479,7 @@ generated to describe the same data in the same order". New info-dict keys: `fil
 unanswered since 2026-01-02. Debian and Alpine both ship 1.37.0. This is low-maintenance mode, not abandonment,
 and 1.37.0 is feature-complete for HTTP/FTP/SFTP. dl-tool builds its aria2 image in-repo from `alpine` +
 `apk add aria2`; `p3terx/aria2-pro` was last pushed 2022-09-06 and must not be depended on. See
-[ADR-0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md).
+[ADR-0005](decisions/0005-aria2-qbittorrent-ytdlp-engines.md).
 
 ### 4.1 Daemon flags
 
@@ -438,7 +501,7 @@ aria2c \
 | `--enable-rpc` | `false` | Required; upstream "strongly recommended" pairing with `--rpc-secret`. |
 | `--rpc-listen-all` | `false` | Otherwise aria2 listens only on loopback and dl-tool cannot reach it. |
 | `--rpc-listen-port` | `6800` | Left at the default. |
-| `--dir` | (cwd) | Must be the single `/data` mount ([ADR-0012](decisions/0012-a-single-data-mount.md)). |
+| `--dir` | (cwd) | Must be the single `/data` mount ([ADR-0012](decisions/0012-single-data-mount.md)). |
 | `--file-allocation` | **`prealloc`** | `prealloc` blocks for a long time on large files on some filesystems; `falloc` suits ext4/xfs. *(Inferred from the option list, not an upstream recommendation.)* |
 | `--save-session` + `--input-file`, same path | (none) | The documented restart-persistence idiom: "You can pass this output file to aria2c with `--input-file` option on restart." |
 | `--pause` | `false` | Per-task add-paused; "effective only when `--enable-rpc=true` is given". Not changeable later via `changeOption`. |
@@ -743,7 +806,7 @@ is dramatically cheaper than polling `torrents/info`.
 Algorithm: hold `rid` in adapter memory; send it on every poll; if `full_update` is true **replace** the cache,
 else **deep-merge** each per-hash partial and then apply the `*_removed` arrays. Emit one `TaskEvent` per changed
 hash. This `rid` is the engine's own and is unrelated to dl-tool's SSE `rid`
-([ADR-0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md)).
+([ADR-0006](decisions/0006-sse-with-rid-deltas.md)).
 
 ### 5.5 `torrents/info`
 
@@ -786,12 +849,15 @@ The 5.2.3 serialiser emits exactly: `error`, `missingFiles`, `uploading`, `stopp
 0-based), `name` ("Filename including relative path"), `size` (bytes), `progress` (float, "percentage/100"),
 `priority` (integer), `is_seed` (bool), `piece_range` ("[start_piece, end_piece] inclusive"), `availability`.
 
+Priorities are an **identity mapping** in both directions — the canonical vocabulary of §1.1 *is*
+qBittorrent's. Never send `4`.
+
 | qBittorrent priority | Meaning | `FileEntry.Priority` |
 |---|---|---|
 | `0` | Do not download | `0` (skip), `Selected = false` |
-| `1` | Normal priority | `1` (low) |
-| `6` | High priority | `4` (normal) |
-| `7` | Maximal priority | `7` (high) |
+| `1` | Normal priority | `1` (normal) |
+| `6` | High priority | `6` (high) |
+| `7` | Maximal priority | `7` (maximum) |
 
 `POST /api/v2/torrents/filePrio` takes `hash`, `id` ("File **IDs separated by pipes**") and `priority`; all three
 are required. Out-of-range indices give `409`; a non-integer id gives `400 "File IDs must be integers"`. `-1`
@@ -832,8 +898,8 @@ POST /api/v2/torrents/delete?hashes=8c212779b4abde7c6bc608063a0d008b7e40ce32&del
 `GET /api/v2/transfer/info` supplies the global counters `dl_info_speed`, `up_info_speed`, `dl_rate_limit`,
 `up_rate_limit`, `dht_nodes`, `connection_status` (`connected` | `firewalled` | `disconnected`) and
 `use_alt_speed_limits`. dl-tool calls **no** `search/*` and **no** `rss/*` endpoint
-([ADR-0008](decisions/0008-torznab-first-declarative-yaml-engines-second.md),
-[ADR-0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md)).
+([ADR-0008](decisions/0008-torznab-first-declarative-yaml-second.md),
+[ADR-0009](decisions/0009-native-cross-protocol-rss-rules.md)).
 
 ---
 
@@ -867,8 +933,9 @@ The table below is fixed now so the v2 adapter cannot re-derive it differently.
 
 ### 7.1 Subprocess only, never in-process
 
-The backend is Go ([ADR-0002](decisions/0002-go-for-the-backend.md)) and yt-dlp is Python, so there is no
-in-process option: dl-tool shells out, as Pinchflat does and for the same reason. `runner.go` owns process
+The backend is Go ([ADR-0002](decisions/0002-go-for-the-backend.md)) and yt-dlp is a Python program shipped as
+a standalone binary (§7.6), so there is no in-process option: dl-tool shells out, as Pinchflat does and for the
+same reason. `runner.go` owns process
 lifecycle, `parse.go` owns the JSON. One OS process per task, killed by `exec.CommandContext` cancellation on
 pause or remove.
 
@@ -952,18 +1019,175 @@ the `--download-archive` option"), `--max-downloads NUMBER`, `--no-download-arch
 the file's contents; dl-tool only persists it.
 <!-- UNVERIFIED: the archive line format "<extractor> <id>" is inferred from behaviour, not read from the writer source. dl-tool never parses or writes the file. -->
 
-### 7.6 Operational requirement: yt-dlp must be updated often
+### 7.6 Packaging, pinning and the boot capability probe
 
-Upstream ships **stable** on a "(mostly) monthly schedule" and **nightly** "shortly before midnight UTC on any
-day that sees changes to the codebase", and calls nightly "the **recommended channel for regular users**" because
-sites — YouTube above all — break extractors constantly. A container that pins a yt-dlp version stops working
-within weeks. Therefore: ship the standalone `yt-dlp_linux` binary, refreshed at image build time; surface
-`yt-dlp --version` in `GET /system/info` and in the UI; offer an operator-triggered update plus an optional daily
-scheduled update job; and make an update failure mark the engine degraded rather than take down the app.
+Per [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md), owned by task **T113**:
+
+| Rule | Detail |
+|---|---|
+| Binary | The standalone **`yt-dlp_musllinux`** (`yt-dlp_musllinux_aarch64` on arm64), selected by `TARGETARCH`. Alpine runs it: upstream ships musl 1.2+ builds alongside the glibc ones. |
+| Pin | An **exact version, verified by SHA-256** at image build time. Python is never installed. The build recipe lives in [`10-deployment-and-compose.md`](10-deployment-and-compose.md). |
+| Self-update | **Disabled at runtime.** dl-tool never invokes `yt-dlp -U` or `--update-to`, and exposes no update button or update job. `yt-dlp -U` is an unreviewed remote code fetch → [`12-security-and-threat-model.md`](12-security-and-threat-model.md). |
+| Freshness | A **weekly scheduled image rebuild** bumps the pin, CI smoke-tests it and a human merges; `docker compose pull` is the update mechanism. Upstream ships stable on a "(mostly) monthly schedule" and nightlies "shortly before midnight UTC on any day that sees changes to the codebase", so extractors rot fast — the rebuild cadence, not a runtime updater, is the answer. |
+| Path | `DLTOOL_YTDLP_PATH`, JS runtime `DLTOOL_JS_RUNTIME_PATH` → [`11-config-reference.md`](11-config-reference.md). |
+
+**The JavaScript runtime.** The yt-dlp README lists one under "Strongly recommended", verbatim: "A JavaScript
+runtime/engine like deno (recommended), node.js, bun, or QuickJS is also required to run yt-dlp-ejs." It is
+**required for full YouTube support**. The runtime image ships **`nodejs`**, not deno, because deno does not
+build reliably on musl ([ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md)).
+
+**Boot capability probe** (`runner.go`), run once at `Connect()` and recorded in `engines.version`
+([`04-data-model.md`](04-data-model.md)):
+
+| Probe | Command | On success | On failure |
+|---|---|---|---|
+| yt-dlp | `<DLTOOL_YTDLP_PATH> --version` | Record the version string; surface it in `GET /system/info` and the UI. | Mark the engine unavailable with `engine_unavailable`; the rest of dl-tool keeps running. |
+| JS runtime | `<DLTOOL_JS_RUNTIME_PATH> --version` | Record the version string alongside the yt-dlp version. | Raise the task-event code **`js_runtime_missing`**, disable the media lane and show a visible warning. |
+
+A missing JS runtime never fails a download silently and never crashes the process: the media lane is disabled
+and the warning names the missing binary and its env var.
 
 ---
 
-## 8. The shared contract test suite
+## 8. Engine ownership
+
+dl-tool assumes **exclusive control** of every engine it is configured with
+([ADR-0017](decisions/0017-exclusive-control-of-engines.md)). An engine is a private back end, not a shared
+daemon: adding transfers through the qBittorrent WebUI or a second aria2 client is outside the supported
+configuration, because two controllers over one queue produce irreproducible bugs.
+
+`engines.foreign_task_policy` decides what happens to a transfer dl-tool did not create. Column, values and
+default live in [`04-data-model.md`](04-data-model.md#49-enginesforeign_task_policy); the behaviour is:
+
+| Policy | A transfer dl-tool did not create |
+|---|---|
+| `ignore` (default) | Never surfaces. It is absent from `GET /tasks`, from SSE deltas and from `GET /tasks/{id}`; it counts toward no quota and no `max_active_*` limit; the schedule, the global limit and the alternative-speed limits are never applied to it; it is never paused, resumed, relocated or deleted by dl-tool. It keeps running under the engine's own settings. |
+| `adopt` | The next reconciliation creates a `tasks` row owned by **the admin who configured that engine**, preserving the engine's save path, category and tags, and copying `engine_ref` from the engine handle (§3.5). From that moment it is an ordinary dl-tool task: schedule, limits, quota accounting, post-processing and deletion all apply. |
+
+Rules that hold under **both** policies:
+
+- dl-tool **never deletes** a foreign transfer and never deletes data it did not record in `task_files`.
+- Detection is by handle: a transfer is foreign when its `engine_ref` matches no `tasks` row for that engine —
+  the aria2 GID, the qBittorrent `hash`, the yt-dlp job id.
+- Adoption is **idempotent**. A second reconciliation must not create a duplicate; a torrent already known by
+  either infohash is matched, never re-added
+  ([FR-023](02-requirements.md#fr-023-reject-a-duplicate-torrent-by-either-infohash)).
+- Reconciliation runs at `Connect()` and again on every `full_update` from `sync/maindata` (§5.4) or full
+  `tellActive`/`tellWaiting`/`tellStopped` sweep (§4.3).
+- Switching `ignore` → `adopt` adopts everything currently foreign at the next reconciliation. Switching back
+  does **not** un-adopt: an adopted task is a dl-tool task.
+- Bulk adoption as a deliberate one-time migration, with a dry run, is a separate feature →
+  [`15-migration-and-import.md`](15-migration-and-import.md).
+
+Requirement: [FR-148](02-requirements.md#fr-148-apply-the-foreign-task-policy-to-tasks-dl-tool-did-not-create).
+
+---
+
+## 9. Engine conformance at boot
+
+At `Connect()` every adapter runs a conformance probe that asserts the engine's own competing automation is
+off, and forces it off where the API allows. Two schedulers or two RSS engines against one feed produce
+irreproducible bugs, and Automatic Torrent Management silently relocates files by category, which would
+override `tasks.destination`.
+
+**A conformance failure is a visible warning with a "fix it for me" action, never a crash.** dl-tool boots,
+the engine stays usable, `GET /engines` reports every failed check by key name, and the UI offers the
+correction ([FR-147](02-requirements.md#fr-147-assert-engine-conformance-at-boot), task **T101**).
+
+### 9.1 qBittorrent
+
+Read with `GET /api/v2/app/preferences`; fix with `POST /api/v2/app/setPreferences`, whose body is a single
+`json` form field carrying **only the keys being changed**.
+
+| Check | Preference key | Required value | Why |
+|---|---|---|---|
+| RSS auto-downloading | `rss_processing_enabled` | `false` | dl-tool owns RSS across every engine ([ADR-0009](decisions/0009-native-cross-protocol-rss-rules.md)); a second rule engine would double-add. |
+| Bandwidth scheduler | `scheduler_enabled` | `false` | dl-tool owns the 24×7 grid (§10); qBittorrent's own from/to window would fight it. |
+| Automatic Torrent Management | `auto_tmm_enabled` | `false` | ATM relocates files by category behind dl-tool's back and would override `tasks.destination`. |
+| Search plugins | none — `GET /api/v2/search/plugins` must return an empty list | no plugin installed | dl-tool calls no `search/*` endpoint ([ADR-0008](decisions/0008-torznab-first-declarative-yaml-second.md)); an installed plugin means third-party Python in the engine image ([ADR-0010](decisions/0010-never-execute-third-party-definitions.md)). Warn only — dl-tool never uninstalls a plugin. |
+| Queue limits | the queueing preference keys | raised above dl-tool's own ceilings, or queueing disabled | dl-tool owns concurrency; qBittorrent must never hold a torrent back that dl-tool has decided to start. |
+
+<!-- UNVERIFIED: the exact qBittorrent preference keys for the queueing limits were not read verbatim from
+     release-5.2.3. `rss_processing_enabled`, `scheduler_enabled` and `auto_tmm_enabled` are settled; T101
+     must confirm the queueing key names against `GET /api/v2/app/preferences` before writing them. -->
+
+Also send `torrents/add` with `autoTMM=false` explicitly (§5.3), so a torrent cannot inherit ATM from a
+category even if the preference is flipped behind dl-tool's back.
+
+### 9.2 aria2
+
+| Check | Read | Required value | Fix |
+|---|---|---|---|
+| Concurrency | `aria2.getGlobalOption` → `max-concurrent-downloads` | at or above `max_active_total` | `aria2.changeGlobalOption([secret], {"max-concurrent-downloads": "<n>"})` |
+| Save directory | `aria2.getGlobalOption` → `dir` | inside a configured data root | Warn only: `--dir` is a daemon flag set in `compose.yaml` → [`10-deployment-and-compose.md`](10-deployment-and-compose.md). |
+| Session persistence | `aria2.getGlobalOption` → `save-session` | non-empty | Warn only: same daemon flag (§4.1). |
+| Reachability | `aria2.getVersion` | responds | None — `ErrUnavailable`. |
+
+### 9.3 yt-dlp
+
+The capability probe of §7.6 *is* the conformance check: binary present, JS runtime present, self-update never
+invoked.
+
+### 9.4 Why the engine queues are raised, not used
+
+dl-tool enforces `max_active_total`, `max_active_per_engine` and `max_active_per_user` itself
+([`11-config-reference.md`](11-config-reference.md), task **T098**). Each engine can see only its own queue,
+so an engine-side limit would silently reorder a queue dl-tool believes it owns and would make
+`process_order` meaningless. Tasks in state `seeding` count toward none of the three limits.
+
+---
+
+## 10. Bandwidth precedence and fan-out
+
+**This is the single home of the precedence rule.** Every other document links here.
+
+```
+effective_rate = min(schedule cell limit, global limit, per-task limit)
+```
+
+evaluated in that order, per direction (download and upload), in **bytes per second**. `0` means unlimited and
+is excluded from the `min()`; if every term is `0` the effective rate is unlimited. The chain is re-evaluated
+when the active cell changes, when a global or alternative limit is edited, and when a task's own limit is
+edited ([FR-096](02-requirements.md#fr-096-combine-schedule-global-and-per-task-limits-by-minimum)).
+
+| Active schedule cell | Global values used | Effect |
+|---|---|---|
+| `0` No Download | — | **Every task dl-tool started is paused.** It is never throttled to 1 byte/s. dl-tool records which tasks it paused and resumes exactly those when the cell changes; a task the user paused stays paused. |
+| `1` Default speed | `download_rate_limit`, `upload_rate_limit` | Fan out the values below. |
+| `2` Alternative speed | `alt_download_rate_limit`, `alt_upload_rate_limit` | Identical fan-out with the second value pair. |
+
+Cell encoding, the 168-cell grid and its time zone live in
+[`05-api-contract.md`](05-api-contract.md) and
+[FR-092](02-requirements.md#fr-092-store-and-edit-a-247-schedule-grid); the settings keys live in
+[`11-config-reference.md`](11-config-reference.md).
+
+**Alternative speed is not an engine feature.** aria2 and yt-dlp have no alternative-speed concept at all, and
+dl-tool does not use qBittorrent's, so "alternative speed" is simply *a second global limit value* that
+dl-tool applies through the same calls. Unlike Download Station, it therefore applies to HTTP, FTP, SFTP,
+BitTorrent and media-site tasks alike ([FR-091](02-requirements.md#fr-091-apply-alternative-speeds-to-every-engine)).
+
+### 10.1 The fan-out call per engine
+
+| Engine | Global limit | Per-task limit | No Download |
+|---|---|---|---|
+| aria2 | `aria2.changeGlobalOption([secret], {"max-overall-download-limit": "<B/s>", "max-overall-upload-limit": "<B/s>"})`; `0` is unrestricted | `aria2.changeOption([secret], gid, {"max-download-limit": "<B/s>", "max-upload-limit": "<B/s>"})` — both are in the safe list that does **not** restart the transfer (§4.6) | `aria2.pause([secret], gid)` per GID |
+| qBittorrent | `POST /api/v2/transfer/setDownloadLimit` and `.../setUploadLimit`, form field `limit` in bytes/second | `POST /api/v2/torrents/setDownloadLimit` and `.../setUploadLimit`, form fields `hashes` and `limit` | `POST /api/v2/torrents/stop` (5.x) / `.../pause` (4.x), `hashes=all` or a pipe-joined list (§5.7) |
+| yt-dlp | Applied to the argument vector at spawn time; a running process is never re-limited, so a changed limit takes effect on the next spawn | Same argument, computed per task | Cancel the `exec.CommandContext` (§7.1) and mark the task `paused`; the resume respawn continues the partial file |
+
+<!-- UNVERIFIED: the yt-dlp rate-limit flag was not read verbatim from the pinned build. T113 must confirm it
+     against `yt-dlp --help` before writing it into `runner.go`. -->
+
+- dl-tool **never** calls `transfer/toggleSpeedLimitsMode` or `transfer/speedLimitsMode`. qBittorrent's own
+  alternative-speed mode is a second source of truth for the same number; dl-tool always pushes one absolute
+  value it computed itself.
+- `GET /api/v2/transfer/info` (`dl_rate_limit`, `up_rate_limit`, `use_alt_speed_limits`) and
+  `aria2.getGlobalStat` are read back after a fan-out to verify it landed, and a mismatch is logged.
+- A per-task limit is applied to a task that is already `downloading`, without restarting it
+  ([FR-094](02-requirements.md#fr-094-apply-per-task-limits-to-already-running-tasks)).
+
+---
+
+## 11. The shared contract test suite
 
 One table-driven conformance suite lives in `internal/engine/enginetest/contract.go`. Every adapter calls it from
 its own `*_test.go`; an adapter that does not pass it is not done.
@@ -995,6 +1219,8 @@ func RunContract(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
   that the corresponding method returns `ErrNotSupported` **and changes nothing**.
 - `StateNormalisationCoversEveryEngineState` is a pure table test with no container, driving every row of §4.6,
   §5.6 and §6 and asserting the unknown-state fallback to `queued` plus a warning log.
+- Engine ownership (§8), the boot conformance probe (§9) and the bandwidth fan-out (§10) are asserted per
+  engine by T101, T102 and T110 rather than by `RunContract`, because each needs an engine-specific fixture.
 
 **Golden-file fixture policy.** Capture one real response per engine into `internal/engine/<x>/testdata/*.json`
 and compare parser output with `github.com/google/go-cmp v0.7.0`:
@@ -1017,23 +1243,29 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 ## Decisions referenced
 | ADR | Decision |
 |---|---|
-| [ADR-0001](decisions/0001-build-a-control-plane-over-existing-download-engines.md) | Build a control plane over existing download engines |
+| [ADR-0001](decisions/0001-control-plane-over-existing-engines.md) | Build a control plane over existing download engines |
 | [ADR-0002](decisions/0002-go-for-the-backend.md) | Go for the backend — hence yt-dlp is a subprocess, never in-process |
-| [ADR-0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
-| [ADR-0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md) | Server-sent events with rid deltas for live updates |
-| [ADR-0008](decisions/0008-torznab-first-declarative-yaml-engines-second.md) | Torznab first — so no `search/*` passthrough |
-| [ADR-0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md) | A native cross-protocol RSS rule engine — so no `rss/*` passthrough |
-| [ADR-0012](decisions/0012-a-single-data-mount.md) | A single `/data` mount, identical in every engine container |
+| [ADR-0005](decisions/0005-aria2-qbittorrent-ytdlp-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
+| [ADR-0006](decisions/0006-sse-with-rid-deltas.md) | Server-sent events with rid deltas for live updates |
+| [ADR-0008](decisions/0008-torznab-first-declarative-yaml-second.md) | Torznab first — so no `search/*` passthrough |
+| [ADR-0009](decisions/0009-native-cross-protocol-rss-rules.md) | A native cross-protocol RSS rule engine — so no `rss/*` passthrough |
+| [ADR-0010](decisions/0010-never-execute-third-party-definitions.md) | Never execute third-party code — hence no qBittorrent search plugin is tolerated (§9.1) |
+| [ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md) | Alpine runtime — hence the musl yt-dlp binary and `nodejs` as the JS runtime |
+| [ADR-0012](decisions/0012-single-data-mount.md) | A single `/data` mount, identical in every engine container |
+| [ADR-0017](decisions/0017-exclusive-control-of-engines.md) | dl-tool assumes exclusive control of its engines — §8 and §9 |
+| [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | Pin yt-dlp by version and hash; never self-update at runtime — §7.6 |
 
 ## Open questions
-- [NEEDS CLARIFICATION: the `tasks` DDL in [`04-data-model.md`](04-data-model.md) has no `infohash_v1` or
-  `infohash_v2` column, so `TaskInfo.InfohashV1`/`InfohashV2` have no persistent home and a hybrid torrent added
-  once by v1 magnet and once by v2 magnet cannot be deduplicated. Either add both columns with a uniqueness
-  constraint over the pair, or declare v2-magnet dedup out of scope for v1.]
-- [NEEDS CLARIFICATION: T088 must confirm, against the pinned `yt-dlp_linux` build, the exact flag that
+- [NEEDS CLARIFICATION: T088 must confirm, against the pinned `yt-dlp_musllinux` build, the exact flag that
   enumerates extractor URL patterns for the cheap `Accepts()` check in §7.2.]
+- [NEEDS CLARIFICATION: T101 must confirm the qBittorrent queueing-limit preference key names against
+  `GET /api/v2/app/preferences` on `release-5.2.3` before §9.1 names them.]
+- [NEEDS CLARIFICATION: T113 must confirm the yt-dlp rate-limit flag used by the fan-out in §10.1.]
+- [NEEDS CLARIFICATION: T100 must confirm, against a v2-only fixture, that qBittorrent's `hash` for a v2-only
+  torrent is the 40-hex truncation of `infohash_v2` (§3.5).]
 
 ## Change log
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | File-priority vocabulary corrected to `skip=0 normal=1 high=6 maximum=7` with the per-engine translation table (§1.1) and the §5.7 identity mapping; added the `engine_ref` rule for BitTorrent v1/v2/hybrid identity (§3.5); added §8 engine ownership and the foreign-task policy, §9 engine conformance at boot, and §10 the bandwidth precedence chain with its per-engine fan-out calls; rewrote §7.6 for the pinned `yt-dlp_musllinux` binary, disabled self-update, the weekly rebuild, the boot capability probe and `js_runtime_missing`; renumbered the contract test suite to §11; corrected the ADR filenames. |

@@ -3,7 +3,7 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** T001–T005, T093–T097, T099, T114, T115, and any task touching `compose.yaml`, `Dockerfile`, `deploy/` or `.github/workflows/release.yml`
+> **Read this before:** T001–T005, T093–T097, T099, T113, T115, and any task touching `compose.yaml`, `Dockerfile`, `deploy/` or `.github/workflows/release.yml`
 
 ## Purpose
 Define the shipped container topology: service names, ports, volumes, compose profiles, the image build, the
@@ -18,7 +18,9 @@ define environment-variable semantics, HTTP shapes or operator runbooks.
   endpoints and payloads → [`05-api-contract.md`](05-api-contract.md); engine wire protocols →
   [`06-download-engines.md`](06-download-engines.md); DDL → [`04-data-model.md`](04-data-model.md);
   threat model → [`12-security-and-threat-model.md`](12-security-and-threat-model.md); backup, restore,
-  diagnostics and symptom→fix tables → [`18-operations-and-runbook.md`](18-operations-and-runbook.md).
+  diagnostics and symptom→fix tables → [`17-operations-and-runbook.md`](17-operations-and-runbook.md);
+  one-time migration from an existing Download Station or qBittorrent →
+  [`15-migration-and-import.md`](15-migration-and-import.md).
 
 ---
 
@@ -99,8 +101,6 @@ services:
       DLTOOL_QBITTORRENT_PASSWORD: "${QBT_PASSWORD:-}"
       DLTOOL_ARIA2_URL: "http://aria2:6800/jsonrpc"
       DLTOOL_ARIA2_SECRET: "${ARIA2_RPC_SECRET:-}"
-      DLTOOL_COMPAT_QBITTORRENT: "${DLTOOL_COMPAT_QBITTORRENT:-false}"
-      DLTOOL_COMPAT_SYNOLOGY: "${DLTOOL_COMPAT_SYNOLOGY:-false}"
     volumes:
       - ${CONFIG_DIR:-./config}/dl-tool:/config
       - ${DATA_DIR:-/srv/data}:/data          # ONE mount — see §3
@@ -221,7 +221,7 @@ return `EXDEV`, hardlinks become impossible and every completed-file move degrad
 The Servarr guide states it directly: passing in `/tv`, `/movies` and `/downloads` "makes them look like two
 different file systems, even if they are a single file system outside the container. This means hard links
 won't work *and* instead of an instant/atomic move, a slower and more IO intensive copy+delete is used."
-See [ADR-0012](decisions/0012-a-single-data-mount.md).
+See [ADR-0012](decisions/0012-single-data-mount.md).
 
 ### 3.2 Folder tree (TRaSH layout, verified)
 
@@ -342,6 +342,12 @@ linuxserver.io images are **not** compatible with `--user` — their documentati
 Four stages. Both build stages run on `$BUILDPLATFORM` and cross-compile via `$TARGETARCH`, so no QEMU
 emulation is needed for the expensive work; only the final `apk add` layer is emulated.
 
+The runtime base is `alpine:3.22` and nothing else: musl is safe here because the Go binary is built with
+`CGO_ENABLED=0` and is therefore statically linked, and yt-dlp publishes `yt-dlp_musllinux` /
+`yt-dlp_musllinux_aarch64` builds ([ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md)). Do not
+propose `debian:trixie-slim` or `gcr.io/distroless/*`: a distroless image has no shell and no `su-exec`, so it
+cannot perform the PUID/PGID drop in §4.
+
 ```dockerfile
 # syntax=docker/dockerfile:1
 
@@ -369,9 +375,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # yt-dlp: fetched on the build platform, selected by TARGETARCH, verified by SHA-256.
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS ytdlp
 ARG TARGETARCH
-ARG YTDLP_VERSION                     # pin at implementation time
-ARG YTDLP_SHA256_AMD64                # pin at implementation time
-ARG YTDLP_SHA256_ARM64                # pin at implementation time
+# The three defaults below ARE the pin. They are the only place the yt-dlp version and
+# hashes are recorded, and the weekly job in section 10.1 rewrites exactly these lines.
+ARG YTDLP_VERSION=""                  # pin at implementation time
+ARG YTDLP_SHA256_AMD64=""             # pin at implementation time
+ARG YTDLP_SHA256_ARM64=""             # pin at implementation time
 RUN apk add --no-cache curl
 RUN set -eu; \
     case "${TARGETARCH}" in \
@@ -417,7 +425,7 @@ CMD ["serve"]
 
 - `su-exec` performs the privilege drop; `ca-certificates` for HTTPS indexers; `tzdata` for `TZ`; `7zip`
   provides `/usr/bin/7zz` for auto-extract; `nodejs` is the JavaScript runtime `yt-dlp-ejs` requires for full
-  YouTube support ([ADR-0018](decisions/0018-pin-yt-dlp-by-version-and-hash-never-self-update-at-runtime.md)).
+  YouTube support ([ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md)).
 - **Python is never installed.** yt-dlp is the standalone musl binary; `yt-dlp -U` is disabled at runtime and
   freshness comes from a scheduled CI rebuild that bumps `YTDLP_VERSION` and the hashes.
 - `dl-tool healthcheck` is a subcommand of the same binary: it requests `{BASE_PATH}/healthz` on
@@ -490,8 +498,6 @@ DLTOOL_BASE_PATH=
 DLTOOL_TRUSTED_PROXIES=
 DLTOOL_LOG_LEVEL=info
 DLTOOL_LOG_FORMAT=json
-DLTOOL_COMPAT_QBITTORRENT=false
-DLTOOL_COMPAT_SYNOLOGY=false
 
 # ---- vpn profile only (section 8) ----
 VPN_SERVICE_PROVIDER=
@@ -569,8 +575,9 @@ following hold. Each is a hard requirement on the implementation.
 1. **Configurable base.** `DLTOOL_BASE_PATH` accepts `/dl-tool`, normalises to a leading slash with no
    trailing slash, and `""` means the web root. It is also editable in Settings so it can be changed without
    env vars.
-2. **Every route mounts under the base.** The SPA, `/api/v1/*`, the compatibility façades, `/healthz`,
-   `/readyz` — one `chi` sub-router mounted at the base, nothing registered outside it.
+2. **Every route mounts under the base.** The SPA, `/api/v1/*`, `/healthz`, `/readyz` — one `chi` sub-router
+   mounted at the base, nothing registered outside it. dl-tool serves `/api/v1` and nothing else; there is no
+   second HTTP surface to proxy.
 3. **Relative asset URLs.** Build the SPA with Vite `base: './'` so `dist/index.html` never emits a
    root-absolute `/assets/…` URL. Do not bake the base in at build time; it is a runtime setting.
 4. **Injected base href.** The server rewrites `index.html` at serve time to carry `<base href="{base}/">`
@@ -674,6 +681,9 @@ Facts that follow:
 VPN_PORT_FORWARDING_UP_COMMAND=/bin/sh -c 'wget -O- -nv --retry-connrefused --post-data "json={\"listen_port\":{{PORT}},\"current_network_interface\":\"{{VPN_INTERFACE}}\",\"random_port\":false,\"upnp\":false}" http://127.0.0.1:8080/api/v2/app/setPreferences'
 ```
 
+That command targets **qBittorrent's own WebAPI** inside the `qbittorrent` container, on qBittorrent's own
+port. dl-tool exposes no such endpoint.
+
 Two preconditions: qBittorrent's "Bypass authentication for clients on localhost" must be enabled, and a
 matching `VPN_PORT_FORWARDING_DOWN_COMMAND` is required because the port must be re-set after a disconnect.
 Do **not** set `VPN_PORT_FORWARDING_LISTENING_PORTS` for a torrent client — the wiki warns that such software
@@ -706,7 +716,7 @@ Do **not** set `VPN_PORT_FORWARDING_LISTENING_PORTS` for a torrent client — th
 The container must be destroyable and recreatable with zero loss as long as `/config` and `/data` survive.
 Nothing stateful is written to `/tmp`, `/app` or the image filesystem. Backup, restore, `VACUUM INTO`
 scheduling and the schema-newer-than-binary refusal are owned by
-[`18-operations-and-runbook.md`](18-operations-and-runbook.md).
+[`17-operations-and-runbook.md`](17-operations-and-runbook.md).
 
 - SQLite lives in `/config/dl-tool.db` in WAL mode. WAL "does not work over a network filesystem"; dl-tool
   detects `nfs`, `cifs`, `smb3` or `fuse.*` on the directory holding the database and **refuses to start**
@@ -938,12 +948,12 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 | ADR | Decision |
 |---|---|
 | [ADR-0004](decisions/0004-sqlite-as-the-only-datastore.md) | SQLite is the only datastore; no Postgres service and no Postgres profile. |
-| [ADR-0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) | aria2, qBittorrent and yt-dlp are the v1 engines, hence the service inventory in §1. |
-| [ADR-0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md) | SSE drives live updates, hence the no-buffering proxy requirements in §7. |
-| [ADR-0011](decisions/0011-alpine-runtime-image-with-puid-pgid-privilege-drop.md) | Alpine 3.22 runtime with `su-exec` PUID/PGID privilege drop. |
-| [ADR-0012](decisions/0012-a-single-data-mount.md) | One `/data` mount at an identical path in every container. |
+| [ADR-0005](decisions/0005-aria2-qbittorrent-ytdlp-engines.md) | aria2, qBittorrent and yt-dlp are the v1 engines, hence the service inventory in §1. |
+| [ADR-0006](decisions/0006-sse-with-rid-deltas.md) | SSE drives live updates, hence the no-buffering proxy requirements in §7. |
+| [ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md) | Alpine 3.22 runtime with `su-exec` PUID/PGID privilege drop. |
+| [ADR-0012](decisions/0012-single-data-mount.md) | One `/data` mount at an identical path in every container. |
 | [ADR-0013](decisions/0013-mandatory-built-in-authentication.md) | Authentication is mandatory, so no deployment mode publishes an unauthenticated UI. |
-| [ADR-0018](decisions/0018-pin-yt-dlp-by-version-and-hash-never-self-update-at-runtime.md) | yt-dlp is pinned by version and SHA-256 and never self-updates. |
+| [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | yt-dlp is pinned by version and SHA-256 and never self-updates. |
 
 ## Open questions
 - [NEEDS CLARIFICATION: the brief allows only the `aria2`, `vpn` and `proxy` profiles, so a bare

@@ -142,36 +142,49 @@ User-Agent and SSRF guard stay under dl-tool's control — then hand the bytes t
 
 ### 3.1 Download-URI extraction ladder
 
-Apply in this order; the first hit wins. Steps 2–6 and 8 are a deliberate superset of qBittorrent's parser.
+Four tiers, evaluated per item. Tiers **A**, **B** and **D** reproduce qBittorrent's *actual* parser
+behaviour (`rss_parser.cpp`, `parseRssArticle` + `addArticle`); tier **C** is dl-tool's addition, inserted
+between tier B and tier D. A tier is consulted only when every earlier tier yielded nothing.
 
-1. `enclosure[@type ^= "application/x-bittorrent"]/@url` — a **prefix** match, so it also accepts Torznab's
-   `application/x-bittorrent;x-scheme-handler/magnet`.
-2. `torznab:attr[@name="magneturl"]/@value`.
-3. `torznab:attr[@name="infohash"]/@value` → synthesise `magnet:?xt=urn:btih:<hash>&dn=<urlencoded title>`.
-4. `<infohash>` child element (Academic Torrents ships this) → synthesise the same magnet.
-5. `<torrent>/<magneturi>` or `<torrent>/<infohash>` (BEP 36).
-6. `media:content/@url` where the URL ends in `.torrent`, or `media:hash[@algo="sha1"]` → magnet.
-7. `<link>` if it starts with `magnet:` (case-insensitively).
-8. Atom `link[@rel="enclosure"]/@href`.
-9. `enclosure` with an empty or absent `type` attribute.
-10. `<link>` (RSS) / `link[@rel="alternate"]/@href` or the first `<link>` (Atom), resolved against `xml:base`.
-11. `<guid>` when `isPermaLink != "false"` and it looks like a URL.
+| Tier | Source | Selection rule |
+|---|---|---|
+| **A** | `enclosure[@type ^= "application/x-bittorrent"]/@url` **and** `<link>` whose value starts with `magnet:` (case-insensitive) | **Document order, last one wins.** The two are not ranked against each other — both write the same slot, so the element appearing **last inside the `<item>`** is the one kept. Two `x-bittorrent` enclosures behave the same way: the last, not the first. |
+| **B** | `enclosure` whose `type` attribute is empty or absent | First such enclosure in document order. |
+| **C** | The six synthesised sources listed below | First hit wins, in the listed order. |
+| **D** | `<link>` (RSS) / `link[@rel="alternate"]/@href` or the first `<link>` (Atom), resolved against `xml:base`; then `<guid>` when `isPermaLink != "false"` and it looks like a URL | Last resort. |
+
+Tier C, in order:
+
+1. `torznab:attr[@name="magneturl"]/@value`.
+2. `torznab:attr[@name="infohash"]/@value` → synthesise `magnet:?xt=urn:btih:<hash>&dn=<urlencoded title>`.
+3. `<infohash>` child element (Academic Torrents ships this) → synthesise the same magnet.
+4. `<torrent>/<magneturi>` or `<torrent>/<infohash>` (BEP 36).
+5. `media:content/@url` where the URL ends in `.torrent`, or `media:hash[@algo="sha1"]` → magnet.
+6. Atom `link[@rel="enclosure"]/@href` whose `type` qualified it for neither tier A nor tier B.
+
+Torznab sets `type="application/x-bittorrent"` on the enclosure (the specification also permits
+`application/x-bittorrent;x-scheme-handler/magnet`), so a Torznab item resolves in **tier A** and never
+reaches tier C.
+
+Where dl-tool deviates from qBittorrent, and where it deliberately does not:
+
+| qBittorrent behaviour | dl-tool |
+|---|---|
+| Enclosure `type` compared with **exact string equality**, so `application/x-bittorrent;x-scheme-handler/magnet` qualifies for neither branch and the item is discarded entirely | Prefix match (`^=`), so both Torznab type strings qualify for tier A. |
+| An `x-bittorrent` enclosure and a `magnet:` `<link>` overwrite each other; last in document order wins | **Copied verbatim** — tier A above. |
+| No synthesis from Torznab attributes, `<infohash>` or BEP 36 elements | Added as tier C. |
 
 An item that yields no URI at all is discarded and not stored (FR-072). Parse `<infohash>` and `<size>` by
 **local name**, not qualified name: Academic Torrents declares `xmlns:academictorrents` but emits both
 elements unprefixed.
-
-Two qBittorrent behaviours this ladder deliberately does **not** copy: it tests the enclosure type with exact
-string equality, so a Torznab magnet enclosure (`type="application/x-bittorrent;x-scheme-handler/magnet"`) is
-discarded entirely; and an `x-bittorrent` enclosure and a `magnet:` `<link>` overwrite each other there, so
-whichever comes **last in document order wins**. dl-tool prefix-matches and uses the fixed ladder above.
 
 ### 3.2 Item identity fallback chain
 
 Resolve `feed_items.identity` with the first non-empty value:
 
 1. `<guid>` (RSS) or `<id>` (Atom), raw string, also stored in `feed_items.guid`.
-2. The info-hash, from any source in §3.1, lowercased 40-hex.
+2. The info-hash, from any source in §3.1, normalised to lowercase hex — 40 characters for a v1 hash, 64 for
+   a v2 hash. Stored in `feed_items.info_hash`, which accepts either width.
 3. The resolved download URI.
 4. `sha1(title + "\x00" + feed_id)`, hex-encoded.
 
@@ -434,15 +447,26 @@ expensive and more authoritative.
 | Order | Key | Table and column | Effect on a hit |
 |---|---|---|---|
 | 1 | Feed item GUID, resolved through the identity chain of §3.2 | `feed_items.identity`, unique with `feed_id` | The item is not new. It is never re-evaluated in a poll cycle, so no reason code is produced. |
-| 2 | BitTorrent info-hash, 40-char lowercase hex | `rule_matches.info_hash`, unique partial index | Reject `duplicate_infohash`. This is the only cross-feed authoritative check. |
+| 2 | BitTorrent info-hash, lowercase hex, **40 characters (v1) or 64 characters (v2)** | `feed_items.info_hash` for the item and `rule_matches.info_hash` (unique partial index) for the grab — both columns accept either width | Reject `duplicate_infohash`. This is the only cross-feed authoritative check. |
 | 3 | Normalised episode / content key | `rule_seen_episodes.episode_key` (per rule) and `rule_matches.content_key` (global) | Reject `duplicate_episode` (step 9) or `already_have` (step 10) unless the new release beats the stored one on score. |
 
 The DDL, indices and retention policy for `feeds`, `feed_items`, `rules`, `rule_matches` and
 `rule_seen_episodes` are owned by [`04-data-model.md`](04-data-model.md#35-rss); do not restate them here.
 
+Info-hash comparison rules for step 2, all inherited from the widened columns:
+
+- Normalise at ingest before comparing: a 32-character base32 `xt=urn:btih:` value is decoded to 20 bytes and
+  hex-encoded, and `xt=urn:btmh:1220<64 hex>` yields the v2 hash. The full table is in
+  [`04-data-model.md`](04-data-model.md#33-tasks).
+- Compare a 40-hex value against `tasks.infohash_v1` and a 64-hex value against `tasks.infohash_v2`. **Never
+  truncate a 64-hex v2 hash to 40 characters to make a comparison work.**
+- A hybrid release announced by one feed as a v1 magnet and by another as a v2 magnet therefore collides on
+  whichever hash both carry, and produces one `duplicate_infohash` rejection instead of two tasks.
+
 Back-fill rule: when an item was grabbed from a `.torrent` URL with no known info-hash, write
-`rule_matches.info_hash` once the metainfo is parsed; the unique partial index then makes a later magnet-only
-item for the same content collide naturally.
+`rule_matches.info_hash` once the metainfo is parsed — the v2 hash for a v2 or hybrid torrent, the v1 hash
+otherwise; the unique partial index then makes a later magnet-only item for the same content collide
+naturally.
 
 Do **not** dedup on the download URL: Download Station does, and rotating passkeys or CDN paths make it
 re-download the same item forever (Jackett issue 13312).
@@ -537,9 +561,9 @@ examples; all eight are golden fixtures in `internal/rss/testdata/`.
 
 | # | Feed URL | Format | Torrent link? | Conditional GET | Why it is in the set |
 |---|---|---|---|---|---|
-| 1 | `https://archlinux.org/feeds/releases/` | RSS 2.0 | Yes — `<enclosure type="application/x-bittorrent" length="…" url="…"/>` | not probed | The M5 exit criterion feed and the happy-path fixture. |
-| 2 | `https://distrowatch.com/news/torrents.xml` | RSS 2.0 | Yes — `<link>`/`<guid>` are direct `.torrent` URLs | none | Extraction ladder step 10, and the dry-run example. |
-| 3 | `https://academictorrents.com/rss.xml` | RSS 2.0 + `xmlns:academictorrents` | Yes — `<infohash>` element ⇒ synthesised magnet | **ETag + Last-Modified, both 304** | Extraction ladder step 4 and the conditional-GET test. |
+| 1 | `https://archlinux.org/feeds/releases/` | RSS 2.0 | Yes — `<enclosure type="application/x-bittorrent" length="…" url="…"/>` | not probed | Extraction ladder tier A; the M5 exit criterion feed and the happy-path fixture. |
+| 2 | `https://distrowatch.com/news/torrents.xml` | RSS 2.0 | Yes — `<link>`/`<guid>` are direct `.torrent` URLs | none | Extraction ladder tier D, and the dry-run example. |
+| 3 | `https://academictorrents.com/rss.xml` | RSS 2.0 + `xmlns:academictorrents` | Yes — `<infohash>` element ⇒ synthesised magnet | **ETag + Last-Modified, both 304** | Extraction ladder tier C source 3, and the conditional-GET test. |
 | 4 | `https://linuxtracker.org/rss.php` | RSS 2.0 | No — `<link>` is a details page | none (`no-store`) | Hostile-feed fixture: no `<guid>`, non-RFC-822 `<pubDate>`. |
 | 5 | `https://www.gutenberg.org/cache/epub/feeds/today.rss` | **RSS 0.91** | No | Last-Modified, **304** | Degenerate feed: no `<guid>`, no `<pubDate>`. |
 | 6 | `https://librivox.org/rss/latest_releases` | RSS 2.0 | No | none (`no-store`) | Every field wrapped in CDATA, `<pubDate>` included. |
@@ -547,7 +571,7 @@ examples; all eight are golden fixtures in `internal/rss/testdata/`.
 | 8 | `https://linuxunplugged.com/rss` | RSS 2.0 | No (audio) | none observed | 9.2 MB — the 16 MiB cap and streaming-parser test. |
 
 Feed 2 items are `<title>`, `<description/>`, RFC-822 `<pubDate>`, and a `<link>` and `<guid>` both holding the
-same direct `.torrent` URL — extraction ladder step 10, identity step 1.
+same direct `.torrent` URL — extraction ladder tier D, identity step 1.
 
 Golden item, feed 3, for the info-hash path — note `<infohash>` and `<size>` are **unprefixed**:
 
@@ -580,10 +604,10 @@ distribution or a public-domain catalogue.
 ## Decisions referenced
 | ADR | Decision |
 |---|---|
-| [ADR-0001](decisions/0001-build-a-control-plane-over-existing-download-engines.md) | Build a control plane over existing download engines |
-| [ADR-0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines — a rule's action routes to any of them |
-| [ADR-0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md) | A native cross-protocol RSS rule engine, not a qBittorrent `rss/*` passthrough |
-| [ADR-0010](decisions/0010-never-execute-third-party-definition-code.md) | Never execute third-party definition code — rule documents are data, never scripts |
+| [ADR-0001](decisions/0001-control-plane-over-existing-engines.md) | Build a control plane over existing download engines |
+| [ADR-0005](decisions/0005-aria2-qbittorrent-ytdlp-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines — a rule's action routes to any of them |
+| [ADR-0009](decisions/0009-native-cross-protocol-rss-rules.md) | A native cross-protocol RSS rule engine, not a qBittorrent `rss/*` passthrough |
+| [ADR-0010](decisions/0010-never-execute-third-party-definitions.md) | Never execute third-party definition code — rule documents are data, never scripts |
 | [ADR-0015](decisions/0015-db-backed-in-process-job-queue.md) | DB-backed in-process job queue — feed polls are `rss_poll` jobs |
 
 ## Open questions
@@ -605,3 +629,4 @@ distribution or a public-domain catalogue.
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | §3.1 rebuilt as the four-tier extraction ladder matching qBittorrent's actual parser: an `application/x-bittorrent` enclosure and a `magnet:` `<link>` are document-order last-wins (tier A), then an empty- or absent-type enclosure (tier B), then dl-tool's synthesised sources (tier C), then `<link>`/`<guid>` (tier D); noted that Torznab enclosures resolve in tier A. Identity step 2 and the §7 dedup ladder now use the widened 40-or-64-hex `feed_items.info_hash` and `rule_matches.info_hash` columns, with the v1/v2 comparison and back-fill rules. §10 references retargeted to the tier names. ADR link filenames corrected to the canonical slugs. |

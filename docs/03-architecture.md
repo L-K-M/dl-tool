@@ -3,7 +3,7 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** T001, T004, T015, T019, T028, T039, T065 — and before adding any package under `internal/`
+> **Read this before:** T001, T004, T015, T019, T028, T039, T065, T098, T101, T102 — and before adding any package under `internal/`
 
 ## Purpose
 
@@ -13,8 +13,9 @@ define DDL, HTTP payload shapes, the `Engine` interface body, or the compose fil
 
 ## Scope of this document
 
-- In scope: system context, container topology, package decomposition, three runtime scenarios, the task
-  state machine, the ID scheme, the error model, the units rule, job semantics, the SSE ring, risks.
+- In scope: system context, container topology, package decomposition, four runtime scenarios including
+  admission control, the task state machine, the ID scheme, the error model, the units rule, job semantics,
+  the SSE ring, engine conformance, the foreign-task policy, risks.
 - Out of scope, and where it lives instead: DDL and enums → [`04-data-model.md`](04-data-model.md);
   endpoints and payloads → [`05-api-contract.md`](05-api-contract.md); the `Engine` interface and engine
   status tables → [`06-download-engines.md`](06-download-engines.md); RSS rule schema →
@@ -37,15 +38,15 @@ talks to but does not control.
 ```mermaid
 flowchart LR
     op["Operator<br/>web browser"]
-    arr["Sonarr and Radarr, DS get and DS download<br/>third-party clients using a compatibility facade"]
     idx["Torznab and Newznab indexers<br/>Prowlarr, Jackett, bitmagnet"]
     feeds["RSS and Atom feeds"]
     subgraph sys["dl-tool — control plane"]
         dlt["dl-tool<br/>unified queue, users, destinations,<br/>search, RSS rules, bandwidth schedule, UI"]
     end
     eng["Download engines<br/>aria2, qBittorrent-nox, yt-dlp<br/>fetch from origin servers and the swarm into /data"]
+    dsm["Synology NAS running Download Station<br/>one-time migration source only"]
     op -->|"HTTPS: REST /api/v1 plus SSE /api/v1/events"| dlt
-    arr -->|"facade /api/v2 or /webapi"| dlt
+    dlt -->|"one-time, read-only migration import"| dsm
     dlt -->|"HTTP GET: Torznab caps and search"| idx
     dlt -->|"conditional GET: If-None-Match, If-Modified-Since"| feeds
     dlt -->|"JSON-RPC, WebAPI v2, subprocess"| eng
@@ -54,13 +55,17 @@ flowchart LR
 | External interface | Direction | Protocol | Detailed in |
 |---|---|---|---|
 | Operator browser | inbound | REST `/api/v1` plus SSE | [`05-api-contract.md`](05-api-contract.md) |
-| Sonarr, Radarr, DS mobile apps | inbound | qBittorrent subset at `/api/v2/*` and Synology subset at `/webapi/*`, both default off | [`15-compatibility-apis.md`](15-compatibility-apis.md) |
+| Download Station NAS | outbound | one-time, read-only migration client over `SYNO.*` | [`15-migration-and-import.md`](15-migration-and-import.md) |
 | aria2 | outbound | JSON-RPC 2.0 over HTTP POST at `/jsonrpc`; notifications over WebSocket only | [`06-download-engines.md`](06-download-engines.md) |
 | qBittorrent-nox, yt-dlp | outbound | WebAPI v2 with a `SID` cookie session; local subprocess with JSON on stdout | [`06-download-engines.md`](06-download-engines.md) |
 | Indexers and feeds | outbound | Torznab/Newznab XML and RSS/Atom over HTTPS | [`07-search-and-indexers.md`](07-search-and-indexers.md) |
 
+dl-tool serves `/api/v1` only. It exposes no compatibility surface for third-party clients: there is no
+qBittorrent WebAPI façade and no Synology DownloadStation façade, and dl-tool never claims to be a
+drop-in download client for other software. The goal is UX parity with Download Station, not API parity.
+
 Non-goals: no BitTorrent, NNTP/par2 or hoster-scraping implementation, no DHT crawler, no interpreter for
-third-party code. See [`01-vision-and-scope.md`](01-vision-and-scope.md).
+third-party code, no compatibility façade. See [`01-vision-and-scope.md`](01-vision-and-scope.md).
 
 ---
 
@@ -73,22 +78,26 @@ server-side destination browser; pluggable search as a user feature; and a globa
 
 | # | Decision | ADR |
 |---|---|---|
-| D1 | Control plane over external engine daemons, not a new engine. | [ADR-0001](decisions/0001-build-a-control-plane-over-existing-download-engines.md) |
+| D1 | Control plane over external engine daemons, not a new engine. | [ADR-0001](decisions/0001-control-plane-over-existing-engines.md) |
 | D2 | Go 1.26 backend, single static binary built with `CGO_ENABLED=0`. | [ADR-0002](decisions/0002-go-for-the-backend.md) |
-| D3 | chi v5 plus Huma v2; REST with OpenAPI 3.1 generated from the handler structs. | [ADR-0003](decisions/0003-chi-huma-with-code-first-openapi.md) |
+| D3 | chi v5 plus Huma v2; REST with OpenAPI 3.1 generated from the handler structs. | [ADR-0003](decisions/0003-chi-huma-code-first-openapi.md) |
 | D4 | SQLite via `modernc.org/sqlite` at `/config/dl-tool.db` in WAL mode; no Postgres. | [ADR-0004](decisions/0004-sqlite-as-the-only-datastore.md) |
-| D5 | Engines are aria2, qBittorrent-nox and yt-dlp behind one `Engine` interface. | [ADR-0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) |
-| D6 | SSE at `GET /api/v1/events` carrying rid deltas, with `GET /api/v1/sync?rid=` as the polling fallback. | [ADR-0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md) |
-| D7 | React 19 plus Vite plus TypeScript SPA, `//go:embed`-ed into the binary. | [ADR-0007](decisions/0007-react-spa-embedded-in-the-go-binary.md) |
-| D8 | Search is a Torznab/Newznab client first, `dlsearch/v1` declarative YAML engines second. | [ADR-0008](decisions/0008-torznab-first-declarative-yaml-engines-second.md) |
-| D9 | A native cross-protocol RSS rule engine, not a passthrough to qBittorrent's `rss/*`. | [ADR-0009](decisions/0009-a-native-cross-protocol-rss-rule-engine.md) |
-| D10 | No third-party code execution; `.dlm` and qBittorrent `.py` plugins are statically analysed and converted. | [ADR-0010](decisions/0010-never-execute-third-party-definition-code.md) |
-| D11 | Alpine 3.22 runtime image with `su-exec` for PUID/PGID/UMASK privilege drop. | [ADR-0011](decisions/0011-alpine-runtime-image-with-puid-pgid-privilege-drop.md) |
-| D12 | A single `/data` bind mount plus `/config`, identical path in every container. | [ADR-0012](decisions/0012-a-single-data-mount.md) |
+| D5 | Engines are aria2, qBittorrent-nox and yt-dlp behind one `Engine` interface. | [ADR-0005](decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |
+| D6 | SSE at `GET /api/v1/events` carrying rid deltas, with `GET /api/v1/sync?rid=` as the polling fallback. | [ADR-0006](decisions/0006-sse-with-rid-deltas.md) |
+| D7 | React 19 plus Vite plus TypeScript SPA, `//go:embed`-ed into the binary. | [ADR-0007](decisions/0007-react-spa-embedded-in-the-binary.md) |
+| D8 | Search is a Torznab/Newznab client first, `dlsearch/v1` declarative YAML engines second. | [ADR-0008](decisions/0008-torznab-first-declarative-yaml-second.md) |
+| D9 | A native cross-protocol RSS rule engine, not a passthrough to qBittorrent's `rss/*`. | [ADR-0009](decisions/0009-native-cross-protocol-rss-rules.md) |
+| D10 | No third-party code execution; `.dlm` and qBittorrent `.py` plugins are statically analysed and converted. | [ADR-0010](decisions/0010-never-execute-third-party-definitions.md) |
+| D11 | Alpine 3.22 runtime image with `su-exec` for PUID/PGID/UMASK privilege drop. | [ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md) |
+| D12 | A single `/data` bind mount plus `/config`, identical path in every container. | [ADR-0012](decisions/0012-single-data-mount.md) |
 | D13 | Built-in local users and server-side sessions are mandatory; no anonymous mode, no default credentials. | [ADR-0013](decisions/0013-mandatory-built-in-authentication.md) |
-| D14 | qBittorrent and Synology compatibility façades, both opt-in and default off. | [ADR-0014](decisions/0014-opt-in-qbittorrent-and-synology-compatibility-facades.md) |
 | D15 | In-process worker pool plus a `jobs` table in SQLite plus `robfig/cron/v3`. | [ADR-0015](decisions/0015-db-backed-in-process-job-queue.md) |
-| D16 | Declarative-only extensibility in v1; if v2 ever needs scripting it is Starlark. | [ADR-0010](decisions/0010-never-execute-third-party-definition-code.md) |
+| D16 | Declarative-only extensibility in v1; if v2 ever needs scripting it is Starlark. | [ADR-0010](decisions/0010-never-execute-third-party-definitions.md) |
+| — | dl-tool assumes exclusive control of every engine it is configured with; see §8.7 and §8.8. | [ADR-0017](decisions/0017-exclusive-control-of-engines.md) |
+| — | yt-dlp is pinned by version and SHA-256 at image build time and never self-updates. | [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) |
+
+D14 (compatibility façades) is withdrawn: dl-tool serves `/api/v1` only, ADR-0014 does not exist, and the
+number is never reused. ADR-0017 and ADR-0018 postdate the settled D-list, so they carry no `D` number.
 
 ---
 
@@ -131,7 +140,6 @@ flowchart TB
 flowchart TB
     main["cmd/dl-tool<br/>humacli wiring only"]
     api["internal/api<br/>chi, Huma, SPA static, SSE"]
-    compat["internal/compat<br/>qbittorrent.go, synology.go"]
     secure["internal/secure<br/>ssrf, hash, session, csrf"]
     engine["internal/engine<br/>Engine interface, registry, router"]
     uri["internal/uri<br/>normalize, obfuscated, magnet, metainfo"]
@@ -148,7 +156,7 @@ flowchart TB
     cfgp["internal/config"]
     obs["internal/obs<br/>log, metrics, health"]
     main --> api & cfgp & obs & jobs
-    api --> compat & secure & uri & engine & syncp & search & rss & fsx
+    api --> secure & uri & engine & syncp & search & rss & fsx
     engine --> a2 & qb & yt
     jobs --> engine & fsx
     rss --> jobs
@@ -164,7 +172,6 @@ flowchart TB
 | `internal/config` | Parse `DLTOOL_*` environment variables into one struct and validate them at boot. |
 | `internal/store` | All SQL: `sqlx` access, goose migrations, and row structs with `db:` and `json:` tags. |
 | `internal/api` | chi router, Huma operations, session and CSRF middleware, embedded SPA, the SSE endpoint. |
-| `internal/compat` | Translate the qBittorrent `/api/v2/*` and Synology `/webapi/*` façades onto internal services. |
 | `internal/engine` | The `Engine` interface, the adapter registry, and the URI-to-engine routing table. |
 | `internal/engine/aria2`, `.../qbittorrent` | Protocol client plus status and field normalisation, one package per daemon. |
 | `internal/engine/ytdlp` | yt-dlp subprocess runner and stdout JSON parser. |
@@ -275,6 +282,48 @@ sequenceDiagram
 Send a weak validator `W/"..."` back exactly as received, never stripping the `W/`. Around half of real
 feeds supply neither validator, so a poll that always receives 200 is normal.
 
+### 6.4 Admission control — the concurrency limiter
+
+Every engine keeps its own queue and none of them can see the others, so no engine can enforce a limit that
+spans the stack. dl-tool is therefore the only admission controller: it holds tasks in `queued` and releases
+them itself, and the engines' own queue limits are raised out of the way during the conformance check (§8.7).
+
+| Setting | What it caps |
+|---|---|
+| `max_active_total` | Active tasks across every engine. |
+| `max_active_per_engine` | Active tasks released to one engine. |
+| `max_active_per_user` | Active tasks owned by one user; a concurrency limit, not the storage quota. |
+
+**Seeding never counts toward any of the three.** Values, defaults and their env vars live in
+[`11-config-reference.md`](11-config-reference.md); the columns live in [`04-data-model.md`](04-data-model.md).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant TICK as Admission pass
+    participant DB as tasks table
+    participant ENG as internal/engine router
+    participant E as aria2, qBittorrent or yt-dlp
+    TICK->>DB: count active tasks in total, per engine and per user
+    TICK->>DB: select queued candidates in process_order
+    loop while every applicable limit still has headroom
+        TICK->>ENG: release one candidate
+        ENG->>E: add or resume
+        E-->>ENG: engine_ref
+    end
+    TICK->>DB: leave the rest in queued, error_code concurrency_limit
+    Note over TICK,DB: seeding tasks are excluded from all three counts,<br/>so a full seed list cannot starve new downloads
+```
+
+- Without dl-tool-side admission, `process_order` (by-date or by-user round-robin) is meaningless: every
+  task would start at once because each engine only sees its own share of the queue.
+- Concurrency exhaustion is the error code `concurrency_limit`, distinct from the storage-quota code
+  `quota_exceeded`.
+- A task held back by a limit stays `queued`; it is never rejected at creation time for concurrency alone.
+
+<!-- INFERRED: the counted set is "released to an engine and not yet completed, error, paused or removed";
+     the brief fixes only that seeding is excluded. -->
+
 ---
 
 ## 7. Deployment View
@@ -370,7 +419,8 @@ Engine-side identifiers — aria2 GID, qBittorrent infohash, yt-dlp job id — l
 - Every API error is RFC 9457 `application/problem+json`, the Huma default; shapes and status codes are in
   [`05-api-contract.md`](05-api-contract.md).
 - Every task failure also sets `tasks.error_code` from the canonical enum: Download Station's 26 values plus
-  `ssrf_blocked`, `path_rejected`, `quota_exceeded`, `engine_unavailable` and `unsupported_scheme`.
+  `ssrf_blocked`, `path_rejected`, `quota_exceeded`, `concurrency_limit`, `disk_full`, `engine_unavailable`
+  and `unsupported_scheme`.
 - Every state transition and job attempt writes one `task_events` row whose `code` is a stable machine
   string such as `engine.accepted` or `postprocess.extract.failed`, so the UI can translate it with i18next.
 - Go errors wrap with `fmt.Errorf("...: %w", err)`; see [`14-conventions.md`](14-conventions.md).
@@ -420,6 +470,39 @@ grid, which the cron tick reads on each fire.
 The ring lives in `internal/sync/ring.go` and is memory-only; after a restart it is rebuilt from the current
 task snapshot, which is exactly the `seq_gap` case every client already handles.
 
+### 8.7 Engine conformance at boot
+
+dl-tool assumes exclusive control of every engine it is configured with ([ADR-0017](decisions/0017-exclusive-control-of-engines.md)).
+At boot, and after any engine configuration change, it asserts the settings below and, where the API allows
+it, forces them. Two schedulers or two RSS engines against one feed produce irreproducible bugs.
+
+| Engine setting | Asserted value | Reason |
+|---|---|---|
+| qBittorrent `rss_processing_enabled` | `false` | dl-tool owns RSS rules (D9); a second rule engine double-adds items. |
+| qBittorrent `scheduler_enabled` | `false` | dl-tool owns the 24×7 bandwidth schedule and fans it out itself. |
+| qBittorrent `auto_tmm_enabled` | `false` | Automatic Torrent Management silently relocates files by category and would override `tasks.destination`. |
+| qBittorrent search plugins | none installed | D10: dl-tool never executes third-party code. |
+| Every engine's internal queue limit | raised out of the way | dl-tool is the only admission controller (§6.4). |
+
+A conformance failure is a visible warning carrying a "fix it for me" action. It is never a crash and never
+blocks start-up. The probe also records the resolved engine, yt-dlp and JavaScript-runtime versions into
+`engines.version`.
+
+### 8.8 Foreign-task policy
+
+`engines.foreign_task_policy` decides what happens to tasks that exist in an engine but that dl-tool did not
+create — a torrent added directly in qBittorrent's own WebUI, or a queue predating installation. The
+`engines` columns themselves are defined in [`04-data-model.md`](04-data-model.md).
+
+| Value | Behaviour |
+|---|---|
+| `ignore` (default) | Foreign tasks never appear in the queue, the grid or an SSE delta. dl-tool leaves them running and untouched. |
+| `adopt` | Foreign tasks are imported as dl-tool tasks and owned by the admin who configured that engine, preserving save path, category and tags. |
+
+The "one queue" claim in [`01-vision-and-scope.md`](01-vision-and-scope.md) is conditional on this setting.
+Bulk adoption of an existing qBittorrent is a one-time import, not a live sync; it is specified in
+[`15-migration-and-import.md`](15-migration-and-import.md).
+
 ---
 
 ## 11. Risks and Technical Debt
@@ -427,10 +510,11 @@ task snapshot, which is exactly the `seq_gap` case every client already handles.
 | # | Risk | Mitigation |
 |---|---|---|
 | R1 | aria2 has shipped no tagged release since `1.37.0` on 2023-11-15, although `master` still receives commits, the most recent seen on 2026-06-25. Treat this as maintenance mode, not abandonment. | The `Engine` interface isolates aria2 in `internal/engine/aria2`; replacing it touches one directory plus one line of `registry.go`, and `enginetest` already defines what a replacement must satisfy. |
-| R2 | yt-dlp breaks whenever a media site changes, so it needs updating far more often than the rest of the stack. | Install the standalone `yt-dlp_linux` binary at `DLTOOL_YTDLP_PATH`, document an update path that does not rebuild the dl-tool image, and report the yt-dlp version in `GET /system/info`. |
+| R2 | yt-dlp breaks whenever a media site changes, so it needs updating far more often than the rest of the stack — but a self-updating binary is an unreviewed remote code path inside the container. | Install the standalone `yt-dlp_musllinux` binary at an exact version verified by SHA-256 at image build time; `yt-dlp -U` and every other self-update path is disabled at runtime. Freshness comes from a scheduled weekly CI job that bumps the pin and rebuilds the image. The boot probe records the resolved version in `engines.version` and `GET /system/info` reports it. See [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md). |
 | R3 | qBittorrent's upstream wiki is stale in two places that break adapters: `torrents/add` reads `stopped`, not the documented `paused`; and the `state` enum returns `stoppedDL`/`stoppedUP` in 5.x where the wiki says `pausedDL`/`pausedUP`. | Send both parameter names, accept both spellings on read, and always provide a `default` branch mapping unknown states to `queued` with a logged warning rather than a crash. The exact parameter list and state enum are reproduced in [`06-download-engines.md`](06-download-engines.md). |
-| R4 | SQLite WAL mode does not work on a network filesystem, because WAL requires all processes to share memory and processes on separate hosts cannot. | **IMPORTANT:** `/config`, and therefore `dl-tool.db`, must be a local path or local Docker volume — never NFS or SMB. Download destinations under `/data` may be network mounts. Detect a network filesystem at boot and refuse to start. |
+| R4 | SQLite WAL mode does not work on a network filesystem, because WAL requires all processes to share memory and processes on separate hosts cannot. | **IMPORTANT:** `/config`, and therefore `dl-tool.db`, must be a local path or local Docker volume — never NFS or SMB. Download destinations under `/data` may be network mounts. At boot, detect `nfs`, `cifs`, `smb3` or `fuse.*` on the directory holding the database and **refuse to start** with a named error. There is no degraded fallback: `journal_mode=DELETE` on a network mount is not offered, because a silently slower and still-corruptible database is worse than a refusal the operator can read. |
 | R5 | A wedged engine daemon stalls the poll loop and therefore the SSE stream for every task. | Poll each engine in its own goroutine with a per-call timeout; a failed poll marks that engine unhealthy in `/readyz` and leaves the last known snapshot in place instead of emptying the grid. |
+| R6 | yt-dlp needs a JavaScript runtime for full YouTube support — its README lists deno, node.js, bun or QuickJS as strongly recommended, to run `yt-dlp-ejs`. That is a second moving dependency inside the runtime image. | The image installs Alpine's `nodejs`, because deno does not build reliably on musl; Python is never installed. The boot capability probe records the JS runtime version in `engines.version`; a missing runtime raises the `js_runtime_missing` task-event code and disables the media lane behind a visible warning rather than failing downloads silently. |
 
 Accepted v1 debt: no Usenet engine, no ed2k engine, no in-process BitTorrent, no Litestream replication, no
 all-in-one s6-overlay image — all listed as out of scope in [`01-vision-and-scope.md`](01-vision-and-scope.md).
@@ -439,21 +523,21 @@ all-in-one s6-overlay image — all listed as out of scope in [`01-vision-and-sc
 
 ## Decisions referenced
 
-The full D1–D16 map is the table in §4. ADRs that shape this document directly:
+The D-list in §4 is the full map, D14 excluded. ADRs that shape this document directly:
 
 | ADR | Decision |
 |---|---|
-| [ADR-0001](decisions/0001-build-a-control-plane-over-existing-download-engines.md) | Build a control plane over existing download engines |
+| [ADR-0001](decisions/0001-control-plane-over-existing-engines.md) | Build a control plane over existing download engines |
 | [ADR-0004](decisions/0004-sqlite-as-the-only-datastore.md) | SQLite as the only datastore |
-| [ADR-0005](decisions/0005-aria2-qbittorrent-and-yt-dlp-as-the-v1-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
-| [ADR-0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md) | Server-sent events with rid deltas for live updates |
-| [ADR-0012](decisions/0012-a-single-data-mount.md) | A single `/data` mount |
+| [ADR-0005](decisions/0005-aria2-qbittorrent-ytdlp-engines.md) | aria2, qBittorrent and yt-dlp as the v1 engines |
+| [ADR-0006](decisions/0006-sse-with-rid-deltas.md) | Server-sent events with rid deltas for live updates |
+| [ADR-0012](decisions/0012-single-data-mount.md) | A single `/data` mount |
 | [ADR-0015](decisions/0015-db-backed-in-process-job-queue.md) | DB-backed in-process job queue |
+| [ADR-0017](decisions/0017-exclusive-control-of-engines.md) | dl-tool assumes exclusive control of its engines |
+| [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | Pin yt-dlp by version and hash; never self-update at runtime |
 
 ## Open questions
 
-- ADR filenames here are the kebab-cased ADR titles from the plan brief; `docs/decisions/` must use exactly
-  these slugs, or fix these links in the same change.
 - D16 (declarative-only extensibility) has no ADR of its own and is covered by ADR-0010; ADR-0016 is the
   licensing decision.
 - [NEEDS CLARIFICATION: whether `extracting` and `moving` may run while a torrent is `seeding`, or whether
@@ -464,3 +548,4 @@ The full D1–D16 map is the table in §4. ADRs that shape this document directl
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | Compatibility façades cut: removed D14, ADR-0014, `internal/compat`, the façade actor and its context row. Added §6.4 admission control, §8.7 engine conformance, §8.8 foreign-task policy, ADR-0017 and ADR-0018, and risk R6 (JS runtime). Hardened R2 (pinned yt-dlp) and R4 (refuse to start on a network filesystem). ADR links moved to the canonical slugs. |
