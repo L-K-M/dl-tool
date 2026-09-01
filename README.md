@@ -42,9 +42,7 @@ engines that already exist and are good at their job:
 
 ```mermaid
 flowchart LR
-  user["Browser / PWA"]
-  arr["Sonarr / Radarr"]
-  dsapp["DS get, browser extensions"]
+  user["Browser / installable PWA"]
   subgraph host["Docker Compose project"]
     app["dl-tool<br/>queue · users · search · RSS · UI<br/>:8080"]
     qb["qBittorrent-nox<br/>BitTorrent"]
@@ -54,14 +52,18 @@ flowchart LR
   end
   idx["Torznab providers<br/>Prowlarr · Jackett · bitmagnet"]
   user --> app
-  arr -->|"qBittorrent or Synology facade"| app
-  dsapp -->|"Synology facade"| app
   app --> db
   app -->|"WebAPI v2"| qb
   app -->|"JSON-RPC"| ar
   app -->|"subprocess"| yt
   app -->|"Torznab"| idx
 ```
+
+The goal is to be **superficially identical to Download Station** — same screen, same sidebar, same
+add-task dialog, same folder picker — while being none of the things about it that have aged badly.
+dl-tool does not pretend to *be* Download Station to other software: there is no Synology or
+qBittorrent API emulation, and it is not a drop-in download client for anything. It has one API, its
+own, and one interface, the one you look at.
 
 ### The five things it owns that nothing else does
 
