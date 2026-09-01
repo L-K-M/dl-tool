@@ -764,7 +764,7 @@ type SearchResult struct {
 }
 ```
 
-Normalisation rules — all five are mandatory:
+Normalisation rules — all six are mandatory:
 
 1. **Leechers from peers.** When an engine reports `peers` but not `leechers`, set
    `leechers = peers - seeders`; `peers` means seeders + leechers, per the Torznab XSD comment
@@ -778,6 +778,14 @@ Normalisation rules — all five are mandatory:
    seeders and leechers columns for that engine's rows.
 5. **At least one acquisition handle.** A row with no `download_url`, no `magnet_uri` and no
    `infohash` is dropped and counted in the engine's error tally.
+6. **Passkeys never reach a non-admin.** A Torznab `download_url` or enclosure link routinely embeds the
+   operator's per-user tracker passkey. The **server** enforces this, not the client: a key-bearing
+   indexer is rejected at `POST /search` for a non-admin caller and excluded from every job's fan-out, so
+   its rows are never fetched at all ([`05-api-contract.md`](05-api-contract.md) §9.1); list-hiding plus
+   client pruning alone would leak the passkey to anyone calling the API directly. Cross-engine
+   deduplication consequently runs only over the engines the requester may see — a key-bearing engine's
+   row can never merge into a non-admin's result. The asset justification is
+   [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §1.
 
 Deduplicate across engines by `infohash` when present, otherwise by `(normalised title, size_bytes)`;
 keep the row with the highest `seeders` and list every engine that returned it. Adding a result to
@@ -880,3 +888,5 @@ Documentation ships as a commented-out Compose snippet the user must deliberatel
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Bundled `linux-distributions` changed from an HTML directory-index scraper to a curated `kind: static` list (§3.8) with a documented per-release refresh (§3.9); `static` added to the `dlsearch/v1` kind set; bundled engines forbidden from using `kind: html`; directory-index scraping and `request.paths[]` deferred to v2; ADR link slugs corrected to the canonical filenames. |
+| 2026-09-01 | §5 gains normalisation rule 6: results of key-bearing indexers are served to admins only, because Torznab download URLs embed the operator's per-user tracker passkey. |
+| 2026-09-01 | Review pass 2: rule 6 is enforced server-side at `POST /search` and in the per-job fan-out, not by list-hiding; cross-engine dedup runs only over engines the requester may see. |
