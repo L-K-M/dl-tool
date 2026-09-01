@@ -149,7 +149,7 @@ c := &http.Client{
 | 2 | Every outbound fetch — task URIs, `.torrent` fetches, indexer queries, RSS polls, notification posts, poster proxying — uses this one client. Enforce with a `depguard` rule forbidding `http.Get`, `http.Post` and bare `http.Client{}` outside `internal/secure`. |
 | 3 | The dialer re-runs for every new connection, so each redirect hop is re-validated automatically; `CheckRedirect` adds the hop cap and the scheme check the dialer cannot see. |
 | 4 | Allow schemes `http` and `https` only, **including after a redirect**. `magnet` is parsed in-process and never fetched. Deny `file`, `ftp`, `gopher`, `data`, `dict`, `ldap`, `jar`, `blob`, `smb` and everything else. |
-| 5 | Allow ports 80 and 443 only; a URL naming any other port is rejected before the dial. |
+| 5 | Allow ports 80 and 443 only for public-internet destinations; a URL naming any other port is rejected before the dial. Fetches a §2.3 switch permits into private ranges are exempt: LAN infrastructure such as Prowlarr (:9696), Jackett (:9117) and bitmagnet (:3333) listens on arbitrary ports, and blocking them would break the primary Torznab use case. |
 | 6 | Follow at most **5** redirects. Re-run rules 3–5 on every hop; a `301 → file:///etc/passwd` or `302 → http://169.254.169.254/` must never pass. |
 | 7 | Cap the body while streaming with `io.LimitReader`, and reject an over-cap `Content-Length` up front — a lying `Content-Length` must not bypass the streaming cap. |
 | 8 | TLS verification is always on. No env var, settings key or API field disables it, and no `InsecureSkipVerify: true` exists outside test fixtures. |
@@ -169,7 +169,9 @@ remote redirect, and private ranges reach it in exactly two ways:
 | Switch | Effect |
 |---|---|
 | `DLTOOL_SSRF_ALLOW_PRIVATE=true` | Lifts `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `127.0.0.0/8`, `fc00::/7` and `::1/128` globally ([`11-config-reference.md`](11-config-reference.md)) |
-| Per-indexer `allow_private` flag on an `indexers` row | Lifts the same set for that indexer's fetches only ([`07-search-and-indexers.md`](07-search-and-indexers.md)) |
+| Per-indexer `allow_private_network` flag on an `indexers` row | Lifts the same set for that indexer's fetches only ([`07-search-and-indexers.md`](07-search-and-indexers.md)) |
+
+Both switches also lift the §2.2 rule-5 port restriction for the addresses they unlock.
 
 `169.254.0.0/16` and `fe80::/10` stay denied under both switches: link-local is where the cloud
 metadata services live and there is no legitimate download source there. Gitea's

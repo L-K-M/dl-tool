@@ -345,6 +345,7 @@ CREATE TABLE indexers (
   provenance TEXT,                      -- shown in the UI, e.g. 'imported from jackett.dlm'
   legal_tier TEXT NOT NULL DEFAULT 'user-supplied' CHECK (legal_tier IN ('legitimate','user-supplied')),
   priority INTEGER NOT NULL DEFAULT 50,
+  allow_private_network INTEGER NOT NULL DEFAULT 0 CHECK (allow_private_network IN (0,1)),
   seeders_unknown INTEGER NOT NULL DEFAULT 0 CHECK (seeders_unknown IN (0,1)),
   settings_json TEXT, categories_json TEXT, last_test_at INTEGER, last_error TEXT,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);

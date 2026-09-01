@@ -831,14 +831,18 @@ DELETE /tags/{name} → 204
 ```json
 {"id":"idx_01JKQ7...","name":"Internet Archive","kind":"dlsearch","enabled":true,
  "url":null,"api_key_set":false,"definition_id":"internet-archive","definition_source":"bundled",
- "provenance":"shipped with dl-tool","legal_tier":"legitimate","priority":50,"seeders_unknown":true,
+ "provenance":"shipped with dl-tool","legal_tier":"legitimate","priority":50,
+ "allow_private_network":false,"seeders_unknown":true,
  "categories":[{"id":8000,"name":"Other"}],"last_test_at":"2026-09-01T08:12:04Z","last_error":null}
 ```
 
 `api_key_set` is a boolean because the key itself is never returned. `POST /indexers` and
 `PATCH /indexers/{id}` accept `name`, `kind` (`torznab` \| `newznab` \| `dlsearch`), `enabled`, `url`,
-`api_key`, `definition_id`, `priority` and `settings` (per-engine values, schema in
-[`07-search-and-indexers.md`](07-search-and-indexers.md)). Imported indexers are created with
+`api_key`, `definition_id`, `priority`, `allow_private_network` and `settings` (per-engine values, schema in
+[`07-search-and-indexers.md`](07-search-and-indexers.md)). `allow_private_network` is required for an
+indexer on a private-network address such as a Prowlarr, Jackett or bitmagnet instance on the same host or
+LAN; it lifts the SSRF private-range denial and the 80/443 port restriction for that indexer's fetches
+only ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §2.3). Imported indexers are created with
 `enabled: false`.
 
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (non-admin write) · `403`
