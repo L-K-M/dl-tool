@@ -140,7 +140,7 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `max_active_per_user` | integer, `0` = unlimited | `3` | `PATCH /settings` |
 | `process_order` | enum `by_date_created\|by_user_round_robin` | `by_date_created` | `PATCH /settings` |
 | `rss_enabled` | boolean | `true` | `PATCH /settings` |
-| `rss_interval_s` | integer seconds, minimum `60` | `900` | `PATCH /settings` |
+| `rss_interval_s` | integer seconds, minimum `300` | `900` | `PATCH /settings` |
 | `auto_extract` | boolean | `false` | `PATCH /settings` |
 | `extract_passwords` | **secret** array of strings | `[]` | `PATCH /settings` |
 | `confirm_on_delete` | boolean | `true` | `PATCH /settings` |
