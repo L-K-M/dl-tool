@@ -196,7 +196,7 @@ Segments, left to right:
 | 3 | Counts | `8 active / 42 total` | |
 | 4 | Free space | `Free: 412 GB of 2 TB` | For the destination of the currently selected task, else the default destination. |
 | 5 | Schedule | `Sched: OFF` / `Default` / `Alt` / `No-DL` | Click navigates to `/settings/bandwidth`. |
-| 6 | Alt-speed indicator | turtle icon | Shows whether the active schedule cell applies the alternative pair; click navigates to `/settings/bandwidth`. There is no manual override toggle: the grid is the only source of alternative speed, and no settings key backs one. |
+| 6 | Alt-speed indicator | turtle icon | Shown only while `schedule_enabled` is true; indicates whether the active cell applies the alternative pair, and click navigates to `/settings/bandwidth`. There is no manual override toggle: the grid is the only source of alternative speed, and no settings key backs one. |
 
 ---
 
@@ -698,8 +698,9 @@ by a CRUD endpoint in [`05-api-contract.md`](05-api-contract.md). Controls that 
 not deferred with a placeholder: proxy settings (the SSRF client is a direct dialer by design), global and
 per-task connection counts, DHT/PeX/LSD/encryption and per-task peer ceilings (engine-side preferences
 dl-tool does not fan out), auto-append trackers, an incomplete folder and a content-layout default, a
-global auto-downloader switch and smart-episode patterns (the rule engine owns both behaviours), and
-session lifetime (`DLTOOL_SESSION_TTL` is infrastructure, environment-only).
+global auto-downloader switch and smart-episode patterns (the rule engine owns both behaviours), log
+retention, database vacuum and a reset-to-defaults action (no endpoints), and session lifetime
+(`DLTOOL_SESSION_TTL` is infrastructure, environment-only).
 
 ### 9.1 The 24×7 schedule grid
 
