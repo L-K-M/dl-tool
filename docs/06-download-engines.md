@@ -485,7 +485,7 @@ and 1.37.0 is feature-complete for HTTP/FTP/SFTP. dl-tool builds its aria2 image
 ```
 aria2c \
   --enable-rpc --rpc-listen-all --rpc-listen-port=6800 \
-  --rpc-secret=${ARIA2_RPC_SECRET} --rpc-allow-origin-all \
+  --rpc-secret=${ARIA2_RPC_SECRET} \
   --dir=/data --continue=true \
   --max-concurrent-downloads=5 --max-connection-per-server=8 --split=8 \
   --file-allocation=falloc \
@@ -500,6 +500,7 @@ aria2c \
 | `--enable-rpc` | `false` | Required; upstream "strongly recommended" pairing with `--rpc-secret`. |
 | `--rpc-listen-all` | `false` | Otherwise aria2 listens only on loopback and dl-tool cannot reach it. |
 | `--rpc-listen-port` | `6800` | Left at the default. |
+| `--rpc-allow-origin-all` | `false` | **Never set.** The flag exists for browser-based RPC clients, which dl-tool is not, and [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §10 forbids it in every environment. |
 | `--dir` | (cwd) | Must be the single `/data` mount ([ADR-0012](decisions/0012-single-data-mount.md)). |
 | `--file-allocation` | **`prealloc`** | `prealloc` blocks for a long time on large files on some filesystems; `falloc` suits ext4/xfs. *(Inferred from the option list, not an upstream recommendation.)* |
 | `--save-session` + `--input-file`, same path | (none) | The documented restart-persistence idiom: "You can pass this output file to aria2c with `--input-file` option on restart." |
