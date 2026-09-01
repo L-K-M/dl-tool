@@ -7,11 +7,11 @@
 
 ## Purpose
 Define the complete SQLite schema of dl-tool: connection configuration, `CREATE TABLE` DDL, indices, enum
-vocabularies, migration policy, backup/restore and retention. It does not define HTTP payload shapes or
+vocabularies, schema-migration policy, backup/restore and retention. It does not define HTTP payload shapes or
 environment variables.
 
 ## Scope of this document
-- In scope: DSN and pragmas, every table and index, every DB-level enum, goose migration policy, `VACUUM INTO`
+- In scope: DSN and pragmas, every table and index, every DB-level enum, the goose schema-migration policy, `VACUUM INTO`
   backup/restore, retention windows.
 - Out of scope (lives instead in): HTTP JSON and status codes → [`05-api-contract.md`](05-api-contract.md);
   environment variables → [`11-config-reference.md`](11-config-reference.md); the `Engine` interface and engine
@@ -185,7 +185,6 @@ CREATE TABLE engines (
   username TEXT,
   secret_enc TEXT,                      -- encrypted at rest; never returned by an API, never logged
   binary_path TEXT,                     -- ytdlp only
-  foreign_task_policy TEXT NOT NULL DEFAULT 'ignore' CHECK (foreign_task_policy IN ('ignore','adopt')),
   version TEXT,                         -- written by the boot capability probe: the resolved engine version,
                                         -- and for 'ytdlp' the yt-dlp version and the JS runtime version
   last_seen_at INTEGER, last_error TEXT,
@@ -211,9 +210,9 @@ CREATE TABLE notification_channels (
 CREATE INDEX idx_notification_channels_enabled ON notification_channels(enabled);
 ```
 
-`engines.foreign_task_policy` decides what happens to a transfer dl-tool did not create: `ignore` (default)
-hides it everywhere, `adopt` imports it and assigns it to the admin who configured that engine →
-[ADR-0017](decisions/0017-exclusive-control-of-engines.md).
+There is no column, and no setting, describing what to do with a transfer dl-tool did not create. dl-tool
+assumes exclusive control of every configured engine: such a transfer is never inserted into `tasks` and
+never listed → [ADR-0017](decisions/0017-exclusive-control-of-engines.md).
 
 Four `settings` rows carry the concurrency and disk-reservation limits. `00001_init.sql` seeds all four:
 
@@ -568,7 +567,7 @@ Plus seven dl-tool additions:
 | `js_runtime_missing` | The yt-dlp JS runtime (`DLTOOL_JS_RUNTIME_PATH`) is absent, so the media lane is disabled. |
 
 `missing_python`, `required_premium_account` and `private_video` are inherited from Download Station's
-vocabulary so an imported task keeps its original code; dl-tool itself never raises them.
+vocabulary for completeness; dl-tool itself never raises them.
 
 ### 4.3 `task_files.priority`
 
@@ -583,8 +582,8 @@ That enum's fifth member, `Mixed = -1`, is never stored by dl-tool.
 | `6` | `high` | Downloaded ahead of `normal` files. |
 | `7` | `maximum` | Downloaded first. |
 
-There is no distinct `low`. Download Station's four-level skip/low/normal/high collapses `low` → `normal`
-on import → [`15-migration-and-import.md`](15-migration-and-import.md). aria2 has no per-file numeric
+There is no distinct `low`: Download Station's four-level skip/low/normal/high collapses `low` → `normal`,
+so the UI offers skip, normal, high and maximum only. aria2 has no per-file numeric
 priority — only `--select-file`, which is a selection — so an aria2 task stores `priority` as `NULL` and
 drives `selected` alone. The per-engine mapping is in [`06-download-engines.md`](06-download-engines.md).
 
@@ -638,16 +637,9 @@ Two independent limits, two error codes. Never conflate them.
 `CHECK` because `task_events.code` is an open, additive vocabulary. Delivery is one `jobs` row per channel
 per event, so a failing channel retries on the standard backoff without blocking the others.
 
-### 4.9 `engines.foreign_task_policy`
-
-| Value | Meaning |
-|---|---|
-| `ignore` | Default. A transfer dl-tool did not create is never listed by any endpoint. |
-| `adopt` | It is imported as a task owned by the admin who configured that engine, preserving save path, category and tags. |
-
 ---
 
-## 5. Migration policy
+## 5. Schema migration policy
 
 Library `github.com/pressly/goose/v3 v3.27.3`, embedded, run at boot before the HTTP listener starts.
 
@@ -780,3 +772,4 @@ new table added by a later migration must be added to this list in the same chan
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | File priority corrected to `IN (0,1,6,7)` with the qBittorrent names `skip/normal/high/maximum`; added `tasks.infohash_v1`/`infohash_v2` with partial unique indices and the ingest normalisation table; widened `feed_items.info_hash` and `rule_matches.info_hash` to 64 hex; added `notification_channels`; added `engines.foreign_task_policy` and the boot-probe meaning of `engines.version`; added the concurrency and `min_free_space` settings rows; separated the storage quota from the concurrency limit and added `concurrency_limit` and `js_runtime_missing` to `error_code`; added the table-reachability list; corrected the ADR-0005/0008/0009 filenames. |
+| 2026-09-01 | Migration subsystem cut: deleted the `engines.foreign_task_policy` column, its `CHECK` constraint and enum section §4.9, replacing them with the single exclusive-control rule; removed every link to the withdrawn migration document and the "imported task" framing of the inherited `error_code` values; §5 retitled "Schema migration policy" to keep goose migrations unambiguous. `notification_channels`, `infohash_v1`/`infohash_v2` and `priority IN (0,1,6,7)` are unchanged. |

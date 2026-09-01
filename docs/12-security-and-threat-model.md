@@ -23,7 +23,7 @@ compose wiring or HTTP shapes.
   dlsearch schema → [`07-search-and-indexers.md`](07-search-and-indexers.md) · error slugs and status
   codes → [`05-api-contract.md`](05-api-contract.md) · fixtures and harness →
   [`13-testing-and-verification.md`](13-testing-and-verification.md) · licensing →
-  [ADR-0016](decisions/0016-relicense-from-the-unlicense-to-apache-2-0.md).
+  [ADR-0016](decisions/0016-relicense-to-apache-2.md).
 
 ---
 
@@ -41,7 +41,7 @@ compose wiring or HTTP shapes.
 
 ```mermaid
 flowchart TB
-    br["Operator browser and facade clients"]
+    br["Operator browser and API-token clients"]
     subgraph trusted["Trust zone — compose project"]
         app["dl-tool: API, jobs, SPA, SQLite in /config"]
         sub["yt-dlp and 7zz subprocesses"]
@@ -60,7 +60,7 @@ flowchart TB
 
 | # | Boundary | Untrusted input | Worst case | Control |
 |---|---|---|---|---|
-| B1 | Browser or facade client → API | URLs, magnet links, destination paths, settings | arbitrary write, privilege escalation | §6, §3 |
+| B1 | Browser or API-token client → `/api/v1` | URLs, magnet links, destination paths, settings | arbitrary write, privilege escalation | §6, §3 |
 | B2 | dl-tool → arbitrary remote HTTP(S) | the URL, DNS answers, redirects | **SSRF** to cloud metadata, LAN RPC ports, sibling containers | §2 |
 | B3 | Remote server → dl-tool | `Content-Disposition`, `Content-Length`, body, TLS certificate | arbitrary write, disk exhaustion, MitM | §2.4, §3 |
 | B4 | Torrent or magnet metadata → dl-tool | `name`, `files[].path`, BEP 47 symlink paths | traversal, symlink escape, disk exhaustion | §3 |
@@ -71,6 +71,11 @@ flowchart TB
 
 B2 is the defining hazard of this software class: dl-tool fetches attacker-supplied URLs server-side,
 from inside the operator's LAN, as a long-lived daemon.
+
+The only remote-service credentials dl-tool ever holds are the engine RPC secrets of B7 and indexer API
+keys. It never asks for, transmits or stores the login of another download manager — there is no code path
+that authenticates against a remote Download Station or a remote qBittorrent on the operator's behalf — so
+that credential class is absent from the asset table by construction.
 
 ---
 
@@ -570,7 +575,7 @@ Each row is the evidence for a rule above. Requirement text lives in
 | 13 | Sonarr | CVE-2024-45247, GHSA-c3w6-j3xj-3mx5, CVSS 6.1 | CWE-601 open redirect | [NFR-024](02-requirements.md#nfr-024-validate-login-redirects-as-relative-paths) |
 | 14 | Sonarr | v4 breaking change | Authentication made mandatory; `None` renamed `External` and demoted to the configuration file | [NFR-011](02-requirements.md#nfr-011-ship-no-default-credentials) |
 | 15 | \*arr ecosystem | Huntarr 9.4.2 reports, 2026 | A third-party dashboard reportedly exposed API keys without login. **UNVERIFIED** — vendor-blog sourcing only, no CVE | [NFR-016](02-requirements.md#nfr-016-keep-api-tokens-revocable-and-out-of-the-logs) |
-| 16 | youtube-dl | RIAA §1201 notice 2020-10-23, reinstated 2020-11-16 | A legal incident, not a vulnerability, in this exact software class | [ADR-0016](decisions/0016-relicense-from-the-unlicense-to-apache-2-0.md), [`01-vision-and-scope.md`](01-vision-and-scope.md) |
+| 16 | youtube-dl | RIAA §1201 notice 2020-10-23, reinstated 2020-11-16 | A legal incident, not a vulnerability, in this exact software class | [ADR-0016](decisions/0016-relicense-to-apache-2.md), [`01-vision-and-scope.md`](01-vision-and-scope.md) |
 | 17 | UnRAR | CVE-2022-30333, fixed 6.12 / OSS 6.1.7 | Symlink path traversal on Unix; pre-authentication RCE against Zimbra, which fixed it by replacing `unrar` with `7z` | [NFR-018](02-requirements.md#nfr-018-extract-archives-safely) |
 | 18 | CPython `tarfile` | CVE-2007-4559 → PEP 706 | `extractall` honoured `..` for 15 years; the `data` filter now refuses absolute links, escaping links and device files | [NFR-018](02-requirements.md#nfr-018-extract-archives-safely) |
 | 19 | Kubernetes | CVE-2019-11253 | Unauthenticated YAML billion-laughs denial of service | [NFR-019](02-requirements.md#nfr-019-parse-untrusted-definitions-and-regexes-defensively) |
@@ -607,7 +612,7 @@ shortly before midnight UTC on any day with changes, upstream's recommended chan
 (after each push). No signed release artefacts or signature verification inside `yt-dlp -U` could be
 found — **UNVERIFIED, likely absent** — so `-U` inside a container is an unreviewed remote code fetch.
 Chosen policy
-([ADR-0018](decisions/0018-pin-yt-dlp-by-version-and-hash-never-self-update-at-runtime.md)):
+([ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md)):
 
 1. The image installs an exact pinned `yt-dlp_musllinux` version, verified by SHA-256 at build time,
    and self-update is disabled at runtime — dl-tool never invokes `-U` or `--update-to`.
@@ -667,7 +672,7 @@ If a Transmission adapter is ever added it keeps `rpc-host-whitelist-enabled: tr
 ## 11. Licensing
 
 Licensing posture and the Unlicense-to-Apache-2.0 question live in
-[ADR-0016](decisions/0016-relicense-from-the-unlicense-to-apache-2-0.md); `LICENSE` is unchanged until
+[ADR-0016](decisions/0016-relicense-to-apache-2.md); `LICENSE` is unchanged until
 the repository owner decides.
 
 ## Decisions referenced
@@ -675,11 +680,11 @@ the repository owner decides.
 | ADR | Decision |
 |---|---|
 | [0010](decisions/0010-never-execute-third-party-definitions.md) | Never execute third-party definition code |
-| [0011](decisions/0011-alpine-runtime-image-with-puid-pgid-privilege-drop.md) | Alpine runtime image with PUID/PGID privilege drop |
-| [0012](decisions/0012-a-single-data-mount.md) | A single `/data` mount |
+| [0011](decisions/0011-alpine-runtime-with-puid-pgid.md) | Alpine runtime image with PUID/PGID privilege drop |
+| [0012](decisions/0012-single-data-mount.md) | A single `/data` mount |
 | [0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication |
-| [0016](decisions/0016-relicense-from-the-unlicense-to-apache-2-0.md) | Relicense from the Unlicense to Apache-2.0 (proposed) |
-| [0018](decisions/0018-pin-yt-dlp-by-version-and-hash-never-self-update-at-runtime.md) | Pin yt-dlp by version and hash; never self-update at runtime |
+| [0016](decisions/0016-relicense-to-apache-2.md) | Relicense from the Unlicense to Apache-2.0 (proposed) |
+| [0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | Pin yt-dlp by version and hash; never self-update at runtime |
 
 ## Open questions
 
@@ -695,3 +700,4 @@ the repository owner decides.
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |

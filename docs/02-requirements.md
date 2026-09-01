@@ -3,7 +3,7 @@
 > **Status:** draft
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
-> **Read this before:** every task T001–T111 and T113–T115
+> **Read this before:** every task T001–T111, T113 and T115
 
 ## Purpose
 
@@ -41,8 +41,20 @@ Download Station's 26 `error_detail` values plus `ssrf_blocked`, `path_rejected`
 `engine_unavailable`, `unsupported_scheme` and `concurrency_limit`; all rates and sizes are bytes or
 bytes/second.
 
-The identifier range `FR-130` – `FR-139` was allocated to compatibility façades, which are cut from v1.
-Those identifiers are permanently unused and are never reassigned; dl-tool serves `/api/v1` only.
+### Permanently unused requirement identifiers
+
+Nothing below is renumbered when a requirement is withdrawn. These identifiers are retired and are never
+reassigned:
+
+| Identifier(s) | Was | Why it is unused |
+|---|---|---|
+| `FR-025` | Bulk-import `.torrent` files and URL lists from a server directory | Withdrawn with the migration subsystem. Uploading `.torrent` and `.txt` files ([FR-005](#fr-005-add-tasks-from-an-uploaded-file)) and the watch folder ([FR-043](#fr-043-import-torrent-files-from-a-watch-folder)) cover the user-facing need. |
+| `FR-079` | Import qBittorrent auto-download rules from `rules.json` | Withdrawn with the migration subsystem. |
+| `FR-130` – `FR-139` | Compatibility façades | Withdrawn with the façades; dl-tool serves `/api/v1` only. |
+| `FR-149` | One-time read-only import from a live Download Station | Withdrawn with the migration subsystem. dl-tool never speaks the Synology Web API. |
+
+dl-tool has no migration or import path from another product. Task identifiers `T112` and `T114` are
+retired for the same reason.
 
 ---
 
@@ -263,15 +275,6 @@ When a client deletes a task with `delete_data=true`, dl-tool shall stop the tas
 | Covered by | Priority |
 |---|---|
 | T111 | must |
-
-### FR-025 Bulk-import torrent files and URL lists from disk
-When an operator imports a directory of `.torrent` files or a `.txt` URL list, dl-tool shall create one task per entry, return a per-entry result naming the reason for every rejection, and leave the source files in place.
-
-**Verify:** T114 imports a fixture directory of three `.torrent` files and a four-line `.txt` and asserts seven tasks, seven per-entry results and that no source file was deleted; see [`15-migration-and-import.md`](15-migration-and-import.md).
-
-| Covered by | Priority |
-|---|---|
-| T114 | must |
 
 ---
 
@@ -576,15 +579,6 @@ The dl-tool rule engine shall route each grabbed item through the same normalisa
 | Covered by | Priority |
 |---|---|
 | T069 | must |
-
-### FR-079 Import qBittorrent auto-download rules
-Where an operator uploads a qBittorrent `rules.json`, dl-tool shall convert each rule using the documented key mapping and report per-rule success or the reason for rejection.
-
-**Verify:** T073 imports a fixture with three rules, one carrying an unsupported key, and asserts two imported rules and one named rejection.
-
-| Covered by | Priority |
-|---|---|
-| T073 | should |
 
 ---
 
@@ -902,29 +896,20 @@ When an operator runs `dl-tool restore --from <file>`, dl-tool shall refuse to p
 ### FR-147 Assert engine conformance at boot
 When dl-tool connects to an engine, it shall assert that the engine's own competing automation is off — for qBittorrent `rss_processing_enabled=false`, `scheduler_enabled=false`, `auto_tmm_enabled=false` and no search plugins installed — shall raise a visible warning offering a one-click correction when it is not, and shall never exit because of it.
 
-**Verify:** T101 starts qBittorrent with Automatic Torrent Management enabled, asserts dl-tool boots, asserts the warning names `auto_tmm_enabled`, applies the offered correction and asserts the setting is then false; see [ADR-0017](decisions/0017-dl-tool-assumes-exclusive-control-of-its-engines.md).
+**Verify:** T101 starts qBittorrent with Automatic Torrent Management enabled, asserts dl-tool boots, asserts the warning names `auto_tmm_enabled`, applies the offered correction and asserts the setting is then false; see [ADR-0017](decisions/0017-exclusive-control-of-engines.md).
 
 | Covered by | Priority |
 |---|---|
 | T101 | must |
 
-### FR-148 Apply the foreign-task policy to tasks dl-tool did not create
-Where an engine holds a task dl-tool has no row for, dl-tool shall apply `engines.foreign_task_policy`: `ignore`, the default, hides it from every endpoint, and `adopt` creates a task owned by the admin who configured that engine, preserving its save path, category and tags.
+### FR-148 Ignore engine tasks dl-tool did not create
+If an engine holds a task dl-tool has no row for, then dl-tool shall ignore it: the task shall not appear in any listing, delta or count, and dl-tool shall neither modify nor delete it. There is no adopt mode and no configurable policy.
 
-**Verify:** T102 adds a torrent directly in qBittorrent, asserts it is absent from the task list under `ignore`, switches to `adopt` and asserts a task appears with the original save path, category, tags and the configuring admin as owner; see [ADR-0017](decisions/0017-dl-tool-assumes-exclusive-control-of-its-engines.md).
+**Verify:** T102 adds a torrent directly in qBittorrent, asserts it never appears in `GET /tasks`, in an SSE delta or in the task counts, and asserts its state at the engine is unchanged after a full poll cycle; see [ADR-0017](decisions/0017-exclusive-control-of-engines.md).
 
 | Covered by | Priority |
 |---|---|
 | T102 | must |
-
-### FR-149 Import once from a live Download Station, read-only
-When an operator supplies a DSM host, account and password, dl-tool shall log in with `SYNO.API.Auth` using `session=DownloadStation`, enumerate tasks with `SYNO.DownloadStation.Task.list` and `additional=detail,transfer`, fetch each BitTorrent task's source with `SYNO.DownloadStation2.Task.Source`, import RSS sites and feeds with `SYNO.DownloadStation.RSS.Site` and `SYNO.DownloadStation.RSS.Feed`, present a dry run before creating anything, and shall never create, modify or delete anything on the NAS.
-
-**Verify:** T114 runs the wizard against a recorded DSM fixture and asserts the dry run lists every task and feed while creating no row, that the committed run creates them, and that the only calls made are the login, the read methods above and the logout — dl-tool never reads Download Station's on-disk database. See [`15-migration-and-import.md`](15-migration-and-import.md).
-
-| Covered by | Priority |
-|---|---|
-| T114 | must |
 
 ---
 
@@ -1248,7 +1233,7 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | [0011](decisions/0011-alpine-runtime-image-with-puid-pgid-privilege-drop.md) | Alpine runtime image with PUID/PGID privilege drop |
 | [0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication |
 | [0015](decisions/0015-db-backed-in-process-job-queue.md) | DB-backed in-process job queue |
-| [0017](decisions/0017-dl-tool-assumes-exclusive-control-of-its-engines.md) | dl-tool assumes exclusive control of its engines |
+| [0017](decisions/0017-exclusive-control-of-engines.md) | dl-tool assumes exclusive control of its engines |
 
 ## Open questions
 
@@ -1270,3 +1255,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades cut: FR-130 – FR-139 withdrawn and permanently unused, ADR-0014 link removed. Added FR-020 – FR-025, FR-033, FR-046 – FR-048, FR-096, FR-097, FR-107, FR-122 – FR-124, FR-144 – FR-149 and NFR-029. Corrected the FR-007 file-priority vocabulary, the FR-121 quota semantics and the NFR-007 acceptance mechanism; fixed the ADR-0003 and ADR-0010 slugs. |
+| 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |

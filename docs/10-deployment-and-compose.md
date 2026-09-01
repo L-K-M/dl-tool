@@ -18,9 +18,7 @@ define environment-variable semantics, HTTP shapes or operator runbooks.
   endpoints and payloads → [`05-api-contract.md`](05-api-contract.md); engine wire protocols →
   [`06-download-engines.md`](06-download-engines.md); DDL → [`04-data-model.md`](04-data-model.md);
   threat model → [`12-security-and-threat-model.md`](12-security-and-threat-model.md); backup, restore,
-  diagnostics and symptom→fix tables → [`17-operations-and-runbook.md`](17-operations-and-runbook.md);
-  one-time migration from an existing Download Station or qBittorrent →
-  [`15-migration-and-import.md`](15-migration-and-import.md).
+  diagnostics and symptom→fix tables → [`17-operations-and-runbook.md`](17-operations-and-runbook.md).
 
 ---
 
@@ -760,7 +758,8 @@ scheduling and the schema-newer-than-binary refusal are owned by
   too: a floating `lscr.io/linuxserver/qbittorrent:latest` can change the libtorrent version underneath a
   running library.
 - Manual update is the documented path: `docker compose pull && docker compose up -d && docker image prune -f`.
-- Migrations run on startup, forward-only, after an automatic pre-migration backup of the database.
+- Database schema migrations run on startup, forward-only, after an automatic pre-migration backup of the
+  database ([`04-data-model.md`](04-data-model.md)). No other import or conversion step runs on upgrade.
 - Rollback:
 
 ```bash
@@ -970,3 +969,4 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |

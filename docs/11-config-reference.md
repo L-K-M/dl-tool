@@ -81,8 +81,6 @@ column names the package that consumes the parsed field.
 | `DLTOOL_JS_RUNTIME_PATH` | file path | `/usr/bin/node` | no | infrastructure | JavaScript runtime required by `yt-dlp-ejs` for full YouTube support. Missing binary raises `js_runtime_missing` and disables the media lane with a visible warning. | `internal/engine/ytdlp/runner.go` |
 | `DLTOOL_SEVENZIP_PATH` | file path | `/usr/bin/7zz` | no | infrastructure | Archive extractor used by the auto-extract job handler. | `internal/jobs/handlers_extract.go` |
 | `DLTOOL_SSRF_ALLOW_PRIVATE` | bool | `false` | no | infrastructure | When `true`, outbound fetches of feeds, indexers and task URIs may resolve to loopback, link-local and RFC 1918 addresses. Leave `false` unless every indexer is on the same LAN. | `internal/secure/ssrf.go` |
-| `DLTOOL_COMPAT_QBITTORRENT` | bool | `false` | no | preference | Seeds the `compat_qbittorrent` setting that mounts the `/api/v2/*` façade. | `internal/compat/qbittorrent.go` |
-| `DLTOOL_COMPAT_SYNOLOGY` | bool | `false` | no | preference | Seeds the `compat_synology` setting that mounts the `/webapi/*` façade. | `internal/compat/synology.go` |
 | `DLTOOL_WATCH_DIR` | dir path | *(empty)* | no | preference | Seeds one enabled row in `watch_folders` pointing at this directory. Must be inside `DLTOOL_DATA_ROOTS`. | `internal/jobs/cron.go` |
 | `DLTOOL_NOTIFY_URL` | url | *(empty)* | no | preference | Seeds one enabled `notification_channels` row of kind `webhook` with this URL. | `internal/jobs/handlers_notify.go` |
 
@@ -146,8 +144,6 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `auto_extract` | boolean | `false` | `PATCH /settings` |
 | `extract_passwords` | **secret** array of strings | `[]` | `PATCH /settings` |
 | `confirm_on_delete` | boolean | `true` | `PATCH /settings` |
-| `compat_qbittorrent` | boolean | value of `DLTOOL_COMPAT_QBITTORRENT` at first boot, else `false` | `PATCH /settings`, first-run wizard |
-| `compat_synology` | boolean | value of `DLTOOL_COMPAT_SYNOLOGY` at first boot, else `false` | `PATCH /settings`, first-run wizard |
 
 Seeding does not count toward any `max_active_*` limit. The 168-cell bandwidth grid is not a settings key: it
 lives in its own table and is replaced through `PUT /settings/schedule`. Per-user `default_destination`,
@@ -254,8 +250,6 @@ DLTOOL_SEVENZIP_PATH=/usr/bin/7zz
 DLTOOL_SSRF_ALLOW_PRIVATE=false
 
 # --- dl-tool: preference seeds, first boot only ---
-DLTOOL_COMPAT_QBITTORRENT=false
-DLTOOL_COMPAT_SYNOLOGY=false
 DLTOOL_WATCH_DIR=/data/watch
 DLTOOL_NOTIFY_URL=
 ```

@@ -164,11 +164,18 @@ Secondary voids: a global bandwidth schedule binding *all* engines; a mobile cli
 **The unlock that makes the plan cheap.** Sonarr's `develop` branch already ships a *Download Station*
 download client — `src/NzbDrone.Core/Download/Clients/DownloadStation/` with `DiskStationProxyBase.cs`,
 `DownloadStationTaskProxyV1.cs` and friends, all returning HTTP 200 on `raw.githubusercontent.com` on
-2026-09-01. Implementing roughly five Synology endpoints therefore makes dl-tool a zero-configuration
-download client for Sonarr, Radarr and Lidarr *and* for every existing DS mobile app and browser
-extension. `decypharr` and `qui` independently chose the sibling trick (impersonating qBittorrent), which
-is corroborating evidence that façades are the right integration strategy. See
-[`15-compatibility-apis.md`](15-compatibility-apis.md) and ADR-0014 in [`decisions/`](decisions/).
+2026-09-01. Implementing roughly five Synology endpoints would therefore have made dl-tool a
+zero-configuration download client for Sonarr, Radarr and Lidarr *and* for every existing DS mobile app
+and browser extension, and `decypharr` and `qui` independently chose the sibling trick of impersonating
+qBittorrent.
+
+**This option was considered and rejected.** The repository owner scoped dl-tool to being superficially
+identical to Download Station *from the user's point of view*, not functionally identical to it for other
+software: "I just want a tool that basically does the same thing from the user's pov and that I can host
+wherever I want using docker compose." dl-tool therefore serves `/api/v1` only, emulates nobody, and
+carries no compatibility surface. ADR-0014 was withdrawn before it was written and its number is
+permanently unused. The finding is recorded here because it is real and well-evidenced — if the scope
+ever changes, this is where the work starts.
 
 ---
 
@@ -201,8 +208,7 @@ Four further corrections that also change code, recorded here so they are not lo
   `isCrossSiteRequest()` is permissive when both are absent, and rejects only a *mismatch*, with 401.
 - **Synology error code 105 is "the logged-in session does not have permission", not "auth failure".**
   Sonarr treats 105/106/107/119 as session errors but raises an authentication exception only on 105;
-  bad credentials at login time come back as Auth-namespace code 400. A façade that returns the wrong one
-  makes Sonarr's retry loop misbehave.
+  bad credentials at login time come back as Auth-namespace code 400.
 
 ---
 
@@ -241,9 +247,10 @@ proves each, so a future maintainer can re-verify without redoing the work.
   `DiskStationProxyBase.cs` and `DownloadStationTaskProxyV1.cs`, including `create` v2 (POST, multipart
   `file`), `create` v3 (GET, query `uri`), `list` v1 (`additional=detail,transfer`) and `delete` v1
   (`id`, `force_complete`). `https://wiki.servarr.com/sonarr/supported`
-- The `SYNO.API.Info` `query=` list is **dynamic** — each Sonarr proxy queries `SYNO.API.Auth` plus its own
-  API name, so a façade must answer for `SYNO.DownloadStation2.Task`, `SYNO.DownloadStation.Info` and
-  `SYNO.FileStation.*` too, not only the two obvious names.
+- The `SYNO.API.Info` `query=` list is **dynamic** — each Sonarr proxy queries `SYNO.API.Auth` plus its
+  own API name, so an emulator would have had to answer for `SYNO.DownloadStation2.Task`,
+  `SYNO.DownloadStation.Info` and `SYNO.FileStation.*` too, not only the two obvious names. Recorded for
+  completeness; dl-tool builds no such emulator.
 - Flood already proves the composition pattern: one REST API with its own OpenAPI spec at
   `/api/openapi.json` normalising four torrent RPCs. `https://flood.js.org`
 - Prowlarr documents *"Usenet support for 24 indexers natively"* and *"Torrent support for over 500
@@ -434,12 +441,13 @@ Files live in [`decisions/`](decisions/).
 | ADR-0009 | A native cross-protocol RSS rule engine |
 | ADR-0010 | Never execute third-party definition code |
 | ADR-0013 | Mandatory built-in authentication |
-| ADR-0014 | Opt-in qBittorrent and Synology compatibility façades |
 | ADR-0016 | Relicense from the Unlicense to Apache-2.0 (proposed) |
 
 ## Open questions
 
-- [NEEDS CLARIFICATION: the ten research reports cited in §5 live outside the repository and cannot be linked relatively. Decide whether to vendor them under `docs/research/` or to treat this file as their only durable summary.]
+- None. The ten research reports cited in §5 are deliberately **not** vendored into the repository: this
+  document is their durable summary, and every claim above carries the primary-source URL it came from, so
+  re-verification goes to the source rather than to a stale copy.
 
 ## Change log
 

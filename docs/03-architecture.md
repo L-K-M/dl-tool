@@ -15,7 +15,7 @@ define DDL, HTTP payload shapes, the `Engine` interface body, or the compose fil
 
 - In scope: system context, container topology, package decomposition, four runtime scenarios including
   admission control, the task state machine, the ID scheme, the error model, the units rule, job semantics,
-  the SSE ring, engine conformance, the foreign-task policy, risks.
+  the SSE ring, engine conformance, engine ownership, risks.
 - Out of scope, and where it lives instead: DDL and enums → [`04-data-model.md`](04-data-model.md);
   endpoints and payloads → [`05-api-contract.md`](05-api-contract.md); the `Engine` interface and engine
   status tables → [`06-download-engines.md`](06-download-engines.md); RSS rule schema →
@@ -44,9 +44,7 @@ flowchart LR
         dlt["dl-tool<br/>unified queue, users, destinations,<br/>search, RSS rules, bandwidth schedule, UI"]
     end
     eng["Download engines<br/>aria2, qBittorrent-nox, yt-dlp<br/>fetch from origin servers and the swarm into /data"]
-    dsm["Synology NAS running Download Station<br/>one-time migration source only"]
     op -->|"HTTPS: REST /api/v1 plus SSE /api/v1/events"| dlt
-    dlt -->|"one-time, read-only migration import"| dsm
     dlt -->|"HTTP GET: Torznab caps and search"| idx
     dlt -->|"conditional GET: If-None-Match, If-Modified-Since"| feeds
     dlt -->|"JSON-RPC, WebAPI v2, subprocess"| eng
@@ -55,7 +53,6 @@ flowchart LR
 | External interface | Direction | Protocol | Detailed in |
 |---|---|---|---|
 | Operator browser | inbound | REST `/api/v1` plus SSE | [`05-api-contract.md`](05-api-contract.md) |
-| Download Station NAS | outbound | one-time, read-only migration client over `SYNO.*` | [`15-migration-and-import.md`](15-migration-and-import.md) |
 | aria2 | outbound | JSON-RPC 2.0 over HTTP POST at `/jsonrpc`; notifications over WebSocket only | [`06-download-engines.md`](06-download-engines.md) |
 | qBittorrent-nox, yt-dlp | outbound | WebAPI v2 with a `SID` cookie session; local subprocess with JSON on stdout | [`06-download-engines.md`](06-download-engines.md) |
 | Indexers and feeds | outbound | Torznab/Newznab XML and RSS/Atom over HTTPS | [`07-search-and-indexers.md`](07-search-and-indexers.md) |
@@ -488,20 +485,17 @@ A conformance failure is a visible warning carrying a "fix it for me" action. It
 blocks start-up. The probe also records the resolved engine, yt-dlp and JavaScript-runtime versions into
 `engines.version`.
 
-### 8.8 Foreign-task policy
+### 8.8 Foreign tasks
 
-`engines.foreign_task_policy` decides what happens to tasks that exist in an engine but that dl-tool did not
-create — a torrent added directly in qBittorrent's own WebUI, or a queue predating installation. The
-`engines` columns themselves are defined in [`04-data-model.md`](04-data-model.md).
+A foreign task is a transfer that exists in an engine but that dl-tool did not create — a torrent added
+directly in qBittorrent's own WebUI, or a queue predating installation. There is one rule and no setting:
+**dl-tool ignores it.** A foreign task never appears in `GET /tasks`, in the grid or in an SSE delta, counts
+toward no quota and no `max_active_*` limit, and is never paused, resumed, relocated or deleted by dl-tool.
+Detection is by handle: a transfer is foreign when its `engine_ref` matches no `tasks` row for that engine.
 
-| Value | Behaviour |
-|---|---|
-| `ignore` (default) | Foreign tasks never appear in the queue, the grid or an SSE delta. dl-tool leaves them running and untouched. |
-| `adopt` | Foreign tasks are imported as dl-tool tasks and owned by the admin who configured that engine, preserving save path, category and tags. |
-
-The "one queue" claim in [`01-vision-and-scope.md`](01-vision-and-scope.md) is conditional on this setting.
-Bulk adoption of an existing qBittorrent is a one-time import, not a live sync; it is specified in
-[`15-migration-and-import.md`](15-migration-and-import.md).
+The "one queue" claim in [`01-vision-and-scope.md`](01-vision-and-scope.md) therefore covers every task
+dl-tool created, and nothing else. Behaviour and detection detail live in
+[`06-download-engines.md`](06-download-engines.md).
 
 ---
 
@@ -549,3 +543,4 @@ The D-list in §4 is the full map, D14 excluded. ADRs that shape this document d
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades cut: removed D14, ADR-0014, `internal/compat`, the façade actor and its context row. Added §6.4 admission control, §8.7 engine conformance, §8.8 foreign-task policy, ADR-0017 and ADR-0018, and risk R6 (JS runtime). Hardened R2 (pinned yt-dlp) and R4 (refuse to start on a network filesystem). ADR links moved to the canonical slugs. |
+| 2026-09-01 | Migration subsystem cut: removed the Download Station NAS actor and its migration edge from the §3 context diagram, its external-interface row, and every link to the withdrawn migration document. §8.8 restated as one rule with no setting — foreign tasks are always ignored; `engines.foreign_task_policy` deleted. |

@@ -49,8 +49,10 @@ exposes a transparent qBittorrent reverse proxy so external apps keep working.
 - Good, because users can point dl-tool at a qBittorrent they already run.
 - Bad, because the deployment is multi-container and every engine adds configuration and credentials.
   [`../10-deployment-and-compose.md`](../10-deployment-and-compose.md) hides this behind one `compose.yaml`.
-- Bad, because the "one queue" claim holds only for tasks dl-tool created; foreign tasks are governed by
-  `engines.foreign_task_policy` in [`../06-download-engines.md`](../06-download-engines.md).
+- Bad, because the "one queue" claim holds only for tasks dl-tool created. A transfer added directly to an
+  engine by some other means is ignored and never appears in the queue — see
+  [`ADR-0017`](0017-exclusive-control-of-engines.md) and
+  [`../06-download-engines.md`](../06-download-engines.md).
 - Neutral, because Usenet, ed2k and hoster premium accounts stay out of v1 — the adapter interface must not
   preclude them, and it does not.
 

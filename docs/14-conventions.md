@@ -38,7 +38,6 @@ dl-tool/
 │   ├── store/                       # all SQL: sqlx access, row structs, retention
 │   │   └── migrations/              # goose .sql files, //go:embed-ed
 │   ├── api/                         # chi router, Huma operations, middleware, SPA, SSE
-│   ├── compat/                      # qBittorrent /api/v2 and Synology /webapi façades
 │   ├── engine/                      # Engine interface, adapter registry, URI→engine router
 │   │   ├── aria2/                   # aria2 JSON-RPC client and field/status mapping
 │   │   ├── qbittorrent/             # qBittorrent WebAPI v2 client and field/status mapping
@@ -285,7 +284,7 @@ Task-local prohibitions belong in the task file's `## Out of scope — do NOT` s
 | [ADR-0002](decisions/0002-go-for-the-backend.md) | Go backend, single static binary |
 | [ADR-0003](decisions/0003-chi-huma-code-first-openapi.md) | chi + Huma; `api/openapi.json` is a build output |
 | [ADR-0004](decisions/0004-sqlite-as-the-only-datastore.md) | SQLite as the only datastore, accessed with sqlx |
-| [ADR-0006](decisions/0006-server-sent-events-with-rid-deltas-for-live-updates.md) | One SSE reducer feeding the client store |
+| [ADR-0006](decisions/0006-sse-with-rid-deltas.md) | One SSE reducer feeding the client store |
 | [ADR-0010](decisions/0010-never-execute-third-party-definitions.md) | Never execute third-party definition code |
 
 ## Open questions
@@ -297,3 +296,4 @@ Task-local prohibitions belong in the task file's `## Out of scope — do NOT` s
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
+| 2026-09-01 | Removed `internal/compat/` from the §1 repository layout: there is no compatibility façade and no migration subsystem, so no package owns either. Corrected the ADR-0006 slug to the canonical filename. |

@@ -4,7 +4,7 @@
 > **Last reviewed:** 2026-09-01
 > **Audience:** implementing agent
 > **Read this before:** T007, T008, T009, T016, T021, T031, T039, T045, T054, T061, T069, T084, T092,
-> T098, T106, T107, T108, T109, T110, T111, T114
+> T098, T106, T107, T108, T109, T110, T111
 
 ## Purpose
 
@@ -22,14 +22,18 @@ define storage.
   dlsearch YAML schema and Torznab client → [`07-search-and-indexers.md`](07-search-and-indexers.md); the
   RSS rule schema, matching algorithm and reason-code enum → [`08-rss-automation.md`](08-rss-automation.md);
   grid columns and dialog fields → [`09-web-ui-spec.md`](09-web-ui-spec.md); environment variables →
-  [`11-config-reference.md`](11-config-reference.md); the importer procedures, the Download Station wire
-  calls and the field-by-field mapping tables behind §16 →
-  [`15-migration-and-import.md`](15-migration-and-import.md); operator procedures and the `dl-tool restore`
-  CLI → [`17-operations-and-runbook.md`](17-operations-and-runbook.md).
+  [`11-config-reference.md`](11-config-reference.md); operator procedures and the `dl-tool restore` CLI →
+  [`17-operations-and-runbook.md`](17-operations-and-runbook.md).
 
 dl-tool serves one HTTP API, `/api/v1`. There is no qBittorrent-compatible and no Synology-compatible
 surface. Outside it the process serves only the embedded SPA's static assets and the three process
 endpoints in §13.1; no other program's wire protocol is implemented, at any path, opt-in or otherwise.
+
+There is also no migration surface: no endpoint imports tasks, feeds or rules from another download
+product, and dl-tool never calls another product's API to fetch them. Tasks arrive through
+`POST /tasks` — pasted URIs, an uploaded `.torrent`, an uploaded `.txt` URL list — through a watch folder
+(§15), through a search result or through an RSS rule. `GET /settings/export` and `POST /settings/import`
+(§11.5) carry dl-tool's own configuration between dl-tool instances and nothing else.
 
 ---
 
@@ -211,9 +215,6 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 | GET | `/system/info` | session\|token | Version, engine health, task counts. |
 | GET | `/system/logs` | admin | Recent structured logs, redacted. |
 | POST | `/system/backup` | admin | `VACUUM INTO` a consistent copy. |
-| POST | `/migrations/download-station` | admin | One-time read-only import from a live DSM. |
-| POST | `/migrations/qbittorrent` | admin | Adopt in place the torrents an engine already holds. |
-| POST | `/migrations/files` | admin | Bulk import `.torrent` files, a URL list or a qBittorrent `rules.json`. |
 
 ---
 
@@ -372,7 +373,9 @@ Create one task per accepted URI or blob.
 | `engine` | string | no | auto-routed by scheme | `aria2` \| `qbittorrent` \| `ytdlp`; the routing table is in [`06-download-engines.md`](06-download-engines.md). |
 
 Multipart form: a `payload` part holding the JSON above without `blob`, plus one or more `file` parts.
-Total request cap 32 MiB.
+A `file` part is a `.torrent` or `.metalink`, which becomes one task each, or a `.txt` whose every
+non-empty line that does not start with `#` is treated as one entry of `uris` and routed by scheme. Total
+request cap 32 MiB, and the 50-URI cap applies to the lines of a `.txt` as well.
 
 ```http
 POST /api/v1/tasks
@@ -766,8 +769,8 @@ that validates a task `destination`
   upwards. Another user's directory names are never enumerable through any of these four endpoints.
 - The check runs after symlink resolution, so a symlink inside the jail pointing outside it is rejected
   exactly like a `..` path.
-- `POST /tasks`, `PATCH /tasks/{id}`, `POST /watch-folders` and every migration importer reject a
-  destination outside the caller's jail with the same `403` `/problems/path-rejected`.
+- `POST /tasks`, `PATCH /tasks/{id}` and `POST /watch-folders` reject a destination outside the caller's
+  jail with the same `403` `/problems/path-rejected`.
 - Categories are global and their `save_path` is admin-managed. A jailed caller creating a task in a
   category whose save path lies outside their jail receives their own `default_destination` as the effective
   `destination`, with the category path reported in `requested_destination`.
@@ -1406,159 +1409,6 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 
 ---
 
-## 16. Migration and import
-
-Three importers, admin-only, each a one-time operation with a mandatory dry-run mode and no state of its own
-([`15-migration-and-import.md`](15-migration-and-import.md) owns the procedures, the mapping tables and the
-operator-facing wizard). None of them creates a compatibility surface: dl-tool acts as a **client** here,
-and nothing depends on any of them after it has run.
-
-Every importer shares one report envelope, so the wizard has one renderer:
-
-| Member | Type | Meaning |
-|---|---|---|
-| `dry_run` | boolean | Echoes the request. `true` ⇒ nothing was written. |
-| `source` | string | `download-station` \| `qbittorrent` \| `files`. |
-| `elapsed_ms` | integer | |
-| `totals` | object | `{"examined":int,"importable":int,"created":int,"skipped":int,"rejected":int}`. `created` is `0` on a dry run. |
-| `items` | object[] | One entry per examined thing: `{"kind","source_ref","title","action","task_id","would","reason","detail"}`. `kind` is `task` \| `feed` \| `rule`; `action` is `create` \| `skip` \| `reject`; `would` holds the fields that would be written; `task_id` is present only when something was created. |
-| `warnings` | string[] | Non-fatal conversions, e.g. a dropped Windows save path. |
-
-A dry run returns exactly the report a committing run would produce, so the two are comparable line by line.
-`dry_run` defaults to `true` on all three endpoints: an importer must be asked twice to write anything.
-
-### 16.1 `POST /migrations/download-station`
-
-A one-time, read-only import from a live DSM the operator owns
-([FR-149](02-requirements.md#fr-149-import-once-from-a-live-download-station-read-only)). dl-tool signs in as
-an ordinary Download Station client and calls only read methods; it never creates, edits, pauses or deletes
-anything on the NAS, and it never reads Download Station's on-disk database.
-
-| Body field | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `host` | string | yes | — | DSM hostname or IP. |
-| `port` | integer | no | `5001` | |
-| `secure` | boolean | no | `true` | `false` uses `http` and DSM's plain port. |
-| `account`, `password` | string | yes | — | Used for this request only; never stored, never logged, never returned. |
-| `import` | string[] | no | `["tasks","rss"]` | Any of `tasks`, `rss`. |
-| `owner_id` | string | no | the calling admin | The dl-tool user every imported task and feed is assigned to. |
-| `destination_map` | object | no | `{}` | DSM shared-folder path → dl-tool path, e.g. `{"/volume1/downloads":"/data"}`. An unmapped destination falls back to `owner_id`'s default and is reported as a warning. |
-| `dry_run` | boolean | no | `true` | |
-
-The exact upstream calls, in order, and nothing else:
-
-| Step | Call |
-|---|---|
-| 1 | `SYNO.API.Info.query` on `query.cgi`, to learn each API's path and version range. |
-| 2 | `SYNO.API.Auth` `method=login` on `auth.cgi` with `session=DownloadStation`. |
-| 3 | `SYNO.DownloadStation.Task` `method=list` with `additional=detail,transfer`. |
-| 4 | `SYNO.DownloadStation2.Task.Source` `method=download&id=<task id>`, per BitTorrent task, for the original `.torrent` bytes. |
-| 5 | `SYNO.DownloadStation.RSS.Site` `method=list`, when `import` contains `rss`. |
-| 6 | `SYNO.DownloadStation.RSS.Feed` `method=list` per site. |
-| 7 | `SYNO.API.Auth` `method=logout`. |
-
-```json
-POST /migrations/download-station
-{"host":"nas.local","account":"admin","password":"…","destination_map":{"/volume1/downloads":"/data"},
- "dry_run":true}
-→ 200
-{"dry_run":true,"source":"download-station","elapsed_ms":1840,
- "totals":{"examined":42,"importable":39,"created":0,"skipped":2,"rejected":1},
- "items":[
-  {"kind":"task","source_ref":"dbid_001","title":"archlinux-2026.09.01-x86_64.iso","action":"create",
-   "task_id":null,
-   "would":{"engine":"qbittorrent","source_kind":"torrent","destination":"/data/iso","paused":true},
-   "reason":null,"detail":null},
-  {"kind":"task","source_ref":"dbid_014","title":"old-emule-item","action":"reject","task_id":null,
-   "would":null,"reason":"unsupported_scheme","detail":"ed2k tasks are not supported in v1"},
-  {"kind":"feed","source_ref":"site:6","title":"Arch Linux releases","action":"create","task_id":null,
-   "would":{"url":"https://archlinux.org/feeds/releases/","enabled":true},"reason":null,"detail":null}],
- "warnings":["3 tasks had destination /volume1/video with no mapping; they will use /data/alice"]}
-```
-
-- Imported tasks are created **paused**, with their DSM progress discarded: dl-tool re-verifies from the
-  source, it never trusts a foreign completion state. A BitTorrent task recreated from step 4's bytes
-  rechecks against the data already on disk when the destination was mapped to an existing directory.
-- DS's four-level file priority collapses on import: `low` → `normal`
-  ([`04-data-model.md`](04-data-model.md) §4.3).
-- The call is synchronous; there is no search-style job id to poll. A DSM that stops answering mid-run is
-  `503` `/problems/engine-unavailable`. A committed run is transactional per item, so re-running it after a
-  failure skips what already landed rather than duplicating it.
-
-`200` · `401` `/problems/unauthenticated` when DSM rejects the credentials, with DSM's own error code in
-`detail` · `403` `/problems/forbidden` · `403` `/problems/ssrf-blocked` when `host` resolves to a blocked
-address · `422` `/problems/validation-failed` · `503` `/problems/engine-unavailable`.
-
-### 16.2 `POST /migrations/qbittorrent`
-
-Adopt in place the torrents an already-configured qBittorrent holds, creating a dl-tool task for every one
-it has no row for and preserving save path, category and tags
-([FR-148](02-requirements.md#fr-148-apply-the-foreign-task-policy-to-tasks-dl-tool-did-not-create)). Nothing
-is re-downloaded and nothing moves on disk.
-
-| Body field | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `engine_id` | string | no | `eng_qbittorrent` | The engine to enumerate. |
-| `owner_id` | string | no | the admin who configured that engine | Owner of every adopted task. |
-| `categories` | string[] | no | `[]` = every category | Restrict the adoption to these qBittorrent categories. |
-| `dry_run` | boolean | no | `true` | |
-
-- The only upstream call is `torrents/info` on the configured engine; adoption reads, never writes.
-- Identity is the infohash: a torrent whose `infohash_v1` or `infohash_v2` already exists in `tasks` is
-  `skip` with `reason:"torrent_duplicate"`, never a second row.
-- A torrent whose save path lies outside the configured roots or outside `owner_id`'s jail is `reject` with
-  `reason:"path_rejected"`; it is left running in qBittorrent, untouched.
-- Adopted tasks keep their live state — a seeding torrent is adopted as `seeding`, not restarted.
-- This endpoint is the manual form of `engines.foreign_task_policy = "adopt"`
-  ([ADR-0017](decisions/0017-exclusive-control-of-engines.md)); with the policy set to `adopt`, adoption
-  happens continuously and this endpoint has nothing left to do.
-
-`200` · `403` `/problems/forbidden` · `404` for an unknown `engine_id` · `422` (the engine is not a
-qBittorrent engine) · `503` `/problems/engine-unavailable`.
-
-### 16.3 `POST /migrations/files`
-
-Bulk import from files on disk or uploaded in the request
-([FR-025](02-requirements.md#fr-025-bulk-import-torrent-files-and-url-lists-from-disk),
-[FR-079](02-requirements.md#fr-079-import-qbittorrent-auto-download-rules)). Source files are read and left
-exactly where they are — this importer never deletes its input.
-
-| Body field | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `kind` | string | yes | — | `torrent_dir` \| `url_list` \| `qbittorrent_rules`. |
-| `path` | string | one of `path`/upload | — | Server-side path, inside the configured roots and inside the caller's jail. A directory for `torrent_dir`, a file for the other two. |
-| `recursive` | boolean | no | `false` | `torrent_dir` only. |
-| `destination` | string | no | the caller's default | `torrent_dir` and `url_list` only. |
-| `category`, `tags`, `paused` | — | no | — | As on `POST /tasks`, applied to every created task. |
-| `owner_id` | string | no | the caller | |
-| `dry_run` | boolean | no | `true` | |
-
-`multipart/form-data` is accepted instead of `path`: a `payload` part holding the JSON above, plus one or
-more `file` parts. Total request cap 32 MiB, as on `POST /tasks`.
-
-| `kind` | Reads | Produces |
-|---|---|---|
-| `torrent_dir` | Every `*.torrent` in the directory, sorted by name | One task per file; a file that is not a valid bencoded torrent is `reject` with `reason:"not_a_torrent"`. |
-| `url_list` | A UTF-8 `.txt`, one URI per line; blank lines and lines starting with `#` are ignored | One task per line, routed by scheme exactly as `POST /tasks` routes it. |
-| `qbittorrent_rules` | A qBittorrent `rules.json` — a JSON object mapping rule name to rule object | One rule per entry, converted by the key mapping in [`08-rss-automation.md`](08-rss-automation.md) §9. `torrentParams` and a non-portable `savePath` are reported as warnings, never dropped silently. |
-
-```json
-POST /migrations/files  {"kind":"torrent_dir","path":"/data/import","dry_run":false} → 200
-{"dry_run":false,"source":"files","elapsed_ms":312,
- "totals":{"examined":4,"importable":3,"created":3,"skipped":0,"rejected":1},
- "items":[{"kind":"task","source_ref":"/data/import/arch.torrent","title":"archlinux-2026.09.01-x86_64.iso",
-           "action":"create","task_id":"tsk_01JKQB...","would":{"destination":"/data/iso"},
-           "reason":null,"detail":null},
-          {"kind":"task","source_ref":"/data/import/notes.txt","title":null,"action":"reject",
-           "task_id":null,"would":null,"reason":"not_a_torrent","detail":"missing bencoded info dictionary"}],
- "warnings":[]}
-```
-
-`200` · `403` `/problems/forbidden` · `403` `/problems/path-rejected` · `404` when `path` does not exist ·
-`413` · `422` (unknown `kind`, `path` and an upload both present, neither present).
-
----
-
 ## Decisions referenced
 
 | ADR | Decision |
@@ -1570,7 +1420,6 @@ POST /migrations/files  {"kind":"torrent_dir","path":"/data/import","dry_run":fa
 | [ADR-0010](decisions/0010-never-execute-third-party-definitions.md) | Never execute third-party definition code |
 | [ADR-0012](decisions/0012-single-data-mount.md) | A single `/data` mount — why a hardlinked file survives `delete_data` |
 | [ADR-0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication |
-| [ADR-0017](decisions/0017-exclusive-control-of-engines.md) | dl-tool assumes exclusive control of its engines |
 
 ## Open questions
 
@@ -1580,13 +1429,11 @@ POST /migrations/files  {"kind":"torrent_dir","path":"/data/import","dry_run":fa
   `requested_destination`; the second needs a column, or 04 must say where it is derived from.]
 - [NEEDS CLARIFICATION: [FR-057](02-requirements.md#fr-057-save-and-re-run-a-search) requires saved
   searches, but the canonical API surface lists no endpoint for them, so no shape is defined here.]
-- The three `/migrations/*` paths in §16 are fixed here because no other document names them; if
-  [`15-migration-and-import.md`](15-migration-and-import.md) uses different paths, this file wins and that
-  file must be corrected.
 
 ## Change log
 
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version |
-| 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export`, `/settings/import` and the three `/migrations/*` importers. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
+| 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
+| 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |

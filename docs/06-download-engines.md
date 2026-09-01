@@ -15,15 +15,14 @@ define HTTP payloads, DB columns or environment variables.
 - In scope: the `Engine` interface and its value types, capability names, the file-priority vocabulary, the
   routing table, obfuscated-scheme decoding, magnet/bencode/BEP 52 parsing, aria2 JSON-RPC, qBittorrent
   WebAPI v2, the yt-dlp subprocess contract, engine→dl-tool state normalisation, engine ownership and the
-  foreign-task policy, the boot conformance probe, the bandwidth precedence chain and its per-engine fan-out
-  calls, and the shared adapter contract test suite.
+  handling of foreign tasks, the boot conformance probe, the bandwidth precedence chain and its per-engine
+  fan-out calls, and the shared adapter contract test suite.
 - Out of scope (lives instead in): columns and enums → [`04-data-model.md`](04-data-model.md); HTTP shapes →
   [`05-api-contract.md`](05-api-contract.md); env vars → [`11-config-reference.md`](11-config-reference.md);
   compose services, ports, volumes → [`10-deployment-and-compose.md`](10-deployment-and-compose.md); search →
   [`07-search-and-indexers.md`](07-search-and-indexers.md); RSS → [`08-rss-automation.md`](08-rss-automation.md);
-  one-time import from a live Download Station or an existing qBittorrent →
-  [`15-migration-and-import.md`](15-migration-and-import.md); operator procedures, boot reconciliation order
-  and shutdown → [`17-operations-and-runbook.md`](17-operations-and-runbook.md); Definition of Done →
+  operator procedures, boot reconciliation order and shutdown →
+  [`17-operations-and-runbook.md`](17-operations-and-runbook.md); Definition of Done →
   [`13-testing-and-verification.md`](13-testing-and-verification.md).
 
 ---
@@ -231,8 +230,8 @@ The canonical vocabulary is qBittorrent's, verified in `release-5.2.3`
 | `6` | `high` | Downloaded before `normal` files. |
 | `7` | `maximum` | Downloaded first. |
 
-- There is **no distinct `low`** level. Download Station's four-level skip/low/normal/high collapses
-  `low` → `normal` on import ([`15-migration-and-import.md`](15-migration-and-import.md)).
+- There is **no distinct `low`** level. Download Station's four-level skip/low/normal/high has no `low`
+  equivalent here; `low` maps onto `normal`.
 - `4` is libtorrent's *internal* scale, not the WebAPI vocabulary: **never send `4`**, and reject a request
   carrying it ([FR-007](02-requirements.md#fr-007-select-and-prioritise-individual-files)). The DDL constraint
   is `priority IN (0,1,6,7)` → [`04-data-model.md`](04-data-model.md).
@@ -1056,30 +1055,24 @@ dl-tool assumes **exclusive control** of every engine it is configured with
 daemon: adding transfers through the qBittorrent WebUI or a second aria2 client is outside the supported
 configuration, because two controllers over one queue produce irreproducible bugs.
 
-`engines.foreign_task_policy` decides what happens to a transfer dl-tool did not create. Column, values and
-default live in [`04-data-model.md`](04-data-model.md#49-enginesforeign_task_policy); the behaviour is:
+**A transfer dl-tool did not create is ignored.** There is one rule, it has no options and no setting: there
+is no adopt mode and no `foreign_task_policy` column.
 
-| Policy | A transfer dl-tool did not create |
+| Aspect | Behaviour for a transfer dl-tool did not create |
 |---|---|
-| `ignore` (default) | Never surfaces. It is absent from `GET /tasks`, from SSE deltas and from `GET /tasks/{id}`; it counts toward no quota and no `max_active_*` limit; the schedule, the global limit and the alternative-speed limits are never applied to it; it is never paused, resumed, relocated or deleted by dl-tool. It keeps running under the engine's own settings. |
-| `adopt` | The next reconciliation creates a `tasks` row owned by **the admin who configured that engine**, preserving the engine's save path, category and tags, and copying `engine_ref` from the engine handle (§3.5). From that moment it is an ordinary dl-tool task: schedule, limits, quota accounting, post-processing and deletion all apply. |
+| Visibility | Never surfaces. Absent from `GET /tasks`, from SSE deltas and from `GET /tasks/{id}`. |
+| Accounting | Counts toward no quota and no `max_active_*` limit. |
+| Control | The schedule, the global limit and the alternative-speed limits are never applied to it; it is never paused, resumed, relocated or deleted by dl-tool. It keeps running under the engine's own settings. |
+| Data | dl-tool **never deletes** a foreign transfer and never deletes data it did not record in `task_files`. |
 
-Rules that hold under **both** policies:
-
-- dl-tool **never deletes** a foreign transfer and never deletes data it did not record in `task_files`.
 - Detection is by handle: a transfer is foreign when its `engine_ref` matches no `tasks` row for that engine —
   the aria2 GID, the qBittorrent `hash`, the yt-dlp job id.
-- Adoption is **idempotent**. A second reconciliation must not create a duplicate; a torrent already known by
-  either infohash is matched, never re-added
-  ([FR-023](02-requirements.md#fr-023-reject-a-duplicate-torrent-by-either-infohash)).
-- Reconciliation runs at `Connect()` and again on every `full_update` from `sync/maindata` (§5.4) or full
-  `tellActive`/`tellWaiting`/`tellStopped` sweep (§4.3).
-- Switching `ignore` → `adopt` adopts everything currently foreign at the next reconciliation. Switching back
-  does **not** un-adopt: an adopted task is a dl-tool task.
-- Bulk adoption as a deliberate one-time migration, with a dry run, is a separate feature →
-  [`15-migration-and-import.md`](15-migration-and-import.md).
+- The check runs at `Connect()` and again on every `full_update` from `sync/maindata` (§5.4) or full
+  `tellActive`/`tellWaiting`/`tellStopped` sweep (§4.3). It only filters; it creates nothing.
+- A foreign transfer therefore never becomes a dl-tool task. The one way a task enters the queue is
+  `POST /tasks` → [`05-api-contract.md`](05-api-contract.md).
 
-Requirement: [FR-148](02-requirements.md#fr-148-apply-the-foreign-task-policy-to-tasks-dl-tool-did-not-create).
+Requirement: [FR-148](02-requirements.md).
 
 ---
 
@@ -1269,3 +1262,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | File-priority vocabulary corrected to `skip=0 normal=1 high=6 maximum=7` with the per-engine translation table (§1.1) and the §5.7 identity mapping; added the `engine_ref` rule for BitTorrent v1/v2/hybrid identity (§3.5); added §8 engine ownership and the foreign-task policy, §9 engine conformance at boot, and §10 the bandwidth precedence chain with its per-engine fan-out calls; rewrote §7.6 for the pinned `yt-dlp_musllinux` binary, disabled self-update, the weekly rebuild, the boot capability probe and `js_runtime_missing`; renumbered the contract test suite to §11; corrected the ADR filenames. |
+| 2026-09-01 | Migration subsystem cut: §8 restated as one rule with no options — a transfer dl-tool did not create is ignored; the `adopt` mode and `engines.foreign_task_policy` are deleted, as is every link to the withdrawn migration document. §9 engine conformance is unchanged. |

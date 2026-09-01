@@ -691,7 +691,7 @@ appears only when the form is dirty and announces `3 unsaved changes` through `a
 | **Indexers** | Table: Name · Type · URL · Categories · Enabled · Priority · Last test result. Actions: Add · Edit · Test · Test all · Reorder · Import. Imported definitions arrive **disabled** and show their provenance. |
 | **Users & Auth** | Users table (username, role, quota, default destination, enabled) · Add / Edit / Delete · Change password · Session lifetime · API tokens with a create-once reveal |
 | **Notifications** | A per-event × per-channel checkbox matrix. Channels: Webhook, ntfy, Gotify, Apprise. Every channel has **Send test**, which shows the **raw upstream status line and body**. |
-| **Advanced** | Log level and retention · Database maintenance and vacuum · Settings export and import · Reset to defaults · Version and build info · Enable the qBittorrent and Synology compatibility façades, both off by default |
+| **Advanced** | Log level and retention · Database maintenance and vacuum · Settings export and import · Reset to defaults · Version and build info |
 
 ### 9.1 The 24×7 schedule grid
 
