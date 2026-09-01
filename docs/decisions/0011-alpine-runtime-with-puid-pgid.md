@@ -67,11 +67,11 @@ Every dependency the image claims must be present, and the drop must actually ha
 ```bash
 make docker-build
 docker run --rm --entrypoint sh ghcr.io/l-k-m/dl-tool:dev -c 'command -v su-exec 7zz node yt-dlp'
-docker run --rm -e PUID=1234 -e PGID=1234 ghcr.io/l-k-m/dl-tool:dev id
+docker run -d --name dltool-uidcheck -e PUID=1234 -e PGID=1234 ghcr.io/l-k-m/dl-tool:dev && docker top dltool-uidcheck
 ```
 
-Expected: four absolute paths, then `uid=1234 gid=1234`. Ownership of written files is asserted end to end
-by [NFR-025](../02-requirements.md#nfr-025-run-unprivileged-with-the-operators-uid-and-gid) (task T093).
+Expected: four absolute paths, then a `dl-tool` process owned by UID `1234`. File ownership is asserted end
+to end by [NFR-025](../02-requirements.md#nfr-025-run-unprivileged-with-the-operators-uid-and-gid), T093.
 
 ## Pros and Cons of the Options
 
