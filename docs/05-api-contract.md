@@ -133,9 +133,10 @@ Offsets are not supported anywhere; do not add `offset`.
 
 ### 1.5 Identifiers
 
-Prefix plus a 26-character Crockford base32 ULID, e.g. `tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X`. Prefixes: `tsk_`
-task, `usr_` user, `fed_` feed, `rul_` rule, `idx_` indexer, `sch_` search job, `job_` job, `evt_` event,
-`tok_` API token. Categories and tags are addressed by their unique `name`. Engine-side references (aria2
+Prefix plus a 26-character Crockford base32 ULID, e.g. `tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X`. The complete
+prefix allocation, including the `itm_` feed item, `res_` search result, `ntf_` notification channel and
+`wfd_` watch folder prefixes used below, lives in [`04-data-model.md`](04-data-model.md) §1.5 and is not
+restated here. Categories and tags are addressed by their unique `name`. Engine-side references (aria2
 GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never returned.
 
 ### 1.6 Units, timestamps and nulls
