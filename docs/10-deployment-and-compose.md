@@ -579,9 +579,11 @@ following hold. Each is a hard requirement on the implementation.
 3. **Relative asset URLs.** Build the SPA with Vite `base: './'` so `dist/index.html` never emits a
    root-absolute `/assets/…` URL. Do not bake the base in at build time; it is a runtime setting.
 4. **Injected base href.** The server rewrites `index.html` at serve time to carry `<base href="{base}/">`
-   and a `window.__DLTOOL_BASE__ = "{base}"` script tag. The SPA reads that, never `location.pathname`.
-5. **SSE and API URLs derived from the base.** Build them as `new URL(base + '/api/v1/events', document.baseURI)`
-   and `new URL(base + '/api/v1/', document.baseURI)`. Never a hardcoded `/api/v1`.
+   before every URL-bearing element. Validate `base` as a path and HTML-escape it before insertion. Add no
+   inline bootstrap script or global variable; the bundled SPA reads `document.baseURI`.
+5. **SSE and API URLs derived from the base.** Build them as `new URL('api/v1/events', document.baseURI)` and
+   `new URL('api/v1/', document.baseURI)`. The relative argument has no leading slash. Never hardcode
+   `/api/v1` or reconstruct the base from `location.pathname`.
 6. **Cookie `Path` equals the base.** MDN: "If omitted, this attribute defaults to the path component of the
    request URL" — too fragile to rely on. Set it explicitly, with `HttpOnly`, `Secure` and `SameSite=Lax`.
    The `__Host-` prefix **requires `Path=/`**, so under a subfolder the session cookie must use the
@@ -970,3 +972,4 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |
 | 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |
+| 2026-09-01 | Replaced the inline base-path bootstrap with the CSP-compatible document base URL. |

@@ -522,7 +522,7 @@ Sent on every HTML response by `internal/api/server.go`:
 
 ```
 Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;
-  connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self';
+  connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';
   frame-ancestors 'none'
 X-Content-Type-Options: nosniff
 Referrer-Policy: same-origin
@@ -537,6 +537,12 @@ works with no internet access. `Strict-Transport-Security` is sent **only** on r
 over HTTPS — unconditionally it bricks plain-HTTP LAN access. dl-tool never serves downloaded content
 through the app; were that to change, such a route must set `Content-Disposition: attachment`,
 `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`.
+
+`base-uri 'self'` permits the server-injected `<base>` required for sub-path deployment while preventing an
+off-origin base. `DLTOOL_BASE_PATH` is path-only, boot-validated and HTML-escaped before insertion. The
+document contains no inline script; bundled code derives relative API and SSE URLs from `document.baseURI`.
+The sub-path browser test fails on any CSP console violation and asserts that `index.html` has no inline
+script element.
 
 ### 6.7 Open redirects, configuration lock, exposure
 
@@ -701,3 +707,4 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | Aligned the sub-path base element with CSP without permitting inline scripts. |
