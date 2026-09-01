@@ -146,7 +146,7 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 | Rates and limits | Integer **bytes per second**; `0` means unlimited, globally and per task. |
 | Durations | Integer **seconds** (`eta_seconds`, `seeding_time_limit`), except `elapsed_ms` on test endpoints. |
 | Timestamps | **RFC 3339** UTC strings ending in `Z`. The database stores Unix milliseconds; conversion happens at the API boundary. |
-| Progress | Float `0.0`–`1.0`, never a percentage. |
+| Progress | Float `0.0`–`1.0`, never a percentage. The single deliberate exception is `unzip_progress`, an integer `0`–`100` mirroring Download Station's own extraction progress. |
 | Unknown | `null`. Never `-1`, never `0` standing in for unknown, never a fabricated `1`. |
 | Secrets | Absent, or the literal `"__redacted__"` where a field must exist to show a value is set. Sending `"__redacted__"` back in a `PATCH` leaves the stored secret unchanged. |
 
