@@ -265,7 +265,8 @@ CREATE TABLE tasks (
   sequential INTEGER NOT NULL DEFAULT 0 CHECK (sequential IN (0,1)),
   queue_position INTEGER,
   unzip_progress INTEGER,               -- 0-100, only while state = 'extracting'
-  extract_password TEXT,                -- secret: never returned by an API, never logged
+  extract_password TEXT,                -- secret: never returned by an API, never logged; encrypted
+                                         -- at rest with DLTOOL_SECRET_KEY (11-config-reference.md §6)
   added_at INTEGER NOT NULL, started_at INTEGER, completed_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX idx_tasks_engine_ref ON tasks(engine, engine_ref) WHERE engine_ref IS NOT NULL;
@@ -785,6 +786,7 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Initial version |
 | 2026-09-01 | File priority corrected to `IN (0,1,6,7)` with the qBittorrent names `skip/normal/high/maximum`; added `tasks.infohash_v1`/`infohash_v2` with partial unique indices and the ingest normalisation table; widened `feed_items.info_hash` and `rule_matches.info_hash` to 64 hex; added `notification_channels`; added `engines.foreign_task_policy` and the boot-probe meaning of `engines.version`; added the concurrency and `min_free_space` settings rows; separated the storage quota from the concurrency limit and added `concurrency_limit` and `js_runtime_missing` to `error_code`; added the table-reachability list; corrected the ADR-0005/0008/0009 filenames. |
 | 2026-09-01 | Migration subsystem cut: deleted the `engines.foreign_task_policy` column, its `CHECK` constraint and enum section §4.9, replacing them with the single exclusive-control rule; removed every link to the withdrawn migration document and the "imported task" framing of the inherited `error_code` values; §5 retitled "Schema migration policy" to keep goose migrations unambiguous. `notification_channels`, `infohash_v1`/`infohash_v2` and `priority IN (0,1,6,7)` are unchanged. |
+| 2026-09-01 | `tasks.extract_password` noted as encrypted at rest with `DLTOOL_SECRET_KEY`, closing the "encrypted at rest — with what key?" gap on the `*_enc` columns. |
 | 2026-09-01 | Added `rules.owner_id`: a rule creates tasks on someone's behalf (the watch-folder privilege rule), so rule-grabbed tasks are owned, quota-accounted and jailed to that user. |
 | 2026-09-01 | Review pass: `rules.owner_id` is `ON DELETE RESTRICT`, not CASCADE — deleting a user must not silently destroy shared automation and match history; `DELETE /users/{id}` answers `409` instead. |
 | 2026-09-01 | Added `tasks.requested_destination` (the column behind FR-044 and the Task object's field of the same name in `05-api-contract.md` §3) and `feeds.priority` (the per-run tie-break `08-rss-automation.md` §5 step 13 sorts on). |

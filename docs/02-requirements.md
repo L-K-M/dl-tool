@@ -1158,7 +1158,7 @@ The dl-tool web UI shall load every script, stylesheet, font and icon from the d
 | T039 | must |
 
 ### NFR-023 Generate secrets on first run and support file-based secrets
-When dl-tool starts with no generated secrets, it shall create the session key, the CSRF key and the setup token from a cryptographic random source, write them with mode `0600`, and shall additionally accept any secret through a `_FILE`-suffixed variable pointing at a mounted file.
+When dl-tool starts with no generated secrets, it shall create, each from a cryptographic random source: the at-rest secret-encryption key `DLTOOL_SECRET_KEY` and the shared engine secret `ARIA2_RPC_SECRET` (both written to `<CONFIG_DIR>/secrets.env` with mode `0600`), and, while no user exists, the one-time setup token (written to `<CONFIG_DIR>/setup-token` with mode `0600`, per FR-115); and it shall additionally accept any secret through a `_FILE`-suffixed variable pointing at a mounted file.
 
 **Verify:** T005 asserts a fresh config directory yields distinct secrets on two separate instances and that a `_FILE` variable is honoured in preference to its inline form.
 
@@ -1261,6 +1261,8 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | NFR-023 names the real first-run secrets: the at-rest encryption key and the setup token. Session/CSRF keys never existed in the design (opaque sessions, per-session CSRF tokens). |
+| 2026-09-01 | Review pass 3: NFR-023 lists all three first-run secrets — `DLTOOL_SECRET_KEY`, `ARIA2_RPC_SECRET` and the setup token — each with its file, matching 11 §6's regeneration rule. |
 | 2026-09-01 | FR-115 hardened: the setup token is at least 128 bits from a CSPRNG and setup attempts are rate-limited with the login throttles; the Verify line asserts the `429`. |
 | 2026-09-01 | Review pass: FR-115 pins the token at 256 bits (matching §6.4 of the threat model), names the per-source-IP throttle specifically, and its Verify is passable in one run — nine failures, the tenth 429s, the window advances, setup then completes — plus the regenerate-on-restart assertion. |
 | 2026-09-01 | Review pass 2: FR-115 gains the regenerate-on-every-boot shall-clause its Verify already asserted, closing the traceability gap. |

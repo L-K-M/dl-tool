@@ -676,7 +676,7 @@ Chosen policy
 | qBittorrent credentials | `DLTOOL_QBITTORRENT_USERNAME` and `DLTOOL_QBITTORRENT_PASSWORD` (or its `_FILE` form); never the WebUI defaults, never a bypass-by-subnet rule |
 | Container flags | `security_opt: [no-new-privileges:true]` on every service |
 | Secret storage | `<CONFIG_DIR>/secrets.env`, mode `0600`, owned by the app user; never in `environment:`, where `docker inspect` and `docker compose config` expose it |
-| Rotation | a UI action regenerates each secret; rotating the session key invalidates every session |
+| Rotation | a UI action regenerates each secret. Rotating `DLTOOL_SECRET_KEY` makes every stored `*_enc` value undecryptable, so the action re-encrypts what it can from the operator's re-entered values and otherwise clears them loudly: a `secret_key_regenerated` boot log, row-level `secret_lost` `last_error` on indexers, channels and engines, the `extract_passwords` setting rendering as `"__lost__"` (distinct from `"__redacted__"`), and one `task_events` row per nulled per-task password — none of it a `tasks.error_code`; rotating `ARIA2_RPC_SECRET` marks aria2 unhealthy until the container restarts. Sessions survive both — session ids are opaque rows, not signed tokens |
 
 If a Transmission adapter is ever added it keeps `rpc-host-whitelist-enabled: true` and binds
 `rpc-bind-address` to the container address.
@@ -715,6 +715,7 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | The rotation row no longer names a session key (sessions are opaque rows, not signed tokens); it names `DLTOOL_SECRET_KEY` and its re-entry consequence. |
 | 2026-09-01 | Contradiction fix: §2.4 splits the body cap — feed polls 16 MiB (owned by `08-rss-automation.md` §2.1) from the 8 MiB metadata-fetch cap. |
 | 2026-09-01 | Review pass: §6.1 names the cookie with its prefix (`__Host-dltool_session` at the root, `__Secure-dltool_session` under a base path, chosen at boot), and §2.4 splits the feed body cap from the metadata-fetch cap. |
 | 2026-09-01 | Review pass 2: the cookie prefix is conditional on TLS — `__Host-`/`__Secure-` only when the cookie is `Secure`, plain `dltool_session` on plain HTTP, because browsers reject a prefixed cookie without `Secure` and plain-HTTP LAN access is supported. |
