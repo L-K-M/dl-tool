@@ -1073,7 +1073,7 @@ defaults and environment counterparts live in [`11-config-reference.md`](11-conf
 {"download_rate_limit":0,"upload_rate_limit":0,
  "alt_download_rate_limit":5242880,"alt_upload_rate_limit":1048576,
  "schedule_enabled":true,"default_destination":"/data",
- "rss_enabled":true,"rss_interval_s":900,
+ "rss_enabled":true,"rss_interval_s":1800,
  "auto_extract":true,"extract_passwords":"__redacted__",
  "process_order":"by_date_created","confirm_on_delete":true}
 ```
@@ -1177,7 +1177,7 @@ therefore every `password_hash`), `api_tokens`, `notification_channels.secret_en
 ```json
 GET /settings/export →
 {"document_version":1,"exported_at":"2026-09-01T09:45:00Z","schema_version":1,
- "settings":{"download_rate_limit":0,"rss_interval_s":900,"auto_extract":true},
+ "settings":{"download_rate_limit":0,"rss_interval_s":1800,"auto_extract":true},
  "categories":[{"name":"linux","save_path":"/data/iso"}],
  "indexers":[{"name":"Internet Archive","kind":"dlsearch","enabled":true,"url":null,
               "definition_id":"internet-archive","priority":50,"settings":{}}],
@@ -1449,3 +1449,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
 | 2026-09-01 | Contradiction fix: the `POST /system/backup` example path now uses the `dl-tool.db.<UTC>.bak` form owned by `04-data-model.md` §6. |
+| 2026-09-01 | Review pass: the two settings examples carry `rss_interval_s: 1800`, matching the corrected default. |

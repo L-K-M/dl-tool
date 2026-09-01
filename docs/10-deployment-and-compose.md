@@ -584,9 +584,12 @@ following hold. Each is a hard requirement on the implementation.
    and `new URL(base + '/api/v1/', document.baseURI)`. Never a hardcoded `/api/v1`.
 6. **Cookie `Path` equals the base.** MDN: "If omitted, this attribute defaults to the path component of the
    request URL" — too fragile to rely on. Set it explicitly, with `HttpOnly`, `Secure` and `SameSite=Lax`.
-   The cookie name stays `dltool_session` with no prefix ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.1):
-   `__Host-` would force `Path=/` and break under a subfolder, and `__Secure-` would rename the cookie
-   depending on the deployment, invalidating sessions when the base path changes.
+   The cookie name carries a prefix chosen at boot from the base path: `__Host-dltool_session` at the root
+   (`__Host-` pins `Path=/`, no `Domain`, `Secure` — the strongest form) and `__Secure-dltool_session` under
+   a base path (`__Host-` is impossible there because its `Path` must be `/`). Changing the base path
+   changes the cookie name and therefore logs every session out — acceptable for a deployment-level change
+   the operator is making anyway. [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.1
+   owns the name.
 7. **Redirects preserve the base.** Never `Location: /login`; always `Location: {base}/login`. This includes
    the first-run wizard redirect, the post-login redirect and the trailing-slash normalisation.
 8. **SPA fallback stays inside the base.** `GET {base}/anything` serves `index.html`; `GET /anything` outside
@@ -971,3 +974,4 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |
 | 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |
+| 2026-09-01 | Review pass: §7.3 item 6 now specifies the cookie prefix pair (`__Host-` at the root, `__Secure-` under a base path) instead of dropping prefixes; the earlier unprefixed wording weakened §12's hardening for no benefit. |

@@ -441,7 +441,7 @@ Imported engines start disabled and record their provenance.
 
 | Attribute | Value |
 |---|---|
-| Name | `dltool_session` |
+| Name | `__Host-dltool_session` at the root, `__Secure-dltool_session` under a base path — the prefix is chosen at boot from `DLTOOL_BASE_PATH` ([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §7.3) |
 | Flags | `HttpOnly`, `SameSite=Lax`, `Path=<base path>/` |
 | `Secure` | set whenever the request arrived over TLS, judged from the listener or from `X-Forwarded-Proto` sent by a `DLTOOL_TRUSTED_PROXIES` peer; otherwise omitted and a startup warning is logged |
 | Value | ≥ 128 bits from `crypto/rand`, opaque, stored server-side in `sessions` |
@@ -703,3 +703,4 @@ the repository owner decides.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
 | 2026-09-01 | Contradiction fix: §2.4 splits the body cap — feed polls 16 MiB (owned by `08-rss-automation.md` §2.1) from the 8 MiB metadata-fetch cap. |
+| 2026-09-01 | Review pass: §6.1 names the cookie with its prefix (`__Host-dltool_session` at the root, `__Secure-dltool_session` under a base path, chosen at boot), and §2.4 splits the feed body cap from the metadata-fetch cap. |

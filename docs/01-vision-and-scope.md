@@ -48,7 +48,7 @@ State the problem dl-tool solves, who it serves, and exactly which Synology Down
 | Feature | DS behaviour (one line) | dl-tool v1 | Notes / link |
 |---|---|---|---|
 | Multi-protocol URL add | Accepts `ftps:// sftp:// magnet:// http:// https:// ftp:// thunder:// flashget:// qqdl://` in one dialog | improved | One queue also covers media-site URLs via yt-dlp; `ed2k://` parsed and rejected with a clear message → [`06-download-engines.md`](06-download-engines.md) |
-| Batch URL paste cap | "You can enter up to 50 URLs in the box" | improved | No hard stop: one request carries at most 50 URIs ([`05-api-contract.md`](05-api-contract.md) §5.2), and the dialog batches a longer paste automatically with a live counter and a *Split into batches* action → [`09-web-ui-spec.md`](09-web-ui-spec.md) §4 |
+| Batch URL paste cap | "You can enter up to 50 URLs in the box" | improved | No hard stop: one request carries at most 50 URIs ([`05-api-contract.md`](05-api-contract.md) §5.2), and the dialog batches a longer paste automatically with a live counter and a *Split into batches* action → [`09-web-ui-spec.md`](09-web-ui-spec.md) §4, FR-001–FR-029 |
 | Upload file cap | "You can upload up to 50 files at a time"; `.torrent`, `.nzb`, `.txt` | improved | No 50-file cap; `.torrent` and `.txt` URL lists in v1, `.nzb` deferred |
 | Obfuscated schemes | `thunder://`/`flashget://`/`qqdl://` are base64 wrappers, not protocols | parity | Decoded in normalisation before routing → [`06-download-engines.md`](06-download-engines.md) |
 | FTP directory recursion | Trailing `/` on an `ftp://` link downloads the folder; "SFTP/FTPS folder downloading is not supported" | parity | Same rule, same restriction |
