@@ -634,9 +634,9 @@ When a client changes a task's download or upload limit, dl-tool shall apply the
 | T082 | must |
 
 ### FR-095 Order the queue by creation date or by owner
-The dl-tool queue shall support a process order of `by_date_created` or `by_user`, the latter starting at most one task per owner in round-robin before starting any owner's second task.
+The dl-tool queue shall support a process order of `by_date_created` or `by_user_round_robin`, the latter starting at most one task per owner in round-robin before starting any owner's second task.
 
-**Verify:** T085 queues three tasks for user A and one for user B under `by_user` and asserts B's task starts before A's second.
+**Verify:** T085 queues three tasks for user A and one for user B under `by_user_round_robin` and asserts B's task starts before A's second.
 
 | Covered by | Priority |
 |---|---|
