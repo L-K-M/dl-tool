@@ -166,7 +166,7 @@ of the five files are untracked, and `git diff --name-only` never lists an untra
 - Do NOT change `internal/secure/ssrf.go`; T123 owns the guard, the prefix tables and the client.
 - Do NOT wire the guard into the feed poller, the notifier or the dlsearch runner; T066, T077 and T058 own
   those call sites.
-- Do NOT add a per-indexer `allow_private` flag or a per-request override of `DLTOOL_SSRF_ALLOW_PRIVATE`.
+- Do NOT add a per-indexer `allow_private_network` flag or a per-request override of `DLTOOL_SSRF_ALLOW_PRIVATE`.
 - Do NOT preflight `magnet:`, a bare infohash, `thunder://`, `flashget://` or `qqdl://`: they are parsed in
   process and never fetched, and a decoded inner URI is preflighted by the normal `http`/`ftp` path.
 - Do NOT route `DLTOOL_ARIA2_URL` or `DLTOOL_QBITTORRENT_URL` through the guard; they are infrastructure

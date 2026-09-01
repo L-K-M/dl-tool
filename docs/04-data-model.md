@@ -345,6 +345,7 @@ CREATE TABLE indexers (
   provenance TEXT,                      -- shown in the UI, e.g. 'imported from jackett.dlm'
   legal_tier TEXT NOT NULL DEFAULT 'user-supplied' CHECK (legal_tier IN ('legitimate','user-supplied')),
   priority INTEGER NOT NULL DEFAULT 50,
+  allow_private_network INTEGER NOT NULL DEFAULT 0 CHECK (allow_private_network IN (0,1)),
   seeders_unknown INTEGER NOT NULL DEFAULT 0 CHECK (seeders_unknown IN (0,1)),
   settings_json TEXT, categories_json TEXT, last_test_at INTEGER, last_error TEXT,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
@@ -406,9 +407,11 @@ CREATE TABLE feed_items (
   download_url TEXT,                    -- .torrent URL or magnet:
   info_hash TEXT,                       -- lowercase hex: 40 chars (v1) or 64 chars (v2); NULL when unknown
   size_bytes INTEGER, published_at INTEGER, first_seen_at INTEGER NOT NULL,
+  read INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0,1)),  -- 1 once the user marks the item read
   raw_json TEXT,                        -- full parsed item; feeds the dry-run panel
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX idx_feed_items_identity ON feed_items(feed_id, identity);
+CREATE INDEX idx_feed_items_read ON feed_items(feed_id, read, published_at DESC);
 CREATE INDEX idx_feed_items_hash ON feed_items(info_hash);
 CREATE INDEX idx_feed_items_norm ON feed_items(title_norm);
 CREATE INDEX idx_feed_items_pub ON feed_items(feed_id, published_at DESC);

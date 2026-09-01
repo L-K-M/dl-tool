@@ -634,9 +634,9 @@ When a client changes a task's download or upload limit, dl-tool shall apply the
 | T082 | must |
 
 ### FR-095 Order the queue by creation date or by owner
-The dl-tool queue shall support a process order of `by_date_created` or `by_user`, the latter starting at most one task per owner in round-robin before starting any owner's second task.
+The dl-tool queue shall support a process order of `by_date_created` or `by_user_round_robin`, the latter starting at most one task per owner in round-robin before starting any owner's second task.
 
-**Verify:** T085 queues three tasks for user A and one for user B under `by_user` and asserts B's task starts before A's second.
+**Verify:** T085 queues three tasks for user A and one for user B under `by_user_round_robin` and asserts B's task starts before A's second.
 
 | Covered by | Priority |
 |---|---|
@@ -712,7 +712,7 @@ Where a notification channel is configured, dl-tool shall deliver an event to it
 ### FR-105 Run a completion hook only when explicitly enabled
 Where a completion hook is enabled in the configuration file, dl-tool shall execute it as an argument vector with a fixed environment and a timeout, and shall not expose the hook command for editing through the HTTP API.
 
-**Verify:** T078 asserts the hook is off by default, that a PATCH attempting to set the hook command returns 403, and that the executed process receives argv entries rather than a shell string.
+**Verify:** T078 asserts the hook is off by default, that a PATCH attempting to set the hook command returns 422 with the same body shape as any other unknown settings key — the response must not reveal that a hook key is special — and that the executed process receives argv entries rather than a shell string.
 
 | Covered by | Priority |
 |---|---|
