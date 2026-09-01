@@ -163,6 +163,11 @@ lives in its own table and is replaced through `PUT /settings/schedule`. Per-use
 | notification channel `secret_enc`, engine `secret_enc` | `notification_channels`/`engines` rows, encrypted at rest | returned by `GET /notifications` or `/engines` |
 | at-rest secret key `DLTOOL_SECRET_KEY`, `ARIA2_RPC_SECRET` | `<CONFIG_DIR>/secrets.env`, mode `0600` | exported, or exposed through any API |
 
+**One value, two names.** `ARIA2_RPC_SECRET` (the compose-level name) and `DLTOOL_ARIA2_SECRET` (the
+application variable) hold the **same** value: `compose.yaml` interpolates the one `.env` entry into the
+aria2 service and into dl-tool's `DLTOOL_ARIA2_SECRET`. Setting one sets both; an operator who copies
+`ARIA2_RPC_SECRET` into `.env` per step 3 below has configured dl-tool's side too.
+
 **At-rest encryption.** Every `*_enc` column and the extraction passwords are sealed with
 `DLTOOL_SECRET_KEY`: XChaCha20-Poly1305 with a 32-byte key and a fresh random nonce per value, the nonce
 stored alongside the ciphertext. The key lives only in `secrets.env` and in process memory; it is never
@@ -330,3 +335,4 @@ stated fallback.
 | 2026-09-01 | Secrets corrected: `DLTOOL_SESSION_KEY`/`DLTOOL_CSRF_KEY` removed (opaque server-side sessions and per-session CSRF tokens need no key) and replaced by `DLTOOL_SECRET_KEY`, the previously unspecified key behind every "encrypted at rest" `*_enc` column and the extraction passwords; its loss-and-regeneration behaviour is specified. |
 | 2026-09-01 | Review pass: the `DLTOOL_SECRET_KEY` loss story names every affected surface (row-level `secret_lost` markers — not a `tasks.error_code` — plus the cleared `extract_passwords` setting and one `task_events` row per nulled per-task password); the two extraction-password carriers are split into their own rows; NFR-023 names each secret's file and mode. |
 | 2026-09-01 | Review pass 2: the `secret_key_regenerated` boot log is restored (the aria2 branch's `aria2_secret_rotated` keeps its twin), and a key-lost `extract_passwords` renders as the literal `"__lost__"` — distinct from `"__redacted__"` and a no-op on PATCH — so the wipe is assertable, not vague. |
+| 2026-09-01 | Review pass 4: the `ARIA2_RPC_SECRET` ↔ `DLTOOL_ARIA2_SECRET` equivalence is stated once, explicitly — one `.env` value, interpolated by Compose into both consumers — instead of leaving two names for one secret across the table and step 3. |
