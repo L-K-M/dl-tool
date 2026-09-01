@@ -243,11 +243,13 @@ forcing a resync, and reconnection carrying `Last-Event-ID`.
 | `web/e2e/add-magnet.spec.ts` | Add a magnet, choose files in the selection step, download it. | The inspect dialog lists files, deselected files stay at priority `0`, and the task reaches `completed` or `seeding`. |
 | `web/e2e/rss-rule.spec.ts` | Create an RSS rule and open the dry-run panel. | Every evaluated feed item is listed with a reason code, matches and non-matches alike. |
 
-E2E runs against a real stack started by `compose.yaml` with the aria2 lane up —
-`COMPOSE_PROFILES=aria2` plus `DLTOOL_ARIA2_URL` and `ARIA2_RPC_SECRET` in `.env`
-([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §2) — because `add-url.spec.ts` downloads a
-real HTTPS URL; magnet and URL fixtures use the bundled legitimate sources only (Arch Linux, Debian,
-Ubuntu). See [`10-deployment-and-compose.md`](10-deployment-and-compose.md).
+E2E runs against a real stack started by `compose.yaml` with **both engine lanes up** — the aria2 lane
+with `COMPOSE_PROFILES=aria2` plus `DLTOOL_ARIA2_URL` and `ARIA2_RPC_SECRET` in `.env`, and the
+qBittorrent lane with `DLTOOL_QBITTORRENT_URL` plus `QBT_USERNAME`/`QBT_PASSWORD`
+([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §2) — because `add-url.spec.ts` downloads
+a real HTTPS URL and `add-magnet.spec.ts` adds a real torrent; magnet and URL fixtures use the bundled
+legitimate sources only (Arch Linux, Debian, Ubuntu). See
+[`10-deployment-and-compose.md`](10-deployment-and-compose.md).
 
 ### 6.2 Accessibility and PWA gates
 
