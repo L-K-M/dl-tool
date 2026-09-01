@@ -71,7 +71,7 @@ column names the package that consumes the parsed field.
 | `DLTOOL_LOG_FORMAT` | enum `json\|text` | `json` | no | infrastructure | `json` selects `slog.NewJSONHandler`; `text` selects the `tint` handler for local development. | `internal/obs/log.go` |
 | `DLTOOL_TRUSTED_PROXIES` | `,`-separated CIDRs | *(empty)* | no | infrastructure | Sources whose `X-Forwarded-For` and `X-Forwarded-Proto` are honoured. Empty means no forwarded header is trusted and the peer address is used. | `internal/api/server.go` |
 | `DLTOOL_SESSION_TTL` | duration | `720h` | no | infrastructure | Lifetime of a session cookie and its `sessions` row. | `internal/secure/session.go` |
-| `DLTOOL_METRICS_ADDR` | listen addr | `127.0.0.1:9090` | no | infrastructure | Separate listener exposing `GET /metrics`. Set to an empty string to disable metrics entirely. | `internal/obs/metrics.go` |
+| `DLTOOL_METRICS_ADDR` | listen addr \| `off` | `127.0.0.1:9090` | no | infrastructure | Separate listener exposing `GET /metrics`. The exact lowercase value `off` disables metrics entirely — an empty string cannot express this, because empty means "unset" and falls back to the default. | `internal/obs/metrics.go` |
 | `DLTOOL_ARIA2_URL` | url | *(empty)* | no | infrastructure | aria2 JSON-RPC endpoint, e.g. `http://aria2:6800/jsonrpc`. Empty disables the aria2 lane and every HTTP/FTP/SFTP/Metalink task fails with `engine_unavailable`. | `internal/engine/aria2/client.go` |
 | `DLTOOL_ARIA2_SECRET` | **secret** string | *(empty)* | yes when `DLTOOL_ARIA2_URL` is set | infrastructure | Value sent as the aria2 `token:<secret>` first parameter. | `internal/engine/aria2/client.go` |
 | `DLTOOL_QBITTORRENT_URL` | url | *(empty)* | no | infrastructure | qBittorrent WebUI base URL, e.g. `http://qbittorrent:8080`. Empty disables the BitTorrent lane. | `internal/engine/qbittorrent/client.go` |
@@ -273,7 +273,7 @@ stated fallback.
 | Both `X` and `X_FILE` set | any secret | Fatal. | `config_conflict` |
 | `X_FILE` path unreadable | any secret | Fatal. | `config_secret_unreadable` |
 | Unparseable value | bool, duration, integer, enum, CIDR list | Fatal, naming the variable and the received value. | `config_malformed` |
-| Not a valid `host:port` | `DLTOOL_HTTP_ADDR`, `DLTOOL_METRICS_ADDR` | Fatal. | `config_malformed` |
+| Not a valid `host:port` | `DLTOOL_HTTP_ADDR`, `DLTOOL_METRICS_ADDR` | Fatal. `DLTOOL_METRICS_ADDR` additionally accepts the literal `off`. | `config_malformed` |
 | Missing leading `/`, or trailing `/` | `DLTOOL_BASE_PATH` | Fatal. | `config_malformed` |
 | Not an absolute path | `DLTOOL_CONFIG_DIR`, `DLTOOL_DATA_ROOTS`, `DLTOOL_DB_PATH`, `DLTOOL_WATCH_DIR` | Fatal. | `config_malformed` |
 | Directory missing or not writable | `DLTOOL_CONFIG_DIR`, directory of `DLTOOL_DB_PATH` | Fatal, after attempting one `MkdirAll`. | `config_path_unwritable` |
