@@ -988,8 +988,10 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 {"updated":2}
 ```
 
-`PATCH` body: `ids` (string[], required, 1–500) and `read` (boolean, required). An id belonging to another
-feed is silently skipped. Statuses: `200` · `404` · `422` (empty `ids`, more than 500).
+`PATCH` body: `ids` (string[], required, 1–500) and `read` (boolean, required). `POST /read-all` takes no
+body. Both return `{"updated":n}`, where `n` counts the rows whose state actually changed; an id that does
+not exist, or belongs to another feed, is silently skipped. Statuses: `200` · `404` · `422` (empty `ids`,
+more than 500).
 
 ```json
 {"items":[{"id":"itm_01JKQ8...","feed_id":"fed_01JKQ7...","title":"archlinux-2026.09.01-x86_64.iso",

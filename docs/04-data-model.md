@@ -410,7 +410,7 @@ CREATE TABLE feed_items (
   raw_json TEXT,                        -- full parsed item; feeds the dry-run panel
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX idx_feed_items_identity ON feed_items(feed_id, identity);
-CREATE INDEX idx_feed_items_read ON feed_items(feed_id, read);
+CREATE INDEX idx_feed_items_read ON feed_items(feed_id, read, published_at DESC);
 CREATE INDEX idx_feed_items_hash ON feed_items(info_hash);
 CREATE INDEX idx_feed_items_norm ON feed_items(title_norm);
 CREATE INDEX idx_feed_items_pub ON feed_items(feed_id, published_at DESC);
