@@ -656,10 +656,13 @@ goose.Up(db, "migrations")
   monotonically increasing, never renumbered and never edited once merged.
 - Each file contains `-- +goose Up` and `-- +goose Down` markers. A `Down` section is mandatory, even when it
   only drops the tables the `Up` created.
-- Take a `VACUUM INTO` backup **before** running any migration, named
-  `/config/backups/dl-tool.db.pre-migration-<currentversion>.bak`. Abort the migration if the backup fails.
-- Refuse to start if the applied schema version is **newer** than the highest migration embedded in the
-  binary. Log both version numbers and exit non-zero; never attempt a downgrade.
+- Read the applied and highest embedded versions before taking a backup or running goose.
+- Refuse to start when the applied version is newer, logging both versions; never attempt a downgrade.
+- When both versions match, skip both backup and migration. On a new database at version `0`, migrate without
+  creating an empty rollback backup.
+- Only when `0 < applied < embedded` take a `VACUUM INTO` backup before migration. Name it
+  `/config/backups/dl-tool.db.pre-migration-<from>-to-<to>.<UTC>.bak`, write to a unique temporary path in
+  that directory, then atomically rename it. Abort before goose if any backup step fails.
 
 ```sql
 SELECT MAX(version_id) FROM goose_db_version;
@@ -683,19 +686,20 @@ VACUUM INTO '/config/backups/dl-tool.db.20260901T120000Z.bak';
 - **The target file must not already exist**, or must be an empty file, or the command fails with an error.
   Generate a fresh UTC timestamp for every run; never reuse a name.
 - An interrupted `VACUUM INTO` (unplanned shutdown, power loss) can leave an incomplete and corrupt output.
-  Write to a temporary name inside `/config/backups/` and `rename()` it into place once the statement returns.
-- Schedule: nightly via `github.com/robfig/cron/v3 v3.0.1`, retaining the newest 7 files. Also exposed at
-  `POST /system/backup`.
+  Write to a unique temporary name inside `/config/backups/`, check its integrity, fsync it, then `rename()`
+  it into place and fsync the directory.
+- Schedule: nightly via `github.com/robfig/cron/v3 v3.0.1`, retaining the newest 7 files matching exactly
+  `dl-tool.db.<UTC>.bak`. Pre-migration and replaced-database backups are never counted or pruned by this job.
+  The same operation is exposed at `POST /system/backup`.
+- The server and restore CLI acquire an exclusive non-blocking `flock` on `DLTOOL_DB_PATH + ".lock"`. The
+  stable mode-`0600` lock file is never replaced or removed; the server holds its descriptor until shutdown.
 
-Restore procedure:
-1. Stop the container.
-2. Delete `dl-tool.db`, `dl-tool.db-wal` and `dl-tool.db-shm` from `/config`.
-3. Copy the `.bak` file to `/config/dl-tool.db`, owned by `PUID:PGID`.
-4. Start the container; migrations run at boot and bring the restored file forward.
-
-Copying `dl-tool.db` while dl-tool is running **loses the contents of `dl-tool.db-wal`** and can yield a
-corrupt copy. A clean shutdown checkpoints and removes the `-wal` and `-shm` files, leaving only
-`dl-tool.db`; that is the only state safe to copy by hand.
+Restore is supported only through `dl-tool restore --from <file>`. The command acquires the process lock,
+integrity-checks the source, stages and fsyncs a mode-`0600` copy beside the database, preserves a consistent
+copy of the current database, checkpoints it, clears its sidecars, then atomically renames the staged file
+over `DLTOOL_DB_PATH` and fsyncs the directory. It accepts schema versions at or below the embedded maximum;
+boot migrates an older restore forward. Directly deleting or copying the live database or its WAL sidecars is
+unsupported. The exact procedure is in [`17-operations-and-runbook.md` §3.4](17-operations-and-runbook.md#34-dl-tool-restore---from-file).
 
 ---
 
@@ -773,3 +777,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Initial version |
 | 2026-09-01 | File priority corrected to `IN (0,1,6,7)` with the qBittorrent names `skip/normal/high/maximum`; added `tasks.infohash_v1`/`infohash_v2` with partial unique indices and the ingest normalisation table; widened `feed_items.info_hash` and `rule_matches.info_hash` to 64 hex; added `notification_channels`; added `engines.foreign_task_policy` and the boot-probe meaning of `engines.version`; added the concurrency and `min_free_space` settings rows; separated the storage quota from the concurrency limit and added `concurrency_limit` and `js_runtime_missing` to `error_code`; added the table-reachability list; corrected the ADR-0005/0008/0009 filenames. |
 | 2026-09-01 | Migration subsystem cut: deleted the `engines.foreign_task_policy` column, its `CHECK` constraint and enum section §4.9, replacing them with the single exclusive-control rule; removed every link to the withdrawn migration document and the "imported task" framing of the inherited `error_code` values; §5 retitled "Schema migration policy" to keep goose migrations unambiguous. `notification_channels`, `infohash_v1`/`infohash_v2` and `priority IN (0,1,6,7)` are unchanged. |
+| 2026-09-01 | Made migration backups idempotent and database restore lock-protected and atomic. |

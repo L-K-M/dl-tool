@@ -889,9 +889,15 @@ The dl-tool settings API shall export a versioned document containing settings, 
 | T108 | must |
 
 ### FR-146 Restore a backup from the command line
-When an operator runs `dl-tool restore --from <file>`, dl-tool shall refuse to proceed while a server process holds the database, shall refuse a backup whose schema version does not match the binary, and shall otherwise replace the database in place.
+When an operator runs `dl-tool restore --from <file>`, dl-tool shall acquire the same process-lifetime file
+lock as the server, refuse a backup whose schema is newer than the binary, verify its integrity, stage it on
+the database filesystem, and atomically replace the database without first deleting the live file. An older
+schema is accepted and migrates forward at the next boot.
 
-**Verify:** T108 runs the command against a running instance and asserts a named refusal, stamps a backup with a foreign schema version and asserts a second named refusal, then restores against a stopped instance and asserts the task count matches the source.
+**Verify:** T108 runs the command against a running instance and asserts a named lock refusal, rejects a
+future schema, restores an older schema and observes its forward migration, injects a failure before the
+atomic rename and proves the original remains intact, then restores successfully and matches the source task
+count.
 
 | Covered by | Priority |
 |---|---|
@@ -1262,3 +1268,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | Required a process lock and staged atomic database restore. |

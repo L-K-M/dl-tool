@@ -1292,7 +1292,7 @@ default `info`, minimum level of `debug` \| `info` \| `warn` \| `error`) · `sin
 `__redacted__` before a record is stored, not at read time.
 
 `POST /system/backup` is admin-only, takes no body, runs `VACUUM INTO` and returns `201`
-`{"path":"/config/backups/dl-tool-20260901T094500Z.db","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}`.
+`{"path":"/config/backups/dl-tool.db.20260901T094500Z.bak","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}`.
 `403` · `409` `/problems/conflict` when a backup is already running · `500` `/problems/internal`.
 
 ### 13.1 Process endpoints outside `/api/v1`
@@ -1448,3 +1448,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
+| 2026-09-01 | Aligned the backup API filename with the canonical recovery format. |

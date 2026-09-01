@@ -41,11 +41,14 @@ flowchart TD
   C -->|invalid| X1["exit 1, config_*"]
   C --> D["S2 network-filesystem check on the database directory"]
   D -->|"nfs, cifs, smb3, fuse.*"| X2["exit 1, config_network_fs"]
-  D --> E["S3 open SQLite, apply pragmas"]
-  E --> F["S4 pre-migration VACUUM INTO backup"]
-  F -->|backup failed| X3["exit 1, backup_failed"]
-  F --> G["S5 goose migrations"]
-  G -->|"applied version > embedded max"| X4["exit 1, schema_too_new"]
+  D --> E["S3 acquire process lock, open SQLite"]
+  E --> F["S4 read applied and embedded schema versions"]
+  F -->|"applied > embedded"| X4["exit 1, schema_too_new"]
+  F -->|"0 < applied < embedded"| P["unique pre-migration VACUUM INTO backup"]
+  P -->|backup failed| X3["exit 1, backup_failed"]
+  P --> G["S5 goose migrations"]
+  F -->|"applied = 0 < embedded"| G
+  F -->|"applied = embedded"| H["S6 PRAGMA integrity_check"]
   G --> H["S6 PRAGMA integrity_check"]
   H --> I["S7 mount and hardlink self-check"]
   I --> J["S8 bind listeners, serve /healthz"]
@@ -88,17 +91,21 @@ refusal.
 
 `/data` may be a network filesystem. Only the database directory is checked.
 
-### 1.3 Stages S4–S6 — backup, migrate, refuse a newer schema
+### 1.3 Stages S3–S6 — lock, version gate, backup and migrate
 
-1. Read the applied schema version. Take a `VACUUM INTO` backup named
-   `/config/backups/dl-tool.db.pre-migration-<appliedversion>.bak`. **If the backup fails, the migration does
-   not run** and the process exits non-zero.
-2. Run the embedded goose migrations, forward-only, logging each file and its duration.
-3. If the applied version is **greater** than the highest migration embedded in the binary, exit non-zero
-   with `err_code=schema_too_new`, logging both numbers and the restore path. A downgrade is never attempted:
-   an older binary that ran migrations it does not understand would corrupt data it cannot interpret. This is
-   the single guard that makes the rollback in §4 safe.
-4. Run `PRAGMA integrity_check` and publish the result on `GET /system/info`.
+1. Derive the stable lock path with `databaseLockSuffix = ".lock"`, open it mode `0600`, acquire
+   `flock(LOCK_EX|LOCK_NB)`, then write the process PID. A second server exits with `database_locked`.
+   Keep the descriptor locked for the process lifetime; never unlink or replace the lock file.
+2. Open SQLite and read the applied and highest embedded schema versions. If applied is greater, exit with
+   `schema_too_new` **before** backup or goose runs.
+3. When both versions match, skip backup and migration. Repeated boots at one version create no backup.
+4. On a new database at version `0`, run goose without creating an empty rollback backup.
+5. Only when `0 < applied < embedded`, back up to
+   `dl-tool.db.pre-migration-<from>-to-<to>.<UTC>.bak`. `VACUUM INTO` a unique temporary name, integrity-check
+   and fsync it, atomically rename it, then fsync the directory. Any failure exits with `backup_failed` before
+   goose runs.
+6. Run embedded migrations forward, logging each file and duration.
+7. Run `PRAGMA integrity_check` and publish the result on `GET /system/info`.
 
 Migration file naming, the mandatory `-- +goose Down` section and the version query live in
 [`04-data-model.md` §5](04-data-model.md#5-schema-migration-policy).
@@ -179,7 +186,8 @@ dl-tool's `SIGTERM` handler, in order:
 4. Flush task state and `engine_ref` values to SQLite. Engine-side transfers are **not** paused — pausing on
    every restart would break seeding and confuse the user.
 5. Close SSE connections and the job workers.
-6. `PRAGMA wal_checkpoint(TRUNCATE)`, close the database, exit 0.
+6. `PRAGMA wal_checkpoint(TRUNCATE)`, close the database, release and close the process-lock descriptor,
+   then exit 0.
 
 A clean shutdown checkpoints and removes `dl-tool.db-wal` and `dl-tool.db-shm`, leaving only `dl-tool.db`.
 Their presence after a stop means the shutdown was killed, not graceful.
@@ -198,36 +206,30 @@ Their presence after a stop means the shutdown was killed, not graceful.
 
 ### 3.2 The nightly job
 
-A `robfig/cron/v3` entry runs `VACUUM INTO` once per night and retains the newest **7** files in
-`/config/backups/`. The same statement backs `POST /system/backup`. Semantics, including retention, are owned
-by [`04-data-model.md` §6](04-data-model.md#6-backup-and-restore). Two failure modes the operator will meet:
+A `robfig/cron/v3` entry runs `VACUUM INTO` once per night and retains the newest **7** files matching
+`dl-tool.db.<UTC>.bak`. It never counts pre-migration or replaced-database backups. The same operation backs
+`POST /system/backup`. Semantics, including retention, are owned by
+[`04-data-model.md` §6](04-data-model.md#6-backup-and-restore). Two failure modes the operator will meet:
 
 - **The target file must not already exist** (an existing *empty* file is accepted); otherwise the statement
   fails with an error. Every run generates a fresh UTC timestamp and never reuses a name.
 - An **interrupted** `VACUUM INTO` — power loss, an unplanned stop — can leave an incomplete and corrupt
-  output. dl-tool writes to a temporary name inside `/config/backups/` and `rename()`s it into place, so a
-  partial file is never mistaken for a good backup.
+  output. dl-tool integrity-checks and fsyncs a unique temporary file, renames it into place, then fsyncs the
+  directory, so a partial file is never mistaken for a good backup.
 
-Never copy `dl-tool.db` while dl-tool is running: the copy **loses the contents of `dl-tool.db-wal`** and can
-be corrupt. Only the post-clean-shutdown file, with no `-wal` and no `-shm` beside it, is safe to copy by
-hand.
+Never copy `dl-tool.db` directly: while running, that loses committed WAL contents; while stopped, stale
+sidecars can later be applied to the wrong database. Use the restore command, whose process lock, checkpoint
+and atomic rename cover both cases.
 
-### 3.3 Stop-copy-start restore
+### 3.3 Direct file replacement is unsupported
 
-```bash
-docker compose stop dl-tool
-rm -f ./config/dl-tool/dl-tool.db ./config/dl-tool/dl-tool.db-wal ./config/dl-tool/dl-tool.db-shm
-cp ./config/dl-tool/backups/dl-tool.db.20260901T030000Z.bak ./config/dl-tool/dl-tool.db
-chown 1000:1000 ./config/dl-tool/dl-tool.db     # PUID:PGID
-docker compose start dl-tool
-```
-
-Migrations run at boot and bring the restored file forward. Tasks are reconciled by §1.6, so transfers that
-kept running in the engines are picked back up rather than duplicated.
+Do not remove, overwrite or copy the database or its sidecars by hand. Use §3.4, which leaves the original
+database intact until a checked replacement is ready and preserves a rollback snapshot.
 
 ### 3.4 `dl-tool restore --from <file>`
 
-The same operation without the manual file surgery ([FR-146](02-requirements.md#fr-146-restore-a-backup-from-the-command-line)).
+This is the only supported restore path
+([FR-146](02-requirements.md#fr-146-restore-a-backup-from-the-command-line)).
 
 ```bash
 docker compose stop dl-tool
@@ -237,13 +239,24 @@ docker compose start dl-tool
 
 | Gate | Check | Refusal |
 |---|---|---|
-| Not running | Acquire an exclusive lock on the target database; a live server holds it. | Exit 1, `restore_server_running`, naming the lock holder's PID file. |
-| Schema version | `MAX(version_id)` in the backup must equal the highest migration embedded in this binary. | Exit 1, `restore_schema_mismatch`, printing both versions and the tag that matches the backup. |
+| Not running | Acquire `flock(LOCK_EX\|LOCK_NB)` on the stable process lock before opening either database. | Exit 1, `restore_server_running`, naming the PID recorded by the lock holder. |
+| Source path | Resolve to a regular file inside `DLTOOL_CONFIG_DIR`; reject the live database, lock and sidecars. | Exit 1, `restore_source_rejected`; the live database is untouched. |
+| Schema version | The backup's `MAX(version_id)` must not exceed the highest embedded migration. Older is valid. | Exit 1, `restore_schema_too_new`, printing both versions. |
 | Integrity | `PRAGMA integrity_check` on the backup, opened read-only. | Exit 1, `restore_integrity_failed`; the live database is untouched. |
 
-On success it renames the current database to `dl-tool.db.replaced-<UTC>.bak`, copies the backup into place
-with `PUID:PGID` ownership and mode `0600`, removes any stale `-wal` and `-shm`, and prints the restored task
-count. `--from` accepts only a file inside `DLTOOL_CONFIG_DIR`.
+Every gate completes before the command changes the live database. On success:
+
+1. Copy the source to a unique `dl-tool.db.restore-<ULID>.tmp` beside `DLTOOL_DB_PATH` using `O_EXCL`, set
+   `PUID:PGID` and mode `0600`, fsync it, then integrity-check the staged copy.
+2. If a live database exists, create `dl-tool.db.replaced-<UTC>.bak` through `VACUUM INTO` a unique temporary
+   path; integrity-check and fsync it, rename it into place and fsync the directory.
+3. Checkpoint the live database with `PRAGMA wal_checkpoint(TRUNCATE)`, close every SQLite handle, then remove
+   its now-stale `-wal` and `-shm` sidecars. A crash here leaves the complete old database plus its backup.
+4. Atomically rename the staged copy over `DLTOOL_DB_PATH` and fsync the directory. A crash yields either the
+   complete old file or the complete checked replacement, never a partially copied live file.
+5. Print the restored task count. The next server boot migrates an older restored schema forward.
+
+Any failure before step 4 removes only the temporary stage and leaves the live database untouched.
 
 ### 3.5 Settings export and import
 
@@ -259,8 +272,9 @@ settings into a fresh instance, the operator still creates the first admin throu
 1. **Pin.** The shipped compose pins a major tag, `ghcr.io/l-k-m/dl-tool:1`, never `:latest`. Pin the engine
    images too — a floating `lscr.io/linuxserver/qbittorrent:latest` can change the libtorrent version
    underneath a running library.
-2. **Upgrade.** `docker compose pull && docker compose up -d && docker image prune -f`. Migrations run on
-   startup after the automatic pre-migration backup of §1.3.
+2. **Upgrade.** Run `docker compose pull && docker compose up -d`. When a migration is pending, startup takes
+   the unique pre-migration backup from §1.3. Do not prune the previous image until the rollback window has
+   expired and the backup has been tested.
 3. **Verify.** `curl -fsS localhost:8091/healthz`, then check `GET /system/info` for the expected `version`
    and `database.schema_version`.
 4. **Roll back.** Restore the pre-migration backup **and** pin the previous tag. Doing only one of the two
@@ -268,8 +282,9 @@ settings into a fresh instance, the operator still creates the first admin throu
    database simply re-migrates.
 
 ```bash
-docker compose down
-cp ./config/dl-tool/backups/dl-tool.db.pre-migration-7.bak ./config/dl-tool/dl-tool.db
+docker compose stop dl-tool
+docker compose run --rm dl-tool restore \
+  --from /config/backups/dl-tool.db.pre-migration-7-to-8.20260901T030000Z.bak
 # edit compose.yaml: image: ghcr.io/l-k-m/dl-tool:1.3.7
 docker compose up -d
 ```
@@ -389,12 +404,11 @@ deliberate, local operator action.
 
 ## Open questions
 
-- [NEEDS CLARIFICATION: backup file naming is stated two ways. `04-data-model.md` §6 uses
-  `dl-tool.db.<UTC>.bak` and `05-api-contract.md` §13 returns `/config/backups/dl-tool-<UTC>.db`. This
-  document uses the `04` form. One of the two must be corrected before T091.]
+None.
 
 ## Change log
 
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version. |
+| 2026-09-01 | Made migration backup and database restore idempotent, lock-protected and crash-safe. |
