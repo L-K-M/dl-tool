@@ -260,7 +260,8 @@ row shows `error_code` in the cell and `error_message` in the tooltip.
 ### 3.3 Persistence
 
 One document, persisted server-side per user through `GET`/`PUT /api/v1/prefs`. Write on a 500 ms debounce; never write during an active drag or
-resize gesture.
+resize gesture. Render the built-in defaults immediately and patch them once `GET /api/v1/prefs` resolves,
+accepting a brief default→saved flash in exchange for dropping the client-side cache.
 
 ```json
 {
@@ -851,11 +852,13 @@ Every truncated element gets a native `title` and a tooltip that opens after 400
 The live transport is `GET /api/v1/events` (SSE), with `GET /api/v1/sync?rid=` as the identical-payload
 polling fallback — see [`05-api-contract.md`](05-api-contract.md) §6.
 
-1. When no `sync` event and no heartbeat comment has arrived for two heartbeat intervals (the server emits
-   one every 15 s while idle, so about 30 s of silence), the connection dot turns amber and the grid
-   dims to 70 % opacity.
-2. After 5 s disconnected a full-width banner slides in beneath the toolbar, `role="alert"`:
-   `⚠ Lost connection to the server. Reconnecting in 3s…  [Retry now]`.
+1. When nothing has arrived for two heartbeat intervals — no `sync` event, no heartbeat comment and no
+   successful polling response (the server emits a heartbeat every 15 s while idle, so about 30 s of
+   silence) — the connection dot turns amber and the grid dims to 70 % opacity.
+2. After 5 s of the transport being known down — an SSE `error` event or a closed connection — or once
+   silence passes the amber threshold, a full-width banner slides in beneath the toolbar, `role="alert"`:
+   `⚠ Lost connection to the server. Reconnecting in 3s…  [Retry now]`. The ladder is monotonic:
+   amber can never fire after the banner.
 3. Reconnect backoff: 1, 2, 4, 8, 15, 30 s, then every 30 s.
 4. After three consecutive SSE failures, fall back to polling `GET /api/v1/sync?rid=` every 2 s and say so
    in the banner; keep attempting SSE in the background.
