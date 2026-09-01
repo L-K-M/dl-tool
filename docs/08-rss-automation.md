@@ -218,7 +218,10 @@ as a hint only.
 ## 4. The rule document
 
 One document, YAML in the editor and JSON in `rules.definition_json`. `POST /rules` carries it as a JSON
-object in the `definition` member, never as a YAML string.
+object in the `definition` member, never as a YAML string. The rule **row** additionally carries
+`owner_id` ([`04-data-model.md`](04-data-model.md) §3.5): it is not part of the document, it names the
+user whose quota, jail and task list a grab lands in, and rule writes are admin-only — the same
+privilege rule as a watch folder, for the same reason (a rule creates tasks on someone's behalf).
 
 ### 4.1 Schema
 
@@ -289,7 +292,7 @@ throttle:
 | `score.formats[].name` | string | — | Label shown in the dry run. |
 | `score.formats[].pattern` | string | — | Regex, always case-insensitive, matched against the haystack. |
 | `score.formats[].weight` | int | — | Added once when the pattern matches. Negative values are outright vetoes when large enough to sink the total below `minimum`. |
-| `action.destination` | string | server default | Absolute path under a configured data root. |
+| `action.destination` | string | server default | Absolute path under a configured data root **and inside the rule owner's jail**; validated at save time and again at grab time ([`05-api-contract.md`](05-api-contract.md) §10.2). |
 | `action.category` | string | `""` | Category name; must exist. |
 | `action.paused` | bool | `false` | Create the task in `paused` state. |
 | `action.content_layout` | enum | `original` | `original` \| `subfolder` \| `no_subfolder`. |
@@ -326,7 +329,7 @@ For each enabled rule, ordered by `(priority ASC, name ASC)`, over the candidate
 11. **Score.** Sum the weights of every `score.formats` entry whose `pattern` matches the haystack. If `total < score.minimum`, reject `below_minimum_score`.
 12. **Collect.** Do **not** grab yet.
 13. **Per-run resolution.** Group all accepted candidates by `content_key`; within each group sort by `(score DESC, rule.priority ASC, feed_priority ASC, published_at DESC)` and grab only the winner. Record the losers as `fallback` rows so a failed hand-off to the download client can be retried with the runner-up.
-14. **Commit.** Insert `rule_matches`, insert `rule_seen_episodes`, set `rule.last_match_at = item.published_at`, enforce `throttle.max_per_run`.
+14. **Commit.** Insert `rule_matches`, insert `rule_seen_episodes`, set `rule.last_match_at = item.published_at`, enforce `throttle.max_per_run`. The task itself is created through the ordinary task-creation path as the rule's `owner_id`: the destination is re-checked against the owner's jail and the owner's storage quota and concurrency limits apply exactly as in [`05-api-contract.md`](05-api-contract.md) §5.11 — a breach leaves the item ungrabbed with `rule_matches.status = 'failed'`, never an unaccounted task.
 
 Steps 1 and 3 remove an item from the candidate set before evaluation; they produce no reason code and the
 item does not appear in a dry run's `results`. Losers from step 13 are written with
@@ -582,3 +585,4 @@ distribution or a public-domain catalogue.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | §3.1 rebuilt as the four-tier extraction ladder matching qBittorrent's actual parser: an `application/x-bittorrent` enclosure and a `magnet:` `<link>` are document-order last-wins (tier A), then an empty- or absent-type enclosure (tier B), then dl-tool's synthesised sources (tier C), then `<link>`/`<guid>` (tier D); noted that Torznab enclosures resolve in tier A. Identity step 2 and the §7 dedup ladder now use the widened 40-or-64-hex `feed_items.info_hash` and `rule_matches.info_hash` columns, with the v1/v2 comparison and back-fill rules. §10 references retargeted to the tier names. ADR link filenames corrected to the canonical slugs. |
 | 2026-09-01 | Removed the qBittorrent `rules.json` importer section and its mention in the scope list: brief §18 cuts the migration subsystem, so no rule importer exists. Renumbered the former §10 to §9. Corrected the `POST /rules/test` anchor to `#103-post-rulestest--the-dry-run`. |
+| 2026-09-01 | Ownership and jail: `rules.owner_id` attributes grabs to a user; `action.destination` is validated against the owner's jail at save time and again at grab time; step 14 creates the task through the ordinary §5.11 path so quota and concurrency accounting applies. Rule writes are admin-only, matching the watch-folder privilege rule. |

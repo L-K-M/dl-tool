@@ -575,7 +575,9 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 
 - **Indexer multi-select**: a popover checkbox list with *All* / *None*; each row shows the indexer name, a
   health dot and its last error in a tooltip. Disabled indexers are greyed with a link to
-  `/settings/indexers`. The selection is persisted in the prefs document.
+  `/settings/indexers`. The selection is persisted in the prefs document. The list is whatever
+  `GET /api/v1/indexers` returns: key-bearing indexers are absent for non-admins by server rule
+  ([`05-api-contract.md`](05-api-contract.md) §9.1), so the client adds no rule of its own.
 - **Category filter** is populated from `GET /api/v1/indexers/categories`; the client never hard-codes a
   category tree.
 - **Results grid** reuses the §3 grid component. Columns: checkbox · Name · Size · Seeders · Leechers ·
@@ -617,6 +619,8 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 - **Feed tree**: folders and feeds, each with an unread count. Feed states: OK `●`, loading `◐`, error `⚠`
   with the HTTP status or parse error in the tooltip. Context menu: Update · Rename… · Edit URL… ·
   Mark all read · Move to folder ▸ · Copy feed URL · Remove.
+- **Feed and rule management is admin-only** ([`05-api-contract.md`](05-api-contract.md) §2); a
+  non-admin sees this screen read-only, with Update/Refresh actions but no create, edit or remove.
 - **Add feed** dialog fields: URL · Name · Folder · `☐ Automatically download all items`.
 - **Item list** columns: checkbox · Title (unread bold with a filled dot, read muted) · Feed · Age ·
   matched-rule chips. Hovering a chip explains why the rule matched. Multi-select plus *Download selected*,
@@ -930,3 +934,4 @@ The justification record for every choice above. Both tables are evidence, not d
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: corrected the ADR-0006, ADR-0007 and ADR-0009 links to the canonical filenames; dropped the two stale open questions about `/prefs` and `infohash_v1`/`infohash_v2`, both of which `05-api-contract.md` now specifies, and removed the `localStorage` fallback for the grid layout. |
+| 2026-09-01 | Privilege review: the RSS screens are read-only for non-admins (feed and rule writes are admin-only), and the search indexer list notes that key-bearing indexers are absent for non-admins by server rule. |

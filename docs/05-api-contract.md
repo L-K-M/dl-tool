@@ -193,10 +193,12 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 | POST | `/search` | session\|token | Start an asynchronous search job. |
 | GET | `/search/{id}` | session\|token | Poll partial results and per-engine status. |
 | DELETE | `/search/{id}` | session\|token | Discard a search job and its results. |
-| GET·POST·PATCH·DELETE | `/feeds[/{id}]` | session\|token | Feed CRUD. |
+| GET | `/feeds[/{id}]` | session\|token | Feed and item reads — feeds are global. |
+| POST·PATCH·DELETE | `/feeds[/{id}]` | admin | Feed writes; a feed is shared state every rule can see. |
 | POST | `/feeds/{id}/refresh` | session\|token | Force one poll now. |
 | GET | `/feeds/{id}/items` | session\|token | Items of one feed. |
-| GET·POST·PATCH·DELETE | `/rules[/{id}]` | session\|token | Rule CRUD. |
+| GET | `/rules[/{id}]` | session\|token | Rule reads. |
+| POST·PATCH·DELETE | `/rules[/{id}]` | admin | Rule writes — a rule creates tasks on someone's behalf, the same reason `/watch-folders` is admin (§15). |
 | POST | `/rules/test` | session\|token | Dry-run an unsaved rule; explains every item. |
 | POST | `/rules/{id}/run` | session\|token | Apply a saved rule to existing items. |
 | GET | `/settings` | session\|token | Read settings, secrets redacted. |
@@ -841,6 +843,13 @@ DELETE /tags/{name} → 204
 [`07-search-and-indexers.md`](07-search-and-indexers.md)). Imported indexers are created with
 `enabled: false`.
 
+**Key-bearing indexers are admin-only.** An indexer with a stored `api_key` is invisible to a non-admin:
+it does not appear in `GET /indexers` or `GET /indexers/categories`, its id in `POST /search` returns
+`404`, and its results never reach a non-admin search job. Private-tracker download URLs and enclosure
+links embed the operator's per-user passkey ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §1
+lists tracker passkeys as an asset); a shared household account must not be able to read one. Keyless
+indexers — the four bundled engines, bitmagnet — stay searchable by every authenticated user.
+
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (non-admin write) · `403`
 `/problems/ssrf-blocked` · `404` · `409` `/problems/conflict` (duplicate `definition_id`) · `422` (unknown
 `kind`, missing `url` for a Torznab indexer, invalid definition).
@@ -989,10 +998,24 @@ The rule document's schema, the matching algorithm and the rejection-reason enum
 [`08-rss-automation.md`](08-rss-automation.md); this file fixes only how the document travels over HTTP — it
 is a JSON object in the `definition` member, never a YAML string.
 
-`POST /rules` requires `name` and `definition`; `PATCH /rules/{id}` accepts `name`, `enabled`, `priority`
-and `definition`; `DELETE /rules/{id}` → `204`. A malformed `episode.filter` is rejected **at save time**
+`POST /rules` requires `name` and `definition` and accepts `owner_id` (a `usr_` id, default the calling
+admin); `PATCH /rules/{id}` accepts `name`, `enabled`, `priority`, `owner_id` and `definition`;
+`DELETE /rules/{id}` → `204`. A malformed `episode.filter` is rejected **at save time**
 with `422` and an `errors[]` entry pointing at `body.definition.episode.filter` — never accepted and
 silently ignored at match time.
+
+**Ownership and the jail.** A rule creates tasks on someone's behalf, exactly like a watch folder (§15),
+so writes are admin-only and every rule carries an `owner_id`:
+
+- `action.destination` is validated at save time against the **owner's** jail (§7.2), not merely against
+  the configured roots: a rule may not write outside the subtree its owner could reach by hand. A
+  destination outside the owner's jail is `403` `/problems/path-rejected`.
+- The check runs again at grab time on every item, because `PATCH /users/{id}` can move a jail after the
+  rule was saved.
+- Tasks a rule creates are owned by `owner_id`, count against that user's storage quota and concurrency
+  limits (§5.11), and appear only in that user's listings — the grabbed item is processed through the
+  ordinary task-creation path, so a quota breach leaves the item ungrabbed with `rule_matches.status =
+  'failed'`, never a task that escapes accounting.
 
 `POST /rules/{id}/run` applies a saved rule to the items already stored:
 
@@ -1448,3 +1471,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
+| 2026-09-01 | Privilege review: rule and feed **writes** are admin-only (a rule creates tasks on someone's behalf, mirroring the watch-folder rule), `POST /rules` gains `owner_id` with save-time and grab-time jail validation of `action.destination`, and rule-grabbed tasks are owned by and quota-accounted to that owner through §5.11. Indexers with a stored API key are admin-only across `GET /indexers`, `GET /indexers/categories` and `POST /search`, because their download URLs embed the operator's tracker passkey. |
