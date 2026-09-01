@@ -165,8 +165,11 @@ lives in its own table and is replaced through `PUT /settings/schedule`. Per-use
 
 **One value, two names.** `ARIA2_RPC_SECRET` (the compose-level name) and `DLTOOL_ARIA2_SECRET` (the
 application variable) hold the **same** value: `compose.yaml` interpolates the one `.env` entry into the
-aria2 service and into dl-tool's `DLTOOL_ARIA2_SECRET`. Setting one sets both; an operator who copies
-`ARIA2_RPC_SECRET` into `.env` per step 3 below has configured dl-tool's side too.
+aria2 service and into dl-tool's `DLTOOL_ARIA2_SECRET`. The `.env` entry is the single source — an
+operator who copies `ARIA2_RPC_SECRET` into `.env` per step 3 below has configured dl-tool's side too.
+Provisioning `DLTOOL_ARIA2_SECRET` directly (inline or `_FILE`) reaches only dl-tool, so aria2's RPC
+secret must then be made to match by hand; a mismatch shows up as aria2 rejecting every request and the
+engine reading unhealthy.
 
 **At-rest encryption.** Every `*_enc` column and the extraction passwords are sealed with
 `DLTOOL_SECRET_KEY`: XChaCha20-Poly1305 with a 32-byte key and a fresh random nonce per value, the nonce
@@ -336,3 +339,4 @@ stated fallback.
 | 2026-09-01 | Review pass: the `DLTOOL_SECRET_KEY` loss story names every affected surface (row-level `secret_lost` markers — not a `tasks.error_code` — plus the cleared `extract_passwords` setting and one `task_events` row per nulled per-task password); the two extraction-password carriers are split into their own rows; NFR-023 names each secret's file and mode. |
 | 2026-09-01 | Review pass 2: the `secret_key_regenerated` boot log is restored (the aria2 branch's `aria2_secret_rotated` keeps its twin), and a key-lost `extract_passwords` renders as the literal `"__lost__"` — distinct from `"__redacted__"` and a no-op on PATCH — so the wipe is assertable, not vague. |
 | 2026-09-01 | Review pass 4: the `ARIA2_RPC_SECRET` ↔ `DLTOOL_ARIA2_SECRET` equivalence is stated once, explicitly — one `.env` value, interpolated by Compose into both consumers — instead of leaving two names for one secret across the table and step 3. |
+| 2026-09-01 | Review pass 5: the equivalence names the `.env` entry as the single source — a directly set `DLTOOL_ARIA2_SECRET` (inline or `_FILE`) reaches only dl-tool and must be matched by hand on the aria2 side. |

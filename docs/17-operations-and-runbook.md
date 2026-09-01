@@ -305,7 +305,7 @@ including `debug`. Values are typed `secure.Secret`, whose `String`, `Format` an
 
 | Never logged | Where it lives |
 |---|---|
-| `DLTOOL_ARIA2_SECRET`, `DLTOOL_QBITTORRENT_PASSWORD` | Environment or `_FILE` |
+| `DLTOOL_ARIA2_SECRET`, `DLTOOL_QBITTORRENT_PASSWORD` | Environment or `_FILE`; the generated `ARIA2_RPC_SECRET` also rests in `/config/secrets.env` |
 | At-rest secret key `DLTOOL_SECRET_KEY` | `/config/secrets.env` |
 | Password hashes, API token values | `users`, `api_tokens` |
 | Indexer `api_key`, notification `secret_enc`, engine `secret_enc` | Configuration tables |
@@ -399,3 +399,4 @@ deliberate, local operator action.
 |---|---|
 | 2026-09-01 | Initial version. |
 | 2026-09-01 | `secrets.env` described correctly: `DLTOOL_SECRET_KEY` (the at-rest encryption key behind every `*_enc` column) and `ARIA2_RPC_SECRET` — no session or CSRF keys exist. |
+| 2026-09-01 | Review pass: the never-logged table names `secrets.env` as an at-rest home of the aria2 secret, so an inventory or scrub does not miss the stale copy. |
