@@ -264,7 +264,7 @@ sequenceDiagram
     POLL->>FEED: GET the feed URL with If-None-Match and If-Modified-Since
     alt 304 Not Modified
         FEED-->>POLL: 304, zero bytes
-        POLL->>POLL: update last_checked_at only
+        POLL->>POLL: update last_fetch_at and last_success_at only
     else 200 OK
         FEED-->>POLL: 200 body plus ETag and Last-Modified
         POLL->>POLL: parse with gofeed, upsert items keyed by guid, store both validators verbatim
