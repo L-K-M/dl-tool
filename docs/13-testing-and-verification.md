@@ -246,10 +246,14 @@ forcing a resync, and reconnection carrying `Last-Event-ID`.
 E2E runs against a real stack started by `compose.yaml` with **both engine lanes up** — the aria2 lane
 with `COMPOSE_PROFILES=aria2` plus `DLTOOL_ARIA2_URL` and `ARIA2_RPC_SECRET` in `.env`, and the
 qBittorrent lane with `DLTOOL_QBITTORRENT_URL` plus `QBT_USERNAME`/`QBT_PASSWORD`
-([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §2) — because `add-url.spec.ts` downloads
-a real HTTPS URL and `add-magnet.spec.ts` adds a real torrent; magnet and URL fixtures use the bundled
-legitimate sources only (Arch Linux, Debian, Ubuntu). See
-[`10-deployment-and-compose.md`](10-deployment-and-compose.md).
+([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §2) — plus the one-time qBittorrent step
+the image requires: set the **same** username and password in qBittorrent's own WebUI, because the
+linuxserver image does not read those variables
+([`11-config-reference.md`](11-config-reference.md) §4). Without it the lane is enabled but every RPC
+call fails authentication and `add-magnet.spec.ts` fails for a reason unrelated to the code under test.
+This is needed because `add-url.spec.ts` downloads a real HTTPS URL and `add-magnet.spec.ts` adds a real
+torrent; magnet and URL fixtures use the bundled legitimate sources only (Arch Linux, Debian, Ubuntu).
+See [`10-deployment-and-compose.md`](10-deployment-and-compose.md).
 
 ### 6.2 Accessibility and PWA gates
 

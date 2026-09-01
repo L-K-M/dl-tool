@@ -229,8 +229,9 @@ DLTOOL_LOG_FORMAT=json
 - [ ] Both `DLTOOL_*_URL` engine variables interpolate from `.env` with an empty default; with a fresh
       `.env` the dl-tool container boots with both engine lanes disabled instead of exiting `config_missing`.
 - [ ] With `COMPOSE_PROFILES=aria2` and an empty `ARIA2_RPC_SECRET`, the aria2 container exits non-zero
-      before `aria2c` starts — the entrypoint is now the only guard against an unauthenticated RPC endpoint,
-      so this refusal needs its own proof.
+      before `aria2c` starts. The runtime proof is owned by
+      [T115](T115-aria2-image-build-and-publish.md)'s "unset secret exits non-zero" criterion — T125 ships
+      no aria2 image (`deploy/aria2/` does not exist yet) and proves only the config-level behaviour above.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
