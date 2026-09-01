@@ -482,9 +482,12 @@ The dl-tool search API shall persist a named search consisting of a query, an in
 | T064 | should |
 
 ### FR-058 Create a task from a search result in one click
-When a client adds a search result, dl-tool shall create a task from that result's download URI or magnet, applying the default destination unless the client supplied one.
+When a client adds an owned search result by its opaque ID, dl-tool shall resolve the stored download URI or
+magnet on the server and create a task, applying the default destination unless the client supplied one. Search
+responses shall never expose acquisition URIs, magnets or provider detail URLs.
 
-**Verify:** T063 Playwright test clicks a result's download button and asserts a task row appears in the grid within five seconds.
+**Verify:** T063 seeds a result whose acquisition URL contains `passkey=secret`, asserts no search response or
+task request contains that value, clicks its download button and asserts a task row appears within five seconds.
 
 | Covered by | Priority |
 |---|---|
@@ -1262,3 +1265,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | Security review: made search-result acquisition handles server-only. |

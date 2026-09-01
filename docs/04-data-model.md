@@ -235,7 +235,9 @@ CREATE TABLE tasks (
   engine TEXT NOT NULL CHECK (engine IN ('aria2','qbittorrent','ytdlp')),
   engine_ref TEXT,                      -- aria2 GID | qBittorrent infohash | yt-dlp job id; NULL until accepted
   source_kind TEXT NOT NULL CHECK (source_kind IN ('http','ftp','sftp','magnet','torrent','metalink','media')),
-  source_uri TEXT, name TEXT NOT NULL,
+  source_uri TEXT,                       -- server-only engine/recovery source; may contain provider credentials
+  source_display_uri TEXT,               -- API-safe; search-result:<res_id> for a grabbed result
+  name TEXT NOT NULL,
   infohash_v1 TEXT,                     -- exactly 40 lowercase hex chars, or NULL
   infohash_v2 TEXT,                     -- exactly 64 lowercase hex chars, or NULL
   state TEXT NOT NULL CHECK (state IN ('queued','downloading','seeding','paused','checking',
@@ -367,6 +369,7 @@ CREATE TABLE search_results (
   id TEXT PRIMARY KEY,
   search_job_id TEXT NOT NULL REFERENCES search_jobs(id) ON DELETE CASCADE,
   indexer_id TEXT NOT NULL REFERENCES indexers(id) ON DELETE CASCADE,
+  -- Provider URLs and magnets are server-only acquisition data; never serialize them.
   title TEXT NOT NULL, download_url TEXT, magnet_uri TEXT, info_hash TEXT, size_bytes INTEGER,
   seeders INTEGER,                      -- NULL when unknown; never -1, never a fabricated 1
   leechers INTEGER,                     -- leechers = peers - seeders when only peers is given
@@ -744,7 +747,7 @@ new table added by a later migration must be added to this list in the same chan
 | `task_events` | `/tasks/{id}/events` |
 | `indexers` | `/indexers`, `/indexers/{id}/test`, `/indexers/import` |
 | `search_jobs` | `/search`, `/search/{id}` |
-| `search_results` | `GET /search/{id}` |
+| `search_results` | metadata through `GET /search/{id}`; acquisition through `POST /tasks` by opaque result id |
 | `feeds` | `/feeds`, `/feeds/{id}/refresh` |
 | `feed_items` | `/feeds/{id}/items` |
 | `rules` | `/rules`, `/rules/{id}/run` |
@@ -784,3 +787,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Migration subsystem cut: deleted the `engines.foreign_task_policy` column, its `CHECK` constraint and enum section §4.9, replacing them with the single exclusive-control rule; removed every link to the withdrawn migration document and the "imported task" framing of the inherited `error_code` values; §5 retitled "Schema migration policy" to keep goose migrations unambiguous. `notification_channels`, `infohash_v1`/`infohash_v2` and `priority IN (0,1,6,7)` are unchanged. |
 | 2026-09-01 | Added `rules.owner_id`: a rule creates tasks on someone's behalf (the watch-folder privilege rule), so rule-grabbed tasks are owned, quota-accounted and jailed to that user. |
 | 2026-09-01 | Review pass: `rules.owner_id` is `ON DELETE RESTRICT`, not CASCADE — deleting a user must not silently destroy shared automation and match history; `DELETE /users/{id}` answers `409` instead. |
+| 2026-09-01 | Security review: separated server-only acquisition sources from API display references. |

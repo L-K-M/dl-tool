@@ -556,6 +556,15 @@ through the app; were that to change, such a route must set `Content-Disposition
   [`10-deployment-and-compose.md`](10-deployment-and-compose.md). Every incident in §7 that was
   exploited at scale involved an internet-exposed web UI.
 
+### 6.8 Provider credential containment
+
+Indexer download URLs, detail URLs and magnets may embed tracker credentials. They stay in server-only search
+and task source fields. `GET /search/{id}` returns metadata and an opaque result id; `POST /tasks` and
+`POST /tasks/inspect` accept that id and resolve it in the task service after checking job ownership. Task
+DTOs derive `source_uri` only from `source_display_uri`, and errors are redacted before storage. This applies
+to admins too: role is not a reason to move a provider secret into a browser
+([FR-058](02-requirements.md#fr-058-create-a-task-from-a-search-result-in-one-click)).
+
 ---
 
 ## 7. The justification record: 23 incidents mapped to requirements
@@ -706,3 +715,4 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | Security review: contained provider acquisition credentials behind opaque result ids. |

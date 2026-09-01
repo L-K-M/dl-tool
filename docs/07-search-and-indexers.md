@@ -736,9 +736,8 @@ type SearchResult struct {
     EngineID string `json:"engine_id"` // idx_<ULID>
     Title    string `json:"title"`
 
-    DownloadURL string `json:"download_url,omitempty"`
-    MagnetURI   string `json:"magnet_uri,omitempty"`
-    Infohash    string `json:"infohash,omitempty"`
+    source   searchSource // private: provider credentials stay below the API boundary
+    Infohash string `json:"infohash,omitempty"`
 
     SizeBytes   int64   `json:"size_bytes"`
     Seeders     *int    `json:"seeders"`      // null when unknown
@@ -746,7 +745,6 @@ type SearchResult struct {
     Grabs       *int    `json:"grabs"`
     PublishedAt *string `json:"published_at"` // RFC 3339, null when unknown
 
-    DetailsURL   string `json:"details_url,omitempty"`
     CategoryIDs  []int  `json:"category_ids"`
     CategoryDesc string `json:"category_desc,omitempty"`
 
@@ -762,6 +760,12 @@ type SearchResult struct {
     // Genre, Language, Publisher, Author, Album, Artist: all string, all `omitempty`,
     // all snake_case JSON names, all populated only from the torznab:attr of the same name.
 }
+
+type searchSource struct {
+    downloadURL string
+    magnetURI   string
+    detailsURL  string
+}
 ```
 
 Normalisation rules — all six are mandatory:
@@ -776,22 +780,22 @@ Normalisation rules — all six are mandatory:
 4. **Never fabricate a seeder count.** The upstream `internetarchive.yml` writes `seeders: 1`, which
    corrupts sorting. Set `caps.seeders_unknown: true` on the engine, emit `null`, and grey out the
    seeders and leechers columns for that engine's rows.
-5. **At least one acquisition handle.** A row with no `download_url`, no `magnet_uri` and no
+5. **At least one acquisition handle.** A row with no `source.downloadURL`, no `source.magnetURI` and no
    `infohash` is dropped and counted in the engine's error tally.
-6. **Passkeys never reach a non-admin.** A Torznab `download_url` or enclosure link routinely embeds the
-   operator's per-user tracker passkey. The **server** enforces this, not the client: a key-bearing
-   indexer is rejected at `POST /search` for a non-admin caller and excluded from every job's fan-out, so
-   its rows are never fetched at all ([`05-api-contract.md`](05-api-contract.md) §9.1); list-hiding plus
-   client pruning alone would leak the passkey to anyone calling the API directly. Cross-engine
-   deduplication consequently runs only over the engines the requester may see — a key-bearing engine's
-   row can never merge into a non-admin's result. The asset justification is
-   [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §1.
+6. **Acquisition handles never leave the server.** A Torznab download URL, enclosure, details URL or magnet
+   can embed the operator's tracker passkey. They remain in the private `source` field; the API mapper emits
+   metadata and the opaque result id for every role. `POST /tasks` takes that id and the service resolves the
+   source. Separately, a key-bearing indexer is rejected at `POST /search` for a non-admin caller and excluded
+   from every job's fan-out ([`05-api-contract.md`](05-api-contract.md) §9.1). Cross-engine deduplication runs
+   only over the engines the requester may see, so a key-bearing engine's row cannot merge into a non-admin's
+   result. Both controls are server-side; list hiding and client pruning are insufficient. The asset
+   justification is [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §1.
 
 Deduplicate across engines by `infohash` when present, otherwise by `(normalised title, size_bytes)`;
 keep the row with the highest `seeders` and list every engine that returned it. Adding a result to
-the queue reuses `POST /tasks` and normal scheme routing
-(see [`06-download-engines.md`](06-download-engines.md)); an `infohash`-only result becomes
-`magnet:?xt=urn:btih:<infohash>&dn=<title>`.
+the queue posts its opaque id to `POST /tasks` and reuses normal scheme routing
+(see [`06-download-engines.md`](06-download-engines.md)); the service turns an `infohash`-only result into
+`magnet:?xt=urn:btih:<infohash>&dn=<title>` without returning that magnet to the client.
 
 ---
 
@@ -890,3 +894,4 @@ Documentation ships as a commented-out Compose snippet the user must deliberatel
 | 2026-09-01 | Bundled `linux-distributions` changed from an HTML directory-index scraper to a curated `kind: static` list (§3.8) with a documented per-release refresh (§3.9); `static` added to the `dlsearch/v1` kind set; bundled engines forbidden from using `kind: html`; directory-index scraping and `request.paths[]` deferred to v2; ADR link slugs corrected to the canonical filenames. |
 | 2026-09-01 | §5 gains normalisation rule 6: results of key-bearing indexers are served to admins only, because Torznab download URLs embed the operator's per-user tracker passkey. |
 | 2026-09-01 | Review pass 2: rule 6 is enforced server-side at `POST /search` and in the per-job fan-out, not by list-hiding; cross-engine dedup runs only over engines the requester may see. |
+| 2026-09-01 | Security review: made provider acquisition handles private and queueing opaque. |
