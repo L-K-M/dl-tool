@@ -14,8 +14,12 @@
 
 ## Goal
 When the operator has placed an executable at `<DLTOOL_CONFIG_DIR>/hooks/on-complete`, a finished task runs
-it once as an argument vector with a fixed environment and a wall-clock timeout. The hook is off when the
-file is absent, and its command can never be set, read or edited through the HTTP API.
+it once as an argument vector with a fixed environment and a wall-clock timeout. The switch is three-state
+and re-evaluated per finished task, never cached at boot: absent means off (the default), present and
+executable means on, present but not executable means off with a `warn` naming the path — emitted by the
+same per-task evaluation, so installing a broken hook at runtime still produces feedback. Its command can
+never be set, read or edited through the HTTP API, and no HTTP endpoint writes any file into
+`<DLTOOL_CONFIG_DIR>`.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
