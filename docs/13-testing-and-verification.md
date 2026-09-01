@@ -249,8 +249,12 @@ qBittorrent lane with `DLTOOL_QBITTORRENT_URL` plus `QBT_USERNAME`/`QBT_PASSWORD
 ([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §2) — plus the one-time qBittorrent step
 the image requires: set the **same** username and password in qBittorrent's own WebUI, because the
 linuxserver image does not read those variables
-([`11-config-reference.md`](11-config-reference.md) §4). Without it the lane is enabled but every RPC
-call fails authentication and `add-magnet.spec.ts` fails for a reason unrelated to the code under test.
+([`11-config-reference.md`](11-config-reference.md) §4). In CI this step is automated — the harness
+seeds the qBittorrent config volume with a committed `qBittorrent.conf` fixture carrying a known username
+and password hash before first start, because nobody can log into a WebUI on a fresh CI volume (the
+manual step is for operators standing the stack up by hand). Without it the lane is enabled but every
+RPC call fails authentication and `add-magnet.spec.ts` fails for a reason unrelated to the code under
+test.
 This is needed because `add-url.spec.ts` downloads a real HTTPS URL and `add-magnet.spec.ts` adds a real
 torrent; magnet and URL fixtures use the bundled legitimate sources only (Arch Linux, Debian, Ubuntu).
 See [`10-deployment-and-compose.md`](10-deployment-and-compose.md).

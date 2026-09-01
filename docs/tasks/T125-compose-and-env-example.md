@@ -226,8 +226,9 @@ DLTOOL_LOG_FORMAT=json
 - [ ] `dl-tool` and `qbittorrent` both bind `${DATA_DIR}` to `/data`, and no service binds a second data path.
 - [ ] `stop_grace_period` is `60s`, `120s` and `30s`, and all three services carry `no-new-privileges:true`.
 - [ ] `.env.example` contains no secret value, and `compose.yaml` has no `gluetun`, `caddy` or Postgres service.
-- [ ] Both `DLTOOL_*_URL` engine variables interpolate from `.env` with an empty default; with a fresh
-      `.env` the dl-tool container boots with both engine lanes disabled instead of exiting `config_missing`.
+- [ ] `docker compose config` renders `DLTOOL_QBITTORRENT_URL` and `DLTOOL_ARIA2_URL` as empty strings
+      from a fresh `.env`, so §8's missing-credential fatal cannot fire on a fresh boot (the runtime
+      lane-disabled boot is exercised by T124's healthcheck run and the milestone exit checkpoints).
 
   The runtime counterpart is not a T125 criterion: an empty `ARIA2_RPC_SECRET` with the `aria2` profile
   active must exit non-zero before `aria2c` starts, and that proof is owned by
