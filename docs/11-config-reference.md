@@ -64,6 +64,8 @@ column names the package that consumes the parsed field.
 |---|---|---|---|---|---|---|
 | `DLTOOL_HTTP_ADDR` | listen addr | `:8080` | no | infrastructure | Address of the main HTTP listener serving the SPA, `/api/v1`, `/healthz` and `/readyz`. | `internal/api/server.go` |
 | `DLTOOL_BASE_PATH` | url path | *(empty)* | no | infrastructure | Sub-path prefix when reverse-proxied, e.g. `/dl-tool`. Must start with `/` and must not end with `/`. Empty means the app is served at the root. | `internal/api/server.go`, `internal/api/static.go` |
+| `DLTOOL_ALLOWED_HOSTS` | `,`-separated DNS names | *(empty)* | no | infrastructure | Exact additional `Host` names accepted by DNS-rebinding protection. `localhost` and literal IP addresses are always accepted. | `internal/api/server.go` |
+| `DLTOOL_CONFIG_LOCK` | bool | `false` | no | infrastructure | When `true`, rejects API mutations of operator configuration. It cannot be changed through the API. | `internal/api/middleware.go` |
 | `DLTOOL_CONFIG_DIR` | dir path | `/config` | no | infrastructure | Directory holding the database, `secrets.env`, `backups/`, `logs/` and `torrents/`. Must exist and be writable by the dropped user. | `internal/config`, `internal/store/db.go` |
 | `DLTOOL_DATA_ROOTS` | `:`-separated dir paths | `/data` | no | infrastructure | The only directories any destination, browse, mkdir, move or delete-data operation may touch. Order matters: the first root is the fallback default destination. | `internal/fsx/safepath.go` |
 | `DLTOOL_DB_PATH` | file path | `/config/dl-tool.db` | no | infrastructure | SQLite database file. Its directory must be on a local filesystem. | `internal/store/db.go` |
@@ -85,6 +87,14 @@ column names the package that consumes the parsed field.
 | `DLTOOL_NOTIFY_URL` | url | *(empty)* | no | preference | Seeds one enabled `notification_channels` row of kind `webhook` with this URL. | `internal/jobs/handlers_notify.go` |
 
 Every variable marked **secret** also accepts a `_FILE` suffixed sibling — see §6.
+
+`DLTOOL_ALLOWED_HOSTS` contains ASCII DNS names only: no scheme, path, port or wildcard. Internationalised
+names are supplied in their ASCII Punycode form. Parsing lowercases each name and removes one trailing root
+dot. Request validation removes a syntactically valid port, applies the same normalisation, and requires an
+exact match. It checks the received `Host`, never `X-Forwarded-Host`. An empty list accepts only the implicit
+loopback names and literal IP addresses.
+
+`DLTOOL_CONFIG_LOCK` is environment-only. Settings export and import neither contain nor change it.
 
 ---
 
@@ -231,12 +241,14 @@ ARIA2_RPC_SECRET=Zk8s1QmF3rT9vN2xJ7bH5cW0aY4pL6dE8gU1oI3sK5M
 # --- dl-tool: infrastructure ---
 DLTOOL_HTTP_ADDR=:8080
 DLTOOL_BASE_PATH=
+DLTOOL_ALLOWED_HOSTS=
+DLTOOL_CONFIG_LOCK=false
 DLTOOL_CONFIG_DIR=/config
 DLTOOL_DATA_ROOTS=/data
 DLTOOL_DB_PATH=/config/dl-tool.db
 DLTOOL_LOG_LEVEL=info
 DLTOOL_LOG_FORMAT=json
-DLTOOL_TRUSTED_PROXIES=172.16.0.0/12
+DLTOOL_TRUSTED_PROXIES=
 DLTOOL_SESSION_TTL=720h
 DLTOOL_METRICS_ADDR=127.0.0.1:9090
 DLTOOL_ARIA2_URL=http://aria2:6800/jsonrpc
@@ -275,6 +287,7 @@ stated fallback.
 | Unparseable value | bool, duration, integer, enum, CIDR list | Fatal, naming the variable and the received value. | `config_malformed` |
 | Not a valid `host:port` | `DLTOOL_HTTP_ADDR`, `DLTOOL_METRICS_ADDR` | Fatal. | `config_malformed` |
 | Missing leading `/`, or trailing `/` | `DLTOOL_BASE_PATH` | Fatal. | `config_malformed` |
+| URL, port, wildcard, non-ASCII or invalid DNS name | `DLTOOL_ALLOWED_HOSTS` | Fatal. | `config_malformed` |
 | Not an absolute path | `DLTOOL_CONFIG_DIR`, `DLTOOL_DATA_ROOTS`, `DLTOOL_DB_PATH`, `DLTOOL_WATCH_DIR` | Fatal. | `config_malformed` |
 | Directory missing or not writable | `DLTOOL_CONFIG_DIR`, directory of `DLTOOL_DB_PATH` | Fatal, after attempting one `MkdirAll`. | `config_path_unwritable` |
 | Directory missing or not writable | any entry of `DLTOOL_DATA_ROOTS` | Fatal — a destination that cannot be written is not recoverable at runtime. | `config_path_unwritable` |
@@ -312,3 +325,4 @@ stated fallback.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
+| 2026-09-01 | Security review: added the Host allowlist and environment-only configuration lock; made the trusted-proxy example deny forwarded headers by default. |

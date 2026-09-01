@@ -91,6 +91,8 @@ services:
       DLTOOL_DATA_ROOTS: "/data"
       DLTOOL_DB_PATH: "/config/dl-tool.db"
       DLTOOL_BASE_PATH: "${DLTOOL_BASE_PATH:-}"
+      DLTOOL_ALLOWED_HOSTS: "${DLTOOL_ALLOWED_HOSTS:-}"
+      DLTOOL_CONFIG_LOCK: "${DLTOOL_CONFIG_LOCK:-false}"
       DLTOOL_TRUSTED_PROXIES: "${DLTOOL_TRUSTED_PROXIES:-}"
       DLTOOL_LOG_LEVEL: "${DLTOOL_LOG_LEVEL:-info}"
       DLTOOL_LOG_FORMAT: "${DLTOOL_LOG_FORMAT:-json}"
@@ -493,6 +495,8 @@ QBT_PASSWORD=
 # ---- app settings surfaced through compose ----
 # Leave DLTOOL_BASE_PATH empty for a subdomain; set /dl-tool to serve under a subfolder (section 7.3).
 DLTOOL_BASE_PATH=
+DLTOOL_ALLOWED_HOSTS=
+DLTOOL_CONFIG_LOCK=false
 DLTOOL_TRUSTED_PROXIES=
 DLTOOL_LOG_LEVEL=info
 DLTOOL_LOG_FORMAT=json
@@ -540,7 +544,8 @@ example.com {
 
 Caddy sets `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host`, and "by default, the proxy will
 ignore their values from incoming requests, to prevent spoofing" unless `trusted_proxies` is configured. Set
-`DLTOOL_TRUSTED_PROXIES` to the proxy's CIDR so dl-tool honours them in turn.
+`DLTOOL_TRUSTED_PROXIES` to the exact proxy address or dedicated Compose subnet, never a broad RFC 1918
+range. Set `DLTOOL_ALLOWED_HOSTS=dl.example.com,example.com` for the public names in this example.
 
 ### 7.2 Traefik — `deploy/traefik/labels.md`
 
@@ -592,7 +597,8 @@ following hold. Each is a hard requirement on the implementation.
    the base returns 404, so a misconfigured proxy fails loudly instead of half-working.
 
 Honour `X-Forwarded-Proto`, `-Host` and `-For` only from `DLTOOL_TRUSTED_PROXIES`; they decide whether the
-session cookie gets `Secure`. An end-to-end test runs the app behind Caddy at `/dl-tool/`
+session cookie gets `Secure`. DNS-rebinding protection always validates the received `Host`, not a forwarded
+host. An end-to-end test runs the app behind Caddy at `/dl-tool/`
 ([`13-testing-and-verification.md`](13-testing-and-verification.md)).
 
 ---
@@ -970,3 +976,4 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |
 | 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |
+| 2026-09-01 | Security review: wired the Host allowlist and configuration lock through Compose and narrowed trusted-proxy guidance. |

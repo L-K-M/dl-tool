@@ -1068,9 +1068,9 @@ The dl-tool API shall enforce CSRF using a per-session synchroniser token suppli
 | T008 | must |
 
 ### NFR-013 Reject unexpected Host headers
-If an incoming request carries a `Host` header outside the configured allowlist, then dl-tool shall reject it with HTTP 421, with loopback names and literal IP addresses implicitly allowed.
+If an incoming request carries a `Host` header outside `DLTOOL_ALLOWED_HOSTS`, then dl-tool shall reject it with HTTP 421, with loopback names and literal IP addresses implicitly allowed.
 
-**Verify:** T095 sends `Host: evil.example` and asserts 421, and sends `Host: localhost:8080` and asserts success — the lesson of CVE-2018-5702.
+**Verify:** T095 configures `DLTOOL_ALLOWED_HOSTS=dl.example.com`, asserts that host and `localhost:8080` succeed, and asserts `Host: evil.example` returns 421 — the lesson of CVE-2018-5702.
 
 | Covered by | Priority |
 |---|---|
@@ -1220,6 +1220,19 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 |---|---|
 | T103 | must |
 
+### NFR-030 Lock configuration from the environment
+When `DLTOOL_CONFIG_LOCK=true`, dl-tool shall reject every API mutation of settings, engines, indexers,
+feeds, rules, categories, tags, watch folders and notification channels with HTTP 403
+`/problems/config-locked`. Task, user, authentication, token and backup operations shall remain available,
+and no API shall change the lock itself.
+
+**Verify:** T095 enables the lock, asserts a settings mutation and an indexer mutation return 403 without
+side effects, then asserts task pause and token revocation still work.
+
+| Covered by | Priority |
+|---|---|
+| T095 | must |
+
 ---
 
 ## Decisions referenced
@@ -1262,3 +1275,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | Security review: made the Host allowlist configurable and specified the environment-only configuration lock. |

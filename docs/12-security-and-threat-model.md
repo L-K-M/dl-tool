@@ -513,8 +513,11 @@ protection"; its `settings.json` keys are `rpc-host-whitelist-enabled` (default 
 |---|---|
 | Enabled | always; no switch turns it off |
 | Implicitly allowed | `localhost`, `localhost.`, and any literal IPv4 or IPv6 address, port stripped |
-| Additionally allowed | the names the operator configures |
+| Additionally allowed | exact names in `DLTOOL_ALLOWED_HOSTS`, after lowercasing and removing one trailing root dot |
 | Mismatch | `421 Misdirected Request`, logged with the offending `Host` value |
+
+The allowlist contains DNS names only: no scheme, path, port or wildcard. Validation strips a valid port
+from the received `Host` and never substitutes `X-Forwarded-Host`, including for trusted proxies.
 
 ### 6.6 Response headers
 
@@ -543,9 +546,10 @@ through the app; were that to change, such a route must set `Content-Disposition
 - A login redirect parameter is honoured only when it is a relative path beginning with a single `/`;
   `//evil.example` and `https://evil.example` are ignored and the user lands on the application root.
   Sonarr shipped CVE-2024-45247 (CWE-601) in exactly this place.
-- `internal/config` exposes a `config_lock` switch, settable from the environment only, that makes
-  every settings-mutating endpoint return `403`. SABnzbd names precisely this control as the mitigation
-  for both of its RCE advisories, and it costs almost nothing.
+- `DLTOOL_CONFIG_LOCK=true`, settable from the environment only, makes mutations of settings, engines,
+  indexers, feeds, rules, categories, tags, watch folders and notification channels return `403`
+  `/problems/config-locked`. Task, user, authentication, token and backup operations remain available.
+  SABnzbd names precisely this control as the mitigation for both of its RCE advisories.
 - Do not expose dl-tool directly to the internet. Put it behind a reverse proxy that terminates TLS and
   preferably behind an identity layer or a private network overlay; the proxy profiles are in
   [`10-deployment-and-compose.md`](10-deployment-and-compose.md). Every incident in §7 that was
@@ -701,3 +705,4 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | Security review: bound Host validation and configuration locking to documented environment variables and exact resource scopes. |
