@@ -36,6 +36,12 @@ file:/config/dl-tool.db?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pr
 The path segment comes from `DLTOOL_DB_PATH` (default `/config/dl-tool.db`). `modernc.org/sqlite` parses
 `_pragma` (repeatable, executed verbatim) and `_txlock` with allowed values `deferred|immediate|exclusive`.
 
+Before `sql.Open`, the store creates or repairs the parent directory to mode `0700`, rejects an existing
+symlink or non-regular database, and sets an existing database to `0600`. After acquiring the first SQLite
+connection, it sets a newly created database to `0600` before migrations, application data or listeners.
+SQLite's Unix VFS creates WAL and SHM files with the database's exact mode, so they remain `0600` even when
+`UMASK=002` ([SQLite Unix VFS](https://sqlite.org/src/artifact/410185df49)). Failure to enforce the mode is fatal.
+
 ### 1.2 The four pragmas
 
 | Pragma | Value | Reason |
@@ -685,15 +691,15 @@ VACUUM INTO '/config/backups/dl-tool.db.20260901T120000Z.bak';
   consistent snapshot of the original database."*
 - **The target file must not already exist**, or must be an empty file, or the command fails with an error.
   Generate a fresh UTC timestamp for every run; never reuse a name.
-- An interrupted `VACUUM INTO` (unplanned shutdown, power loss) can leave an incomplete and corrupt output.
-  Write to a temporary name inside `/config/backups/` and `rename()` it into place once the statement returns.
+- Before `VACUUM INTO`, create its unique empty temporary target with `O_CREATE|O_EXCL` and mode `0600`.
+  Close it, run the statement, enforce mode `0600`, fsync the file and atomically rename it only after success.
 - Schedule: nightly via `github.com/robfig/cron/v3 v3.0.1`, retaining the newest 7 files. Also exposed at
   `POST /system/backup`.
 
 Restore procedure:
 1. Stop the container.
 2. Delete `dl-tool.db`, `dl-tool.db-wal` and `dl-tool.db-shm` from `/config`.
-3. Copy the `.bak` file to `/config/dl-tool.db`, owned by `PUID:PGID`.
+3. Copy the `.bak` file to `/config/dl-tool.db`, owned by `PUID:PGID` and mode `0600`.
 4. Start the container; migrations run at boot and bring the restored file forward.
 
 Copying `dl-tool.db` while dl-tool is running **loses the contents of `dl-tool.db-wal`** and can yield a
@@ -776,3 +782,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Initial version |
 | 2026-09-01 | File priority corrected to `IN (0,1,6,7)` with the qBittorrent names `skip/normal/high/maximum`; added `tasks.infohash_v1`/`infohash_v2` with partial unique indices and the ingest normalisation table; widened `feed_items.info_hash` and `rule_matches.info_hash` to 64 hex; added `notification_channels`; added `engines.foreign_task_policy` and the boot-probe meaning of `engines.version`; added the concurrency and `min_free_space` settings rows; separated the storage quota from the concurrency limit and added `concurrency_limit` and `js_runtime_missing` to `error_code`; added the table-reachability list; corrected the ADR-0005/0008/0009 filenames. |
 | 2026-09-01 | Migration subsystem cut: deleted the `engines.foreign_task_policy` column, its `CHECK` constraint and enum section §4.9, replacing them with the single exclusive-control rule; removed every link to the withdrawn migration document and the "imported task" framing of the inherited `error_code` values; §5 retitled "Schema migration policy" to keep goose migrations unambiguous. `notification_channels`, `infohash_v1`/`infohash_v2` and `priority IN (0,1,6,7)` are unchanged. |
+| 2026-09-01 | Security review: fixed SQLite, WAL/SHM, backup and restored-database modes at `0600`. |

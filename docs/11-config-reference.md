@@ -64,9 +64,9 @@ column names the package that consumes the parsed field.
 |---|---|---|---|---|---|---|
 | `DLTOOL_HTTP_ADDR` | listen addr | `:8080` | no | infrastructure | Address of the main HTTP listener serving the SPA, `/api/v1`, `/healthz` and `/readyz`. | `internal/api/server.go` |
 | `DLTOOL_BASE_PATH` | url path | *(empty)* | no | infrastructure | Sub-path prefix when reverse-proxied, e.g. `/dl-tool`. Must start with `/` and must not end with `/`. Empty means the app is served at the root. | `internal/api/server.go`, `internal/api/static.go` |
-| `DLTOOL_CONFIG_DIR` | dir path | `/config` | no | infrastructure | Directory holding the database, `secrets.env`, `backups/`, `logs/` and `torrents/`. Must exist and be writable by the dropped user. | `internal/config`, `internal/store/db.go` |
+| `DLTOOL_CONFIG_DIR` | dir path | `/config` | no | infrastructure | Directory holding the database, `secrets.env`, `backups/`, `logs/` and `torrents/`. Must be owned by the runtime user, mode `0700` and writable. | `internal/config`, `internal/store/db.go` |
 | `DLTOOL_DATA_ROOTS` | `:`-separated dir paths | `/data` | no | infrastructure | The only directories any destination, browse, mkdir, move or delete-data operation may touch. Order matters: the first root is the fallback default destination. | `internal/fsx/safepath.go` |
-| `DLTOOL_DB_PATH` | file path | `/config/dl-tool.db` | no | infrastructure | SQLite database file. Its directory must be on a local filesystem. | `internal/store/db.go` |
+| `DLTOOL_DB_PATH` | file path | `/config/dl-tool.db` | no | infrastructure | Mode-`0600` SQLite database file. Its directory must be on a local filesystem. | `internal/store/db.go` |
 | `DLTOOL_LOG_LEVEL` | enum `debug\|info\|warn\|error` | `info` | no | infrastructure | Minimum `log/slog` level. | `internal/obs/log.go` |
 | `DLTOOL_LOG_FORMAT` | enum `json\|text` | `json` | no | infrastructure | `json` selects `slog.NewJSONHandler`; `text` selects the `tint` handler for local development. | `internal/obs/log.go` |
 | `DLTOOL_TRUSTED_PROXIES` | `,`-separated CIDRs | *(empty)* | no | infrastructure | Sources whose `X-Forwarded-For` and `X-Forwarded-Proto` are honoured. Empty means no forwarded header is trusted and the peer address is used. | `internal/api/server.go` |
@@ -98,10 +98,12 @@ process never reads them, except that `TZ` reaches it through the standard libra
 | `PUID` | integer uid | `1000` | User id the application runs as. `/config` is `chown`ed to `PUID:PGID` at start. `PUID=0` skips the privilege drop and logs a warning. |
 | `PGID` | integer gid | `1000` | Group id the application runs as. |
 | `TZ` | IANA zone | `Etc/UTC` | Container time zone. The 24×7 bandwidth schedule is evaluated in this zone; the UI shows it beside the grid. |
-| `UMASK` | octal mask | `002` | Applied with `umask` before `exec`. `002` yields `775` directories and `664` files; `022` yields `755`/`644`. |
+| `UMASK` | octal mask | `002` | Applied before `exec`; controls only files below data roots. `002` yields `775` directories and `664` files; `022` yields `755`/`644`. |
 
-Files are created with mode `0666` and directories with `0777` so that `UMASK` — not a hard-coded mode —
-decides the result. See [ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md).
+Data-root files request mode `0666` and directories `0777`, so `UMASK` decides their resulting modes.
+Configuration directories request `0700` and sensitive files request `0600`, including temporary files;
+`UMASK` cannot widen them. See [ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md) and
+[NFR-023](02-requirements.md#nfr-023-generate-secrets-on-first-run-and-support-file-based-secrets).
 
 ---
 
@@ -277,6 +279,8 @@ stated fallback.
 | Missing leading `/`, or trailing `/` | `DLTOOL_BASE_PATH` | Fatal. | `config_malformed` |
 | Not an absolute path | `DLTOOL_CONFIG_DIR`, `DLTOOL_DATA_ROOTS`, `DLTOOL_DB_PATH`, `DLTOOL_WATCH_DIR` | Fatal. | `config_malformed` |
 | Directory missing or not writable | `DLTOOL_CONFIG_DIR`, directory of `DLTOOL_DB_PATH` | Fatal, after attempting one `MkdirAll`. | `config_path_unwritable` |
+| Group or other permissions present | `DLTOOL_CONFIG_DIR` or state beneath it | Repair directories to `0700` and sensitive files to `0600` before opening them. Failure is fatal. | `config_permissions` |
+| Symlink or non-regular file | existing `DLTOOL_DB_PATH` | Fatal before SQLite opens the path; the parent directory is restricted first. | `config_path_unsafe` |
 | Directory missing or not writable | any entry of `DLTOOL_DATA_ROOTS` | Warn. Boot continues so the UI can show the problem — a NAS data mount may simply be late — and operations touching that root fail per request with `path_rejected` until it appears. Writability is re-probed after every settings change and lazily on each operation, so recovery needs no restart. The root is never `MkdirAll`-ed: creating the directory would silently mask an unmounted volume. | `data_root_not_writable` |
 | Filesystem of the database directory is `nfs`, `cifs`, `smb3` or `fuse.*` | `DLTOOL_DB_PATH` | Fatal. SQLite WAL requires shared memory, which network filesystems do not provide; there is no degraded fallback. | `config_network_fs` |
 | Binary absent or not executable | `DLTOOL_YTDLP_PATH`, `DLTOOL_SEVENZIP_PATH` | Warn. Disable the media lane and auto-extract respectively, and surface the reason in `GET /system/info`. | `binary_missing` |
@@ -312,3 +316,4 @@ stated fallback.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
+| 2026-09-01 | Security review: separated private configuration modes from the data-root `UMASK`. |

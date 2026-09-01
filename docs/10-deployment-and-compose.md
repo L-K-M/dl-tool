@@ -215,6 +215,9 @@ Notes a reader must not lose:
 | `/config` | `${CONFIG_DIR}/<service>` | one directory per service; dl-tool's holds `dl-tool.db`, `definitions/`, `backups/`, `logs/`, `torrents/`, `secrets/` | yes |
 | `/data` | `${DATA_DIR}` | every download and every library folder, one filesystem | yes |
 
+Every host directory backing a service's `/config` is mode `0700`, including dl-tool and engine state.
+This parent-directory mode protects third-party engine files even when an engine creates them more broadly.
+
 **IMPORTANT** Mount `/data` exactly once, at the same container path, in every service. Two bind mounts are
 two mount points inside the container's mount namespace, so `st_dev` differs, `link(2)` and `rename(2)`
 return `EXDEV`, hardlinks become impossible and every completed-file move degrades to a copy plus delete.
@@ -251,6 +254,10 @@ data
 ### 3.3 Bootstrap
 
 ```bash
+export CONFIG_DIR=./config
+mkdir -p "$CONFIG_DIR"/{dl-tool,qbittorrent,aria2,gluetun,caddy}
+chmod 0700 "$CONFIG_DIR"/{dl-tool,qbittorrent,aria2,gluetun,caddy}
+
 export DATA_DIR=/srv/data
 mkdir -p "$DATA_DIR"/torrents/{books,movies,music,tv}
 mkdir -p "$DATA_DIR"/usenet/{incomplete,complete/{books,movies,music,tv}}
@@ -259,8 +266,9 @@ sudo chown -R "$USER:$USER" "$DATA_DIR"
 sudo chmod -R a=,a+rX,u+w,g+w "$DATA_DIR"
 ```
 
-The `chmod` expression yields `775` on directories and `664` on files, which is what `UMASK=002` reproduces
-for everything created later. Upstream's own `mkdir` one-liner omits `books`; the commands above do not.
+The data-root `chmod` expression yields `775` on directories and `664` on files, which is what `UMASK=002`
+reproduces under `/data`. It never widens `/config`; configuration directories stay `0700` and sensitive
+files stay `0600`. Upstream's own `mkdir` one-liner omits `books`; the commands above do not.
 
 ### 3.4 Startup self-check (mandatory)
 
@@ -301,22 +309,27 @@ as root, in exactly this order:
 1. Read `PUID` (default `1000`), `PGID` (default `1000`), `UMASK` (default `002`), `TZ` (default `Etc/UTC`).
 2. Apply the time zone: symlink `/usr/share/zoneinfo/$TZ` to `/etc/localtime` and write `$TZ` to
    `/etc/timezone`. The 24×7 bandwidth schedule is evaluated in this zone.
-3. `umask "$UMASK"`. `002` gives `775` directories and `664` files; `022` gives `755`/`644`.
+3. `umask "$UMASK"` for files created under `/data`. `002` gives `775` directories and `664` files; `022`
+   gives `755`/`644`.
 4. Create group `dltool` with GID `$PGID` and user `dltool` with UID `$PUID` if they do not already exist
    (`addgroup -g`, `adduser -D -H -u`).
-5. `chown $PUID:$PGID /config` and its contents. **Never recursively chown `/data`** — it can hold terabytes
-   and the operator owns its permissions.
+5. `chown $PUID:$PGID /config` and its contents, set `/config` directories to `0700`, and remove every
+   group/other permission from existing configuration files before the application opens them. **Never
+   recursively chown `/data`** — it can hold terabytes and the operator owns its permissions.
 6. Verify `/data` is writable as `$PUID:$PGID`; if not, log a `data_root_not_writable` warning and continue,
    so the UI can show the problem instead of the container crash-looping.
-7. If the effective UID is already non-root (compose `user:` was used), skip steps 4–5 and go to step 9.
+7. If the effective UID is already non-root (compose `user:` was used), skip user creation and ownership
+   changes, enforce the private `/config` modes as that user, and go to step 9.
 8. If `PUID=0`, skip the privilege drop and log a warning that dl-tool is running as root.
 9. `exec su-exec "$PUID:$PGID" /usr/local/bin/dl-tool "$@"`. `exec` matters: without it the shell stays PID 1
    and swallows `SIGTERM`.
 
 Rules that follow:
 
-- Every file-creating call site uses permissive modes and relies on the umask. Hardcoding `0644` is the most
-  common regression in this class of app.
+- File writers below a data root request `0666` for files and `0777` for directories, then let `UMASK` apply.
+  File writers below `/config` request `0600` for files and `0700` for directories, including temporary files;
+  the store repairs the database mode before SQLite opens it. See
+  [NFR-023](02-requirements.md#nfr-023-generate-secrets-on-first-run-and-support-file-based-secrets).
 - `/custom-cont-init.d` and `DOCKER_MODS` are deliberately **not** implemented: both execute third-party code
   fetched or mounted at runtime, which contradicts
   [ADR-0010](decisions/0010-never-execute-third-party-definitions.md).
@@ -331,8 +344,9 @@ Operators who prefer Docker's own user mapping can bypass the entrypoint's ident
 ```
 
 The entrypoint then detects a non-root UID, skips user creation and `chown`, still applies `UMASK` and `TZ`,
-and `exec`s the binary directly. The host directories must already be owned by that UID:GID. Note that
-linuxserver.io images are **not** compatible with `--user` — their documentation says so explicitly — so
+enforces private configuration modes, and `exec`s the binary directly. The host configuration directories
+must already be owned by that UID:GID and permit the user to set directories to `0700` and files to `0600`.
+Note that linuxserver.io images are **not** compatible with `--user` — their documentation says so — so
 `qbittorrent` must keep `PUID`/`PGID`.
 
 ---
@@ -511,8 +525,8 @@ FIREWALL_VPN_INPUT_PORTS=
 VPN_PORT_FORWARDING=off
 ```
 
-`.env` is never committed. `ARIA2_RPC_SECRET` uses the `:?` form in `compose.yaml`, so an empty value fails
-the `up` with a named error instead of starting an unauthenticated RPC endpoint.
+`.env` is never committed and must be mode `0600`. `ARIA2_RPC_SECRET` uses the `:?` form in `compose.yaml`,
+so an empty value fails the `up` with a named error instead of starting an unauthenticated RPC endpoint.
 
 ---
 
@@ -972,3 +986,4 @@ control over host filesystem paths that the single-`/data` rule in §3 requires.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |
 | 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |
+| 2026-09-01 | Security review: confined `UMASK` to data roots and made service configuration private. |

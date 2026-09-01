@@ -36,7 +36,7 @@ as `PUID:PGID`. Nothing between them is optional and nothing is reordered.
 
 ```mermaid
 flowchart TD
-  A["entrypoint.sh as root: PUID, PGID, UMASK, TZ"] --> B["exec su-exec PUID:PGID dl-tool"]
+  A["entrypoint.sh as root: identity, data umask, private config"] --> B["exec su-exec PUID:PGID dl-tool"]
   B --> C["S1 config.Load: parse and validate"]
   C -->|invalid| X1["exit 1, config_*"]
   C --> D["S2 network-filesystem check on the database directory"]
@@ -56,14 +56,15 @@ flowchart TD
 
 ### 1.1 Stage S0 — the entrypoint privilege drop
 
-The ordered steps (read `TZ`, apply `umask`, create the `dltool` user and group, `chown /config` but never
-`/data`, then `exec su-exec "$PUID:$PGID" …`) are owned by
-[`10-deployment-and-compose.md`](10-deployment-and-compose.md#4-puid-pgid-umask-tz). Two operator-visible
+The ordered steps (read `TZ`, apply the data-root `umask`, create the `dltool` user and group, `chown` and
+restrict `/config` but never recursively change `/data`, then `exec su-exec "$PUID:$PGID" …`) are owned by
+[`10-deployment-and-compose.md`](10-deployment-and-compose.md#4-puid-pgid-umask-tz). Three operator-visible
 consequences belong here:
 
 | Symptom at S0 | Meaning | Action |
 |---|---|---|
 | Log line `data_root_not_writable` | `/data` is not writable as `PUID:PGID`. The container still starts so the UI can show the problem. | `chown -R "$PUID:$PGID"` the host directory backing `/data`, then restart. |
+| Exit with `config_permissions` | The runtime user cannot make `/config` private. No listener binds. | Make the host configuration directory writable by `PUID:PGID`, then restart. |
 | Warning that dl-tool is running as root | `PUID=0`; the privilege drop was skipped. | Set a non-zero `PUID`/`PGID`. Files written as root are unusable from SMB and the NAS file manager. |
 | `SIGTERM` ignored, container always killed at the grace period | The entrypoint was edited to launch the binary without `exec`. | Restore `exec`; without it the shell is PID 1 and swallows the signal. |
 
@@ -192,7 +193,7 @@ Their presence after a stop means the shutdown was killed, not graceful.
 
 | Artefact | Mechanism | Covers |
 |---|---|---|
-| `/config/dl-tool.db` | `VACUUM INTO`, nightly and pre-migration | Everything: users, tasks, settings, indexers, feeds, rules, schedule. |
+| `/config/dl-tool.db` | Mode-`0600` `VACUUM INTO`, nightly and pre-migration | Everything: users, tasks, settings, indexers, feeds, rules, schedule. |
 | `/config/secrets.env` | Operator copies the file | Session key, CSRF key, `ARIA2_RPC_SECRET`. Losing it invalidates every session; the file is mode `0600`. |
 | Portable settings | `GET /settings/export` | Configuration without identities — safe to attach to a bug report ([`05-api-contract.md` §11.5](05-api-contract.md#115-get-settingsexport-and-post-settingsimport)). |
 
@@ -202,11 +203,11 @@ A `robfig/cron/v3` entry runs `VACUUM INTO` once per night and retains the newes
 `/config/backups/`. The same statement backs `POST /system/backup`. Semantics, including retention, are owned
 by [`04-data-model.md` §6](04-data-model.md#6-backup-and-restore). Two failure modes the operator will meet:
 
-- **The target file must not already exist** (an existing *empty* file is accepted); otherwise the statement
-  fails with an error. Every run generates a fresh UTC timestamp and never reuses a name.
-- An **interrupted** `VACUUM INTO` — power loss, an unplanned stop — can leave an incomplete and corrupt
-  output. dl-tool writes to a temporary name inside `/config/backups/` and `rename()`s it into place, so a
-  partial file is never mistaken for a good backup.
+- The final target must not already exist. Every run creates a unique empty temporary file with
+  `O_CREATE|O_EXCL` and mode `0600`, then gives that path to `VACUUM INTO`.
+- An **interrupted** `VACUUM INTO` — power loss, an unplanned stop — can leave an incomplete output. dl-tool
+  enforces mode `0600`, fsyncs the completed temporary file, and atomically renames it, so a partial file is
+  never mistaken for a good backup.
 
 Never copy `dl-tool.db` while dl-tool is running: the copy **loses the contents of `dl-tool.db-wal`** and can
 be corrupt. Only the post-clean-shutdown file, with no `-wal` and no `-shm` beside it, is safe to copy by
@@ -219,6 +220,7 @@ docker compose stop dl-tool
 rm -f ./config/dl-tool/dl-tool.db ./config/dl-tool/dl-tool.db-wal ./config/dl-tool/dl-tool.db-shm
 cp ./config/dl-tool/backups/dl-tool.db.20260901T030000Z.bak ./config/dl-tool/dl-tool.db
 chown 1000:1000 ./config/dl-tool/dl-tool.db     # PUID:PGID
+chmod 0600 ./config/dl-tool/dl-tool.db
 docker compose start dl-tool
 ```
 
@@ -398,3 +400,4 @@ deliberate, local operator action.
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version. |
+| 2026-09-01 | Security review: made database, backup and configuration modes private. |

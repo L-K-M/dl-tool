@@ -1158,13 +1158,22 @@ The dl-tool web UI shall load every script, stylesheet, font and icon from the d
 | T039 | must |
 
 ### NFR-023 Generate secrets on first run and support file-based secrets
-When dl-tool starts with no generated secrets, it shall create the session key, the CSRF key and the setup token from a cryptographic random source, write them with mode `0600`, and shall additionally accept any secret through a `_FILE`-suffixed variable pointing at a mounted file.
+When dl-tool starts with no generated secrets, it shall create the session key, the CSRF key and the setup
+token from a cryptographic random source, write them with mode `0600`, and shall additionally accept any
+secret through a `_FILE`-suffixed variable pointing at a mounted file. Every service configuration directory
+shall be mode `0700`; databases, WAL/SHM files, backups, source caches, logs and diagnostics shall be mode
+`0600`, independent of `UMASK`. The operator's `UMASK` shall govern only files created under data roots.
 
-**Verify:** T005 asserts a fresh config directory yields distinct secrets on two separate instances and that a `_FILE` variable is honoured in preference to its inline form.
+**Verify:** T005 asserts fresh instances yield distinct mode-`0600` secrets, mode-`0700` config directories
+and a working `_FILE` carrier. T006 writes a transaction and asserts the database, WAL and SHM are `0600`;
+T091 asserts backup modes; T124 asserts `UMASK` still controls downloaded data and cannot widen config files.
 
 | Covered by | Priority |
 |---|---|
 | T005 | must |
+| T006 | must |
+| T091 | must |
+| T124 | must |
 
 ### NFR-024 Validate login redirects as relative paths
 If a login redirect parameter is not a relative path beginning with a single `/`, then dl-tool shall ignore it and redirect to the application root.
@@ -1262,3 +1271,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | Security review: made configuration state private independently of the download umask. |

@@ -641,6 +641,9 @@ Chosen policy
   `X-Api-Key`, `?apikey=`, `?token=` and `passkey=` from every request log, error message and
   diagnostics bundle. Wrap secrets in a `type Secret string` whose `String`, `MarshalJSON` and `%v`
   render `"[REDACTED]"`.
+- **Private state at rest.** Service configuration directories are `0700`; databases, WAL/SHM files,
+  backups, source caches, logs and diagnostics are `0600`. The operator's `UMASK` applies only below data
+  roots ([NFR-023](02-requirements.md#nfr-023-generate-secrets-on-first-run-and-support-file-based-secrets)).
 - **BitTorrent is not private, and the documentation says so plainly.** Every peer sees the operator's
   IP; trackers log announcing IPs; DHT and PEX broadcast it to nodes never contacted. Disabling DHT,
   PEX and LSD reduces exposure without eliminating it, many tracker announces are plain HTTP, and UDP
@@ -706,3 +709,4 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | Security review: made credential-bearing configuration state private at rest. |
