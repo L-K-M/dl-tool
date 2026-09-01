@@ -128,7 +128,7 @@ Worked response, admin only:
 
 ```json
 {"items":[{"at":"2026-09-01T09:41:52Z","level":"info","msg":"engine accepted task",
-           "attrs":{"task_id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","engine":"qbittorrent",
+           "attrs":{"task_id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","engine":"qbittorrent",
                     "url":"https://indexer.example.org/api?apikey=__redacted__"}}],
  "next_cursor":null,"total":1}
 ```

@@ -389,9 +389,9 @@ deliberate, local operator action.
 
 ## Open questions
 
-- [NEEDS CLARIFICATION: backup file naming is stated two ways. `04-data-model.md` §6 uses
-  `dl-tool.db.<UTC>.bak` and `05-api-contract.md` §13 returns `/config/backups/dl-tool-<UTC>.db`. This
-  document uses the `04` form. One of the two must be corrected before T091.]
+- (none — the backup-naming ambiguity was resolved 2026-09-01 by correcting the example in
+  [`05-api-contract.md`](05-api-contract.md) §13 to the `dl-tool.db.<UTC>.bak` form this document and
+  [`04-data-model.md`](04-data-model.md) §6 already use)
 
 ## Change log
 
@@ -400,3 +400,4 @@ deliberate, local operator action.
 | 2026-09-01 | Initial version. |
 | 2026-09-01 | `secrets.env` described correctly: `DLTOOL_SECRET_KEY` (the at-rest encryption key behind every `*_enc` column) and `ARIA2_RPC_SECRET` — no session or CSRF keys exist. |
 | 2026-09-01 | Review pass: the never-logged table names `secrets.env` as an at-rest home of the aria2 secret, so an inventory or scrub does not miss the stale copy. |
+| 2026-09-01 | Resolved the backup-naming open question: the §13 example in [`05-api-contract.md`](05-api-contract.md) was corrected to the `dl-tool.db.<UTC>.bak` form used here and in [`04-data-model.md`](04-data-model.md) §6. |

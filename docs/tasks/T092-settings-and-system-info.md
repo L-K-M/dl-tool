@@ -118,7 +118,7 @@ Worked `GET /settings` body, secrets already replaced:
 {"download_rate_limit":0,"upload_rate_limit":0,
  "alt_download_rate_limit":5242880,"alt_upload_rate_limit":1048576,
  "schedule_enabled":true,"default_destination":"/data",
- "rss_enabled":true,"rss_interval_s":900,
+ "rss_enabled":true,"rss_interval_s":1800,
  "auto_extract":true,"extract_passwords":"__redacted__",
  "process_order":"by_date_created","confirm_on_delete":true}
 ```
@@ -126,7 +126,7 @@ Worked `GET /settings` body, secrets already replaced:
 ## Steps
 1. Edit `internal/store/settings.go` to add `Settings`, `GetSettings` and `PutSettings` with the sixteen keys
    of doc 11 §5 and their documented defaults. Read and write `value_json` as JSON, never as a bare string.
-2. Validate in `PutSettings`: `rss_interval_s` at least `60`; every rate limit and `max_active_*` at least
+2. Validate in `PutSettings`: `rss_interval_s` at least `300`; every rate limit and `max_active_*` at least
    `0`; `process_order` one of the two enum values; `default_destination` non-empty. Return
    `ErrSettingOutOfRange` otherwise.
 3. Skip any key whose submitted value is exactly `"__redacted__"`, so a client that round-trips
@@ -146,7 +146,7 @@ Worked `GET /settings` body, secrets already replaced:
 9. Edit `internal/api/settings_test.go` with: a `GET` asserting `extract_passwords` is exactly
    `"__redacted__"` and that no other field contains a configured secret; a `PATCH` carrying
    `"extract_passwords":"__redacted__"` leaving the stored value unchanged; an unknown key returning `422`;
-   `rss_interval_s` of `30` returning `422`; a non-admin `PATCH` returning `403`; and a `GET /system/info`
+   `rss_interval_s` of `120` returning `422` (below the 300-second floor); a non-admin `PATCH` returning `403`; and a `GET /system/info`
    whose serialised body contains neither `DLTOOL_ARIA2_SECRET` nor `DLTOOL_QBITTORRENT_PASSWORD`.
 
 ## Acceptance criteria
