@@ -228,10 +228,10 @@ DLTOOL_LOG_FORMAT=json
 - [ ] `.env.example` contains no secret value, and `compose.yaml` has no `gluetun`, `caddy` or Postgres service.
 - [ ] Both `DLTOOL_*_URL` engine variables interpolate from `.env` with an empty default; with a fresh
       `.env` the dl-tool container boots with both engine lanes disabled instead of exiting `config_missing`.
-- [ ] With `COMPOSE_PROFILES=aria2` and an empty `ARIA2_RPC_SECRET`, the aria2 container exits non-zero
-      before `aria2c` starts. The runtime proof is owned by
-      [T115](T115-aria2-image-build-and-publish.md)'s "unset secret exits non-zero" criterion — T125 ships
-      no aria2 image (`deploy/aria2/` does not exist yet) and proves only the config-level behaviour above.
+      The runtime counterpart — an empty `ARIA2_RPC_SECRET` with the `aria2` profile active must exit
+      non-zero before `aria2c` starts — is proven by
+      [T115](T115-aria2-image-build-and-publish.md)'s "unset secret exits non-zero" criterion; T125 ships
+      no aria2 image (`deploy/aria2/` does not exist yet) and owns only the config-level behaviour.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
