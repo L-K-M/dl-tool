@@ -133,9 +133,10 @@ Offsets are not supported anywhere; do not add `offset`.
 
 ### 1.5 Identifiers
 
-Prefix plus a 26-character Crockford base32 ULID, e.g. `tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X`. Prefixes: `tsk_`
-task, `usr_` user, `fed_` feed, `rul_` rule, `idx_` indexer, `sch_` search job, `job_` job, `evt_` event,
-`tok_` API token. Categories and tags are addressed by their unique `name`. Engine-side references (aria2
+Prefix plus a 26-character Crockford base32 ULID, e.g. `tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X`. The complete
+prefix allocation, including the `itm_` feed item, `res_` search result, `ntf_` notification channel and
+`wfd_` watch folder prefixes used below, lives in [`04-data-model.md`](04-data-model.md) §1.5 and is not
+restated here. Categories and tags are addressed by their unique `name`. Engine-side references (aria2
 GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never returned.
 
 ### 1.6 Units, timestamps and nulls
@@ -263,7 +264,7 @@ carried — partially — by every SSE delta.
 Never present in any Task object: `extract_password`, `ftp_credentials`, `engine_ref`.
 
 ```json
-{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","owner_id":"usr_01JKQ7X1AA0000000000000000","owner_username":"alice",
+{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","owner_id":"usr_01JKQ7X1AA0000000000000000","owner_username":"alice",
  "engine":"qbittorrent","source_kind":"magnet",
  "source_uri":"magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2",
  "infohash_v1":"8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2","infohash_v2":null,
@@ -348,7 +349,7 @@ GET /api/v1/tasks?state=active&sort=-download_rate&limit=2
 ```
 
 ```json
-{"items":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","state":"downloading"}],"next_cursor":null,"total":8}
+{"items":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","state":"downloading"}],"next_cursor":null,"total":8}
 ```
 
 `items` entries are full Task objects; the fragment above is abbreviated. Statuses: `200` · `401` · `422`
@@ -393,8 +394,8 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 ```http
 HTTP/1.1 201 Created
 
-{"created":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","state":"queued","engine":"qbittorrent"},
-            {"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0Y","state":"queued","engine":"aria2"}],
+{"created":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","state":"queued","engine":"qbittorrent"},
+            {"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0Y","state":"queued","engine":"aria2"}],
  "rejected":[{"uri":"ed2k://|file|x|1|AA|/","type":"/problems/unsupported-scheme",
               "detail":"ed2k links are not supported in v1"}]}
 ```
@@ -473,7 +474,7 @@ Partial update; omitted fields are untouched, `null` clears a nullable field.
 | `sequential` | boolean | |
 
 ```http
-PATCH /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X
+PATCH /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X
 X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 
 {"dl_limit":2097152,"category":"linux","sequential":true}
@@ -489,7 +490,7 @@ Query: `delete_data` (boolean, optional, default `false`) also unlinks the downl
 the task `completed` instead of removing it.
 
 ```http
-DELETE /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X?delete_data=true
+DELETE /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X?delete_data=true
 X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 ```
 
@@ -535,12 +536,12 @@ six steps in §5.6 for every id in the batch).
 POST /api/v1/tasks/actions
 X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 
-{"ids":["tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0Z"],"action":"pause"}
+{"ids":["tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0Z"],"action":"pause"}
 ```
 
 ```json
-{"results":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","ok":true},
-            {"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0Z","ok":false,
+{"results":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","ok":true},
+            {"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0Z","ok":false,
              "type":"/problems/engine-unavailable","detail":"aria2 did not answer within 5s"}]}
 ```
 
@@ -570,7 +571,7 @@ qBittorrent WebAPI vocabulary and is applied in the engine adapter, never in the
 `priority:"skip"` are one concept — setting either sets both. Unlisted indices are untouched.
 
 ```http
-PATCH /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X/files
+PATCH /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X/files
 X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 
 {"files":[{"index":2,"selected":false},{"index":0,"priority":"high"}]}
@@ -638,7 +639,7 @@ API call and no background job may delete such a task; the owner or an admin res
 quota, removing other tasks, or deleting this one deliberately through §5.6.
 
 ```json
-{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","state":"paused","error_code":"quota_exceeded",
+{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","state":"paused","error_code":"quota_exceeded",
  "error_message":"resolved size 5583457280 B exceeds the remaining quota of 1073741824 B",
  "total_bytes":5583457280,"completed_bytes":8388608}
 ```
@@ -660,13 +661,13 @@ retry: 3000
 
 event: sync
 id: 42
-data: {"rid":42,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X":{"progress":0.4137,"download_rate":1048576,"eta_seconds":312}},"tasks_removed":["tsk_01JKQ0AAAA0000000000000000"],"stats":{"speed_down":2097152,"speed_up":131072,"active":3,"queued":11},"seq_gap":false}
+data: {"rid":42,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X":{"progress":0.4137,"download_rate":1048576,"eta_seconds":312}},"tasks_removed":["tsk_01JKQ0AAAA0000000000000000"],"stats":{"speed_down":2097152,"speed_up":131072,"active":3,"queued":11},"seq_gap":false}
 
 : hb
 
 event: sync
 id: 43
-data: {"rid":43,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X":{"state":"completed","progress":1.0,"download_rate":0}},"tasks_removed":[],"stats":{"speed_down":0,"speed_up":131072,"active":2,"queued":11},"seq_gap":false}
+data: {"rid":43,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X":{"state":"completed","progress":1.0,"download_rate":0}},"tasks_removed":[],"stats":{"speed_down":0,"speed_up":131072,"active":2,"queued":11},"seq_gap":false}
 ```
 
 | Field | Type | Always | Meaning |
@@ -713,7 +714,7 @@ GET /api/v1/sync?rid=42
 
 ```json
 {"rid":43,"full_update":false,
- "tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X":{"state":"completed","progress":1.0}},
+ "tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X":{"state":"completed","progress":1.0}},
  "tasks_removed":[],"stats":{"speed_down":0,"speed_up":131072,"active":2,"queued":11},"seq_gap":false}
 ```
 
@@ -911,7 +912,7 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 ```http
 HTTP/1.1 202 Accepted
 
-{"id":"sch_01JKQ9Z0YV6M3P0R2S4T6U8W0X"}
+{"id":"sch_01JKQ9Z0YV6M3P0R2S4T6V8W0X"}
 ```
 
 `202` · `422` (empty query, unknown indexer id) · `503` `/problems/engine-unavailable` when no indexer is
@@ -922,7 +923,7 @@ also `title`, `size_bytes`, `leechers`, `published_at`, `indexer`, each reversib
 and `cursor`, which apply to `results` only.
 
 ```json
-{"id":"sch_01JKQ9Z0YV6M3P0R2S4T6U8W0X","query":"ubuntu 26.04","finished":false,"total":42,
+{"id":"sch_01JKQ9Z0YV6M3P0R2S4T6V8W0X","query":"ubuntu 26.04","finished":false,"total":42,
  "engines":[
    {"id":"idx_01JKQ7...","name":"Internet Archive","status":"done","count":42,"error":null},
    {"id":"idx_01JKQ8...","name":"Arch Linux","status":"searching","count":0,"error":null},
@@ -1314,7 +1315,7 @@ default `info`, minimum level of `debug` \| `info` \| `warn` \| `error`) · `sin
 
 ```json
 {"items":[{"at":"2026-09-01T09:41:52Z","level":"info","msg":"engine accepted task",
-           "attrs":{"task_id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","engine":"qbittorrent",
+           "attrs":{"task_id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","engine":"qbittorrent",
                     "url":"https://indexer.example.org/api?apikey=__redacted__"}}],
  "next_cursor":null,"total":1}
 ```
