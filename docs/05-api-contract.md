@@ -1140,7 +1140,7 @@ defaults and environment counterparts live in [`11-config-reference.md`](11-conf
 {"download_rate_limit":0,"upload_rate_limit":0,
  "alt_download_rate_limit":5242880,"alt_upload_rate_limit":1048576,
  "schedule_enabled":true,"default_destination":"/data",
- "rss_enabled":true,"rss_interval_s":900,
+ "rss_enabled":true,"rss_interval_s":1800,
  "auto_extract":true,"extract_passwords":"__redacted__",
  "process_order":"by_date_created","confirm_on_delete":true}
 ```
@@ -1244,7 +1244,7 @@ therefore every `password_hash`), `api_tokens`, `notification_channels.secret_en
 ```json
 GET /settings/export →
 {"document_version":1,"exported_at":"2026-09-01T09:45:00Z","schema_version":1,
- "settings":{"download_rate_limit":0,"rss_interval_s":900,"auto_extract":true},
+ "settings":{"download_rate_limit":0,"rss_interval_s":1800,"auto_extract":true},
  "categories":[{"name":"linux","save_path":"/data/iso"}],
  "indexers":[{"name":"Internet Archive","kind":"dlsearch","enabled":true,"url":null,
               "definition_id":"internet-archive","priority":50,"settings":{}}],
@@ -1361,7 +1361,7 @@ default `info`, minimum level of `debug` \| `info` \| `warn` \| `error`) · `sin
 `__redacted__` before a record is stored, not at read time.
 
 `POST /system/backup` is admin-only, takes no body, runs `VACUUM INTO` and returns `201`
-`{"path":"/config/backups/dl-tool-20260901T094500Z.db","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}`.
+`{"path":"/config/backups/dl-tool.db.20260901T094500Z.bak","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}`.
 `403` · `409` `/problems/conflict` when a backup is already running · `500` `/problems/internal`.
 
 ### 13.1 Process endpoints outside `/api/v1`
@@ -1521,3 +1521,5 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Review pass: `POST /rules/{id}/run` is admin-only like rule writes (it creates tasks as the owner); `POST /rules/test` takes `owner_id` so dry-run jail checks target the right jail; an omitted `action.destination` resolves to the owner's default destination and the resolved value must pass the jail check; credential-bearing feeds (URL userinfo or `passkey`/`apikey`/`token`) are admin-only like key-bearing indexers; `DELETE /users/{id}` is `409` while the user owns tasks or rules (`ON DELETE RESTRICT`). |
 | 2026-09-01 | Review pass 2: `POST /rules/test`'s `owner_id` is admin-only (a non-admin tests as themselves, so the dry run cannot probe another user's jail or read their resolved default destination). |
 | 2026-09-01 | Review pass 3: the `/rules/test` `owner_id` rejection is spelled out — a non-admin naming anyone but themselves gets `403 /problems/forbidden`. |
+| 2026-09-01 | Contradiction fix: the `POST /system/backup` example path now uses the `dl-tool.db.<UTC>.bak` form owned by `04-data-model.md` §6. |
+| 2026-09-01 | Review pass: the two settings examples carry `rss_interval_s: 1800`, matching the corrected default. |

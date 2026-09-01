@@ -600,8 +600,16 @@ following hold. Each is a hard requirement on the implementation.
    and `new URL(base + '/api/v1/', document.baseURI)`. Never a hardcoded `/api/v1`.
 6. **Cookie `Path` equals the base.** MDN: "If omitted, this attribute defaults to the path component of the
    request URL" — too fragile to rely on. Set it explicitly, with `HttpOnly`, `Secure` and `SameSite=Lax`.
-   The `__Host-` prefix **requires `Path=/`**, so under a subfolder the session cookie must use the
-   `__Secure-` prefix instead.
+   The cookie name carries a prefix only when the **listener itself** terminates TLS — a static condition
+   decidable at boot, because the name cannot flap per request (browsers reject a prefixed cookie without
+   `Secure`, and plain-HTTP LAN access is a supported mode): TLS listener at the root →
+   `__Host-dltool_session` (`__Host-` pins `Path=/`, no `Domain`, `Secure` — the strongest form); TLS
+   listener under a base path → `__Secure-dltool_session` (`__Host-` is impossible there because its
+   `Path` must be `/`); plain listener, including one behind a TLS-terminating proxy where the cookie is
+   still marked `Secure` per-request → the unprefixed `dltool_session`. Changing the base path or TLS
+   state changes the name and therefore logs every session out — acceptable for a deployment-level change
+   the operator is making anyway. [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.1
+   owns the name.
 7. **Redirects preserve the base.** Never `Location: /login`; always `Location: {base}/login`. This includes
    the first-run wizard redirect, the post-login redirect and the trailing-slash normalisation.
 8. **SPA fallback stays inside the base.** `GET {base}/anything` serves `index.html`; `GET /anything` outside
@@ -989,3 +997,4 @@ document's change log.
 | 2026-09-01 | Migration subsystem cut: removed the scope pointer to the withdrawn migration document and stated that upgrade runs database schema migrations and nothing else. Compose topology, volumes, ports, PUID/PGID and the release workflow are unchanged. |
 | 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |
 | 2026-09-01 | Fixed the fresh-boot engine wiring: both `DLTOOL_*_URL` values now interpolate from `.env` with an empty default (an empty URL disables the lane) instead of being hardcoded, because [`11-config-reference.md`](11-config-reference.md) §8 makes a set URL with missing credentials a fatal `config_missing` — the hardcoded URLs made a fresh `docker compose up -d` crash-loop. The aria2 secret dropped the `:?` form (Compose resolves required variables before profile filtering, so it broke core-only starts) and is enforced by the entrypoint instead. Resolved the M0/M1 profile open question: aria2 stays behind its profile and M1 is verified with `COMPOSE_PROFILES=aria2`. |
+| 2026-09-01 | Review pass: §7.3 item 6 now specifies the cookie prefix pair (`__Host-` at the root, `__Secure-` under a base path) instead of dropping prefixes; the earlier unprefixed wording weakened §12's hardening for no benefit. |

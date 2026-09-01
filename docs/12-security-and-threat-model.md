@@ -187,7 +187,8 @@ Filter", is the cautionary tale for getting the default wrong.
 |---|---|
 | Connect timeout · total request timeout | 10 s · 120 s |
 | Redirect hops | 5 |
-| Body, metadata fetch (`.torrent`, feed, indexer page) | 8 MiB, enforced while streaming |
+| Body, metadata fetch (`.torrent`, indexer page) | 8 MiB, enforced while streaming |
+| Body, feed poll | 16 MiB, enforced while streaming — owned by [`08-rss-automation.md`](08-rss-automation.md) §2.1 |
 | Response headers | 100 headers, 64 KiB total |
 
 Every block logs one `warn` record carrying `url_redacted`, `resolved_ip`, `matched_prefix` and `hop`
@@ -445,7 +446,7 @@ Imported engines start disabled and record their provenance.
 
 | Attribute | Value |
 |---|---|
-| Name | `dltool_session` |
+| Name | `__Host-dltool_session` when the listener itself terminates TLS at the root, `__Secure-dltool_session` when the listener itself terminates TLS under a base path, plain `dltool_session` otherwise — browsers reject a prefixed cookie without `Secure`, and the name is fixed at boot, so the prefix can only follow the listener's static TLS state. This is deliberately a **stronger** condition than the `Secure` row's per-request `X-Forwarded-Proto` judgement: behind a TLS-terminating proxy the cookie is therefore `Secure` yet unprefixed (valid, one notch less hardened). Chosen at boot from `DLTOOL_BASE_PATH` and the listener's TLS state ([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §7.3) |
 | Flags | `HttpOnly`, `SameSite=Lax`, `Path=<base path>/` |
 | `Secure` | set whenever the request arrived over TLS, judged from the listener or from `X-Forwarded-Proto` sent by a `DLTOOL_TRUSTED_PROXIES` peer; otherwise omitted and a startup warning is logged |
 | Value | ≥ 128 bits from `crypto/rand`, opaque, stored server-side in `sessions` |
@@ -706,3 +707,7 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | Contradiction fix: §2.4 splits the body cap — feed polls 16 MiB (owned by `08-rss-automation.md` §2.1) from the 8 MiB metadata-fetch cap. |
+| 2026-09-01 | Review pass: §6.1 names the cookie with its prefix (`__Host-dltool_session` at the root, `__Secure-dltool_session` under a base path, chosen at boot), and §2.4 splits the feed body cap from the metadata-fetch cap. |
+| 2026-09-01 | Review pass 2: the cookie prefix is conditional on TLS — `__Host-`/`__Secure-` only when the cookie is `Secure`, plain `dltool_session` on plain HTTP, because browsers reject a prefixed cookie without `Secure` and plain-HTTP LAN access is supported. |
+| 2026-09-01 | Review pass 3: the prefix condition is the listener's static TLS state, not the `Secure` row's per-request `X-Forwarded-Proto` judgement — behind a TLS-terminating proxy the cookie is `Secure` yet unprefixed, which is valid and stated. |
