@@ -960,16 +960,19 @@ to the job's results. To turn a result into a task, `POST /tasks` with
 
 `refresh_interval_s: 0` means "use the global RSS interval". `POST /feeds` requires `url` and accepts
 `title`, `enabled`, `refresh_interval_s`, `item_cap` and `priority`; `PATCH /feeds/{id}` accepts the same
-set; `DELETE /feeds/{id}` returns `204` and cascades to the feed's items. `priority` is only the per-run
-tie-break of the rule engine ([`08-rss-automation.md`](08-rss-automation.md) §5 step 13): when two feeds
-carry the same content, the lower `priority` feed's copy wins; it affects neither polling nor display.
+set **plus `auto_download`** — `true` creates the `auto:<feed_id>` rule when it does not exist, `false`
+deletes it, so a misticked box is undone without deleting the feed and its read state;
+`DELETE /feeds/{id}` returns `204`, deletes the `auto:` rule and cascades to the feed's items. `priority`
+is only the per-run tie-break of the rule engine ([`08-rss-automation.md`](08-rss-automation.md) §5 step 13):
+when two feeds carry the same content, the lower `priority` feed's copy wins; it affects neither polling
+nor display.
 
 The add-dialog's *Automatically download all items* checkbox
 ([`09-web-ui-spec.md`](09-web-ui-spec.md) §8.1, Download Station's own option) is **not** a `feeds`
 column: `POST /feeds` accepts it as `auto_download` (boolean, default `false`) and, when true, creates an
 enabled rule named `auto:<feed_id>` scoped to that one feed, with an empty `match` block — which passes
 every item ([`08-rss-automation.md`](08-rss-automation.md) §4.2) — and the caller's default destination
-as `action.destination`. Deleting the feed deletes its `auto:` rule.
+as `action.destination`.
 
 `POST /feeds/{id}/refresh` forces one conditional GET now, bypassing the backoff ladder:
 
@@ -1159,9 +1162,12 @@ Both verbs return `200` with the stored document. `401` · `413` `/problems/payl
 
 Saved searches ([FR-057](02-requirements.md#fr-057-save-and-re-run-a-search)) ride in this document
 rather than owning endpoints: the SPA stores them under the `search` member (`{indexerIds, categories,
-saved[]}`, at most 50 entries), the server stores and returns it verbatim like every unknown member, and
-re-running is `POST /search` with the stored selection. The member's shape is owned by
-[`09-web-ui-spec.md`](09-web-ui-spec.md) §3.3 and built by task T064; no `/search/saved` surface exists.
+saved[]}`), the server stores and returns it verbatim like every unknown member, and re-running is
+`POST /search` with the stored selection. The 50-entry cap is client-enforced (T064's
+`TestFiftyEntryCap`); the server's only bound on the whole document is the 64 KiB cap above. The member's
+shape is owned by [`09-web-ui-spec.md`](09-web-ui-spec.md) §3.3 and built by task T064; no `/search/saved`
+surface exists. Like the rest of `/prefs`, the member is per-user UI state and is **not** part of the
+`GET /settings/export` document (§11.5).
 
 ### 11.5 `GET /settings/export` and `POST /settings/import`
 
@@ -1259,7 +1265,9 @@ the caller deletes or re-assigns the tasks first. A user may always be disabled 
 
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (caller is not an admin, or the request would
 delete or disable the last enabled admin) · `404` · `409` `/problems/conflict` (username exists,
-case-insensitively) · `422` (short password, unknown role, `default_destination` outside the roots).
+case-insensitively, or the user still owns tasks or rules — those foreign keys are `ON DELETE RESTRICT`,
+so delete or re-assign those rows first) · `422` (short password, unknown role, `default_destination`
+outside the roots).
 
 ```json
 GET /api-tokens →
@@ -1466,3 +1474,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
 | 2026-09-01 | Closed both open questions: `requested_destination` became a `tasks` column, and saved searches are specified as a `search` member of the `/prefs` document (§11.4, task T064) — no `/search/saved` surface. The feed object gains `priority` (the rule engine's per-run tie-break) and `POST /feeds` gains `auto_download`, which creates the `auto:<feed_id>` rule behind the dialog's Download-Station checkbox. `DELETE /users/{id}` for a user who still owns tasks is `409`, matching `ON DELETE RESTRICT`. |
+| 2026-09-01 | Review pass: the users-group `409` enumeration now names the owned-rows case; the saved-search 50-entry cap is stated as client-enforced (the server's bound is the 64 KiB document cap) and `/prefs` is excluded from the settings export; `PATCH /feeds/{id}` accepts `auto_download` so the checkbox is reversible without deleting the feed. |
