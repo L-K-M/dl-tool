@@ -311,7 +311,10 @@ Set-Cookie: dltool_session=6f1c...; Path=/; HttpOnly; SameSite=Lax
 ```
 
 Statuses: `201` · `401` `/problems/unauthenticated` (wrong token) · `409`
-`/problems/setup-already-complete` · `422` `/problems/validation-failed` (password under 12 characters).
+`/problems/setup-already-complete` · `422` `/problems/validation-failed` (password under 12 characters) ·
+`429` `/problems/rate-limited` — the login throttle of
+[`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.3 covers this endpoint while it is
+callable, because a guessed token mints the admin account.
 
 ### 4.2 `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`
 
@@ -1448,3 +1451,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
+| 2026-09-01 | `POST /auth/setup` gains `429 /problems/rate-limited`: the login throttle covers it while it is callable. |

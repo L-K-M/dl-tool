@@ -478,7 +478,8 @@ adopt Transmission's token approach instead. Three layers, because proxies break
 Brute-force controls in `internal/secure/session.go`: per-account exponential backoff starting at 1 s,
 doubling, capped at 15 minutes; a per-source-IP token bucket of 10 attempts per 5 minutes keyed on the
 peer address (or the `X-Forwarded-For` entry from a trusted proxy, never a forged one); `429` with
-`Retry-After` on exhaustion. **Never a permanent lockout** — it strands a single-admin home server and
+`Retry-After` on exhaustion. The same bucket covers `POST /auth/setup` while it is callable (§6.4).
+**Never a permanent lockout** — it strands a single-admin home server and
 is itself a denial-of-service primitive. Every failed login writes one record with a stable event code
 and the source IP for fail2ban or CrowdSec; the repository ships the matching filter regex.
 
@@ -487,11 +488,17 @@ and the source IP for fail2ban or CrowdSec; the repository ships the matching fi
 Authentication is mandatory ([ADR-0013](decisions/0013-mandatory-built-in-authentication.md)): no
 built-in account, no default password, no anonymous mode, no "disabled for local addresses" escape.
 
-1. On first start with an empty `users` table, dl-tool generates a one-time setup token, prints it to
-   stdout and writes `<config>/setup-token` mode `0600`.
+1. On first start with an empty `users` table, dl-tool generates a one-time setup token — 32 bytes from
+   `crypto/rand`, base64url-encoded (256 bits, no predictable prefix) — prints it to stdout and writes
+   `<config>/setup-token` mode `0600`. The token is regenerated on every boot while the `users` table is
+   still empty, so a token leaked in an old log is worthless after the next restart.
 2. Every endpoint except `POST /auth/setup` returns `401` `/problems/setup-required`.
 3. `POST /auth/setup` requires that token and creates the first admin with a password of at least 12
-   characters; on success the token file is deleted and the endpoint returns `409` thereafter.
+   characters; on success the token file is deleted and the endpoint returns `409` thereafter. While it
+   is callable it sits behind the same per-source-IP token bucket as login (§6.3), with the identical
+   `429` + `Retry-After`, because a guessed setup token creates the admin account outright and there is
+   no account to lock out afterwards. A failed attempt writes the same stable event code as a failed
+   login, so one fail2ban filter covers both.
 4. No admin password is ever accepted from an environment variable in the shipped compose file — it
    would land in `docker inspect`, `docker compose config` and shell history.
 
@@ -701,3 +708,4 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | Setup-token hardening: §6.4 pins the token at 256 bits from `crypto/rand` (base64url), regenerates it on every boot while unused, and puts `POST /auth/setup` behind the §6.3 throttle — a guessed token mints the admin account and there is no account to lock out afterwards. |
