@@ -779,7 +779,12 @@ If a non-admin calls a user-management, engine-configuration, indexer-management
 ### FR-119 Filter tasks by owner for non-admins
 While a non-admin session is active, dl-tool shall return only the tasks owned by that user from every task read endpoint and shall reject actions on tasks owned by anyone else with HTTP 404.
 
-**Verify:** T085 creates tasks for two users and asserts each non-admin sees only their own, an admin sees both, and a cross-owner pause returns 404 rather than 403.
+This includes `GET /events` and `GET /sync`: task deltas, removal identifiers, rates, counts and category or
+tag counts shall reveal only the caller's tasks. Admins receive the system-wide view.
+
+**Verify:** T085 creates tasks for two users and asserts each non-admin sees only their own through the
+task list, SSE and polling fallback, including aggregate fields; an admin sees both; and a cross-owner
+pause returns 404 rather than 403.
 
 | Covered by | Priority |
 |---|---|
@@ -1262,3 +1267,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | Required owner filtering for live task deltas, removals and aggregates. |

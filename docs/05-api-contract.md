@@ -681,6 +681,11 @@ data: {"rid":43,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X":{"
 Server rules:
 
 - Keep an in-memory ring buffer of the last **300** deltas keyed by rid (≈5 minutes at 1 Hz).
+- Keep owner ids as internal metadata for every changed or removed task. Before serialization, project the
+  coalesced delta through the authenticated caller: an admin receives all tasks; a non-admin receives only
+  their tasks. Strip the internal metadata from the response.
+- Scope `tasks_removed`, `stats`, and category or tag task counts to the same caller. An id enters
+  `tasks_removed` when a task that was visible to that caller is removed or reassigned away from them.
 - On connect, read the `Last-Event-ID` request header. That header **is** the rid; there is no separate
   client-side bookkeeping.
 - If `Last-Event-ID` is inside the ring, send the coalesced diff from that rid onward. If it is absent,
@@ -703,7 +708,7 @@ in-band — the server closes the connection and `EventSource` reconnects.
 
 Query: `rid` (integer, optional, default `0`) — the last rid the client holds. `0`, or a rid outside the
 ring, forces a full update. The response body is **byte-for-byte the same JSON object** as an SSE `data:`
-payload, delivered as `application/json` with no event framing.
+payload for the same authenticated caller and rid, delivered as `application/json` with no event framing.
 
 ```http
 GET /api/v1/sync?rid=42
@@ -1448,3 +1453,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
+| 2026-09-01 | Scoped live task deltas, removals and aggregates to the authenticated caller. |
