@@ -196,7 +196,7 @@ Segments, left to right:
 | 3 | Counts | `8 active / 42 total` | |
 | 4 | Free space | `Free: 412 GB of 2 TB` | For the destination of the currently selected task, else the default destination. |
 | 5 | Schedule | `Sched: OFF` / `Default` / `Alt` / `No-DL` | Click navigates to `/settings/bandwidth`. |
-| 6 | Alt-speed toggle | turtle icon, `aria-pressed` | Toggles the global alternative-speed limits. |
+| 6 | Alt-speed indicator | turtle icon | Shown only while `schedule_enabled` is true; indicates whether the active cell applies the alternative pair, and click navigates to `/settings/bandwidth`. There is no manual override toggle: the grid is the only source of alternative speed, and no settings key backs one. |
 
 ---
 
@@ -687,15 +687,24 @@ appears only when the form is dirty and announces `3 unsaved changes` through `a
 | Section | Contents |
 |---|---|
 | **General** | UI language · Theme (System / Light / Dark) · Density (Comfortable / Compact) · Date format (Browser default / ISO 8601) · Confirm on delete · Alternating row colours · Action on double-click, set separately for downloading and completed tasks · Default sidebar filter on startup · Remember last destination · Process order (**By date created** / **By user (one task at a time)**) |
-| **Connection** | Engine endpoints, read-only when supplied by the environment · Global maximum connections · Maximum connections per task · `max_active_total`, `max_active_per_engine`, `max_active_per_user` · Proxy settings |
+| **Connection** | Engine endpoints, read-only when supplied by the environment · `max_active_total`, `max_active_per_engine`, `max_active_per_user` |
 | **Bandwidth** | Global download and upload limits in bytes per second, `0` = unlimited · Alternative download and upload limits · radio *Immediately* / *Advanced schedule* · the 24×7 grid (§9.1) |
-| **BitTorrent** | DHT · PeX · LSD · Encryption (**Disable** / **Auto** / **Always**) · Maximum peers per task · Default share-ratio limit, seeding-time limit and the action when reached · Auto-append trackers |
-| **Downloads** | Default destination (folder browser) · Incomplete folder · Content layout default · Watch folders, each with a path and *Delete loaded .torrent files* · Auto-extract archives plus a shared password list · Category → path mapping table · Per-root `min_free_space` |
-| **RSS** | Enable RSS fetching · Update interval · Maximum articles kept per feed · Enable the auto-downloader · Smart-episode-filter patterns |
+| **BitTorrent** | Default share-ratio limit, seeding-time limit and the action when reached |
+| **Downloads** | Default destination (folder browser) · Watch folders, each with a path and *Delete loaded .torrent files* · Auto-extract archives plus a shared password list · Category → path mapping table · Per-root `min_free_space` |
+| **RSS** | Enable RSS fetching · Update interval · Maximum articles kept per feed (the per-feed `item_cap`, edited feed by feed) |
 | **Indexers** | Table: Name · Type · URL · Categories · Enabled · Priority · Last test result. Actions: Add · Edit · Test · Test all · Reorder · Import. Imported definitions arrive **disabled** and show their provenance. |
-| **Users & Auth** | Users table (username, role, quota, default destination, enabled) · Add / Edit / Delete · Change password · Session lifetime · API tokens with a create-once reveal |
+| **Users & Auth** | Users table (username, role, quota, default destination, enabled) · Add / Edit / Delete · Change password · API tokens with a create-once reveal |
 | **Notifications** | A per-event × per-channel checkbox matrix. Channels: Webhook, ntfy, Gotify, Apprise. Every channel has **Send test**, which shows the **raw upstream status line and body**. |
-| **Advanced** | Log level and retention · Database maintenance and vacuum · Settings export and import · Reset to defaults · Version and build info |
+| **Advanced** | Log level (read-only; `DLTOOL_LOG_LEVEL` is environment-only) · Settings export and import · Version and build info |
+
+Every control above is backed by a settings key in [`11-config-reference.md`](11-config-reference.md) §5 or
+by a CRUD endpoint in [`05-api-contract.md`](05-api-contract.md). Controls that have no backing are cut,
+not deferred with a placeholder: proxy settings (the SSRF client is a direct dialer by design), global and
+per-task connection counts, DHT/PeX/LSD/encryption and per-task peer ceilings (engine-side preferences
+dl-tool does not fan out), auto-append trackers, an incomplete folder and a content-layout default, a
+global auto-downloader switch and smart-episode patterns (the rule engine owns both behaviours), log
+retention, database vacuum and a reset-to-defaults action (no endpoints), and session lifetime
+(`DLTOOL_SESSION_TTL` is infrastructure, environment-only).
 
 ### 9.1 The 24×7 schedule grid
 
