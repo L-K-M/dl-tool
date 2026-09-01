@@ -86,6 +86,13 @@ column names the package that consumes the parsed field.
 
 Every variable marked **secret** also accepts a `_FILE` suffixed sibling — see §6.
 
+One deliberate absence: there is **no** variable, settings key or API field for the completion hook
+([FR-105](02-requirements.md#fr-105-run-a-completion-hook-only-when-explicitly-enabled)). The hook is an
+executable the operator installs at `<DLTOOL_CONFIG_DIR>/hooks/on-complete`; its existence is the switch —
+absent means off, executable-by-`PUID:PGID` means on — so a compromised web session cannot introduce or
+alter the command that runs. argv, environment, timeout and tests are owned by task
+[T078](tasks/T078-completion-hook.md).
+
 ---
 
 ## 3. Container-level variables (entrypoint, not the application)
@@ -312,3 +319,4 @@ stated fallback.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
+| 2026-09-01 | §2 now records the completion hook's deliberate absence from every configuration surface: the fixed path `<DLTOOL_CONFIG_DIR>/hooks/on-complete` is the switch (FR-105, T078). |

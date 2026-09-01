@@ -710,7 +710,7 @@ Where a notification channel is configured, dl-tool shall deliver an event to it
 | T077 | must |
 
 ### FR-105 Run a completion hook only when explicitly enabled
-Where a completion hook is enabled in the configuration file, dl-tool shall execute it as an argument vector with a fixed environment and a timeout, and shall not expose the hook command for editing through the HTTP API.
+Where the operator has installed an executable at `<DLTOOL_CONFIG_DIR>/hooks/on-complete`, dl-tool shall run it once per finished task as an argument vector with a fixed environment and a timeout; the hook shall be off while the file is absent, and no environment variable, settings key or API field shall exist that names or edits the command.
 
 **Verify:** T078 asserts the hook is off by default, that a PATCH attempting to set the hook command returns 403, and that the executed process receives argv entries rather than a shell string.
 
@@ -1262,3 +1262,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | FR-105 corrected: the hook is enabled by installing an executable at `<DLTOOL_CONFIG_DIR>/hooks/on-complete` (T078's mechanism), not "in the configuration file" — no configuration file exists in the design. |
