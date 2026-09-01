@@ -115,10 +115,10 @@ environment; they only produce values for other fields.
 | `CONFIG_DIR` | `./config` | The host side of the `/config` bind mount for dl-tool and each engine. |
 | `DATA_DIR` | `/srv/data` | The host side of the single `/data` bind mount, identical in every service ([ADR-0012](decisions/0012-single-data-mount.md)). |
 | `DLTOOL_PORT` | `8091` | Published host port mapped to container `8080`. |
-| `DLTOOL_QBITTORRENT_URL` | *(empty — lane disabled; an empty string counts as unset, §1)* | `DLTOOL_QBITTORRENT_URL`. A non-empty value enables the BitTorrent lane, and `QBT_USERNAME`/`QBT_PASSWORD` must then be set or boot fails with `config_missing`. |
+| `DLTOOL_QBITTORRENT_URL` | *(empty — lane disabled; an empty string counts as unset, §1)* | Passes straight through to the application variable of the same name (§2): a non-empty value enables the BitTorrent lane, and `QBT_USERNAME`/`QBT_PASSWORD` must then be set or boot fails with `config_missing`. |
 | `QBT_USERNAME` | *(empty)* | `DLTOOL_QBITTORRENT_USERNAME`. The same credentials must be set in qBittorrent's own WebUI; the linuxserver image does not read them. |
 | `QBT_PASSWORD` | *(empty)* | `DLTOOL_QBITTORRENT_PASSWORD`. The `_FILE` variant (`DLTOOL_QBITTORRENT_PASSWORD_FILE`) is supported by the application (§2) but is not wired by the shipped compose — using it means adding a `secrets:` stanza by hand. |
-| `DLTOOL_ARIA2_URL` | *(empty — lane disabled)* | `DLTOOL_ARIA2_URL`. Set together with `ARIA2_RPC_SECRET` **and** the `aria2` profile (`COMPOSE_PROFILES=aria2`); a URL without the profile enables a lane whose backend container is not running, and every HTTP/FTP task fails at runtime with `engine_unavailable`. |
+| `DLTOOL_ARIA2_URL` | *(empty — lane disabled)* | Passes straight through to the application variable of the same name (§2). Set together with `ARIA2_RPC_SECRET` **and** the `aria2` profile (`COMPOSE_PROFILES=aria2`); a URL without the profile enables a lane whose backend container is not running, and every HTTP/FTP task fails at runtime with `engine_unavailable`. |
 | `ARIA2_RPC_SECRET` | *(none)* | The aria2 service's RPC secret **and** dl-tool's `DLTOOL_ARIA2_SECRET`. One value, two consumers. The aria2 entrypoint refuses an empty value when that profile is active. |
 | `QBT_WEBUI_PORT` | `8080` | qBittorrent's in-container WebUI port. The URL is no longer derived from it — changing the port means updating `DLTOOL_QBITTORRENT_URL` to match. |
 
@@ -317,3 +317,4 @@ stated fallback.
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
 | 2026-09-01 | §4 gains the engine-lane interpolation variables (`DLTOOL_QBITTORRENT_URL`, `QBT_USERNAME`, `QBT_PASSWORD`, `DLTOOL_ARIA2_URL`); all default to empty, matching the compose fix in [`10-deployment-and-compose.md`](10-deployment-and-compose.md) §2 — an empty URL disables the lane instead of making §8's missing-credential check fatal on a fresh boot. |
+| 2026-09-01 | Review pass: the `ARIA2_RPC_SECRET` and `QBT_WEBUI_PORT` rows were rewritten too (single-source note; the URL is no longer port-derived), and the two `DLTOOL_*_URL` rows read as pass-through application config, not producers of other fields. |
