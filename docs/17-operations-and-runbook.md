@@ -389,12 +389,13 @@ deliberate, local operator action.
 
 ## Open questions
 
-- [NEEDS CLARIFICATION: backup file naming is stated two ways. `04-data-model.md` §6 uses
-  `dl-tool.db.<UTC>.bak` and `05-api-contract.md` §13 returns `/config/backups/dl-tool-<UTC>.db`. This
-  document uses the `04` form. One of the two must be corrected before T091.]
+- (none — the backup-naming ambiguity was resolved 2026-09-01 by correcting the example in
+  [`05-api-contract.md`](05-api-contract.md) §13 to the `dl-tool.db.<UTC>.bak` form this document and
+  [`04-data-model.md`](04-data-model.md) §6 already use)
 
 ## Change log
 
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version. |
+| 2026-09-01 | Resolved the backup-naming open question: the §13 example in [`05-api-contract.md`](05-api-contract.md) was corrected to the `dl-tool.db.<UTC>.bak` form used here and in [`04-data-model.md`](04-data-model.md) §6. |
