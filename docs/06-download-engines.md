@@ -687,7 +687,7 @@ Call both at adapter start; record them for `GET /system/info` and for bug repor
 The wiki's "latest WebAPI version 2.11.3" is stale — that is only the newest heading on the wiki page, while the
 shipping constant in `release-5.2.3` is `{2, 15, 1}`. Never gate a feature on `>= 2.11.3`.
 
-### 5.2 Login and the SID cookie
+### 5.2 Login and the session cookie
 
 `POST /api/v2/auth/login`, `Content-Type: application/x-www-form-urlencoded`, fields `username` and `password`.
 
@@ -697,26 +697,28 @@ curl -i --header 'Referer: http://qbittorrent:8080' \
      http://qbittorrent:8080/api/v2/auth/login
 ```
 ```http
-HTTP/1.1 200 OK
-Content-Length: 3
-Set-Cookie: SID=hBc7TxF76ERhvIw0jQQ4LZ7Z1jQUV0tQ; path=/
+HTTP/1.1 204 No Content
+Set-Cookie: QBT_SID_8080=hBc7TxF76ERhvIw0jQQ4LZ7Z1jQUV0tQ; path=/; HttpOnly
 ```
 ```sh
-curl http://qbittorrent:8080/api/v2/torrents/info --cookie "SID=hBc7TxF76ERhvIw0jQQ4LZ7Z1jQUV0tQ"
+curl http://qbittorrent:8080/api/v2/torrents/info --cookie "QBT_SID_8080=hBc7TxF76ERhvIw0jQQ4LZ7Z1jQUV0tQ"
 ```
 
-**Success test: the presence of the `Set-Cookie: SID=` header, never the status code.** Status codes differ by
-version and a naive `status == 200` assertion fails on 5.2.x.
+Give the adapter's `http.Client` a standards-compliant cookie jar; never parse, rename or manually copy the
+cookie. qBittorrent 5.2.3 names it `QBT_SID_<WebUI port>`, not `SID`
+([source](https://github.com/qbittorrent/qBittorrent/blob/release-5.2.3/src/webui/webapplication.cpp#L438)).
+Accept login only after the jar captures the response cookie and an authenticated `GET /api/v2/app/version`
+succeeds. Neither the login status nor its body alone proves that the session works.
 
 | qBittorrent | login OK | bad credentials | banned IP |
 |---|---|---|---|
-| ≤ 5.1.x | `200` + body `Ok.` + `Set-Cookie: SID` | `200` + body `Fails.` | `403` |
-| ≥ 5.2.0 | **`204` No Content** + `Set-Cookie: SID` | **`401`** | `403` |
+| ≤ 5.1.x | `200` + body `Ok.` + a session cookie | `200` + body `Fails.` | `403` |
+| ≥ 5.2.0 | **`204` No Content** + `QBT_SID_<port>` | **`401`** | `403` |
 
 Always send `Referer: <scheme>://<host>:<port>` matching the request's own `Host` header: the wiki instructs it
 and 4.x needs it. It is **not** strictly required by 5.2.x — a request sending neither `Origin` nor `Referer`
 passes CSRF, and only a **mismatched** header is rejected, with `401` — but the matching header is correct on
-every version. Re-login and retry once on any `401` or `403`; the SID expires.
+every version. Re-login and retry once on any `401` or `403`; the session expires.
 
 Two further failure modes look identical to an auth failure: `HostHeaderValidation` defaults to `true` and
 survives only because `ServerDomains` defaults to `*`, so a user who narrowed `ServerDomains` makes every
@@ -771,10 +773,22 @@ Content-Disposition: form-data; name="savepath"
 
 Unknown parameters are ignored, which is exactly why sending both spellings of every renamed parameter is safe.
 
-Responses: **`200`** on success, **`415 Unsupported Media Type`** when the torrent file is invalid. **No hash is
-returned.** Resolve identity before adding — `POST /api/v2/torrents/fetchMetadata` and `/parseMetadata` (both
-present in 5.2.3) give the infohash first, and are also how `POST /tasks/inspect` is served for a magnet.
-Otherwise compute the infohash client-side per §3.4 and correlate against `torrents/info`.
+WebAPI 2.15.1 returns the JSON result introduced in the
+[2.14 changelog](https://github.com/qbittorrent/qBittorrent/blob/release-5.2.3/WebAPI_Changelog.md#2140):
+
+| Status | Meaning |
+|---|---|
+| `200` | At least one immediate success and `pending_count == 0`. |
+| `202` | At least one URL or magnet remains pending. |
+| `409` | Every submitted torrent failed. |
+| `415` | An uploaded file is invalid torrent metadata. |
+
+The `200` and `202` bodies contain `success_count`, `pending_count`, `failure_count` and
+`added_torrent_ids`. Resolve identity before adding through `fetchMetadata`/`parseMetadata` or the local
+§3.4 parser. For an immediate single add, require one returned id and verify it equals the expected engine
+reference. For a pending add, retain the expected identity and reconcile when it appears. Treat malformed
+JSON, inconsistent counts or an unexpected id as a protocol error; never infer success from a 2xx status or
+recover identity by choosing an arbitrary later `torrents/info` row.
 
 ### 5.4 `sync/maindata` — the delta protocol
 
@@ -808,8 +822,15 @@ is dramatically cheaper than polling `torrents/info`.
 ```
 
 Algorithm: hold `rid` in adapter memory; send it on every poll; if `full_update` is true **replace** the cache,
-else **deep-merge** each per-hash partial and then apply the `*_removed` arrays. Emit one `TaskEvent` per changed
-hash. This `rid` is the engine's own and is unrelated to dl-tool's SSE `rid`
+else **deep-merge** each per-hash partial and then apply the `*_removed` arrays. Decode and merge into a copy,
+then publish the cache and new rid together so a truncated body cannot advance either one. Emit one
+`TaskEvent` per changed hash.
+
+After a timeout, transport failure, non-2xx response or decode failure, set the next request's rid to `0`.
+Also force `rid=0` after the named `qbtFullSyncInterval` of five minutes. Pinned 5.2.3 can
+[omit an earlier unacknowledged field](https://github.com/qbittorrent/qBittorrent/issues/24845) from a later
+delta, so only a full response repairs a lost update. This `rid` is the engine's own and is unrelated to
+dl-tool's SSE `rid`
 ([ADR-0006](decisions/0006-sse-with-rid-deltas.md)).
 
 ### 5.5 `torrents/info`
@@ -1211,6 +1232,10 @@ func RunContract(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 - Wait on readiness explicitly, e.g.
   `testcontainers.WithWaitStrategy(wait.ForHTTP("/api/v2/app/version").WithPort("8080/tcp"))`; the default wait
   deadline is 60 s.
+- The qBittorrent integration test logs in through the cookie jar, asserts the pinned daemon returns
+  `QBT_SID_8080`, and proves the jar authenticates an `app/version` request.
+- The add test covers `200`, `202`, `409` and malformed counts. A truncating test proxy drops one maindata
+  response after qBittorrent generated it; the next request must send `rid=0` and repair the cache.
 - Gate the suite behind `//go:build integration` so plain `go test ./...` stays fast and needs no Docker. CI runs
   the tagged suite on every PR.
 - `RemoveRetainsData` writes a sentinel payload, removes the engine handle, and asserts the payload still
@@ -1233,7 +1258,7 @@ if diff := cmp.Diff(want, got); diff != "" { t.Fatalf("mismatch (-want +got):\n%
 ```
 
 Fixtures to capture, each named after the version it came from: `qb_info_5.2.3.json`,
-`qb_maindata_full_5.2.3.json`, `qb_maindata_delta_5.2.3.json`, `qb_files_5.2.3.json`,
+`qb_add_5.2.3.json`, `qb_maindata_full_5.2.3.json`, `qb_maindata_delta_5.2.3.json`, `qb_files_5.2.3.json`,
 `aria2_tellstatus_1.37.0.json`, `aria2_getfiles_1.37.0.json`, `ytdlp_info_<version>.json`, plus the
 `thunder`/`flashget`/`qqdl` links and the `.torrent` inputs of §3. Every golden file regenerates behind a
 `-update` flag, and the diff on an upstream change is the alarm. The full test pyramid and Definition of Done
@@ -1274,3 +1299,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | M2 task allocation: §11 now attributes the §8 ownership assertion to T026 and T030; task identifier T102 is retired with the foreign-task policy. |
 | 2026-09-01 | Contradiction fix: dropped `--rpc-allow-origin-all` from the §4.1 daemon flags — `12-security-and-threat-model.md` §10 forbids it in any environment and the entrypoint in `10-deployment-and-compose.md` §5.1 never set it. |
 | 2026-09-01 | Removed engine-side data deletion and required every adapter to retain payloads. |
+| 2026-09-01 | Corrected qBittorrent 5.2.3 session, add-result and delta-recovery contracts. |
