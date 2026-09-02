@@ -1565,3 +1565,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Review pass 2: both feed verbs list `auto_download` explicitly — the earlier "plus" wording read as if `POST /feeds` rejected the field the add dialog sends. |
 | 2026-09-01 | Scoped live task deltas, removals and aggregates to the authenticated caller. |
 | 2026-09-01 | Replaced destructive task-row deletion with retained tombstones and confined filesystem removal. |
+| 2026-09-01 | Aligned the backup API filename with the canonical recovery format. |
