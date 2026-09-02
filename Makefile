@@ -11,7 +11,7 @@ LYCHEE_VERSION        ?= 0.24.2  # pin at implementation time; scripts/doclint.s
 
 setup:
 	$(GO) mod download
-	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	cd web && npm ci
 	cd web && npx playwright install --with-deps chromium
 	cargo install --locked lychee --version $(LYCHEE_VERSION)
