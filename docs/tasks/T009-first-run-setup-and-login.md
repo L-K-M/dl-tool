@@ -85,7 +85,7 @@ HTTP/1.1 201 Created
 Set-Cookie: dltool_session=6f1c...; Path=/; HttpOnly; SameSite=Lax
 
 {"user":{"id":"usr_01JKQ7X1AA0000000000000000","username":"alice","role":"admin","enabled":true,
- "default_destination":null,"quota_bytes":0,"locale":"en","last_login_at":null,
+ "locale":"en","last_login_at":null,
  "created_at":"2026-09-01T09:00:00Z"},
  "csrf_token":"K7sB2h1QpVmNc0aZ"}
 ```
@@ -144,8 +144,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Out of scope — do NOT
 - Do NOT build the setup wizard screen; T039 and T040 own the SPA shell and its first-run route.
-- Do NOT implement `/users` CRUD, role checks on other endpoints, or `/api-tokens`; T084 owns them.
-- Do NOT add a per-user default destination or quota enforcement; T085 and T086 own them.
+- Do NOT implement `/account` or `/api-tokens`; T084 and T120 own them.
 - Do NOT accept an admin password from an environment variable, in any form, ever.
 - Do NOT add a "disabled for local addresses" or anonymous mode; there is none.
 

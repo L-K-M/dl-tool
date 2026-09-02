@@ -20,10 +20,10 @@ caller is allowed to see.
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/05-api-contract.md` §8.1 Categories](../05-api-contract.md#81-categories) and
-   [§8.2 Tags](../05-api-contract.md#82-tags) — the shapes, the admin-only rule and every status code.
+   [§8.2 Tags](../05-api-contract.md#82-tags) — the shapes and every status code.
 2. [`docs/04-data-model.md` §3.2 Configuration](../04-data-model.md#32-configuration) — the `categories`
    and `tags` DDL.
-3. [`docs/05-api-contract.md` §7.2 The per-user jail](../05-api-contract.md#72-the-per-user-jail) — the last
+3. [`docs/05-api-contract.md` §7.2 The per-user jail](../05-api-contract.md#72-containment) — the last
    bullet: a jailed caller creating a task in a category outside their jail gets their own default
    destination, with the category path reported in `requested_destination`.
 4. [`docs/tasks/T020-create-tasks-endpoint.md`](T020-create-tasks-endpoint.md) — where the destination is
@@ -107,7 +107,7 @@ Destination resolution, added to the create path in `internal/api/tasks.go`:
 | none, category `save_path` outside the caller's jail | the caller's `default_destination` | the category `save_path` |
 | none, no category | the caller's default, else the first root | `null` |
 
-Statuses, exactly doc 05 §8.1: `200`/`201`/`204` · `403 /problems/forbidden` for a non-admin write ·
+Statuses, exactly doc 05 §8.1: `200`/`201`/`204` ·
 `403 /problems/path-rejected` for a `save_path` outside the roots · `404` · `409 /problems/conflict` on a
 duplicate name · `422` for an empty name or a name containing `/`.
 
@@ -123,10 +123,10 @@ duplicate name · `422` for an empty name or a name containing `/`.
 5. Implement `DELETE` so tasks in the category become uncategorised and no task and no file is touched.
 6. Edit `internal/api/tasks.go` to apply the resolution table above when the create body carries a category
    and no destination, setting `requested_destination` only in the third row's case.
-7. For `GET /tags`, pass the caller's id as `ownerID` for a non-admin so the count reflects only their own
+7. For `GET /tags`, count every task carrying the tag, including tags whose count is
    tasks, and the empty string for an admin.
 8. Create `internal/api/categories_test.go`: create, list, rename, delete; a duplicate name is `409`; a
-   name containing `/` is `422`; a non-admin write is `403`; a `save_path` of `/etc` is `403`; creating a
+   name containing `/` is `422`; a `save_path` of `/etc` is `403`; creating a
    task in category `linux` with no destination resolves to `/data/linux`; deleting the category leaves its
    tasks present and uncategorised; `GET /tags` lists a tag with `task_count: 0`.
 9. Run the verification command and paste its output under `## Evidence`.
@@ -159,7 +159,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   tasks appears once M6 wires `GET /categories` into it.
 - Do NOT add a per-category engine, ratio limit or automation setting; v1 has name and save path only.
 - Do NOT move or delete any downloaded data when a category is renamed or deleted.
-- Do NOT let a non-admin create a category as a way around the destination jail.
+- Do NOT let a category `save_path` escape `DLTOOL_DATA_ROOTS`; it is checked like any destination.
 
 ## Forbidden shortcuts
 - Do NOT skip/xfail a test, weaken an assertion, or delete a test to make a check pass.

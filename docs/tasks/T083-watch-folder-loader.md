@@ -50,7 +50,6 @@ const (
 	SkipAlreadyLoaded SkipReason = "already_loaded"
 	SkipUnreadable    SkipReason = "unreadable"
 	SkipDuplicate     SkipReason = "torrent_duplicate"
-	SkipQuota         SkipReason = "quota_exceeded"
 	SkipPathRejected  SkipReason = "path_rejected"
 )
 
@@ -119,7 +118,7 @@ for when the two differ, per the Task object in
    `newOSWatcher` and the polling implementation.
 3. In `ScanOnce`, read each directory entry, skip anything not ending in `.torrent` with `SkipNotATorrent`,
    parse it with the T031 metainfo parser and skip an unparsable file with `SkipNotATorrent`.
-4. Create the task through `TaskCreator` with the folder's `owner_id`, `destination` and `category`; map a
+4. Create the task through `TaskCreator` with the folder's `destination` and `category`; map a
    rejected destination to `SkipPathRejected`, a known infohash to `SkipDuplicate` and a quota refusal to
    `SkipQuota`.
 5. Unlink the source file only after the creator returned a task id, and only when `delete_after_load` is

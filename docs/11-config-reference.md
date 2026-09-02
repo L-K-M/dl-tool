@@ -165,7 +165,6 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `min_free_space` | object, root path → bytes | `2147483648` for every configured root | `PATCH /settings` |
 | `max_active_total` | integer, `0` = unlimited | `5` | `PATCH /settings` |
 | `max_active_per_engine` | integer, `0` = unlimited | `3` | `PATCH /settings` |
-| `max_active_per_user` | integer, `0` = unlimited | `3` | `PATCH /settings` |
 | `process_order` | enum `by_date_created\|by_user_round_robin` | `by_date_created` | `PATCH /settings` |
 | `rss_enabled` | boolean | `true` | `PATCH /settings` |
 | `rss_interval_s` | integer seconds, minimum `300` | `1800` | `PATCH /settings` — the global poll interval and its 5-minute floor are owned by [`08-rss-automation.md`](08-rss-automation.md) §2.1 |
@@ -175,7 +174,7 @@ flat and lowercase. This table is the authoritative key list referenced by
 
 Seeding does not count toward any `max_active_*` limit. The 168-cell bandwidth grid is not a settings key: it
 lives in its own table and is replaced through `PUT /settings/schedule`. Per-user `default_destination`,
-`quota_bytes` and `locale` are columns on `users`, changed through `PATCH /users/{id}`.
+`locale` is a column on the single `users` row, changed through `PATCH /account`.
 
 ---
 
@@ -218,7 +217,7 @@ Rules:
 - **Never logged.** Secret fields are typed `secure.Secret`, whose `String`, `Format` and `MarshalJSON`
   return `[REDACTED]`. Request logging additionally redacts `Authorization`, `Cookie`, `X-Api-Key`, and the
   query or path parameters `apikey`, `token` and `passkey`, because indexer and tracker URLs routinely embed
-  a per-user passkey.
+  a tracker passkey.
 - **Never returned.** No endpoint echoes a secret. Redacted placeholders are literal `"__redacted__"`, and
   `PATCH` of a field whose submitted value equals `"__redacted__"` is a no-op on that field.
 
@@ -378,3 +377,4 @@ stated fallback.
 | 2026-09-01 | Review pass: the aria2 rows state both guards — the fatal `config_missing` boot check when the URL is set and the secret is empty, and the entrypoint refusal under the profile — matching the qBittorrent row's failure model and doc 10's "guarded twice" paragraph. |
 | 2026-09-01 | Added `DLTOOL_ALLOWED_HOSTS`, the previously unspecified knob behind the Host-allowlist defence in `12-security-and-threat-model.md` §6.5. |
 | 2026-09-01 | Security review: added the Host allowlist and environment-only configuration lock; made the trusted-proxy example deny forwarded headers by default. |
+| 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |

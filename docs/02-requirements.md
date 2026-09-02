@@ -37,7 +37,7 @@ only by recording the deferral in [`docs/tasks/00-task-index.md`](tasks/00-task-
 
 Vocabulary used below and owned by the brief: task states are
 `queued downloading seeding paused checking extracting moving completed error removed`; error codes are
-Download Station's 26 `error_detail` values plus `ssrf_blocked`, `path_rejected`, `quota_exceeded`,
+Download Station's 26 `error_detail` values plus `ssrf_blocked`, `path_rejected`,
 `engine_unavailable`, `unsupported_scheme` and `concurrency_limit`; all rates and sizes are bytes or
 bytes/second.
 
@@ -52,6 +52,7 @@ reassigned:
 | `FR-079` | Import qBittorrent auto-download rules from `rules.json` | Withdrawn with the migration subsystem. |
 | `FR-130` – `FR-139` | Compatibility façades | Withdrawn with the façades; dl-tool serves `/api/v1` only. |
 | `FR-149` | One-time read-only import from a live Download Station | Withdrawn with the migration subsystem. dl-tool never speaks the Synology Web API. |
+| `FR-118` – `FR-124` | Roles, task ownership, per-user default destination, storage and concurrency quotas, and the per-user filesystem jail | Withdrawn with the multi-user model ([ADR-0019](decisions/0019-single-account-no-ownership.md)). dl-tool authenticates one operator account; there is nobody to filter against. |
 
 dl-tool imports no tasks, feeds or rules from another download product, and never calls another
 product's API to fetch them. The one import that survives is the static, never-executed conversion of a
@@ -59,6 +60,13 @@ product's API to fetch them. The one import that survives is the static, never-e
 which is a definition format, not a migration path. Task identifiers `T112` and `T114` are
 retired for the same reason. Task identifier `T102` is retired too: a foreign-task *policy* cannot exist
 when there is only one rule, so the ignore behaviour of FR-148 is asserted by T026 and T030 instead.
+
+dl-tool has exactly one account, so nothing is filtered or attributed by user
+([ADR-0019](decisions/0019-single-account-no-ownership.md)). Three things that sound like multi-user are
+not, and are unaffected: authentication itself ([FR-115](#fr-115-complete-a-first-run-setup-using-a-one-time-token)
+– [FR-117](#fr-117-issue-and-revoke-api-tokens)), the filesystem jail against `DLTOOL_DATA_ROOTS`, which is
+path-traversal defence, and the opaque search-result ids that keep tracker passkeys out of browser payloads.
+Task identifiers `T085`, `T086` and `T109` are retired with this model.
 
 ---
 
@@ -164,7 +172,7 @@ The dl-tool store shall hold every task in exactly one of the states `queued`, `
 | T018 | must |
 
 ### FR-012 List and filter tasks
-The dl-tool task listing shall support the filters `state`, `category`, `tag`, `owner` and free-text `q`, with `sort`, `limit` and `cursor`, and shall impose no fixed upper bound on the number of stored tasks.
+The dl-tool task listing shall support the filters `state`, `category`, `tag` and free-text `q`, with `sort`, `limit` and `cursor`, and shall impose no fixed upper bound on the number of stored tasks.
 
 **Verify:** T021 seeds 5 000 tasks, asserts cursor pagination returns every row exactly once and that each filter returns the expected subset.
 
@@ -245,7 +253,7 @@ The dl-tool queue admission control shall start no more tasks than `max_active_t
 | T098 | must |
 
 ### FR-021 Exclude seeding tasks from every concurrency limit
-The dl-tool queue admission control shall exclude tasks in state `seeding` from `max_active_total`, `max_active_per_engine` and `max_active_per_user`, so a seeding torrent never blocks a queued download.
+The dl-tool queue admission control shall exclude tasks in state `seeding` from `max_active_total` and `max_active_per_engine`, so a seeding torrent never blocks a queued download.
 
 **Verify:** T098 fills `max_active_total` with tasks in state `seeding`, submits one download and asserts it starts immediately.
 
@@ -642,14 +650,14 @@ When a client changes a task's download or upload limit, dl-tool shall apply the
 |---|---|
 | T082 | must |
 
-### FR-095 Order the queue by creation date or by owner
-The dl-tool queue shall support a process order of `by_date_created` or `by_user_round_robin`, the latter starting at most one task per owner in round-robin before starting any owner's second task.
+### FR-095 Order the queue by creation date
+The dl-tool queue shall start queued tasks in order of creation date.
 
-**Verify:** T085 queues three tasks for user A and one for user B under `by_user_round_robin` and asserts B's task starts before A's second.
+**Verify:** T098 queues four tasks, releases admission one at a time and asserts they start in `added_at` order.
 
 | Covered by | Priority |
 |---|---|
-| T085 | should |
+| T098 | should |
 
 ### FR-096 Combine schedule, global and per-task limits by minimum
 The dl-tool bandwidth governor shall resolve a task's effective rate as the minimum of the active schedule cell's limit, the global limit and the task's own limit, and shall **pause** every task while the active cell is `0` rather than throttling it to a near-zero rate.
@@ -747,10 +755,10 @@ The dl-tool notification API shall create, update, delete and list channels of k
 
 ---
 
-## Users, authentication and quotas (FR-115 – FR-129)
+## Authentication and API tokens (FR-115 – FR-129)
 
 ### FR-115 Complete a first-run setup using a one-time token
-While no user exists, dl-tool shall refuse every API call except the setup endpoint, shall accept a one-time setup token of 256 bits (32 bytes) from a cryptographic random source, printed to stdout and written to `<config>/setup-token` with mode `0600`, shall regenerate the unused token on every boot, shall require the first admin password to be at least 12 characters, shall rate-limit setup attempts with the per-source-IP login throttle, and shall delete the token on success.
+While no account exists, dl-tool shall refuse every API call except the setup endpoint, shall accept a one-time setup token of 256 bits (32 bytes) from a cryptographic random source, printed to stdout and written to `<config>/setup-token` with mode `0600`, shall regenerate the unused token on every boot, shall require the operator password to be at least 12 characters, shall rate-limit setup attempts with the per-source-IP login throttle, and shall delete the token on success.
 
 **Verify:** T009 boots an empty config, asserts every other endpoint returns 401, asserts the token file holds a different value after a restart while unused, drives nine failed setup attempts from one source and asserts the tenth returns `429` with `Retry-After`, advances past the bucket window, then completes setup with the token, asserts the token file is deleted and a second setup attempt returns 409.
 
@@ -775,74 +783,6 @@ The dl-tool token API shall create a token whose secret is returned exactly once
 | Covered by | Priority |
 |---|---|
 | T084 | must |
-
-### FR-118 Restrict administrative endpoints to admins
-If a non-admin calls a user-management, engine-configuration, indexer-management, settings-write or system-backup endpoint, then dl-tool shall return HTTP 403 and shall not perform the operation.
-
-**Verify:** T084 drives each admin-only path with a non-admin session and asserts 403 for every one.
-
-| Covered by | Priority |
-|---|---|
-| T084 | must |
-
-### FR-119 Filter tasks by owner for non-admins
-While a non-admin session is active, dl-tool shall return only the tasks owned by that user from every task read endpoint and shall reject actions on tasks owned by anyone else with HTTP 404.
-
-This includes `GET /events` and `GET /sync`: task deltas, removal identifiers, rates, counts and category or
-tag counts shall reveal only the caller's tasks. Admins receive the system-wide view.
-
-**Verify:** T085 creates tasks for two users and asserts each non-admin sees only their own through the
-task list, SSE and polling fallback, including aggregate fields; an admin sees both; and a cross-owner
-pause returns 404 rather than 403.
-
-| Covered by | Priority |
-|---|---|
-| T085 | must |
-
-### FR-120 Apply a per-user default destination
-Where a user has a default destination configured, dl-tool shall use it for that user's tasks when the request omits a destination, in preference to the global default.
-
-**Verify:** T086 sets user B's default to `/data/b`, creates a task as B with no destination and asserts the effective destination is `/data/b`.
-
-| Covered by | Priority |
-|---|---|
-| T086 | must |
-
-### FR-121 Enforce the per-user storage quota
-If creating a task would take the sum of `total_bytes` over a user's non-`removed` tasks above that user's `quota_bytes`, then dl-tool shall reject the request with error code `quota_exceeded` and shall not create the task.
-
-**Verify:** T085 sets `quota_bytes` to 1 073 741 824, creates a 700 MiB task and asserts a second 700 MiB task is rejected with `quota_exceeded`, and asserts `quota_bytes = 0` means unlimited.
-
-| Covered by | Priority |
-|---|---|
-| T085 | must |
-
-### FR-122 Re-check the storage quota when metadata resolves
-When a task's total size first becomes known after creation, dl-tool shall re-evaluate the owner's `quota_bytes` and, if it is now exceeded, shall pause the task with error code `quota_exceeded` and shall neither delete the task nor its data.
-
-**Verify:** T085 adds a magnet with no size at creation for a user 100 MiB below their quota, resolves metadata to a 4 GiB torrent, and asserts the task is `paused` with `quota_exceeded` and still present after a restart.
-
-| Covered by | Priority |
-|---|---|
-| T085 | must |
-
-### FR-123 Enforce a per-user concurrency limit
-The dl-tool queue admission control shall start no more than `max_active_per_user` tasks for any one user and shall report the reason for holding the remainder as `concurrency_limit`, which is distinct from `quota_exceeded`.
-
-**Verify:** T098 sets `max_active_per_user=1`, queues three tasks for user A and one for user B, and asserts exactly one task per user is active and that every held task carries `concurrency_limit`.
-
-| Covered by | Priority |
-|---|---|
-| T098 | must |
-
-### FR-124 Jail non-admins to their own destination subtree
-While a non-admin session is active, dl-tool shall confine filesystem browsing, free-space queries, directory creation and every task destination to the subtree of that user's `default_destination`, and shall grant admins every configured root.
-
-**Verify:** T109 asserts a non-admin browsing a path outside their subtree receives 403, that a task destination outside it is rejected with `path_rejected`, and that no response lists another user's directory names.
-
-| Covered by | Priority |
-|---|---|
-| T109 | must |
 
 ---
 
@@ -884,8 +824,8 @@ The dl-tool engines endpoint shall list each configured engine with its declared
 |---|---|
 | T027 | must |
 
-### FR-144 Persist server-side UI preferences per user
-The dl-tool preferences API shall read and replace a per-user preference document holding the task-grid column layout and the UI preferences listed in [`09-web-ui-spec.md`](09-web-ui-spec.md), so one account sees the same grid in every browser.
+### FR-144 Persist server-side UI preferences
+The dl-tool preferences API shall read and replace the operator's preference document holding the task-grid column layout and the UI preferences listed in [`09-web-ui-spec.md`](09-web-ui-spec.md), so one account sees the same grid in every browser.
 
 **Verify:** T107 stores a column order, width set and visibility set, reads it back from a second client authenticated as the same user and asserts equality under `go-cmp`, and asserts a second user's document is unaffected.
 
@@ -1280,8 +1220,6 @@ side effects, then asserts task pause and token revocation still work.
   mechanism must be settled in [`06-download-engines.md`](06-download-engines.md).
 - FR-050 and FR-055: the Torznab category tree used by the search category filter is **INFERRED** from
   convention; confirm the concrete category IDs in [`07-search-and-indexers.md`](07-search-and-indexers.md).
-- (resolved 2026-09-01: the stale FR-121 anchor in [`05-api-contract.md`](05-api-contract.md) is gone; FR-121
-  is the storage quota and FR-123 the concurrency limit, as written above.)
 - This document exceeds the 700-line budget suggested for it because the mandated coverage list does not fit
   in fewer requirements at the required block format.
 
@@ -1308,3 +1246,4 @@ side effects, then asserts task pause and token revocation still work.
 | 2026-09-01 | Required a process lock and staged atomic database restore. |
 | 2026-09-01 | Security review: made the Host allowlist configurable and specified the environment-only configuration lock. |
 | 2026-09-01 | Security review: made search-result acquisition handles server-only. |
+| 2026-09-02 | Multi-user model dropped: FR-118 – FR-124 deleted and retired, FR-115 restated for a single operator account. Authentication, API tokens, the data-root jail and opaque search-result ids are unaffected ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |

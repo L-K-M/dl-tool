@@ -227,7 +227,7 @@ Segments, left to right:
 Hidden by default, available from `Columns ▾`, each backed by an existing Task field (id → source):
 `downloaded` → `completed_bytes` · `remaining` → `total_bytes - completed_bytes` · `category` · `tags`
 (chips) · `dlLimit` → `dl_limit` · `ulLimit` → `ul_limit` · `ratioLimit` → `ratio_limit` · `user` →
-`owner_username` · `sourceUrl` → `source_uri` (middle-ellipsis + copy button) · `sourceKind` →
+`sourceUrl` → `source_uri` (middle-ellipsis + copy button) · `sourceKind` →
 `source_kind` · `engine` · `fileCount` → `file_count` · `sequential` (✓ or blank) · `errorCode` →
 `error_code` with `error_message` in the tooltip · `startedAt` → `started_at` · `updatedAt` →
 `updated_at` · `infoHashV1` → `infohash_v1` · `infoHashV2` → `infohash_v2`. All render `—` when the
@@ -628,8 +628,6 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
   §10.1). The result is an ordinary rule: it is edited and deleted like any other, and editing the feed's
   URL afterwards does not rewrite it, because rules scope feeds by URL.
   Mark all read · Copy feed URL · Remove.
-- **Feed and rule management is admin-only** ([`05-api-contract.md`](05-api-contract.md) §2); a
-  non-admin sees this screen read-only, with Update/Refresh actions but no create, edit or remove.
 - **Add feed** dialog fields: URL · Name · `☐ Automatically download all items`. Ticking the checkbox also
   creates an enabled rule named `auto:<feed_id>`, scoped to that feed's URL, whose `any_of` is empty — every
   item passes — reusing the rules engine as the only auto-download path ([`05-api-contract.md`](05-api-contract.md)
@@ -700,7 +698,7 @@ appears only when the form is dirty and announces `3 unsaved changes` through `a
 | Section | Contents |
 |---|---|
 | **General** | UI language · Theme (System / Light / Dark) · Density (Comfortable / Compact) · Date format (Browser default / ISO 8601) · Confirm on delete · Alternating row colours · Action on double-click, set separately for downloading and completed tasks · Default sidebar filter on startup · Remember last destination · Process order (**By date created** / **By user (one task at a time)**) |
-| **Connection** | Engine endpoints, read-only when supplied by the environment · `max_active_total`, `max_active_per_engine`, `max_active_per_user` |
+| **Connection** | Engine endpoints, read-only when supplied by the environment · `max_active_total`, `max_active_per_engine` |
 | **Bandwidth** | Global download and upload limits in bytes per second, `0` = unlimited · Alternative download and upload limits · radio *Immediately* / *Advanced schedule* · the 24×7 grid (§9.1) |
 | **BitTorrent** | Default share-ratio limit, seeding-time limit and the action when reached |
 | **Downloads** | Default destination (folder browser) · Watch folders, each with a path and *Delete loaded .torrent files* · Auto-extract archives plus a shared password list · Category → path mapping table · Per-root `min_free_space` |
@@ -962,3 +960,4 @@ The justification record for every choice above. Both tables are evidence, not d
 | 2026-09-01 | Privilege review: the RSS screens are read-only for non-admins (feed and rule writes are admin-only), and the search indexer list notes that key-bearing indexers are absent for non-admins by server rule. |
 | 2026-09-01 | The add-feed dialog's *Automatically download all items* checkbox is now wired: `auto_download` on `POST /feeds` creates the `auto:<feed_id>` rule (`05-api-contract.md` §10.1). |
 | 2026-09-01 | Security review: made search downloads submit opaque result ids only. |
+| 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |

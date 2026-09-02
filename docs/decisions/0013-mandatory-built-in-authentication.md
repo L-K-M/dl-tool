@@ -4,6 +4,11 @@
 > **Date:** 2026-09-01
 > **Deciders:** repository owner
 
+> **Amended 2026-09-02 by [ADR-0019](0019-single-account-no-ownership.md):** the multi-user reasoning
+> below is withdrawn — there is one account, no roles and no ownership. The decision itself —
+> authentication is mandatory, with no anonymous mode and no default credentials — stands, on the
+> exposure grounds rather than the identity ones.
+
 ## Context and Problem Statement
 
 Absent or default authentication is the dominant root cause of critical vulnerabilities in this software

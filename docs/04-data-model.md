@@ -142,12 +142,14 @@ CREATE TABLE users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
   password_hash TEXT NOT NULL,          -- argon2id PHC string: $argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>
-  role TEXT NOT NULL CHECK (role IN ('admin','user')),
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
-  default_destination TEXT,
-  quota_bytes INTEGER NOT NULL DEFAULT 0,   -- STORAGE quota, 0 = unlimited; see §4.7
   locale TEXT NOT NULL DEFAULT 'en', last_login_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+
+`users` holds **exactly one row**, created by the first-run setup wizard and never joined by another
+([ADR-0019](decisions/0019-single-account-no-ownership.md)). The table shape is kept rather than collapsed
+into a settings row so that adding accounts later is a migration, not a redesign. No other table references
+it: there is no `owner_id` anywhere in the schema.
 
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
@@ -220,7 +222,6 @@ Four `settings` rows carry the concurrency and disk-reservation limits. `00001_i
 |---|---|---|
 | `max_active_total` | integer, `0` = unlimited | `5` |
 | `max_active_per_engine` | integer, `0` = unlimited | `3` |
-| `max_active_per_user` | integer, `0` = unlimited | `3` |
 | `min_free_space` | object, data-root path → bytes | `2147483648` (2 GiB) for every configured root |
 
 Tasks in state `seeding` count toward no `max_active_*` limit. The complete settings key list and its
@@ -231,7 +232,6 @@ defaults live in [`11-config-reference.md`](11-config-reference.md#5-database-ba
 ```sql
 CREATE TABLE tasks (
   id TEXT PRIMARY KEY,
-  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   engine TEXT NOT NULL CHECK (engine IN ('aria2','qbittorrent','ytdlp')),
   engine_ref TEXT,                      -- aria2 GID | qBittorrent infohash | yt-dlp job id; NULL until accepted
   source_kind TEXT NOT NULL CHECK (source_kind IN ('http','ftp','sftp','magnet','torrent','metalink','media')),
@@ -249,7 +249,7 @@ CREATE TABLE tasks (
     'required_premium_account','not_supported_type','try_it_later','task_encryption','missing_python',
     'private_video','ftp_encryption_not_supported_type','extract_failed','extract_failed_wrong_password',
     'extract_failed_invalid_archive','extract_failed_quota_reached','extract_failed_disk_full','unknown',
-    'ssrf_blocked','path_rejected','quota_exceeded','engine_unavailable','unsupported_scheme',
+    'ssrf_blocked','path_rejected','engine_unavailable','unsupported_scheme',
     'concurrency_limit','js_runtime_missing')),
   error_message TEXT, destination TEXT NOT NULL,
   requested_destination TEXT,             -- what the client asked for, when the server resolved a
@@ -275,7 +275,6 @@ CREATE UNIQUE INDEX idx_tasks_engine_ref ON tasks(engine, engine_ref) WHERE engi
 CREATE UNIQUE INDEX idx_tasks_infohash_v1 ON tasks(infohash_v1) WHERE infohash_v1 IS NOT NULL AND state <> 'removed';
 CREATE UNIQUE INDEX idx_tasks_infohash_v2 ON tasks(infohash_v2) WHERE infohash_v2 IS NOT NULL AND state <> 'removed';
 CREATE INDEX idx_tasks_state ON tasks(state, added_at DESC);
-CREATE INDEX idx_tasks_owner ON tasks(owner_id, added_at DESC);
 CREATE INDEX idx_tasks_category ON tasks(category_id);
 CREATE INDEX idx_tasks_updated ON tasks(updated_at);
 
@@ -363,7 +362,6 @@ CREATE UNIQUE INDEX idx_indexers_definition ON indexers(definition_id) WHERE def
 
 CREATE TABLE search_jobs (
   id TEXT PRIMARY KEY,
-  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   query TEXT NOT NULL,
   indexer_ids_json TEXT NOT NULL,       -- JSON array of indexers.id
   categories_json TEXT,                 -- JSON array of newznab category ids
@@ -430,7 +428,6 @@ CREATE INDEX idx_feed_items_pub ON feed_items(feed_id, published_at DESC);
 
 CREATE TABLE rules (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
-  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
                                          -- tasks a rule creates are owned by this user and
                                          -- count against their quota and jail (05 §10.2); RESTRICT, not
                                          -- CASCADE: deleting a user must not silently destroy shared
@@ -440,7 +437,6 @@ CREATE TABLE rules (
   definition_json TEXT NOT NULL,        -- the rule document; schema in 08-rss-automation.md
   last_match_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-CREATE INDEX idx_rules_owner ON rules(owner_id);
 
 CREATE TABLE rule_matches (
   id TEXT PRIMARY KEY,
@@ -507,7 +503,6 @@ CREATE UNIQUE INDEX idx_ui_prefs_key ON ui_prefs(user_id, key);
 CREATE TABLE watch_folders (
   id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE,
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
-  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   destination TEXT NOT NULL,
   category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
   delete_after_load INTEGER NOT NULL DEFAULT 0 CHECK (delete_after_load IN (0,1)),
@@ -581,8 +576,7 @@ Plus seven dl-tool additions:
 |---|---|
 | `ssrf_blocked` | The source URL resolved to a blocked address range. |
 | `path_rejected` | The destination failed path-safety validation. |
-| `quota_exceeded` | The owning user's storage quota `quota_bytes` would be exceeded, at creation or when metadata resolves. |
-| `concurrency_limit` | A `max_active_*` limit holds the task in `queued`; distinct from `quota_exceeded`. |
+| `concurrency_limit` | A `max_active_*` limit holds the task in `queued`; distinct from `disk_full`. |
 | `engine_unavailable` | The routed engine did not respond. |
 | `unsupported_scheme` | The URI scheme has no engine, for example `ed2k://`. |
 | `js_runtime_missing` | The yt-dlp JS runtime (`DLTOOL_JS_RUNTIME_PATH`) is absent, so the media lane is disabled. |
@@ -633,17 +627,20 @@ drives `selected` alone. The per-engine mapping is in [`06-download-engines.md`]
 | `regex` | The entry is one regular expression, used as-is. |
 | `plain` | The entry is escaped literally; whitespace still splits it into AND-ed tokens. |
 
-### 4.7 Storage quota versus concurrency limit
+### 4.7 Concurrency limit versus disk space
 
-Two independent limits, two error codes. Never conflate them.
+Two independent reasons a task waits, two error codes. Never conflate them.
 
-| Dimension | Storage quota | Concurrency limit |
+| Dimension | Concurrency limit | Disk space |
 |---|---|---|
-| Where it lives | `users.quota_bytes` (`0` = unlimited) | `settings` keys `max_active_total`, `max_active_per_engine`, `max_active_per_user` |
-| What it measures | `SELECT COALESCE(SUM(total_bytes),0) FROM tasks WHERE owner_id = :user AND state <> 'removed'` | Count of started tasks, that is states `downloading`, `checking`, `extracting` and `moving`; `seeding` is excluded |
-| Breach at creation | Reject the task, `error_code = 'quota_exceeded'` | Accept the task and hold it in `queued`, `error_code = 'concurrency_limit'` |
-| Breach later | When a magnet's metadata resolves `total_bytes`, **pause** the task with `quota_exceeded`; never delete it | The task starts as soon as a slot frees |
-| Scope | Per user | Global, per engine and per user |
+| Where it lives | `settings` keys `max_active_total` and `max_active_per_engine` | `settings` key `min_free_space`, per data root |
+| What it measures | Count of started tasks, that is states `downloading`, `checking`, `extracting` and `moving`; `seeding` is excluded | Free bytes on the destination's filesystem, less the committed-but-unwritten bytes of active tasks sharing it |
+| Breach at creation | Accept the task and hold it in `queued`, `error_code = 'concurrency_limit'` | Accept the task and hold it in `queued`, `error_code = 'disk_full'` |
+| Breach later | The task starts as soon as a slot frees | A running task is paused with `disk_full`; `ENOSPC` never deletes partial data |
+| Scope | Global and per engine | Per data root |
+
+There is no per-user storage quota and no per-user concurrency limit: dl-tool has one account
+([ADR-0019](decisions/0019-single-account-no-ownership.md)).
 
 ### 4.8 `notification_channels.kind`
 
@@ -745,7 +742,7 @@ new table added by a later migration must be added to this list in the same chan
 
 | Table | Reached through |
 |---|---|
-| `users` | `/users`, `/auth/me` |
+| `users` | `/account`, `/auth/me` |
 | `sessions` | **internal-only** — written by `/auth/login` and expired by the reaper; no endpoint enumerates rows |
 | `api_tokens` | `/api-tokens` |
 | `settings` | `/settings`, `/settings/export`, `/settings/import` |
@@ -805,3 +802,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Made task removal durable and released unique identities held by removed rows. |
 | 2026-09-01 | Made migration backups idempotent and database restore lock-protected and atomic. |
 | 2026-09-01 | Security review: separated server-only acquisition sources from API display references. |
+| 2026-09-02 | Multi-user model dropped: removed `owner_id` from `tasks`, `rules`, `search_jobs` and `sessions`, their indexes, `users.role`, `users.default_destination`, `users.quota_bytes`, the `max_active_per_user` setting and the `quota_exceeded` error code. `users` now holds exactly one operator row. §4.7 recast as concurrency versus disk space ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |

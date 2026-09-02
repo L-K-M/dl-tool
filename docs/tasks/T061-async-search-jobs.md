@@ -51,7 +51,6 @@ package store
 
 type SearchJob struct {
 	ID             string  `db:"id"`
-	OwnerID        string  `db:"owner_id"`
 	Query          string  `db:"query"`
 	IndexerIDsJSON string  `db:"indexer_ids_json"`
 	CategoriesJSON *string `db:"categories_json"`

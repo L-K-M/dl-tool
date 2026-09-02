@@ -53,7 +53,6 @@ type Settings struct {
 	MinFreeSpace        map[string]int64  `json:"min_free_space"`
 	MaxActiveTotal      int               `json:"max_active_total"`
 	MaxActivePerEngine  int               `json:"max_active_per_engine"`
-	MaxActivePerUser    int               `json:"max_active_per_user"`
 	ProcessOrder        string            `json:"process_order"` // by_date_created | by_user_round_robin
 	RSSEnabled          bool              `json:"rss_enabled"`
 	RSSIntervalS        int               `json:"rss_interval_s"`
@@ -134,7 +133,7 @@ Worked `GET /settings` body, secrets already replaced:
 4. Edit `internal/api/settings.go` to add `GetSettings` and `PatchSettings` on the existing
    `SettingsHandlers`. Serialise `extract_passwords` as the literal `"__redacted__"` string, never as an
    array, and never as the empty string.
-5. Map `ErrUnknownSettingKey` and `ErrSettingOutOfRange` to `422`, and a non-admin `PATCH` to `403`
+5. Map `ErrUnknownSettingKey` and `ErrSettingOutOfRange` to `422`
    `/problems/forbidden`. `GET /settings` is available to any authenticated user.
 6. Edit `internal/api/system.go` to add `GetSystemInfo` on `SystemHandlers`, filling `version`, `commit` and
    `built_at` from the `main` package ldflags variables, `database` from the DB path, file size and
@@ -146,14 +145,13 @@ Worked `GET /settings` body, secrets already replaced:
 9. Edit `internal/api/settings_test.go` with: a `GET` asserting `extract_passwords` is exactly
    `"__redacted__"` and that no other field contains a configured secret; a `PATCH` carrying
    `"extract_passwords":"__redacted__"` leaving the stored value unchanged; an unknown key returning `422`;
-   `rss_interval_s` of `120` returning `422` (below the 300-second floor); a non-admin `PATCH` returning `403`; and a `GET /system/info`
+   `rss_interval_s` of `120` returning `422` (below the 300-second floor); and a `GET /system/info`
    whose serialised body contains neither `DLTOOL_ARIA2_SECRET` nor `DLTOOL_QBITTORRENT_PASSWORD`.
 
 ## Acceptance criteria
 - [ ] `GET /settings` emits `extract_passwords` as exactly `"__redacted__"`.
 - [ ] `PATCH` with `"__redacted__"` leaves the stored secret byte-identical.
 - [ ] An unknown key and an out-of-range value each return `422`.
-- [ ] A non-admin can `GET` settings and receives `403` `/problems/forbidden` on `PATCH`.
 - [ ] `GET /system/info` returns all eleven top-level fields of doc 05 §13.
 - [ ] No response body from either endpoint contains a configured engine secret in any form.
 

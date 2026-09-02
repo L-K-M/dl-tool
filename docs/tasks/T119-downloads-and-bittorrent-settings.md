@@ -65,7 +65,6 @@ export interface WatchFolderRow {
   id: string;
   path: string;
   enabled: boolean;
-  owner_id: string;
   owner_username: string;
   destination: string;
   category: string | null;
@@ -163,7 +162,7 @@ dirty.
 7. Build the category table with Add, Edit and Delete over `/categories`, showing `task_count` read-only and
    stating that deleting a category leaves its tasks' data alone.
 8. Surface a `403 /problems/forbidden` from any write as the section-level note that these writes are
-   admin-only, and a `403 /problems/path-rejected` as a field error on the path that caused it.
+   and a `403 /problems/path-rejected` as a field error on the path that caused it.
 9. Create `BitTorrentSection.tsx` per the contract: the read-only row list, the `qbittorrent` engine status
    from `GET /engines`, the ADR-0017 sentence, and no form controls.
 10. Edit `SettingsScreen.tsx` to add `'downloads'` and `'bittorrent'` to `IMPLEMENTED` and render the two

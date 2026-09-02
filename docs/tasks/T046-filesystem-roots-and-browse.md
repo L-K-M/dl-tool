@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T007, T008, T020 |
-| **Blocks** | T047, T109 |
+| **Blocks** | T047 |
 | **Parallel-safe** | no — extends `internal/fsx/safepath.go` and `internal/api/server.go` |
 | **Implements** | [FR-040](../02-requirements.md#fr-040-browse-the-server-filesystem-jailed-to-configured-roots), [FR-042](../02-requirements.md#fr-042-reject-a-destination-outside-the-configured-roots), [NFR-014](../02-requirements.md#nfr-014-never-build-a-filesystem-path-from-a-request-parameter) |
 | **Decisions** | [ADR-0012](../decisions/0012-single-data-mount.md) |
@@ -21,7 +21,7 @@ exist and reject every hostile row of the doc 12 table.
 Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/05-api-contract.md` §7.1 Endpoints](../05-api-contract.md#71-endpoints) — the two response shapes
    and every status code.
-2. [`docs/05-api-contract.md` §7.2 The per-user jail](../05-api-contract.md#72-the-per-user-jail) — the
+2. [`docs/05-api-contract.md` §7.2 The per-user jail](../05-api-contract.md#72-containment) — the
    three caller cases, and why a jailed caller sees `403`, never `404` and never a filtered listing.
 3. [`docs/12-security-and-threat-model.md` §3.2](../12-security-and-threat-model.md#32-sanitisesegments-string-string),
    [§3.3](../12-security-and-threat-model.md#33-safejoinroot-string-segments-string-string-error) and

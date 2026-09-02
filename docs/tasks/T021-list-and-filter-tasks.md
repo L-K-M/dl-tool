@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T017, T020 |
-| **Blocks** | T022, T023, T025, T032, T034, T042, T050, T085 |
+| **Blocks** | T022, T023, T025, T032, T034, T042, T050 |
 | **Parallel-safe** | no — extends the shared `internal/api/tasks.go` |
 | **Implements** | [FR-012](../02-requirements.md#fr-012-list-and-filter-tasks), [FR-013](../02-requirements.md#fr-013-resolve-the-sidebar-filter-sets) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |
@@ -49,7 +49,6 @@ type TaskFilter struct {
 	HasCategory bool
 	Tag         string
 	HasTag      bool
-	OwnerID     string
 	Query       string // case-insensitive substring of name
 	Sort        string // a column from the allowlist, optionally prefixed with '-'
 	Limit       int    // 1..500, default 100
@@ -94,7 +93,7 @@ Sort allowlist, exactly these and no others, each accepting a leading `-`:
 7. Add the `GET /tasks` and `GET /tasks/{id}` handlers to `internal/api/tasks.go`, mapping
    `store.ErrNotFound` to `404` `/problems/not-found` and `store.ErrStaleCursor` to `422`
    `/problems/validation-failed`.
-8. Force `OwnerID` to the caller for a non-admin, and ignore a supplied `owner` query for them, so another
+8. Reject an unknown filter key with `422`, so a mistyped query is never silently ignored and another
    user's task returns `404` rather than `403`.
 9. Register both operations in `internal/api/server.go` as `list-tasks` and `get-task`.
 10. Extend `internal/store/tasks_test.go`: seed one task in each of the ten states and assert the
@@ -109,7 +108,6 @@ Sort allowlist, exactly these and no others, each accepting a leading `-`:
 - [ ] `total` counts the filter and ignores the cursor.
 - [ ] `sort=owner` returns `422` `/problems/validation-failed`.
 - [ ] A cursor replayed under a different filter returns `422`, never a wrong page.
-- [ ] A non-admin requesting another user's task id receives `404` `/problems/not-found`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

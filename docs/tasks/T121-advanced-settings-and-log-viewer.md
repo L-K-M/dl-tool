@@ -44,7 +44,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/locales/en/settings.json` | edit | Advanced labels, the reset warning and the log-viewer strings. |
 
 No other file may be modified. `LogViewer` shares the module because nothing else imports it and both
-screens are admin-only readers of the same endpoint group.
+screens read the same endpoint group.
 
 ## Interface contract
 
@@ -64,7 +64,6 @@ export const SETTINGS_DEFAULTS = {
   schedule_enabled: false,
   max_active_total: 5,
   max_active_per_engine: 3,
-  max_active_per_user: 3,
   process_order: 'by_date_created',
   rss_enabled: true,
   rss_interval_s: 1800,
@@ -176,7 +175,7 @@ input; the database path and size come from `GET /system/info`.
       `input`, `select` or `textarea`.
 - [ ] `TestLogViewerPagesWithCursor` asserts the second request carries the first response's `next_cursor`
       and that records render newest first.
-- [ ] `TestLogViewerEmptyAndForbidden` asserts `Nothing logged yet.` for an empty page and the admin-only
+- [ ] `TestLogViewerEmpty` asserts `Nothing logged yet.` for an empty page and the
       message for a `403`.
 - [ ] The viewer renders `attrs` values verbatim and offers no control that would reveal a redacted value.
 

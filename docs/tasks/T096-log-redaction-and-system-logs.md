@@ -162,7 +162,6 @@ Worked response, admin only:
 - [ ] A non-URL string attribute is returned byte-identical.
 - [ ] The ring never grows past its capacity and returns records newest-first.
 - [ ] `GET /system/logs?level=warn` excludes `info` and `debug` records.
-- [ ] A non-admin receives `403` `/problems/forbidden`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

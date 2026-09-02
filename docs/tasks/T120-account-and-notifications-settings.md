@@ -1,28 +1,28 @@
-# T120 — Build the Users & Auth and Notifications settings sections
+# T120 — Build the Account and Notifications settings sections
 
 | Field | Value |
 |---|---|
 | **ID** | T120 |
 | **Milestone** | M6 |
 | **Status** | todo |
-| **Depends on** | T053, T084, T086, T106 |
+| **Depends on** | T053, T084, T106 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `SettingsScreen.tsx` and `settings.json`, shared with T116–T119 and T121 |
-| **Implements** | — (renders [FR-104](../02-requirements.md#fr-104-send-notifications-and-offer-a-per-channel-test) covered by T077, [FR-107](../02-requirements.md#fr-107-manage-notification-channels) covered by T106, [FR-117](../02-requirements.md#fr-117-issue-and-revoke-api-tokens) and [FR-118](../02-requirements.md#fr-118-restrict-administrative-endpoints-to-admins) covered by T084, [FR-120](../02-requirements.md#fr-120-apply-a-per-user-default-destination) covered by T086, [FR-121](../02-requirements.md#fr-121-enforce-the-per-user-storage-quota) covered by T085) |
+| **Implements** | — (renders [FR-104](../02-requirements.md#fr-104-send-notifications-and-offer-a-per-channel-test) covered by T077, [FR-107](../02-requirements.md#fr-107-manage-notification-channels) covered by T106, and [FR-117](../02-requirements.md#fr-117-issue-and-revoke-api-tokens) covered by T084) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |
 | **Est. size** | 3 new files, ~400 LOC |
 
 ## Goal
-`/settings/users` manages users, their quota and default destination, and issues API tokens whose secret is
-shown exactly once and never again. `/settings/notifications` renders the per-event × per-channel matrix
+`/settings/account` changes the operator's password and issues API tokens whose secret is shown exactly
+once and never again. `/settings/notifications` renders the per-event × per-channel matrix
 whose `Send test` shows the raw upstream status line and body.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/09-web-ui-spec.md` §9 Settings screens](../09-web-ui-spec.md#9-settings-screens) — the
-   **Users & Auth** and **Notifications** rows, and the dirty-bar rule.
-2. [`docs/05-api-contract.md` §12 Users and API tokens](../05-api-contract.md#12-users-and-api-tokens) — the
-   user object, the create-only `token` member, and every status code.
+   **Account** and **Notifications** rows, and the dirty-bar rule.
+2. [`docs/05-api-contract.md` §12 The account and API tokens](../05-api-contract.md#12-the-account-and-api-tokens)
+   — the account object, the `current_password` rule, the create-only `token` member, and every status code.
 3. [`docs/05-api-contract.md` §14 Notification channels](../05-api-contract.md#14-notification-channels) — the
    channel object, `secret_set`, the immutable `kind` and `event_mask`.
 4. [`docs/05-api-contract.md` §14.1 `POST /notifications/{id}/test`](../05-api-contract.md#141-post-notificationsidtest)
@@ -38,10 +38,10 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
-| `web/src/components/Settings/UsersSection.tsx` | create | Users table, password change, session-lifetime note and API tokens. |
+| `web/src/components/Settings/AccountSection.tsx` | create | Password change, session-lifetime note and API tokens. |
 | `web/src/components/Settings/NotificationsSection.tsx` | create | Channel list, the event × channel matrix and `Send test`. |
-| `web/src/components/Settings/UsersSection.test.tsx` | create | Both sections: reveal-once, CRUD, matrix round-trip and raw reply. |
-| `web/src/components/Settings/SettingsScreen.tsx` | edit | Add `users` and `notifications` to `IMPLEMENTED` and render them. |
+| `web/src/components/Settings/AccountSection.test.tsx` | create | Both sections: reveal-once, password change, matrix round-trip and raw reply. |
+| `web/src/components/Settings/SettingsScreen.tsx` | edit | Add `account` and `notifications` to `IMPLEMENTED` and render them. |
 | `web/src/locales/en/settings.json` | edit | Labels, column headers, the reveal warning and the event names. |
 
 No other file may be modified.
@@ -49,19 +49,25 @@ No other file may be modified.
 ## Interface contract
 
 ```tsx
-// web/src/components/Settings/UsersSection.tsx
+// web/src/components/Settings/AccountSection.tsx
 
-/** One row of GET /users, doc 05 §12. There is no password member in any read shape. */
-export interface UserRow {
+/** GET /account, doc 05 §12. There is no password member in any read shape. */
+export interface Account {
   id: string;                          // usr_ + ULID
   username: string;
-  role: 'admin' | 'user';
   enabled: boolean;
-  default_destination: string | null;  // doubles as the user's filesystem jail
-  quota_bytes: number;                 // STORAGE quota in bytes, 0 = unlimited
   locale: string;
   last_login_at: string | null;
   created_at: string;
+}
+
+/** PATCH /account. `current_password` is required whenever `password` is present, and the call revokes
+ *  every session except the caller's. API tokens are unaffected. */
+export interface AccountPatch {
+  username?: string;
+  locale?: string;
+  password?: string;                   // minimum 12 characters
+  current_password?: string;
 }
 
 /** One row of GET /api-tokens. Never carries the secret. */
@@ -83,21 +89,20 @@ export interface TokenRevealProps {
 }
 export function TokenRevealDialog(props: TokenRevealProps): JSX.Element;
 
-export function UsersSection(): JSX.Element;
+export function AccountSection(): JSX.Element;
 ```
 
-Users table columns and their writes:
+Account fields and their writes. dl-tool has one account
+([ADR-0019](../decisions/0019-single-account-no-ownership.md)), so there is no user table, no role column
+and no delete:
 
-| Column | Write |
+| Field | Write |
 |---|---|
-| Username, Role, Enabled | `POST /users`, `PATCH /users/{id}` |
-| Default destination | `PATCH /users/{id}`, path chosen through `FolderBrowserDialog` |
-| Quota | `PATCH /users/{id}` `quota_bytes`, in bytes, `0` = unlimited |
-| Password | `PATCH /users/{id}` `password`, minimum 12 characters |
-| — | `DELETE /users/{id}` |
+| Username, Locale | `PATCH /account` |
+| Password | `PATCH /account` with `password` and `current_password`, minimum 12 characters |
 
-`403 /problems/forbidden` on a delete or a disable is the **last enabled admin** rule and renders as a
-field-level message, not a generic toast. `409 /problems/conflict` is a duplicate username.
+`403 /problems/forbidden` means `current_password` did not match, and renders as a field-level message on
+that input, not a generic toast. `422` is a password shorter than 12 characters.
 
 **Session lifetime is not editable.** `DLTOOL_SESSION_TTL` is an `infrastructure` variable
 ([`11-config-reference.md` §1](../11-config-reference.md#1-precedence-rule)), no endpoint returns its value,
@@ -160,10 +165,10 @@ export function NotificationsSection(): JSX.Element;
 1. Edit `web/src/locales/en/settings.json`: add a `users` subtree (column headers, the quota hint
    `0 means unlimited`, the password rule, the session-lifetime sentence, the reveal warning) and a
    `notifications` subtree with one label per `NOTIFIABLE_EVENTS` entry plus the four channel kinds.
-2. Create `UsersSection.tsx` listing `GET /users` through the T014 `api` client, with Add, Edit, Delete and
-   Change password dialogs against `/users`.
+2. Create `AccountSection.tsx` reading `GET /account` through the T014 `api` client, with a Change-password
+   form that sends `password` and `current_password` to `PATCH /account`.
 3. Bind the default-destination field to `FolderBrowserDialog` and the quota field to bytes; state beside
-   the quota that it is a storage quota, not a task count, and that `max_active_per_user` is a different
+   the token that its secret is shown once and is not recoverable, and that revocation is a different
    setting on the Connection section.
 4. Render the session-lifetime row as static text with the `DLTOOL_SESSION_TTL` sentence and no input.
 5. Build the API-token panel: `GET /api-tokens` listing name, prefix, last used, expires; `POST /api-tokens`
@@ -187,7 +192,7 @@ export function NotificationsSection(): JSX.Element;
       appears in no later render, in no `GET /api-tokens` row and in no storage write.
 - [ ] `TestLastAdminForbiddenRendersInline` asserts a `403 /problems/forbidden` on delete renders the
       last-admin message on the row, not a generic toast.
-- [ ] `TestQuotaIsBytesAndZeroIsUnlimited` asserts the `PATCH /users/{id}` body carries `quota_bytes` in
+- [ ] `TestPasswordChangeSendsCurrentPassword` asserts the `PATCH /account` body carries both members in
       bytes and that `0` renders as unlimited.
 - [ ] `TestMatrixRoundTripsUnknownCode` asserts a stored `event_mask` entry outside `NOTIFIABLE_EVENTS`
       survives a save unchanged.
@@ -218,8 +223,7 @@ of these files are new and `git diff --name-only` never lists an untracked file.
 - Do NOT add an input for session lifetime, engine credentials or any other `infrastructure` variable of
   [`11-config-reference.md` §2](../11-config-reference.md#2-dltool_-variables-application); the environment
   wins at boot and no API can change it.
-- Do NOT put `max_active_per_user` on a user row. It is a global setting key and belongs to the Connection
-  section, per [`05-api-contract.md` §12](../05-api-contract.md#12-users-and-api-tokens).
+  section, per [`05-api-contract.md` §12](../05-api-contract.md#12-the-account-and-api-tokens).
 - Do NOT parse, reformat or truncate the `Send test` body; a raw reply that is not raw is useless.
 - Do NOT build the Downloads, BitTorrent, Bandwidth or Advanced sections; **T118**, **T119** and **T121** own
   them.

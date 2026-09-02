@@ -69,7 +69,7 @@ third-party code, no compatibility façade. See [`01-vision-and-scope.md`](01-vi
 ## 4. Solution Strategy
 
 **Control-plane thesis (D1).** dl-tool implements the layer no engine ships: one queue spanning
-HTTP/FTP/SFTP, BitTorrent and media-site URLs; multi-user ownership with per-user destinations and quotas; a
+HTTP/FTP/SFTP, BitTorrent and media-site URLs; a
 server-side destination browser; pluggable search as a user feature; and a global bandwidth governor with a
 24×7 schedule that fans out to every engine. Transferring bytes is delegated to existing daemons.
 
@@ -293,7 +293,6 @@ them itself, and the engines' own queue limits are raised out of the way during 
 |---|---|
 | `max_active_total` | Active tasks across every engine. |
 | `max_active_per_engine` | Active tasks released to one engine. |
-| `max_active_per_user` | Active tasks owned by one user; a concurrency limit, not the storage quota. |
 
 **Seeding never counts toward any of the three.** Values, defaults and their env vars live in
 [`11-config-reference.md`](11-config-reference.md); the columns live in [`04-data-model.md`](04-data-model.md).
@@ -316,10 +315,10 @@ sequenceDiagram
     Note over TICK,DB: seeding tasks are excluded from all three counts,<br/>so a full seed list cannot starve new downloads
 ```
 
-- Without dl-tool-side admission, `process_order` (by-date or by-user round-robin) is meaningless: every
-  task would start at once because each engine only sees its own share of the queue.
-- Concurrency exhaustion is the error code `concurrency_limit`, distinct from the storage-quota code
-  `quota_exceeded`.
+- Without dl-tool-side admission, creation order is meaningless: every task would start at once because
+  each engine only sees its own share of the queue.
+- Concurrency exhaustion is the error code `concurrency_limit`, distinct from the disk-space code
+  `disk_full`.
 - A task held back by a limit stays `queued`; it is never rejected at creation time for concurrency alone.
 
 <!-- INFERRED: the counted set is "released to an engine and not yet completed, error, paused or removed";

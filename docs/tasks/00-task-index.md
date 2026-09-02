@@ -30,6 +30,9 @@ unblocked task without reading all of them. It does not restate any task's conte
 | T102 | Foreign-task policy — withdrawn; dl-tool ignores tasks it did not create ([ADR-0017](../decisions/0017-exclusive-control-of-engines.md)). |
 | T112 | Façade authentication mapping — withdrawn with the compatibility façades. |
 | T114 | Migration importers — withdrawn with the migration subsystem. |
+| T085 | Ownership filtering and the storage quota — withdrawn with the multi-user model ([ADR-0019](../decisions/0019-single-account-no-ownership.md)). |
+| T086 | User management and per-user default destinations — withdrawn with the multi-user model. |
+| T109 | The per-user root jail — withdrawn with the multi-user model. The `DLTOOL_DATA_ROOTS` check it built on remains, in T046 and T047. |
 
 IDs are never reused. `docs/15-*` and ADR 0014 carry the same permanent gap.
 
@@ -187,21 +190,18 @@ Extraction, the bandwidth schedule, watch folders, users and quotas, notificatio
 | [T081](T081-schedule-evaluation-and-alternative-speed.md) | Apply the active schedule cell every minute | T066, T079, T080 | todo |
 | [T082](T082-live-per-task-rate-limits.md) | Apply a per-task rate limit to a running task | T022, T037, T079 | todo |
 | [T083](T083-watch-folder-loader.md) | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | todo |
-| [T084](T084-api-tokens-and-admin-guard.md) | Issue, list and revoke API tokens | T008, T009 | todo |
-| [T085](T085-ownership-filtering-and-quotas.md) | Scope tasks to their owner and enforce the storage quota | T020, T021, T022, T084 | todo |
-| [T086](T086-users-and-default-destinations.md) | Manage users, their default destinations and the process order | T084, T085, T098 | todo |
+| [T084](T084-api-tokens.md) | Issue, list and revoke API tokens | T008, T009 | todo |
 | [T091](T091-database-backup-and-retention.md) | Back up the database on demand and prune on a schedule | T006, T012, T066 | todo |
 | [T092](T092-settings-and-system-info.md) | Serve settings and system info without leaking secrets | T005, T027, T091 | todo |
 | [T106](T106-notification-channel-endpoints.md) | Manage notification channels and test one | T077, T084 | todo |
 | [T107](T107-tag-prefs-and-watch-folder-endpoints.md) | Reach the tag, preference and watch-folder tables over HTTP | T050, T083, T084 | todo |
-| [T108](T108-settings-export-import-and-restore.md) | Export and import portable settings, and restore from the CLI | T080, T086, T106, T107 | todo |
-| [T109](T109-per-user-root-jail.md) | Jail non-admins to their own destination subtree | T046, T047, T085, T086, T107 | todo |
+| [T108](T108-settings-export-import-and-restore.md) | Export and import portable settings, and restore from the CLI | T080, T106, T107 | todo |
 | [T110](T110-bandwidth-precedence-and-dst.md) | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | todo |
-| [T111](T111-delete-data-and-hardlink-safety.md) | Delete downloaded data safely and prove hardlink survival | T023, T076, T085, T109 | todo |
+| [T111](T111-delete-data-and-hardlink-safety.md) | Delete downloaded data safely and prove hardlink survival | T023, T076 | todo |
 | [T117](T117-rss-settings-section.md) | Build the RSS settings section | T053, T065, T066, T068, T092 | todo |
 | [T118](T118-bandwidth-settings-and-schedule-grid.md) | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | todo |
 | [T119](T119-downloads-and-bittorrent-settings.md) | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | todo |
-| [T120](T120-users-auth-and-notifications-settings.md) | Build the Users & Auth and Notifications settings sections | T053, T084, T086, T106 | todo |
+| [T120](T120-account-and-notifications-settings.md) | Build the Account and Notifications settings sections | T053, T084, T106 | todo |
 
 ## M7 — yt-dlp, packaging and release
 
@@ -383,21 +383,18 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T081 | Apply the active schedule cell every minute | T066, T079, T080 | no | todo | [T081](T081-schedule-evaluation-and-alternative-speed.md) |
 | T082 | Apply a per-task rate limit to a running task | T022, T037, T079 | no | todo | [T082](T082-live-per-task-rate-limits.md) |
 | T083 | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | yes | todo | [T083](T083-watch-folder-loader.md) |
-| T084 | Issue, list and revoke API tokens | T008, T009 | yes | todo | [T084](T084-api-tokens-and-admin-guard.md) |
-| T085 | Scope tasks to their owner and enforce the storage quota | T020, T021, T022, T084 | no | todo | [T085](T085-ownership-filtering-and-quotas.md) |
-| T086 | Manage users, their default destinations and the process order | T084, T085, T098 | yes | todo | [T086](T086-users-and-default-destinations.md) |
+| T084 | Issue, list and revoke API tokens | T008, T009 | yes | todo | [T084](T084-api-tokens.md) |
 | T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | todo | [T091](T091-database-backup-and-retention.md) |
 | T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | todo | [T092](T092-settings-and-system-info.md) |
 | T106 | Manage notification channels and test one | T077, T084 | yes | todo | [T106](T106-notification-channel-endpoints.md) |
 | T107 | Reach the tag, preference and watch-folder tables over HTTP | T050, T083, T084 | yes | todo | [T107](T107-tag-prefs-and-watch-folder-endpoints.md) |
-| T108 | Export and import portable settings, and restore from the CLI | T080, T086, T106, T107 | yes | todo | [T108](T108-settings-export-import-and-restore.md) |
-| T109 | Jail non-admins to their own destination subtree | T046, T047, T085, T086, T107 | no | todo | [T109](T109-per-user-root-jail.md) |
+| T108 | Export and import portable settings, and restore from the CLI | T080, T106, T107 | yes | todo | [T108](T108-settings-export-import-and-restore.md) |
 | T110 | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | no | todo | [T110](T110-bandwidth-precedence-and-dst.md) |
-| T111 | Delete downloaded data safely and prove hardlink survival | T023, T076, T085, T109 | no | todo | [T111](T111-delete-data-and-hardlink-safety.md) |
+| T111 | Delete downloaded data safely and prove hardlink survival | T023, T076 | no | todo | [T111](T111-delete-data-and-hardlink-safety.md) |
 | T117 | Build the RSS settings section | T053, T065, T066, T068, T092 | no | todo | [T117](T117-rss-settings-section.md) |
 | T118 | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | no | todo | [T118](T118-bandwidth-settings-and-schedule-grid.md) |
 | T119 | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | no | todo | [T119](T119-downloads-and-bittorrent-settings.md) |
-| T120 | Build the Users & Auth and Notifications settings sections | T053, T084, T086, T106 | no | todo | [T120](T120-users-auth-and-notifications-settings.md) |
+| T120 | Build the Account and Notifications settings sections | T053, T084, T106 | no | todo | [T120](T120-account-and-notifications-settings.md) |
 
 ### M7
 
@@ -431,3 +428,4 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | 2026-09-01 | Added T116–T125; deleted the "Missing tasks" table; moved the image and compose stack into M0 (T124, T125) and rescoped T093 and T094 to hardening; split the SSRF guard out of T054 into T123. |
 | 2026-09-01 | Executability pass: moved T091, T092 and T117 into M6 so no task depends on a later milestone; completed every `Blocks` field against the `Depends on` graph; recorded the M3 settings-section deferral. |
 | 2026-09-01 | Final consistency pass: moved `A note on identifier order` and `Roster` above `Decisions referenced` so the section order matches the document template, and corrected the identifier-order note to place T117 in M6 with T118–T120. |
+| 2026-09-02 | Multi-user model dropped: T085, T086 and T109 deleted and their identifiers retired; T084 rescoped to API tokens alone and T120 to the account section ([ADR-0019](../decisions/0019-single-account-no-ownership.md)). |

@@ -88,7 +88,7 @@ func (h *NotificationHandlers) Delete(ctx context.Context, in *DeleteChannelInpu
 func (h *NotificationHandlers) Test(ctx context.Context, in *TestInput) (*TestOutput, error)
 ```
 
-Enforced rules: every verb is admin-only; `kind` is immutable after creation and a `PATCH` changing it is
+Enforced rules: `kind` is immutable after creation and a `PATCH` changing it is
 `422`; a duplicate `name` is `409` `/problems/conflict`; the `config` key set is fixed per kind by doc 04
 §4.8 and an unknown key is `422`; `event_mask` defaults to `["*"]`; a `config` URL is checked against the
 SSRF guard at save time and again at send time, with a blocked target returning `403`
@@ -98,7 +98,7 @@ SSRF guard at save time and again at send time, with a blocked target returning 
 1. Add the three write queries to `internal/store/settings.go`, storing the secret in `secret_enc` and
    never selecting it into a struct that reaches an API response.
 2. Create `internal/api/notifications.go` with `ChannelView`, `ChannelWriteBody` and the five operations,
-   all guarded by `RequireAdmin` from T084.
+   registered in `internal/api/server.go`.
 3. Validate `config` against the per-kind key set of doc 04 §4.8, rejecting an unknown key with `422` and an
    `errors[].location` naming it.
 4. Implement the three secret behaviours exactly: a new value replaces, `"__redacted__"` leaves unchanged,
@@ -112,7 +112,7 @@ SSRF guard at save time and again at send time, with a blocked target returning 
    false after a `null`; assert `"__redacted__"` leaves the stored value unchanged; assert a mask of
    `["task.completed"]` receives a `completed` event and not an `error` one; assert a `kind` change is `422`;
    assert a duplicate name is `409`; assert `Test` against a `403` stub returns `ok:false` with the stub's
-   status line and body verbatim; assert a non-admin gets `403` from every verb.
+   status line and body verbatim.
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -122,7 +122,6 @@ SSRF guard at save time and again at send time, with a blocked target returning 
 - [ ] A mask holding only `completed` receives a `completed` event and not an `error` one.
 - [ ] Changing `kind` is `422`; a duplicate `name` is `409`.
 - [ ] `POST /notifications/{id}/test` returns the upstream status line and body verbatim.
-- [ ] Every verb is `403` for a non-admin.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
