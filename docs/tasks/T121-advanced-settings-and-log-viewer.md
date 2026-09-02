@@ -67,7 +67,7 @@ export const SETTINGS_DEFAULTS = {
   max_active_per_user: 3,
   process_order: 'by_date_created',
   rss_enabled: true,
-  rss_interval_s: 900,
+  rss_interval_s: 1800,
   auto_extract: false,
   confirm_on_delete: true,
 } as const;

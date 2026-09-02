@@ -138,9 +138,10 @@ Offsets are not supported anywhere; do not add `offset`.
 
 ### 1.5 Identifiers
 
-Prefix plus a 26-character Crockford base32 ULID, e.g. `tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X`. Prefixes: `tsk_`
-task, `usr_` user, `fed_` feed, `rul_` rule, `idx_` indexer, `sch_` search job, `job_` job, `evt_` event,
-`tok_` API token. Categories and tags are addressed by their unique `name`. Engine-side references (aria2
+Prefix plus a 26-character Crockford base32 ULID, e.g. `tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X`. The complete
+prefix allocation, including the `itm_` feed item, `res_` search result, `ntf_` notification channel and
+`wfd_` watch folder prefixes used below, lives in [`04-data-model.md`](04-data-model.md) §1.5 and is not
+restated here. Categories and tags are addressed by their unique `name`. Engine-side references (aria2
 GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never returned.
 
 ### 1.6 Units, timestamps and nulls
@@ -151,7 +152,7 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 | Rates and limits | Integer **bytes per second**; `0` means unlimited, globally and per task. |
 | Durations | Integer **seconds** (`eta_seconds`, `seeding_time_limit`), except `elapsed_ms` on test endpoints. |
 | Timestamps | **RFC 3339** UTC strings ending in `Z`. The database stores Unix milliseconds; conversion happens at the API boundary. |
-| Progress | Float `0.0`–`1.0`, never a percentage. |
+| Progress | Float `0.0`–`1.0`, never a percentage. The single deliberate exception is `unzip_progress`, an integer `0`–`100` mirroring Download Station's own extraction progress, and `null` outside `state = "extracting"`. |
 | Unknown | `null`. Never `-1`, never `0` standing in for unknown, never a fabricated `1`. |
 | Secrets | Absent, or the literal `"__redacted__"` where a field must exist to show a value is set. Sending `"__redacted__"` back in a `PATCH` leaves the stored secret unchanged. |
 
@@ -198,12 +199,16 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 | POST | `/search` | session\|token | Start an asynchronous search job. |
 | GET | `/search/{id}` | session\|token | Poll partial results and per-engine status. |
 | DELETE | `/search/{id}` | session\|token | Discard a search job and its results. |
-| GET·POST·PATCH·DELETE | `/feeds[/{id}]` | session\|token | Feed CRUD. |
+| GET | `/feeds[/{id}]` | session\|token | Feed and item reads — feeds are global. |
+| POST·PATCH·DELETE | `/feeds[/{id}]` | admin | Feed writes; a feed is shared state every rule can see. |
 | POST | `/feeds/{id}/refresh` | session\|token | Force one poll now. |
+| PATCH | `/feeds/{id}/items` | session\|token | Mark items read or unread. |
+| POST | `/feeds/{id}/items/read-all` | session\|token | Mark every item of the feed read. |
 | GET | `/feeds/{id}/items` | session\|token | Items of one feed. |
-| GET·POST·PATCH·DELETE | `/rules[/{id}]` | session\|token | Rule CRUD. |
-| POST | `/rules/test` | session\|token | Dry-run an unsaved rule; explains every item. |
-| POST | `/rules/{id}/run` | session\|token | Apply a saved rule to existing items. |
+| GET | `/rules[/{id}]` | session\|token | Rule reads. |
+| POST·PATCH·DELETE | `/rules[/{id}]` | admin | Rule writes — a rule creates tasks on someone's behalf, the same reason `/watch-folders` is admin (§15). |
+| POST | `/rules/test` | session\|token | Dry-run an unsaved rule; takes an optional `owner_id` (**admins only** — a non-admin tests as themselves) so the jail checks match the rule as it will run. Creates nothing. |
+| POST | `/rules/{id}/run` | admin | Applies a saved rule — it creates tasks as the rule's owner, so it carries the same privilege as a rule write. |
 | GET | `/settings` | session\|token | Read settings, secrets redacted. |
 | PATCH | `/settings` | admin | Partial settings update. |
 | GET | `/settings/schedule` | session\|token | The 24×7 bandwidth grid. |
@@ -266,7 +271,7 @@ carried — partially — by every SSE delta.
 Never present in any Task object: `extract_password`, `ftp_credentials`, `engine_ref`.
 
 ```json
-{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","owner_id":"usr_01JKQ7X1AA0000000000000000","owner_username":"alice",
+{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","owner_id":"usr_01JKQ7X1AA0000000000000000","owner_username":"alice",
  "engine":"qbittorrent","source_kind":"magnet",
  "source_uri":"magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2",
  "infohash_v1":"8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2","infohash_v2":null,
@@ -316,7 +321,10 @@ Set-Cookie: dltool_session=6f1c...; Path=/; HttpOnly; SameSite=Lax
 ```
 
 Statuses: `201` · `401` `/problems/unauthenticated` (wrong token) · `409`
-`/problems/setup-already-complete` · `422` `/problems/validation-failed` (password under 12 characters).
+`/problems/setup-already-complete` · `422` `/problems/validation-failed` (password under 12 characters) ·
+`429` `/problems/rate-limited` — the login throttle of
+[`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.3 covers this endpoint while it is
+callable, because a guessed token mints the admin account.
 
 ### 4.2 `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`
 
@@ -351,10 +359,15 @@ GET /api/v1/tasks?state=active&sort=-download_rate&limit=2
 ```
 
 ```json
-{"items":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","state":"downloading"}],"next_cursor":null,"total":8}
+{"items":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","state":"downloading"}],"next_cursor":null,"total":8}
 ```
 
-`items` entries are full Task objects; the fragment above is abbreviated. Statuses: `200` · `401` · `422`
+`items` entries are full Task objects; the fragment above is abbreviated.
+
+Normal task lists and every sidebar filter omit `removed` tombstones. An explicit `state=removed` query lists
+them; `GET /tasks/{id}` and its event endpoint remain available after removal.
+
+Statuses: `200` · `401` · `422`
 `/problems/validation-failed` (unknown `sort`, `limit` out of range, stale `cursor`).
 
 ### 5.2 `POST /tasks`
@@ -396,8 +409,8 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 ```http
 HTTP/1.1 201 Created
 
-{"created":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","state":"queued","engine":"qbittorrent"},
-            {"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0Y","state":"queued","engine":"aria2"}],
+{"created":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","state":"queued","engine":"qbittorrent"},
+            {"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0Y","state":"queued","engine":"aria2"}],
  "rejected":[{"uri":"ed2k://|file|x|1|AA|/","type":"/problems/unsupported-scheme",
               "detail":"ed2k links are not supported in v1"}]}
 ```
@@ -476,7 +489,7 @@ Partial update; omitted fields are untouched, `null` clears a nullable field.
 | `sequential` | boolean | |
 
 ```http
-PATCH /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X
+PATCH /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X
 X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 
 {"dl_limit":2097152,"category":"linux","sequential":true}
@@ -492,7 +505,7 @@ Query: `delete_data` (boolean, optional, default `false`) also unlinks the downl
 the task `completed` instead of removing it.
 
 ```http
-DELETE /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X?delete_data=true
+DELETE /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X?delete_data=true
 X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 ```
 
@@ -501,29 +514,29 @@ in this order, and never approximate any step:
 
 | # | Step | Rule |
 |---|---|---|
-| 1 | Stop the task at its engine | A `seeding` or `downloading` task is stopped and its engine handle removed **before** any unlink. Never unlink a file an engine still has open. |
-| 2 | Enumerate the targets | Only rows of `task_files` for this task, resolved against `tasks.destination`. Never a glob, never a directory walk, never `content_path` alone. |
-| 3 | Re-check every path, before unlinking any of them | Each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS` **and** inside the caller's jail (§7.2). One failing path aborts the whole request with `403` `/problems/path-rejected` and an `errors[]` entry naming it; nothing at all is unlinked. |
-| 4 | Unlink | One `unlink(2)` per recorded file. Then remove the task's own directory only while it is empty; a non-empty directory is left in place. |
-| 5 | Record it | Write one `task_events` row with `level:"warn"`, `code:"task.data_deleted"` and the file count and byte total in `detail`. The row survives the task row through the cascade window and is written before the response. |
-| 6 | Delete the row | `tasks`, and its `task_files`, `task_trackers` and `task_tags` rows by cascade. |
+| 1 | Enumerate the targets | Only rows of `task_files` for this task, resolved against `tasks.destination`. Never a glob, never a directory walk, never `content_path` alone. |
+| 2 | Validate every target | Before any side effect, each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS` **and** the caller's jail (§7.2). One failure returns `403` `/problems/path-rejected`; the engine and filesystem remain untouched. |
+| 3 | Remove the engine handle | Call `Engine.Remove`, which always instructs the engine to retain payload data. This must finish before any unlink so no file remains open by the engine. |
+| 4 | Unlink through `internal/fsx` | One `unlink(2)` per validated file. Then remove the task's own directory only while empty; leave a non-empty directory in place. Engine adapters never perform this step. |
+| 5 | Record it | In a database transaction write `task.removed`; for `delete_data=true`, also write `task.data_deleted` with the file count and byte total. |
+| 6 | Mark the tombstone | In the same transaction set `state="removed"`, clear `engine_ref`, zero both rates, clear ETA, and commit. Retain the task and all child rows. |
 
 - **Hardlinks are expected and safe.** A file dl-tool downloaded and then hardlinked into a media library is
   one inode with two names; unlinking dl-tool's name leaves the library copy byte-for-byte intact and fully
   readable. This is the normal outcome of the single `/data` mount
   ([ADR-0012](decisions/0012-single-data-mount.md)) and is not a partial deletion — do not warn about it and
   do not try to detect it.
-- `delete_data=false`, the default, unlinks nothing at all: the row goes, every byte stays.
+- `delete_data=false`, the default, skips steps 1, 2 and 4: the retained task enters `removed` and every byte stays.
 - A file recorded in `task_files` that no longer exists is not an error; it is counted in `missing`.
 - The response body reports what happened, so a client never has to guess:
 
 ```json
-{"deleted":true,"delete_data":true,"files_unlinked":3,"bytes_unlinked":5583457280,"missing":0}
+{"removed":true,"delete_data":true,"files_unlinked":3,"bytes_unlinked":5583457280,"missing":0}
 ```
 
 `200` with that body · `404` · `422` `/problems/validation-failed` when both flags are true · `403`
-`/problems/path-rejected` (step 3) · `503` `/problems/engine-unavailable` when step 1 could not be
-completed — the task is **not** deleted and no file is unlinked.
+`/problems/path-rejected` (step 2) · `503` `/problems/engine-unavailable` when step 3 could not be
+completed — the task is **not** removed and no file is unlinked.
 
 ### 5.7 `POST /tasks/actions`
 
@@ -538,12 +551,12 @@ six steps in §5.6 for every id in the batch).
 POST /api/v1/tasks/actions
 X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 
-{"ids":["tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0Z"],"action":"pause"}
+{"ids":["tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0Z"],"action":"pause"}
 ```
 
 ```json
-{"results":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","ok":true},
-            {"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0Z","ok":false,
+{"results":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","ok":true},
+            {"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0Z","ok":false,
              "type":"/problems/engine-unavailable","detail":"aria2 did not answer within 5s"}]}
 ```
 
@@ -573,7 +586,7 @@ qBittorrent WebAPI vocabulary and is applied in the engine adapter, never in the
 `priority:"skip"` are one concept — setting either sets both. Unlisted indices are untouched.
 
 ```http
-PATCH /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X/files
+PATCH /api/v1/tasks/tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X/files
 X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 
 {"files":[{"index":2,"selected":false},{"index":0,"priority":"high"}]}
@@ -641,7 +654,7 @@ API call and no background job may delete such a task; the owner or an admin res
 quota, removing other tasks, or deleting this one deliberately through §5.6.
 
 ```json
-{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","state":"paused","error_code":"quota_exceeded",
+{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","state":"paused","error_code":"quota_exceeded",
  "error_message":"resolved size 5583457280 B exceeds the remaining quota of 1073741824 B",
  "total_bytes":5583457280,"completed_bytes":8388608}
 ```
@@ -663,13 +676,13 @@ retry: 3000
 
 event: sync
 id: 42
-data: {"rid":42,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X":{"progress":0.4137,"download_rate":1048576,"eta_seconds":312}},"tasks_removed":["tsk_01JKQ0AAAA0000000000000000"],"stats":{"speed_down":2097152,"speed_up":131072,"active":3,"queued":11},"seq_gap":false}
+data: {"rid":42,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X":{"progress":0.4137,"download_rate":1048576,"eta_seconds":312}},"tasks_removed":["tsk_01JKQ0AAAA0000000000000000"],"stats":{"speed_down":2097152,"speed_up":131072,"active":3,"queued":11},"seq_gap":false}
 
 : hb
 
 event: sync
 id: 43
-data: {"rid":43,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X":{"state":"completed","progress":1.0,"download_rate":0}},"tasks_removed":[],"stats":{"speed_down":0,"speed_up":131072,"active":2,"queued":11},"seq_gap":false}
+data: {"rid":43,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X":{"state":"completed","progress":1.0,"download_rate":0}},"tasks_removed":[],"stats":{"speed_down":0,"speed_up":131072,"active":2,"queued":11},"seq_gap":false}
 ```
 
 | Field | Type | Always | Meaning |
@@ -686,6 +699,11 @@ data: {"rid":43,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X":{"
 Server rules:
 
 - Keep an in-memory ring buffer of the last **300** deltas keyed by rid (≈5 minutes at 1 Hz).
+- Keep owner ids as internal metadata for every changed or removed task. Before serialization, project the
+  coalesced delta through the authenticated caller: an admin receives all tasks; a non-admin receives only
+  their tasks. Strip the internal metadata from the response.
+- Scope `tasks_removed`, `stats`, and category or tag task counts to the same caller. An id enters
+  `tasks_removed` when a task that was visible to that caller is removed or reassigned away from them.
 - On connect, read the `Last-Event-ID` request header. That header **is** the rid; there is no separate
   client-side bookkeeping.
 - If `Last-Event-ID` is inside the ring, send the coalesced diff from that rid onward. If it is absent,
@@ -708,7 +726,7 @@ in-band — the server closes the connection and `EventSource` reconnects.
 
 Query: `rid` (integer, optional, default `0`) — the last rid the client holds. `0`, or a rid outside the
 ring, forces a full update. The response body is **byte-for-byte the same JSON object** as an SSE `data:`
-payload, delivered as `application/json` with no event framing.
+payload for the same authenticated caller and rid, delivered as `application/json` with no event framing.
 
 ```http
 GET /api/v1/sync?rid=42
@@ -716,7 +734,7 @@ GET /api/v1/sync?rid=42
 
 ```json
 {"rid":43,"full_update":false,
- "tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X":{"state":"completed","progress":1.0}},
+ "tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X":{"state":"completed","progress":1.0}},
  "tasks_removed":[],"stats":{"speed_down":0,"speed_up":131072,"active":2,"queued":11},"seq_gap":false}
 ```
 
@@ -836,15 +854,30 @@ DELETE /tags/{name} → 204
 ```json
 {"id":"idx_01JKQ7...","name":"Internet Archive","kind":"dlsearch","enabled":true,
  "url":null,"api_key_set":false,"definition_id":"internet-archive","definition_source":"bundled",
- "provenance":"shipped with dl-tool","legal_tier":"legitimate","priority":50,"seeders_unknown":true,
+ "provenance":"shipped with dl-tool","legal_tier":"legitimate","priority":50,
+ "allow_private_network":false,"seeders_unknown":true,
  "categories":[{"id":8000,"name":"Other"}],"last_test_at":"2026-09-01T08:12:04Z","last_error":null}
 ```
 
 `api_key_set` is a boolean because the key itself is never returned. `POST /indexers` and
 `PATCH /indexers/{id}` accept `name`, `kind` (`torznab` \| `newznab` \| `dlsearch`), `enabled`, `url`,
-`api_key`, `definition_id`, `priority` and `settings` (per-engine values, schema in
-[`07-search-and-indexers.md`](07-search-and-indexers.md)). Imported indexers are created with
-`enabled: false`.
+`api_key`, `definition_id`, `priority`, `allow_private_network` and `settings` (per-engine values, schema in
+[`07-search-and-indexers.md`](07-search-and-indexers.md)). `allow_private_network` is required for an
+indexer on a private-network address such as a Prowlarr, Jackett or bitmagnet instance on the same host or
+LAN; it lifts the SSRF private-range denial and, for that indexer's configured origin only, the 80/443
+port restriction — a redirect hop to any other host stays limited to 80 and 443
+([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §2.3). A private-network `url` without the
+flag is not rejected at save time; the failure surfaces at probe and search time as `403`
+`/problems/ssrf-blocked` whose `detail` names `allow_private_network` as the remedy, and the import flow of
+[`07-search-and-indexers.md`](07-search-and-indexers.md) §2.7 sets the flag automatically on the rows it
+discovers. Imported indexers are created with `enabled: false`.
+
+**Key-bearing indexers are admin-only.** An indexer with a stored `api_key` is invisible to a non-admin:
+it does not appear in `GET /indexers` or `GET /indexers/categories`, its id in `POST /search` returns
+`404`, and its results never reach a non-admin search job. Private-tracker download URLs and enclosure
+links embed the operator's per-user passkey ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §1
+lists tracker passkeys as an asset); a shared household account must not be able to read one. Keyless
+indexers — the four bundled engines, bitmagnet — stay searchable by every authenticated user.
 
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (non-admin write) · `403`
 `/problems/ssrf-blocked` · `404` · `409` `/problems/conflict` (duplicate `definition_id`) · `422` (unknown
@@ -906,7 +939,7 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 ```http
 HTTP/1.1 202 Accepted
 
-{"id":"sch_01JKQ9Z0YV6M3P0R2S4T6U8W0X"}
+{"id":"sch_01JKQ9Z0YV6M3P0R2S4T6V8W0X"}
 ```
 
 `202` · `422` (empty query, unknown indexer id) · `503` `/problems/engine-unavailable` when no indexer is
@@ -917,7 +950,7 @@ also `title`, `size_bytes`, `leechers`, `published_at`, `indexer`, each reversib
 and `cursor`, which apply to `results` only.
 
 ```json
-{"id":"sch_01JKQ9Z0YV6M3P0R2S4T6U8W0X","query":"ubuntu 26.04","finished":false,"total":42,
+{"id":"sch_01JKQ9Z0YV6M3P0R2S4T6V8W0X","query":"ubuntu 26.04","finished":false,"total":42,
  "engines":[
    {"id":"idx_01JKQ7...","name":"Internet Archive","status":"done","count":42,"error":null},
    {"id":"idx_01JKQ8...","name":"Arch Linux","status":"searching","count":0,"error":null},
@@ -958,14 +991,32 @@ to the job's results. To turn a result into a task, `POST /tasks` with
 
 ```json
 {"id":"fed_01JKQ7...","url":"https://archlinux.org/feeds/releases/","title":"Arch Linux releases",
- "enabled":true,"refresh_interval_s":0,"item_cap":50,"unread_count":3,
+ "enabled":true,"refresh_interval_s":0,"item_cap":50,"priority":0,"unread_count":3,
  "last_fetch_at":"2026-09-01T09:30:00Z","last_success_at":"2026-09-01T09:30:00Z",
  "next_fetch_at":"2026-09-01T10:30:00Z","escalation_level":0,"disabled_till":null,"last_error":null}
 ```
 
 `refresh_interval_s: 0` means "use the global RSS interval". `POST /feeds` requires `url` and accepts
-`title`, `enabled`, `refresh_interval_s`, `item_cap`; `PATCH /feeds/{id}` accepts the same set;
-`DELETE /feeds/{id}` returns `204` and cascades to the feed's items.
+`title`, `enabled`, `refresh_interval_s`, `item_cap`, `priority` and `auto_download`;
+`PATCH /feeds/{id}` accepts the same set. On both verbs `auto_download: true` creates the
+`auto:<feed_id>` rule when it does not exist and `false` deletes it, so a misticked box is undone without
+deleting the feed and its read state; `DELETE /feeds/{id}` returns `204`, deletes the `auto:` rule and
+cascades to the feed's items. `priority` is only the per-run tie-break of the rule engine
+([`08-rss-automation.md`](08-rss-automation.md) §5 step 13): when two feeds carry the same content, the
+lower `priority` feed's copy wins; it affects neither polling nor display.
+
+The add-dialog's *Automatically download all items* checkbox
+([`09-web-ui-spec.md`](09-web-ui-spec.md) §8.1, Download Station's own option) is **not** a `feeds`
+column: `POST /feeds` accepts it as `auto_download` (boolean, default `false`) and, when true, creates an
+enabled rule named `auto:<feed_id>` scoped to that one feed, with an empty `match` block — which passes
+every item ([`08-rss-automation.md`](08-rss-automation.md) §4.2) — and the caller's default destination
+as `action.destination`.
+
+**Credential-bearing feeds are admin-only**, mirroring §9.1's key-bearing-indexer rule: a feed whose URL
+contains userinfo (`https://user:pass@…`) or a `passkey`, `apikey` or `token` query parameter — the same
+patterns the log redactor already matches — is invisible to a non-admin, along with its items, because
+both the URL and the item enclosure links embed the operator's per-user tracker passkey. Non-admins see
+the remaining feeds read-only (§2).
 
 `POST /feeds/{id}/refresh` forces one conditional GET now, bypassing the backoff ladder:
 
@@ -974,6 +1025,27 @@ to the job's results. To turn a result into a task, `POST /tasks` with
 ```
 
 `GET /feeds/{id}/items` is cursor-paginated, newest first, with an optional `unread` (boolean) query.
+`unread_count` on the feed object counts the feed's items with `read = 0`, and the `unread` filter selects
+exactly those rows.
+
+`PATCH /feeds/{id}/items` marks a batch of items read or unread; `POST /feeds/{id}/items/read-all` marks
+every item of the feed read. Both are idempotent.
+
+```http
+PATCH /api/v1/feeds/fed_01JKQ7.../items
+X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
+
+{"ids":["itm_01JKQ8...","itm_01JKQ9..."],"read":true}
+```
+
+```json
+{"updated":2}
+```
+
+`PATCH` body: `ids` (string[], required, 1–500) and `read` (boolean, required). `POST /read-all` takes no
+body. Both return `{"updated":n}`, where `n` counts the rows whose state actually changed; an id that does
+not exist, or belongs to another feed, is silently skipped. Statuses: `200` · `404` · `422` (empty `ids`,
+more than 500).
 
 ```json
 {"items":[{"id":"itm_01JKQ8...","feed_id":"fed_01JKQ7...","title":"archlinux-2026.09.01-x86_64.iso",
@@ -994,10 +1066,30 @@ The rule document's schema, the matching algorithm and the rejection-reason enum
 [`08-rss-automation.md`](08-rss-automation.md); this file fixes only how the document travels over HTTP — it
 is a JSON object in the `definition` member, never a YAML string.
 
-`POST /rules` requires `name` and `definition`; `PATCH /rules/{id}` accepts `name`, `enabled`, `priority`
-and `definition`; `DELETE /rules/{id}` → `204`. A malformed `episode.filter` is rejected **at save time**
+`POST /rules` requires `name` and `definition` and accepts `owner_id` (a `usr_` id, default the calling
+admin); `PATCH /rules/{id}` accepts `name`, `enabled`, `priority`, `owner_id` and `definition`;
+`DELETE /rules/{id}` → `204`. A malformed `episode.filter` is rejected **at save time**
 with `422` and an `errors[]` entry pointing at `body.definition.episode.filter` — never accepted and
 silently ignored at match time.
+
+**Ownership and the jail.** A rule creates tasks on someone's behalf, exactly like a watch folder (§15),
+so writes are admin-only and every rule carries an `owner_id`:
+
+- `action.destination` is validated at save time against the **owner's** jail (§7.2), not merely against
+  the configured roots: a rule may not write outside the subtree its owner could reach by hand. When the
+  member is omitted it resolves to the owner's `users.default_destination`, else the global default — the
+  resolved value, not just the submitted one, must lie inside the owner's jail or the save is `403`
+  `/problems/path-rejected`.
+- The check runs again at grab time on every item, because `PATCH /users/{id}` can move a jail after the
+  rule was saved. `POST /rules/test` takes the same `owner_id` so the dry run's destination checks target
+  the jail the saved rule will actually run under. A non-admin supplying an `owner_id` other than their
+  own is `403` `/problems/forbidden` — a non-admin always tests as themselves, so the dry run cannot
+  probe another user's jail.
+- Tasks a rule creates are owned by `owner_id`, count against that user's storage quota and concurrency
+  limits (§5.11), and appear only in that user's listings — the grabbed item is processed through the
+  ordinary task-creation path, so a quota breach leaves the item ungrabbed with `rule_matches.status =
+  'failed'`, never a task that escapes accounting. A `failed` row is retryable, like a failed hand-off:
+  it does not mark the episode seen, and the item re-enters the candidate set on later runs.
 
 `POST /rules/{id}/run` applies a saved rule to the items already stored:
 
@@ -1078,7 +1170,7 @@ defaults and environment counterparts live in [`11-config-reference.md`](11-conf
 {"download_rate_limit":0,"upload_rate_limit":0,
  "alt_download_rate_limit":5242880,"alt_upload_rate_limit":1048576,
  "schedule_enabled":true,"default_destination":"/data",
- "rss_enabled":true,"rss_interval_s":900,
+ "rss_enabled":true,"rss_interval_s":1800,
  "auto_extract":true,"extract_passwords":"__redacted__",
  "process_order":"by_date_created","confirm_on_delete":true}
 ```
@@ -1153,6 +1245,15 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 Both verbs return `200` with the stored document. `401` · `413` `/problems/payload-too-large` above 64 KiB ·
 `422` `/problems/validation-failed` when the body is not a JSON object.
 
+Saved searches ([FR-057](02-requirements.md#fr-057-save-and-re-run-a-search)) ride in this document
+rather than owning endpoints: the SPA stores them under the `search` member (`{indexerIds, categories,
+saved[]}`), the server stores and returns it verbatim like every unknown member, and re-running is
+`POST /search` with the stored selection. The 50-entry cap is client-enforced (T064's
+`TestFiftyEntryCap`); the server's only bound on the whole document is the 64 KiB cap above. The member's
+shape is owned by [`09-web-ui-spec.md`](09-web-ui-spec.md) §3.3 and built by task T064; no `/search/saved`
+surface exists. Like the rest of `/prefs`, the member is per-user UI state and is **not** part of the
+`GET /settings/export` document (§11.5).
+
 ### 11.5 `GET /settings/export` and `POST /settings/import`
 
 A portable, versioned settings document, so an instance can be rebuilt without carrying a database file
@@ -1182,7 +1283,7 @@ therefore every `password_hash`), `api_tokens`, `notification_channels.secret_en
 ```json
 GET /settings/export →
 {"document_version":1,"exported_at":"2026-09-01T09:45:00Z","schema_version":1,
- "settings":{"download_rate_limit":0,"rss_interval_s":900,"auto_extract":true},
+ "settings":{"download_rate_limit":0,"rss_interval_s":1800,"auto_extract":true},
  "categories":[{"name":"linux","save_path":"/data/iso"}],
  "indexers":[{"name":"Internet Archive","kind":"dlsearch","enabled":true,"url":null,
               "definition_id":"internet-archive","priority":50,"settings":{}}],
@@ -1242,9 +1343,16 @@ independently and report different error codes — see §5.11 and
 [`04-data-model.md`](04-data-model.md). `default_destination` doubles as the user's filesystem jail (§7.2),
 so setting it is what makes a non-admin able to browse and download at all.
 
+`tasks.owner_id` is `ON DELETE RESTRICT` ([`04-data-model.md`](04-data-model.md) §3.1), so
+`DELETE /users/{id}` for a user who still owns tasks is `409` `/problems/conflict` naming the task count;
+the caller deletes or re-assigns the tasks first. A user may always be disabled instead
+(`{"enabled":false}` on `PATCH`), which keeps the rows and revokes access at once.
+
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (caller is not an admin, or the request would
 delete or disable the last enabled admin) · `404` · `409` `/problems/conflict` (username exists,
-case-insensitively) · `422` (short password, unknown role, `default_destination` outside the roots).
+case-insensitively, or the user still owns tasks or rules — both foreign keys are `ON DELETE RESTRICT`,
+so delete or re-assign those rows first) · `422` (short password, unknown role,
+`default_destination` outside the roots).
 
 ```json
 GET /api-tokens →
@@ -1288,7 +1396,7 @@ default `info`, minimum level of `debug` \| `info` \| `warn` \| `error`) · `sin
 
 ```json
 {"items":[{"at":"2026-09-01T09:41:52Z","level":"info","msg":"engine accepted task",
-           "attrs":{"task_id":"tsk_01JKQ8Z9YV6M3P0R2S4T6U8W0X","engine":"qbittorrent",
+           "attrs":{"task_id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","engine":"qbittorrent",
                     "url":"https://indexer.example.org/api?apikey=__redacted__"}}],
  "next_cursor":null,"total":1}
 ```
@@ -1297,7 +1405,7 @@ default `info`, minimum level of `debug` \| `info` \| `warn` \| `error`) · `sin
 `__redacted__` before a record is stored, not at read time.
 
 `POST /system/backup` is admin-only, takes no body, runs `VACUUM INTO` and returns `201`
-`{"path":"/config/backups/dl-tool-20260901T094500Z.db","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}`.
+`{"path":"/config/backups/dl-tool.db.20260901T094500Z.bak","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}`.
 `403` · `409` `/problems/conflict` when a backup is already running · `500` `/problems/internal`.
 
 ### 13.1 Process endpoints outside `/api/v1`
@@ -1438,12 +1546,9 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 
 ## Open questions
 
-- [NEEDS CLARIFICATION: `04-data-model.md` gives `tasks` a single `destination` column, while
-  [FR-044](02-requirements.md#fr-044-report-the-effective-destination) requires the requested and effective
-  destinations to be distinguishable. This file returns both `destination` (effective) and
-  `requested_destination`; the second needs a column, or 04 must say where it is derived from.]
-- [NEEDS CLARIFICATION: [FR-057](02-requirements.md#fr-057-save-and-re-run-a-search) requires saved
-  searches, but the canonical API surface lists no endpoint for them, so no shape is defined here.]
+- (none — the two former items were resolved 2026-09-01: `requested_destination` is a `tasks` column in
+  [`04-data-model.md`](04-data-model.md) §3.3, and saved searches are a `search` member of the `/prefs`
+  document per §11.4, built by T064)
 
 ## Change log
 
@@ -1453,4 +1558,17 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
+| 2026-09-01 | `POST /auth/setup` gains `429 /problems/rate-limited`: the login throttle covers it while it is callable. |
+| 2026-09-01 | Privilege review: rule and feed **writes** are admin-only (a rule creates tasks on someone's behalf, mirroring the watch-folder rule), `POST /rules` gains `owner_id` with save-time and grab-time jail validation of `action.destination`, and rule-grabbed tasks are owned by and quota-accounted to that owner through §5.11. Indexers with a stored API key are admin-only across `GET /indexers`, `GET /indexers/categories` and `POST /search`, because their download URLs embed the operator's tracker passkey. |
+| 2026-09-01 | Review pass: `POST /rules/{id}/run` is admin-only like rule writes (it creates tasks as the owner); `POST /rules/test` takes `owner_id` so dry-run jail checks target the right jail; an omitted `action.destination` resolves to the owner's default destination and the resolved value must pass the jail check; credential-bearing feeds (URL userinfo or `passkey`/`apikey`/`token`) are admin-only like key-bearing indexers; `DELETE /users/{id}` is `409` while the user owns tasks or rules (`ON DELETE RESTRICT`). |
+| 2026-09-01 | Review pass 2: `POST /rules/test`'s `owner_id` is admin-only (a non-admin tests as themselves, so the dry run cannot probe another user's jail or read their resolved default destination). |
+| 2026-09-01 | Review pass 3: the `/rules/test` `owner_id` rejection is spelled out — a non-admin naming anyone but themselves gets `403 /problems/forbidden`. |
+| 2026-09-01 | Contradiction fix: the `POST /system/backup` example path now uses the `dl-tool.db.<UTC>.bak` form owned by `04-data-model.md` §6. |
+| 2026-09-01 | Review pass: the two settings examples carry `rss_interval_s: 1800`, matching the corrected default. |
+| 2026-09-01 | Closed both open questions: `requested_destination` became a `tasks` column, and saved searches are specified as a `search` member of the `/prefs` document (§11.4, task T064) — no `/search/saved` surface. The feed object gains `priority` (the rule engine's per-run tie-break) and `POST /feeds` gains `auto_download`, which creates the `auto:<feed_id>` rule behind the dialog's Download-Station checkbox. `DELETE /users/{id}` for a user who still owns tasks is `409`, matching `ON DELETE RESTRICT`. |
+| 2026-09-01 | Review pass: the users-group `409` enumeration now names the owned-rows case; the saved-search 50-entry cap is stated as client-enforced (the server's bound is the 64 KiB document cap) and `/prefs` is excluded from the settings export; `PATCH /feeds/{id}` accepts `auto_download` so the checkbox is reversible without deleting the feed. |
+| 2026-09-01 | Review pass 2: both feed verbs list `auto_download` explicitly — the earlier "plus" wording read as if `POST /feeds` rejected the field the add dialog sends. |
+| 2026-09-01 | Scoped live task deltas, removals and aggregates to the authenticated caller. |
+| 2026-09-01 | Replaced destructive task-row deletion with retained tombstones and confined filesystem removal. |
+| 2026-09-01 | Aligned the backup API filename with the canonical recovery format. |
 | 2026-09-01 | Security review: specified the environment-only configuration lock and its stable error slug. |
