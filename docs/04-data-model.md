@@ -235,7 +235,9 @@ CREATE TABLE tasks (
   engine TEXT NOT NULL CHECK (engine IN ('aria2','qbittorrent','ytdlp')),
   engine_ref TEXT,                      -- aria2 GID | qBittorrent infohash | yt-dlp job id; NULL until accepted
   source_kind TEXT NOT NULL CHECK (source_kind IN ('http','ftp','sftp','magnet','torrent','metalink','media')),
-  source_uri TEXT, name TEXT NOT NULL,
+  source_uri TEXT,                       -- server-only engine/recovery source; may contain provider credentials
+  source_display_uri TEXT,               -- API-safe; search-result:<res_id> for a grabbed result
+  name TEXT NOT NULL,
   infohash_v1 TEXT,                     -- exactly 40 lowercase hex chars, or NULL
   infohash_v2 TEXT,                     -- exactly 64 lowercase hex chars, or NULL
   state TEXT NOT NULL CHECK (state IN ('queued','downloading','seeding','paused','checking',
@@ -375,6 +377,7 @@ CREATE TABLE search_results (
   id TEXT PRIMARY KEY,
   search_job_id TEXT NOT NULL REFERENCES search_jobs(id) ON DELETE CASCADE,
   indexer_id TEXT NOT NULL REFERENCES indexers(id) ON DELETE CASCADE,
+  -- Provider URLs and magnets are server-only acquisition data; never serialize them.
   title TEXT NOT NULL, download_url TEXT, magnet_uri TEXT, info_hash TEXT, size_bytes INTEGER,
   seeders INTEGER,                      -- NULL when unknown; never -1, never a fabricated 1
   leechers INTEGER,                     -- leechers = peers - seeders when only peers is given
@@ -757,7 +760,7 @@ new table added by a later migration must be added to this list in the same chan
 | `task_events` | `/tasks/{id}/events` |
 | `indexers` | `/indexers`, `/indexers/{id}/test`, `/indexers/import` |
 | `search_jobs` | `/search`, `/search/{id}` |
-| `search_results` | `GET /search/{id}` |
+| `search_results` | metadata through `GET /search/{id}`; acquisition through `POST /tasks` by opaque result id |
 | `feeds` | `/feeds`, `/feeds/{id}/refresh` |
 | `feed_items` | `/feeds/{id}/items` |
 | `rules` | `/rules`, `/rules/{id}/run` |
@@ -801,3 +804,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Added `tasks.requested_destination` (the column behind FR-044 and the Task object's field of the same name in `05-api-contract.md` §3) and `feeds.priority` (the per-run tie-break `08-rss-automation.md` §5 step 13 sorts on). |
 | 2026-09-01 | Made task removal durable and released unique identities held by removed rows. |
 | 2026-09-01 | Made migration backups idempotent and database restore lock-protected and atomic. |
+| 2026-09-01 | Security review: separated server-only acquisition sources from API display references. |

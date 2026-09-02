@@ -488,9 +488,12 @@ The dl-tool search API shall persist a named search consisting of a query, an in
 | T064 | should |
 
 ### FR-058 Create a task from a search result in one click
-When a client adds a search result, dl-tool shall create a task from that result's download URI or magnet, applying the default destination unless the client supplied one.
+When a client adds an owned search result by its opaque ID, dl-tool shall resolve the stored download URI or
+magnet on the server and create a task, applying the default destination unless the client supplied one. Search
+responses shall never expose acquisition URIs, magnets or provider detail URLs.
 
-**Verify:** T063 Playwright test clicks a result's download button and asserts a task row appears in the grid within five seconds.
+**Verify:** T063 seeds a result whose acquisition URL contains `passkey=secret`, asserts no search response or
+task request contains that value, clicks its download button and asserts a task row appears within five seconds.
 
 | Covered by | Priority |
 |---|---|
@@ -1304,3 +1307,4 @@ side effects, then asserts task pause and token revocation still work.
 | 2026-09-01 | Required soft deletion and confined payload removal outside engine adapters. |
 | 2026-09-01 | Required a process lock and staged atomic database restore. |
 | 2026-09-01 | Security review: made the Host allowlist configurable and specified the environment-only configuration lock. |
+| 2026-09-01 | Security review: made search-result acquisition handles server-only. |

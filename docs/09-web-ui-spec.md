@@ -590,6 +590,8 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
   becomes a `✓` linking to the created task. **Download selected ▾** offers exactly two items, matching
   Download Station: *Download immediately* (default destination) and *Download to…* (opens the add dialog
   pre-filled).
+  Both paths submit only `search_result_ids`; the browser never receives, reconstructs or reposts a provider
+  URL or magnet.
 - **Saved searches**: `Save…` captures name, query, indexers and category; saved searches appear under
   Sidebar → Search → Saved Searches with a badge for results new since the last view.
 - **Zero states** are three distinct screens: *No results* (every indexer answered with zero), *All indexers
@@ -959,3 +961,4 @@ The justification record for every choice above. Both tables are evidence, not d
 | 2026-09-01 | Consistency review: corrected the ADR-0006, ADR-0007 and ADR-0009 links to the canonical filenames; dropped the two stale open questions about `/prefs` and `infohash_v1`/`infohash_v2`, both of which `05-api-contract.md` now specifies, and removed the `localStorage` fallback for the grid layout. |
 | 2026-09-01 | Privilege review: the RSS screens are read-only for non-admins (feed and rule writes are admin-only), and the search indexer list notes that key-bearing indexers are absent for non-admins by server rule. |
 | 2026-09-01 | The add-feed dialog's *Automatically download all items* checkbox is now wired: `auto_download` on `POST /feeds` creates the `auto:<feed_id>` rule (`05-api-contract.md` §10.1). |
+| 2026-09-01 | Security review: made search downloads submit opaque result ids only. |

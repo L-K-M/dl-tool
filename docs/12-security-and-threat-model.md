@@ -576,6 +576,15 @@ script element.
   [`10-deployment-and-compose.md`](10-deployment-and-compose.md). Every incident in §7 that was
   exploited at scale involved an internet-exposed web UI.
 
+### 6.8 Provider credential containment
+
+Indexer download URLs, detail URLs and magnets may embed tracker credentials. They stay in server-only search
+and task source fields. `GET /search/{id}` returns metadata and an opaque result id; `POST /tasks` and
+`POST /tasks/inspect` accept that id and resolve it in the task service after checking job ownership. Task
+DTOs derive `source_uri` only from `source_display_uri`, and errors are redacted before storage. This applies
+to admins too: role is not a reason to move a provider secret into a browser
+([FR-058](02-requirements.md#fr-058-create-a-task-from-a-search-result-in-one-click)).
+
 ---
 
 ## 7. The justification record: 23 incidents mapped to requirements
@@ -736,3 +745,4 @@ the repository owner decides.
 | 2026-09-01 | Review pass: failed setup attempts carry their own `auth.setup_failed` event code (a fresh-install takeover attempt is a different signal from password spraying) while the shipped filter still matches both. |
 | 2026-09-01 | Aligned the sub-path base element with CSP without permitting inline scripts. |
 | 2026-09-01 | Security review: bound Host validation and configuration locking to documented environment variables and exact resource scopes. |
+| 2026-09-01 | Security review: contained provider acquisition credentials behind opaque result ids. |

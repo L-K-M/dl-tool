@@ -239,13 +239,13 @@ carried — partially — by every SSE delta.
 | `owner_id`, `owner_username` | string | no | `usr_` + ULID, and the name denormalised for the grid's `user` column. |
 | `engine` | string | no | `aria2` \| `qbittorrent` \| `ytdlp`. |
 | `source_kind` | string | no | `http` \| `ftp` \| `sftp` \| `magnet` \| `torrent` \| `metalink` \| `media`. |
-| `source_uri` | string | yes | Normalised source; embedded credentials are stripped before storage. |
+| `source_uri` | string | yes | Safe display reference. Search-result tasks use `search-result:<res_id>`; provider acquisition data is never returned. |
 | `infohash_v1` | string | yes | 40 lowercase hex characters, or `null`. Base32 magnets are decoded to hex at ingest. |
 | `infohash_v2` | string | yes | 64 lowercase hex characters (BEP 52), or `null`. A hybrid torrent carries both. |
 | `name` | string | no | Display name; editable through `PATCH /tasks/{id}`. |
 | `state` | string | no | `queued` \| `downloading` \| `seeding` \| `paused` \| `checking` \| `extracting` \| `moving` \| `completed` \| `error` \| `removed`. |
 | `error_code` | string | yes | Canonical error-detail enum, set only while `state = "error"`; values in [`04-data-model.md`](04-data-model.md). |
-| `error_message` | string | yes | Raw engine text, for the detail pane. |
+| `error_message` | string | yes | Redacted engine text, for the detail pane; never contains credentials or acquisition URLs. |
 | `destination` | string | no | The destination the server actually resolved. |
 | `requested_destination` | string | yes | What the client asked for, when it differs from `destination`. |
 | `content_path` | string | yes | Absolute path of the finished file or directory; `null` until completion. |
@@ -268,7 +268,7 @@ carried — partially — by every SSE delta.
 | `added_at`, `updated_at` | string | no | RFC 3339. `updated_at` changes on every delta. |
 | `started_at`, `completed_at` | string | yes | RFC 3339. |
 
-Never present in any Task object: `extract_password`, `ftp_credentials`, `engine_ref`.
+Never present in any Task object: `extract_password`, `ftp_credentials`, `engine_ref`, raw acquisition data.
 
 ```json
 {"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","owner_id":"usr_01JKQ7X1AA0000000000000000","owner_username":"alice",
@@ -372,11 +372,12 @@ Statuses: `200` · `401` · `422`
 
 ### 5.2 `POST /tasks`
 
-Create one task per accepted URI or blob.
+Create one task per accepted URI, blob, file part or owned search-result ID.
 
 | Body field | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `uris` | string[] | one of `uris`/`blob`/file parts | `[]` | Maximum 50. `http(s)`, `ftp(s)`, `sftp`, `magnet:`, bare 40-hex or 32-base32 infohash, `thunder://`, `flashget://`, `qqdl://`. `ed2k:` is parsed and rejected. |
+| `uris` | string[] | one of `uris`/`blob`/`search_result_ids`/file parts | `[]` | Maximum 50. `http(s)`, `ftp(s)`, `sftp`, `magnet:`, bare 40-hex or 32-base32 infohash, `thunder://`, `flashget://`, `qqdl://`. `ed2k:` is parsed and rejected. |
+| `search_result_ids` | string[] | see above | `[]` | Maximum 50 opaque `res_` ids from the caller's live search jobs. The server resolves their acquisition data. |
 | `blob` | string | see above | — | Base64 `.torrent` or `.metalink`; maximum 10 MiB decoded. |
 | `filename` | string | no | `null` | Original name of `blob`, for the display name. |
 | `destination` | string | no | user default, else global default | Must resolve inside a configured root. |
@@ -394,6 +395,10 @@ Multipart form: a `payload` part holding the JSON above without `blob`, plus one
 A `file` part is a `.torrent` or `.metalink`, which becomes one task each, or a `.txt` whose every
 non-empty line that does not start with `#` is treated as one entry of `uris` and routed by scheme. Total
 request cap 32 MiB, and the 50-URI cap applies to the lines of a `.txt` as well.
+
+Exactly one source family may be present. For `search_result_ids`, the task service authorises each result
+through its job's `owner_id`, copies the acquisition source into server-only task state and records
+`search-result:<res_id>` as its display source. Provider URLs and magnets never re-enter an API payload.
 
 ```http
 POST /api/v1/tasks
@@ -418,9 +423,13 @@ HTTP/1.1 201 Created
 `created[]` holds full Task objects. Partial success is normal: the response is `201` when at least one task
 was created, even if others were rejected.
 
+A rejected search source carries only `search_result_id`; its `uri` member is absent, and its detail never
+contains provider data. Unknown, expired and another user's result are indistinguishable `not-found` errors.
+
 Statuses: `201` · `403` `/problems/path-rejected` · `403` `/problems/quota-exceeded` · `403`
 `/problems/ssrf-blocked` (see the note below) · `413` `/problems/payload-too-large` · `422` `/problems/validation-failed` (empty
-submission, over 50 URIs, unknown category, `select_files` on an incapable engine) · `422`
+submission, mixed source families, over 50 sources, unknown category, `select_files` on an incapable engine) ·
+`404` `/problems/not-found` when every search-result id is unavailable · `422`
 `/problems/unsupported-scheme` when **every** URI was rejected · `503` `/problems/engine-unavailable`.
 
 `/problems/ssrf-blocked` on this endpoint and on §5.3 arrives late: T020 and T031 land in M1/M2, before
@@ -431,7 +440,7 @@ the status: it is required by
 ### 5.3 `POST /tasks/inspect`
 
 Parse a submission into a manifest so the UI can show the file-selection step. Takes the same `uris`,
-`blob`, `filename` fields and the same multipart form as `POST /tasks`; every other field is ignored.
+`blob`, `filename`, `search_result_ids` fields and multipart form as `POST /tasks`; all else is ignored.
 
 Inspecting **never creates a task**, never writes to `tasks` and never writes to the destination. The only
 engine contact permitted is a metadata-only fetch for `magnet:` submissions, whose temporary engine handle
@@ -462,11 +471,13 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 - `infohash_v2` is populated only for BEP 52 v2 or hybrid torrents; `infohash_v1` is `null` for v2-only.
 - `metadata_pending: true` with `files: null` means magnet metadata did not arrive inside the 60-second
   deadline; the UI then offers "add paused" instead of a file selection.
-- `rejected[]` uses the same `{uri, type, detail}` shape as `POST /tasks`.
+- `source_uri` follows the Task display rule: a search result returns `search-result:<res_id>`, never its
+  provider URL or magnet.
+- `rejected[]` uses the same URI-or-search-result shape as `POST /tasks`.
 
-Statuses: `200` · `403` `/problems/ssrf-blocked` · `413` `/problems/payload-too-large` · `422`
-`/problems/validation-failed` or `/problems/unsupported-scheme` · `503` `/problems/engine-unavailable`
-(magnet metadata needs qBittorrent and it is down).
+Statuses: `200` · `403` `/problems/ssrf-blocked` · `404` `/problems/not-found` · `413`
+`/problems/payload-too-large` · `422` `/problems/validation-failed` or `/problems/unsupported-scheme` ·
+`503` `/problems/engine-unavailable` (magnet metadata needs qBittorrent and it is down).
 
 ### 5.4 `GET /tasks/{id}`
 
@@ -878,6 +889,8 @@ it does not appear in `GET /indexers` or `GET /indexers/categories`, its id in `
 links embed the operator's per-user passkey ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §1
 lists tracker passkeys as an asset); a shared household account must not be able to read one. Keyless
 indexers — the four bundled engines, bitmagnet — stay searchable by every authenticated user.
+Even an admin receives metadata and opaque result ids only; §9.2 never returns provider URLs or magnets.
+Task creation resolves them inside the service.
 
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (non-admin write) · `403`
 `/problems/ssrf-blocked` · `404` · `409` `/problems/conflict` (duplicate `definition_id`) · `422` (unknown
@@ -959,10 +972,9 @@ and `cursor`, which apply to `results` only.
  "results":[
    {"id":"res_01JKQA...","indexer_id":"idx_01JKQ7...","indexer_name":"Internet Archive",
     "title":"ubuntu-26.04-desktop-amd64.iso",
-    "download_url":"https://archive.org/download/ubuntu-26.04/ubuntu-26.04-desktop-amd64.iso.torrent",
-    "magnet_uri":null,"info_hash":"8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2",
+    "info_hash":"8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2",
     "size_bytes":5583457280,"seeders":null,"leechers":null,"grabs":null,
-    "published_at":"2026-08-21T00:00:00Z","details_url":"https://archive.org/details/ubuntu-26.04",
+    "published_at":"2026-08-21T00:00:00Z",
     "category_ids":[4020],"category_desc":"PC/ISO",
     "download_volume_factor":1.0,"upload_volume_factor":1.0,
     "minimum_ratio":null,"minimum_seed_time_seconds":null,
@@ -972,16 +984,18 @@ and `cursor`, which apply to `results` only.
 ```
 
 - `engines[].status` is `queued` \| `searching` \| `done` \| `error`. A failing indexer keeps
-  `status:"error"` with the upstream status and message; the job still finishes.
+  `status:"error"` with the upstream status and redacted message; the job still finishes.
 - A search in which every indexer failed returns `finished:true`, `total:0` and an `engines` array of
   errors — never a bare empty result set.
 - `seeders`, `leechers`, `grabs` and `published_at` are `null` when the source did not supply them; never
   `-1`, never a fabricated `1`. Indexers with `seeders_unknown:true` always report `null`.
 - `leechers` is computed as `peers - seeders` when the source supplies only `peers`.
+- Results contain metadata and an opaque `res_` id only. `download_url`, `magnet_uri` and `details_url`
+  are absent from the response schema for every role.
 
 `200` · `404` (unknown, deleted, or another user's job). `DELETE /search/{id}` → `204` · `404`; it cascades
-to the job's results. To turn a result into a task, `POST /tasks` with
-`uris: [<download_url or magnet_uri>]`.
+to the job's results. To turn results into tasks, `POST /tasks` with
+`search_result_ids: ["res_…"]`.
 
 ---
 
@@ -1572,3 +1586,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Replaced destructive task-row deletion with retained tombstones and confined filesystem removal. |
 | 2026-09-01 | Aligned the backup API filename with the canonical recovery format. |
 | 2026-09-01 | Security review: specified the environment-only configuration lock and its stable error slug. |
+| 2026-09-01 | Security review: replaced client-visible search acquisition URLs with opaque result ids. |
