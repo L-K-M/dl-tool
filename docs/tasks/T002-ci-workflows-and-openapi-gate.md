@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T002 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T001 |
 | **Blocks** | T014, T097 |
 | **Parallel-safe** | yes — touches only `.github/workflows/` and `scripts/gen.sh` |
@@ -141,7 +141,17 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+```text
+$ make doclint && bash -n scripts/gen.sh && echo CI_FILES_OK
+./scripts/doclint.sh
+🔍 2309 Total (in 204ms) 🔗 541 Unique ✅ 2303 OK 🚫 0 Errors 👻 6 Excluded
+
+CI_FILES_OK
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+.github/workflows/ci.yml
+.github/workflows/docs-lint.yml
+scripts/gen.sh
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
