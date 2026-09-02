@@ -45,8 +45,12 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version information",
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s %s\n", version, runtime.Version(), revision())
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s %s\n", version, runtime.Version(), revision()); err != nil {
+				return fmt.Errorf("write version: %w", err)
+			}
+
+			return nil
 		},
 	}
 }

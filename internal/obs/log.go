@@ -15,7 +15,8 @@ func NewLogger(w io.Writer, level, format string) *slog.Logger {
 	options := &slog.HandlerOptions{Level: parseLevel(level)}
 
 	if format == textFormat {
-		return slog.New(tint.NewHandler(w, &tint.Options{Level: options.Level}))
+		// NewTextHandler replaces deprecated NewHandler in tint v1.2.
+		return slog.New(tint.NewTextHandler(w, &tint.Options{Level: options.Level}))
 	}
 
 	return slog.New(slog.NewJSONHandler(w, options))
