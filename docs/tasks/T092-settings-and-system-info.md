@@ -126,7 +126,7 @@ without copying a second contract here.
    least `0`; `min_free_space` a JSON object mapping canonical absolute root paths to integers at least `0`;
    `process_order` equal to `by_date_created`; `default_destination` non-empty and not `"__redacted__"`.
    Each supplied top-level value replaces that key's stored JSON wholesale. A value that cannot decode into
-   its documented type also returns `ErrSettingOutOfRange`.
+   its documented type, or a JSON `null` for any key, returns `ErrSettingOutOfRange`.
 4. Edit `internal/api/settings.go` to add `GetSettings` and `PatchSettings` on the existing
    `SettingsHandlers`. Serialise `extract_passwords` as the literal `"__redacted__"` string, never as an
    array, and never as the empty string.
@@ -143,7 +143,8 @@ without copying a second contract here.
    `"extract_passwords":"__redacted__"` leaving the stored value unchanged; an unknown key returning `422`;
    `rss_interval_s` of `120`, `"rss_interval_s":"300"`, a negative rate limit, a negative `max_active_*`
    value, a negative `min_free_space` value, a relative or non-canonical `min_free_space` key,
-   `"min_free_space":"__redacted__"` and `"default_destination":"__redacted__"` each returning `422`; a
+   `"min_free_space":"__redacted__"`, `"default_destination":"__redacted__"`,
+   `"min_free_space":null` and `"download_rate_limit":null` each returning `422`; a
    `min_free_space` patch replacing its
    stored map wholesale and a patch omitting that key leaving it byte-identical; and a `GET /system/info`
    whose serialised body contains neither configured engine-secret value.
@@ -155,7 +156,8 @@ without copying a second contract here.
 - [ ] `PATCH` with `"__redacted__"` leaves the stored secret byte-identical.
 - [ ] An unknown key, `rss_interval_s=120`, `"rss_interval_s":"300"`, a negative rate limit, a negative
       `max_active_*` value, a negative `min_free_space` value, a relative or non-canonical `min_free_space`
-      key, `"min_free_space":"__redacted__"` and `"default_destination":"__redacted__"` each return `422`.
+      key, `"min_free_space":"__redacted__"`, `"default_destination":"__redacted__"`,
+      `"min_free_space":null` and `"download_rate_limit":null` each return `422`.
 - [ ] A `min_free_space` patch replaces the stored map wholesale; roots omitted from that map are absent
       afterward, while a later top-level patch omitting `min_free_space` leaves the map byte-identical.
 - [ ] `GET /settings` returns the stored `min_free_space` map verbatim (`{}` after T006's initial

@@ -50,7 +50,8 @@ flowchart TD
   F -->|"applied = 0 < embedded"| G
   F -->|"applied = embedded"| H["S6 PRAGMA integrity_check"]
   G --> H["S6 PRAGMA integrity_check"]
-  H --> I["S7 mount and hardlink self-check"]
+  H -->|"exactly one ok row"| I["S7 mount and hardlink self-check"]
+  H -->|"any other result"| X5["exit 1, database integrity error"]
   I --> J["S8 bind listeners, serve /healthz"]
   J --> K["S9 engine capability probe and conformance"]
   K --> L["S10 boot reconciliation"]
@@ -102,10 +103,10 @@ refusal.
 4. On a new database at version `0`, run goose without creating an empty rollback backup.
 5. Only when `0 < applied < embedded`, back up to
    `dl-tool.db.pre-migration-<from>-to-<to>.<UTC>.bak`. `VACUUM INTO` a unique temporary name, integrity-check
-   and fsync it, atomically rename it, then fsync the directory. Any failure exits with `backup_failed` before
-   goose runs.
+   and fsync it, atomically rename it, then fsync the directory and log the final path. Any failure exits with
+   `backup_failed` before goose runs.
 6. Run embedded migrations forward, logging each file and duration.
-7. Run `PRAGMA integrity_check` and publish the result on `GET /system/info`.
+7. Run `PRAGMA integrity_check`; continue only when its result is exactly one row equal to `ok`.
 
 Migration file naming, the mandatory `-- +goose Down` section and the version query live in
 [`04-data-model.md` §5](04-data-model.md#5-schema-migration-policy).
@@ -272,20 +273,24 @@ settings into a fresh instance, the operator still creates the account through t
 1. **Pin.** The shipped compose pins a major tag, `ghcr.io/l-k-m/dl-tool:1`, never `:latest`. Pin the engine
    images too — a floating `lscr.io/linuxserver/qbittorrent:latest` can change the libtorrent version
    underneath a running library.
-2. **Upgrade.** Run `docker compose pull && docker compose up -d`. When a migration is pending, startup takes
-   the unique pre-migration backup from §1.3. Do not prune the previous image until the rollback window has
-   expired and the backup has been tested.
+2. **Upgrade.** Record `database.schema_version` from `GET /system/info`, then run
+   `docker compose pull && docker compose up -d`. Record every final pre-migration backup path logged after
+   this upgrade attempt begins: an automatic restart may produce more than one. After a successful startup,
+   record the new schema version. Do not prune the previous image until the rollback backup has been tested.
 3. **Verify.** `curl -fsS localhost:8091/healthz`, then check `GET /system/info` for the expected `version`
-   and `database.schema_version`.
-4. **Roll back.** Restore the pre-migration backup **and** pin the previous tag. Doing only one of the two
-   fails: an old binary against a new schema stops at `schema_too_new` (§1.3), and a new tag against an old
-   database simply re-migrates.
+   and recorded `database.schema_version`.
+4. **Roll back.** Run `docker compose down` and pin the previous tag. From the paths recorded for this
+   upgrade attempt, restore the first whose `<from>` equals the pre-upgrade schema version; ignore paths from
+   later automatic retries. If there is no such path, do not restore a database: a stale backup would discard
+   later writes. Then start Compose. This rule also covers startup failing before the post-upgrade
+   `GET /system/info` is available.
 
 ```bash
-docker compose stop dl-tool
-docker compose run --rm dl-tool restore \
-  --from /config/backups/dl-tool.db.pre-migration-7-to-8.20260901T030000Z.bak
+docker compose down
 # edit compose.yaml: image: ghcr.io/l-k-m/dl-tool:1.3.7
+# Use the first recorded path whose <from> matches pre-upgrade version 7:
+docker compose run --rm dl-tool restore \
+  --from /config/backups/dl-tool.db.pre-migration-7-to-8.20260901T030000.000000000Z.bak
 docker compose up -d
 ```
 
@@ -419,3 +424,4 @@ deliberate, local operator action.
 | 2026-09-01 | Made migration backup and database restore idempotent, lock-protected and crash-safe. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Single-account cleanup: the restore note says the account rather than the first admin ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Made boot integrity failure fatal and made rollback select the logged backup whose source version matches the recorded pre-upgrade schema, including automatic-restart failures. |

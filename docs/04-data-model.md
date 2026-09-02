@@ -713,8 +713,8 @@ goose.Up(db, "migrations")
 - Only when `0 < applied < embedded` take a `VACUUM INTO` backup before migration. Name it
   `/config/backups/dl-tool.db.pre-migration-<from>-to-<to>.<UTC>.bak`, where `<UTC>` is the backup start time
   converted to UTC and formatted with `20060102T150405.000000000Z`. Write to a unique temporary path in that
-  directory, then
-  atomically rename it. Abort before goose if any backup step fails.
+  directory, then atomically rename it. Abort before goose if any backup step fails. After the rename and
+  directory fsync succeed, log the final path used for rollback.
 
 ```sql
 SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1;
@@ -727,8 +727,9 @@ into a foreign database. No other query error is suppressed. The table name is v
 against goose v3.27.3: `version.go` initializes its package-level table name to
 `goose_db_version`, and the SQLite dialect creates `version_id` as an integer.
 
-- Run `PRAGMA integrity_check;` once per successful `store.Open` invocation at boot, not per pooled
-  connection, including when goose had nothing to apply. Surface the result on `GET /system/info`.
+- Run `PRAGMA integrity_check;` once per `store.Open` invocation at boot, not per pooled connection,
+  including when goose had nothing to apply. Read every result row and fail `Open` unless the result is
+  exactly one row equal to `ok`.
 
 ---
 
@@ -844,4 +845,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-02 | Multi-user model dropped: removed `owner_id` from `tasks`, `rules`, `search_jobs` and `sessions`, their indexes, `users.role`, `users.default_destination`, `users.quota_bytes`, the `max_active_per_user` setting and the `quota_exceeded` error code. `users` now holds exactly one operator row. §4.7 recast as concurrency versus disk space ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | The store now enforces `0700` on the configuration directory and `0600` on the database, its sidecars and every backup, independent of `UMASK`; `VACUUM INTO` creates its target with `O_CREATE\|O_EXCL` at `0600`. |
 | 2026-09-02 | Review pass: added `notification_channels.last_send_at` and `.last_error`, which four consumers already read; removed the orphaned `rules.owner_id` comment block left inside `CREATE TABLE rules` by the multi-user cut, which T006 would otherwise have transcribed into `00001_init.sql`; corrected §4.2's count of the dl-tool `error_code` additions from seven to six. |
-| 2026-09-02 | Made the initial migration executable: corrected the post-account-removal settings count, defined host-independent seed values and stable IDs, supplied the 168-cell insert, kept explanatory prose outside the SQL fence, defined version zero without accepting foreign databases, filtered the version probe to applied rows, pinned integrity-check cadence and the backup timestamp format, and verified goose's version-table name against v3.27.3. |
+| 2026-09-02 | Made the initial migration executable: corrected the post-account-removal settings count, defined host-independent seed values and stable IDs, supplied the 168-cell insert, kept explanatory prose outside the SQL fence, defined version zero without accepting foreign databases, filtered the version probe to applied rows, pinned integrity-check cadence and success, pinned and logged the backup path, and verified goose's version-table name against v3.27.3. |

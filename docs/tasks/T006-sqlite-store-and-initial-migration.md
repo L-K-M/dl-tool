@@ -8,7 +8,7 @@
 | **Depends on** | T004, T005 |
 | **Blocks** | T007, T008, T010, T012, T017, T055, T065, T091 |
 | **Parallel-safe** | yes — touches only `internal/store/` |
-| **Implements** | [NFR-026](../02-requirements.md#nfr-026-store-data-durably-in-one-sqlite-database) |
+| **Implements** | [FR-142](../02-requirements.md#fr-142-produce-consistent-backups), [NFR-026](../02-requirements.md#nfr-026-store-data-durably-in-one-sqlite-database) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
 | **Est. size** | 3 new source files, 1 test file, ~600 LOC — of which ~330 is DDL transcribed verbatim from doc 04 §3. Doc 04 requires the whole schema to be one migration, so this cannot be split. |
 
@@ -116,20 +116,25 @@ func NewID(prefix string) string
 7. Call `goose.SetBaseFS(embedMigrations)` and `goose.SetDialect("sqlite3")`, then read the applied and
    highest embedded versions before backup or migration. Per doc 04 §5, a missing version table or `NULL`
    applied maximum is version `0` only when no schema object except `goose_db_version` or a `sqlite_`
-   internal object exists; refuse every other unrecognised schema and propagate every other query error. The refusal names
-   the offending tables and says to move the foreign file aside. Refuse an applied version above the embedded version. Skip backup for
-   version `0` and when the versions match. Only when `0 < applied < embedded`,
+   internal object exists; refuse every other unrecognised schema and propagate every other query error.
+   The refusal names the offending objects and says to move the foreign file aside. Refuse an applied
+   version above the embedded version. Skip backup for version `0` and when the versions match. Only when
+   `0 < applied < embedded`,
    take the crash-safe `VACUUM INTO` backup specified by doc 04 §5–6, binding the temporary path as a SQL
-   parameter, then abort before goose if any backup step fails. Put this operation in a private helper whose
-   inputs include the from-version, to-version and UTC start time, so the test injects all three.
+   parameter, then abort before goose if any backup step fails. Log the final path after its rename and
+   directory fsync succeed. Put this operation in a private helper whose inputs include the from-version,
+   to-version and UTC start time, so the test injects all three.
 8. Run `goose.Up(db, "migrations")` when migration is needed. Run `PRAGMA integrity_check` after that step
-   on every successful open, including when goose had nothing to apply.
+   on every open, including when goose had nothing to apply. Read every result row and pass them to a private
+   validator taking `dbPath`; return an error naming that path unless the result is exactly one row equal to
+   `ok`.
 9. Write `internal/store/db_test.go` covering: `journal_mode` reads back `wal` and `foreign_keys` reads back
    `1`; a fresh file migrates to version 1 and `bandwidth_schedule` holds 168 rows whose IDs combine the
    documented prefix with a 26-character ULID body and are pairwise distinct, as are the seeded `settings`
    IDs; `Down` then `Up` is clean; a
-   database stamped with version 999 makes `Open` fail with a message naming both versions; a database with
-   an unrelated table and no goose history is refused unchanged with an error naming that table; neither a
+   database stamped with version 999 makes `Open` fail with a message naming both versions; databases with
+   an unrelated table or a standalone view and no goose history are refused unchanged with errors naming
+   those objects; neither a
    nonexistent database nor an existing empty version-0 database produces a backup; the private backup
    operation exercised directly for a synthetic version 1-to-2 transition at the injected UTC time
    `2026-09-01T12:00:00.123456789Z` produces the documented final file and no temporary file; and
@@ -142,16 +147,18 @@ func NewID(prefix string) string
 - [ ] `TestSchemaNewerThanBinaryRefuses` asserts `Open` returns an error naming the applied and the embedded
       version.
 - [ ] `TestNetworkFilesystemRefused` asserts the refusal path is reached for a `nfs` mount entry.
-- [ ] `TestUnrecognisedDatabaseRefused` asserts a database containing an unrelated table and no goose
-      history is refused without changing that table, and the error names it.
+- [ ] `TestUnrecognisedDatabaseRefused` asserts databases containing an unrelated table or a standalone
+      view and no goose history are refused without changing that object, and each error names it.
 - [ ] `TestZeroVersionSkipsBackup` asserts a nonexistent database, an empty file and a database containing
-      only goose version 0 each leave no backup artifact.
+      only goose's initial applied version-0 row each leave no backup artifact.
+- [ ] `TestIntegrityCheckResult` asserts the private validator accepts one `ok` row and rejects zero rows,
+      multiple rows or any non-`ok` row with an error naming the database path.
 - [ ] `TestPreMigrationBackup` exercises the private backup operation with from-version 1, to-version 2 and
       injected time `2026-09-01T12:00:00.123456789Z`; it asserts
       `dl-tool.db.pre-migration-1-to-2.20260901T120000.123456789Z.bak` exists and no temporary file remains.
       It repeats with `2026-09-01T12:00:00Z` and expects
       `dl-tool.db.pre-migration-1-to-2.20260901T120000.000000000Z.bak`, proving fixed-width padding. It must
-      not add an artificial embedded migration.
+      not add an artificial embedded migration. Captured logs name the exact final path after success.
 - [ ] `TestInitialSeedIDs` asserts every seeded ID has its documented prefix, a 26-character ULID body and
       no duplicate within its table; the seeded settings rows are exactly the keys and values documented in
       doc 04 §3.2.
