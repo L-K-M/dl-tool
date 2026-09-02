@@ -595,9 +595,11 @@ following hold. Each is a hard requirement on the implementation.
 3. **Relative asset URLs.** Build the SPA with Vite `base: './'` so `dist/index.html` never emits a
    root-absolute `/assets/…` URL. Do not bake the base in at build time; it is a runtime setting.
 4. **Injected base href.** The server rewrites `index.html` at serve time to carry `<base href="{base}/">`
-   and a `window.__DLTOOL_BASE__ = "{base}"` script tag. The SPA reads that, never `location.pathname`.
-5. **SSE and API URLs derived from the base.** Build them as `new URL(base + '/api/v1/events', document.baseURI)`
-   and `new URL(base + '/api/v1/', document.baseURI)`. Never a hardcoded `/api/v1`.
+   before every URL-bearing element. Validate `base` as a path and HTML-escape it before insertion. Add no
+   inline bootstrap script or global variable; the bundled SPA reads `document.baseURI`.
+5. **SSE and API URLs derived from the base.** Build them as `new URL('api/v1/events', document.baseURI)` and
+   `new URL('api/v1/', document.baseURI)`. The relative argument has no leading slash. Never hardcode
+   `/api/v1` or reconstruct the base from `location.pathname`.
 6. **Cookie `Path` equals the base.** MDN: "If omitted, this attribute defaults to the path component of the
    request URL" — too fragile to rely on. Set it explicitly, with `HttpOnly`, `Secure` and `SameSite=Lax`.
    The cookie name carries a prefix only when the **listener itself** terminates TLS — a static condition
@@ -998,3 +1000,4 @@ document's change log.
 | 2026-09-01 | Consistency review: the disk-space pre-check now holds a candidate in `queued` with `disk_full` instead of rejecting it, matching `03-architecture.md` §6.4 and T099; removed the resolved open question about the ADR-0018 filename slug. |
 | 2026-09-01 | Fixed the fresh-boot engine wiring: both `DLTOOL_*_URL` values now interpolate from `.env` with an empty default (an empty URL disables the lane) instead of being hardcoded, because [`11-config-reference.md`](11-config-reference.md) §8 makes a set URL with missing credentials a fatal `config_missing` — the hardcoded URLs made a fresh `docker compose up -d` crash-loop. The aria2 secret dropped the `:?` form (Compose resolves required variables before profile filtering, so it broke core-only starts) and is enforced by the entrypoint instead. Resolved the M0/M1 profile open question: aria2 stays behind its profile and M1 is verified with `COMPOSE_PROFILES=aria2`. |
 | 2026-09-01 | Review pass: §7.3 item 6 now specifies the cookie prefix pair (`__Host-` at the root, `__Secure-` under a base path) instead of dropping prefixes; the earlier unprefixed wording weakened §12's hardening for no benefit. |
+| 2026-09-01 | Replaced the inline base-path bootstrap with the CSP-compatible document base URL. |

@@ -536,7 +536,7 @@ Sent on every HTML response by `internal/api/server.go`:
 
 ```
 Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;
-  connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self';
+  connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';
   frame-ancestors 'none'
 X-Content-Type-Options: nosniff
 Referrer-Policy: same-origin
@@ -551,6 +551,12 @@ works with no internet access. `Strict-Transport-Security` is sent **only** on r
 over HTTPS — unconditionally it bricks plain-HTTP LAN access. dl-tool never serves downloaded content
 through the app; were that to change, such a route must set `Content-Disposition: attachment`,
 `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`.
+
+`base-uri 'self'` permits the server-injected `<base>` required for sub-path deployment while preventing an
+off-origin base. `DLTOOL_BASE_PATH` is path-only, boot-validated and HTML-escaped before insertion. The
+document contains no inline script; bundled code derives relative API and SSE URLs from `document.baseURI`.
+The sub-path browser test fails on any CSP console violation and asserts that `index.html` has no inline
+script element.
 
 ### 6.7 Open redirects, configuration lock, exposure
 
@@ -723,3 +729,4 @@ the repository owner decides.
 | 2026-09-01 | §6.5 now names the configuration knob (`DLTOOL_ALLOWED_HOSTS`) behind "the names the operator configures". |
 | 2026-09-01 | Setup-token hardening: §6.4 pins the token at 256 bits from `crypto/rand` (base64url), regenerates it on every boot while unused, and puts `POST /auth/setup` behind the §6.3 throttle — a guessed token mints the admin account and there is no account to lock out afterwards. |
 | 2026-09-01 | Review pass: failed setup attempts carry their own `auth.setup_failed` event code (a fresh-install takeover attempt is a different signal from password spraying) while the shipped filter still matches both. |
+| 2026-09-01 | Aligned the sub-path base element with CSP without permitting inline scripts. |
