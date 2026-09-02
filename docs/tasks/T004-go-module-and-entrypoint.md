@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T004 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T001 |
 | **Blocks** | T005, T006, T011, T015, T016, T056, T096, T124 |
 | **Parallel-safe** | no — every later Go task builds on `go.mod` |
@@ -143,7 +143,22 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```text
+$ make build && ./bin/dl-tool version && echo BUILD_OK
+CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X main.version=dev' \
+	-o bin/dl-tool ./cmd/dl-tool
+dev go1.26.0 unknown
+BUILD_OK
+```
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+go.mod
+go.sum
+internal/obs/log.go
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
