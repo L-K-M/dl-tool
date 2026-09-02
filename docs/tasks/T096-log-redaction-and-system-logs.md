@@ -124,7 +124,7 @@ type SystemLogsOutput struct {
 func (h *SystemHandlers) GetSystemLogs(ctx context.Context, in *SystemLogsInput) (*SystemLogsOutput, error)
 ```
 
-Worked response, admin only:
+Worked response:
 
 ```json
 {"items":[{"at":"2026-09-01T09:41:52Z","level":"info","msg":"engine accepted task",
@@ -148,8 +148,8 @@ Worked response, admin only:
    Create the file with mode `0666` so the container umask decides the result.
 7. Edit `internal/obs/log.go`: set `ReplaceAttr: RedactAttr` on the handler options, wrap the handler in
    `NewRecorder(h, 5000)`, and build the writer with `NewLogWriter`.
-8. Edit `internal/api/system.go` to add `GetSystemLogs` reading the recorder, restricted to admins with
-   `403` `/problems/forbidden` otherwise, and edit `internal/api/server.go` to register `get-system-logs`.
+8. Edit `internal/api/system.go` to add `GetSystemLogs` reading the recorder, and edit
+   `internal/api/server.go` to register `get-system-logs`.
 9. Create `internal/obs/logsink_test.go` covering: an `Authorization` attribute; a `Cookie` attribute; a
    `secure.Secret` under the key `engine_password`; an indexer URL with `passkey=`; an FTP URL with
    userinfo; a non-URL string left unchanged; a ring of capacity 3 fed 5 records returning the newest 3; and

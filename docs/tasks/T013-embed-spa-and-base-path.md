@@ -14,7 +14,7 @@
 
 ## Goal
 The Go binary serves the SPA from `//go:embed`ed bytes, rewrites `index.html` at serve time to carry
-`<base href="{base}/">` and `window.__DLTOOL_BASE__`, and falls back to `index.html` for any unknown path
+`<base href="{base}/">`, and falls back to `index.html` for any unknown path
 **inside** the base. A path outside the base is 404, so a misconfigured proxy fails loudly.
 
 ## Context you need
@@ -54,8 +54,12 @@ The rewrite applied to `index.html` on every request, per doc 10 §7.3 rule 4:
 
 ```html
 <base href="{base}/">
-<script>window.__DLTOOL_BASE__ = "{base}";</script>
 ```
+
+That element is the whole mechanism. Doc 10 §7.3 rule 4 forbids an inline bootstrap script or a global
+variable, and the CSP of [`docs/12-security-and-threat-model.md`](../12-security-and-threat-model.md) §6.6
+(`script-src 'self'`) would block one anyway; `base-uri 'self'` is what permits this element. `{base}` is
+HTML-escaped before insertion.
 
 `{base}` is `cfg.BasePath`, or the empty string at the web root, in which case `<base href="/">` is emitted.
 The rewrite happens at serve time. The base path is never baked in at build time; Vite already builds with
@@ -94,13 +98,14 @@ Caching, so a redeploy is picked up without a hard refresh:
    a request to `/anything` while `BasePath=/dl-tool` must be 404.
 8. Write `internal/api/static_test.go` covering: `GET /` returns 200 with `<base href="/">`; with
    `BasePath=/dl-tool`, `GET /dl-tool/` carries `<base href="/dl-tool/">` and
-   `window.__DLTOOL_BASE__ = "/dl-tool"`; `GET /dl-tool/tasks/anything` returns `index.html`;
+   and no inline `<script>` element at all; `GET /dl-tool/tasks/anything` returns `index.html`;
    `GET /tasks` returns 404; `GET /dl-tool/api/v1/system/info` still reaches the API; an `assets/` file
    carries the immutable `Cache-Control` and `index.html` carries `no-cache`; and `POST /dl-tool/` is 405.
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestBaseHrefInjected` passes for both an empty base and `/dl-tool`.
+- [ ] `TestNoInlineScript` asserts the served `index.html` contains no `<script>` element without a `src`.
 - [ ] `TestSPAFallbackInsideBase` returns `index.html` for an unknown path under the base.
 - [ ] `TestOutsideBaseIs404` asserts 404, not a redirect and not the SPA.
 - [ ] `TestAPIRouteNotShadowed` asserts `/api/v1/system/info` still returns JSON.

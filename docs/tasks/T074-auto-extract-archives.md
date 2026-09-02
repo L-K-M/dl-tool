@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T012, T017, T024 |
 | **Blocks** | T075, T076, T077, T078, T119 |
-| **Parallel-safe** | no — it also edits the shared file `internal/store/tasks.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/store/tasks.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-100](../02-requirements.md#fr-100-auto-extract-the-supported-archive-formats), [FR-102](../02-requirements.md#fr-102-report-extraction-state-progress-and-failures), [FR-106](../02-requirements.md#fr-106-remove-completed-tasks-automatically), [NFR-018](../02-requirements.md#nfr-018-extract-archives-safely) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |
 | **Est. size** | 3 new files, ~380 LOC |
@@ -33,6 +33,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/jobs/handlers_extract.go` | create | The three-pass `7zz` recipe and the `extract` job handler. |
 | `internal/jobs/handlers_extract_test.go` | create | Six-format, progress, truncated-archive and zip-slip cases. |
 | `internal/store/tasks.go` | modify | Add `SetExtractProgress` and `SetErrorCode`. |
+| `cmd/dl-tool/main.go` | edit | Construct the `Chain`, register the `extract` handler and hook `OnCompleted`. |
 
 No other file may be modified.
 
@@ -133,11 +134,21 @@ Failure mapping: `ErrWrongPassword` → `extract_failed_wrong_password`; `ErrInv
    `t.TempDir()`; assert each extracts; assert `unzip_progress` advances and ends at `100`; assert a
    truncated archive yields `extract_failed_invalid_archive`; assert a member named `../escape` is rejected
    before any file is written; assert the default of `auto_extract` is `false`.
-10. Run the verification command and paste its output under `## Evidence`.
+10. Edit `cmd/dl-tool/main.go` in `OnStart` to construct `Chain`, call
+    `worker.Register("extract", jobs.NewExtractHandler(st, cfg.SevenzipPath).Handle)` and install
+    `Chain.OnCompleted` as the callback the store fires on a transition into `completed`, so the chain has
+    exactly one call site.
+11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `auto_extract` defaults to `false` and no extraction runs until it is enabled.
+- [ ] `7zz i` against the built runtime image is pasted under `## Evidence`, and the formats asserted below
+      are exactly the ones it lists. If RAR is absent, stop and resolve the open question in
+      [`docs/06-download-engines.md`](../06-download-engines.md#open-questions) rather than weakening this
+      criterion.
 - [ ] One archive of each of `.zip`, `.tar`, `.gz`, `.tgz`, `.rar` and `.7z` extracts successfully.
+- [ ] A `.tgz` yields its contents, not an intermediate `.tar`: 7-Zip decompresses one container per pass,
+      so the handler runs a second pass when the first output is itself an archive.
 - [ ] The task holds `extracting` with `unzip_progress` advancing from `0` to `100`.
 - [ ] A truncated archive sets `error_code` `extract_failed_invalid_archive` and writes nothing.
 - [ ] A `../escape` member is rejected in pass 1; the destination directory is unchanged.

@@ -7,13 +7,13 @@
 | **Status** | todo |
 | **Depends on** | T005, T016, T019, T027 |
 | **Blocks** | T030, T032, T034, T035, T036, T037, T038, T100, T101 |
-| **Parallel-safe** | no — registers the engine in `internal/api/server.go` |
+| **Parallel-safe** | yes — every file it touches is new |
 | **Implements** | the engine half of [FR-005](../02-requirements.md#fr-005-add-tasks-from-an-uploaded-file), [FR-011](../02-requirements.md#fr-011-maintain-the-canonical-task-state-machine), [FR-032](../02-requirements.md#fr-032-propagate-category-and-tags-to-capable-engines) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |
 | **Est. size** | 3 new files, ~430 LOC |
 
 ## Goal
-`qbittorrent.Client` logs in, holds the `SID` cookie, probes the version, normalises every qBittorrent
+`qbittorrent.Client` logs in, holds its session cookie in a cookie jar, probes the version, normalises every qBittorrent
 state, and adds a torrent from a magnet, a `.torrent` URL or raw `.torrent` bytes. It is registered in the
 engine registry under `qbittorrent`.
 
@@ -21,7 +21,7 @@ engine registry under `qbittorrent`.
 Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/06-download-engines.md` §5 qBittorrent adapter](../06-download-engines.md#5-qbittorrent-adapter-internalengineqbittorrent)
 2. [`docs/06-download-engines.md` §5.1 Version probe](../06-download-engines.md#51-version-probe)
-3. [`docs/06-download-engines.md` §5.2 Login and the SID cookie](../06-download-engines.md#52-login-and-the-session-cookie)
+3. [`docs/06-download-engines.md` §5.2 Login and the session cookie](../06-download-engines.md#52-login-and-the-session-cookie)
 4. [`docs/06-download-engines.md` §5.3 `torrents/add`](../06-download-engines.md#53-torrentsadd)
 5. [`docs/06-download-engines.md` §5.5 `torrents/info`](../06-download-engines.md#55-torrentsinfo)
 6. [`docs/06-download-engines.md` §5.6 State normalisation](../06-download-engines.md#56-state-normalisation--reproduce-exactly-accept-both-spellings)
@@ -34,7 +34,6 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/qbittorrent/client.go` | create | Transport, login, version probe, `Add`, `Pause`, `Resume`, `Remove`. |
 | `internal/engine/qbittorrent/map.go` | create | `normaliseState`, `torrentJSON`, `toTaskInfo`. |
 | `internal/engine/qbittorrent/client_test.go` | create | `httptest` cases plus the state-normalisation table test. |
-| `internal/api/server.go` | modify | Construct the client from config and register it in the engine registry. |
 
 No other file may be modified.
 
@@ -69,8 +68,10 @@ func (c *Client) Resume(ctx context.Context, id string) error
 func (c *Client) Remove(ctx context.Context, id string, deleteData bool) error
 
 // login posts username and password as application/x-www-form-urlencoded to auth/login with a Referer
-// matching the request's own Host. Success is the presence of a Set-Cookie: SID= header, never the
-// status code: 5.2.x answers 204 and 4.x answers 200 with the body "Ok.".
+// matching the request's own Host. The cookie jar captures the response cookie; never parse, rename or
+// copy it by hand — 5.2.3 names it QBT_SID_<WebUI port>, not SID, and the name is not part of the
+// contract. Login has succeeded only once the jar holds a cookie AND an authenticated GET app/version
+// returns 200; neither the login status nor its body proves the session works (06 §5.2).
 func (c *Client) login(ctx context.Context) error
 
 // do performs one authenticated call, POST when mutating and GET otherwise. It re-logs in and retries
@@ -152,28 +153,35 @@ Declared capabilities, exactly this set and no other: `bittorrent`, `magnet`, `b
    `sequentialDownload`, and `autoTMM=false` explicitly.
 8. Send **both** spellings of every renamed parameter with the same value — `stopped` and `paused` from
    `req.StartPaused`, `skip_checking` and `seedMode`, `contentLayout` and `root_folder` — because unknown
-   parameters are ignored. Map `415` to a wrapped error naming the invalid torrent.
-9. Resolve the id after adding, because `torrents/add` returns no hash: when the submission carries a
-   known infohash use it directly, otherwise diff the `torrents/info` hash set captured immediately before
-   the add, polling every 200 ms for at most 5 s. Return `"qbittorrent:" + hash`.
+   parameters are ignored. Map the four documented statuses of 06 §5.3: `200` and `202` are decoded as the
+   JSON result, `409` is a wrapped error saying every submission failed, `415` a wrapped error naming the
+   invalid torrent.
+9. Resolve the id from the `added_torrent_ids` of that result (06 §5.3), not from the torrent list. For an
+   immediate single add require exactly one returned id and assert it equals the identity resolved before
+   the add; for a `202` pending add retain the expected identity and let T030 reconcile it when it appears.
+   Return `"qbittorrent:" + hash`. Malformed JSON, inconsistent counts or an unexpected id is a protocol
+   error — never infer success from a 2xx status, and never recover identity by diffing `torrents/info`.
 10. Implement `Pause`, `Resume` and `Remove` on `hashes=`: probe once with the 5.x pair
     `torrents/stop` and `torrents/start`, retry with `torrents/pause` and `torrents/resume` on `404`, and
     cache which pair the daemon answers. `Remove` sends `deleteFiles`.
-11. Create `client_test.go` with an `httptest.Server` covering: login succeeding on `204` with
-    `Set-Cookie: SID=`, login failing on `401`, one `401` mid-session triggering exactly one re-login and
-    retry, the `Referer` header being present, `Add` sending both `stopped` and `paused`, the `404`
-    fallback from `torrents/stop` to `torrents/pause`, and a table test driving every state of 06 §5.6.
-12. Edit `internal/api/server.go` to build the client from `cfg.QBittorrentURL`, `_USERNAME` and
-    `_PASSWORD` and `Register` it beside aria2; skip registration when the URL is empty.
+11. Create `client_test.go` with an `httptest.Server` covering: login succeeding on `204` whose
+    `Set-Cookie` names the cookie `QBT_SID_8080`, login failing on `401`, a `204` that sets no cookie
+    being treated as a failure, one `401` mid-session triggering exactly one re-login and retry, the
+    `Referer` header being present, `Add` sending both `stopped` and `paused`, `Add` returning the id from
+    `added_torrent_ids` and rejecting a body whose counts disagree, the `404` fallback from
+    `torrents/stop` to `torrents/pause`, and a table test driving every state of 06 §5.6.
+12. Register the client nowhere yet: `*Client` does not satisfy `engine.Engine` until T038 adds the last
+    method, so a `Register` call here cannot compile. T038 owns the `internal/api/server.go` edit.
 
 ## Acceptance criteria
-- [ ] Login is judged only by the `Set-Cookie: SID=` header; a `204` response is a success.
+- [ ] Login succeeds only when the jar captured a cookie and an authenticated `GET app/version` returned
+      200; the adapter never names the cookie itself.
+- [ ] `Add` takes its engine reference from `added_torrent_ids` and never from a `torrents/info` diff.
 - [ ] A single `401` mid-session causes exactly one re-login and one retry, never a loop.
 - [ ] `Add` sends `stopped` and `paused` with the same value, and `autoTMM=false`.
 - [ ] `normaliseState` returns the documented value for all 21 spellings and `queued` plus one warning for
       an unknown one.
 - [ ] `Capabilities()` returns exactly the eleven names listed above, sorted and stable.
-- [ ] `Registry.Get("qbittorrent")` returns the client after `NewServer` with a configured URL.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

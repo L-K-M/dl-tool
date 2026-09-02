@@ -22,7 +22,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/05-api-contract.md` §5.6 `DELETE /tasks/{id}`](../05-api-contract.md#56-delete-tasksid)
 2. [`docs/05-api-contract.md` §5.7 `POST /tasks/actions`](../05-api-contract.md#57-post-tasksactions)
 3. [`docs/02-requirements.md` FR-024](../02-requirements.md#fr-024-delete-downloaded-data-safely-and-only-on-request)
-4. [`docs/05-api-contract.md` §7.2 The per-user jail](../05-api-contract.md#72-containment)
+4. [`docs/05-api-contract.md` §7.2 Containment](../05-api-contract.md#72-containment)
 5. [`docs/tasks/T023-remove-task-and-data.md`](T023-remove-task-and-data.md)
 
 ## Files
@@ -32,7 +32,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/fsx/delete_test.go` | create | Hardlink, escape, missing-file and ordering cases. |
 | `internal/api/tasks_delete.go` | modify | Call the executor instead of the inline sequence. |
 | `internal/api/tasks_actions.go` | modify | Run the same executor per id for a bulk `remove`. |
-| `internal/api/tasks_delete_test.go` | modify | Seeding-task, jail and event-row cases. |
+| `internal/api/tasks_delete_test.go` | modify | Seeding-task, containment and event-row cases. |
 
 No other file may be modified.
 
@@ -61,8 +61,8 @@ type Target struct {
 // the caller, in that order, and the caller must not reorder them.
 //
 // Step 3 runs to completion BEFORE any unlink: every target is resolved, symlinks included, and
-// must lie inside jail. One failing target aborts the whole request with ErrPathRejected naming it
-// and NOTHING AT ALL is unlinked.
+// must lie inside one of the configured roots. One failing target aborts the whole request with
+// ErrPathRejected naming it and NOTHING AT ALL is unlinked.
 //
 // Step 4 is one unlink(2) per recorded file, then a single attempt to remove the task's own
 // directory, which succeeds only while it is empty. A non-empty directory is left in place.
@@ -71,7 +71,7 @@ type Target struct {
 // library is one inode with two names, so unlinking dl-tool's name leaves the library copy
 // byte-for-byte intact. This is the normal outcome of the single /data mount. Do not warn about
 // it, do not detect it, and do not refuse the delete because of it.
-func DeleteData(ctx context.Context, jail Jail, taskDir string, targets []Target) (DeleteResult, error)
+func DeleteData(ctx context.Context, roots []string, taskDir string, targets []Target) (DeleteResult, error)
 ```
 
 The caller's obligations, in order, with the failure behaviour that must be tested:
@@ -89,8 +89,8 @@ The caller's obligations, in order, with the failure behaviour that must be test
 
 ## Steps
 1. Create `internal/fsx/delete.go` with `DeleteResult`, `Target` and `DeleteData`.
-2. Implement step 3 as a complete pass over every target before the first unlink, using `Jail.Contains`
-   so the roots check is the same code everywhere.
+2. Implement step 3 as a complete pass over every target before the first unlink, reusing the containment
+   check of `fsx.ResolveDestination` so the roots check is the same code everywhere.
 3. Implement step 4: one `unlink(2)` per target, counting a missing file into `Missing` rather than failing,
    then one `os.Remove` of the task directory that is allowed to fail when the directory is not empty.
 4. Edit `internal/api/tasks_delete.go` to call the executor between its existing step 1 and step 5, deleting
@@ -101,7 +101,7 @@ The caller's obligations, in order, with the failure behaviour that must be test
    aborts with `503` leaving the task and its files intact.
 7. Create `internal/fsx/delete_test.go`: create a file, hardlink it into a second directory, delete through
    the executor and assert the hardlinked copy still opens with its original contents; assert a target
-   resolving outside the jail aborts the whole call with `ErrPathRejected` and unlinks nothing, including
+   resolving outside the roots aborts the whole call with `ErrPathRejected` and unlinks nothing, including
    the valid targets in the same batch; assert a missing recorded file is counted in `Missing`; assert a
    non-empty task directory survives; assert no directory walk or glob is performed by planting an
    unrecorded file in the task directory and asserting it survives.
@@ -112,7 +112,7 @@ The caller's obligations, in order, with the failure behaviour that must be test
 
 ## Acceptance criteria
 - [ ] A hardlinked copy elsewhere opens with its original contents after the delete.
-- [ ] One target outside the roots or the jail aborts the whole request; nothing at all is unlinked.
+- [ ] One target outside the roots aborts the whole request; nothing at all is unlinked.
 - [ ] Only paths recorded in `task_files` are unlinked; an unrecorded file in the same directory survives.
 - [ ] A missing recorded file is counted in `missing` and is not an error.
 - [ ] The engine stop happens before the first unlink; an unreachable engine yields `503` and deletes nothing.
@@ -144,8 +144,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   copy is the intended outcome of the single `/data` mount, not a partial deletion.
 - Do NOT delete a transfer dl-tool did not create, or data it did not record; ADR-0017 leaves them alone.
 - Do NOT remove a non-empty task directory recursively.
-- Do NOT delete anything on `ENOSPC` or on an extraction failure; T099 and T074
-  all pause instead.
+- Do NOT delete anything on `ENOSPC` or on an extraction failure; T099 and T074 both pause instead.
 - Do NOT add a "delete all completed" or "empty trash" endpoint.
 
 ## Forbidden shortcuts

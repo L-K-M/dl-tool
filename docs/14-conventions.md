@@ -89,8 +89,9 @@ vocabulary and every package that can express them uses exactly these names:
 | `ErrNotSupported` | The operation is valid but this implementation lacks the capability; nothing was mutated. |
 
 ```go
-// ErrNotFound is returned when no task with the given id exists.
-var ErrNotFound = errors.New("store: task not found")
+// Illustration only. Each sentinel is declared exactly once, in its package's primary file —
+// this one lives in internal/store/db.go and serves every table in the package.
+var ErrNotFound = errors.New("store: not found")
 
 err := s.db.GetContext(ctx, &t, `SELECT id, state, engine, engine_ref FROM tasks WHERE id = ?`, id)
 if errors.Is(err, sql.ErrNoRows) {
@@ -150,7 +151,7 @@ it from there instead of inventing new key names for the same concept.
 | `request_id` | string | Every record produced during an HTTP request |
 | `task_id` | `tsk_…` | Every record about one task, including engine calls and jobs |
 | `engine` | `aria2` \| `qbittorrent` \| `ytdlp` | Every engine call, poll and conformance check |
-| `user_id` | `usr_…` | Every authenticated request and every ownership decision |
+| `user_id` | `usr_…` | Every authenticated request |
 
 ### 3.2 Levels
 
@@ -218,7 +219,9 @@ segment joined without separators. The last segment is a past-tense outcome — 
 - Never force-push a shared branch — `main`, or any branch with a pull request somebody has reviewed.
   Force-push only your own unreviewed `task/…` branch.
 - Never hand-edit a generated artefact: `api/openapi.json` and `web/src/api/schema.d.ts` are committed as the
-  output of `make gen`. Never commit a secret, a `.env` file, a database file, or anything under `/config`.
+  output of `make gen`; which task must regenerate them is defined by
+  [`13-testing-and-verification.md` §7.1](13-testing-and-verification.md#71-gate-1--generated-artefacts-cannot-drift).
+  Never commit a secret, a `.env` file, a database file, or anything under `/config`.
 
 ## 7. Repository-wide hard rules
 
@@ -270,7 +273,26 @@ Task-local prohibitions belong in the task file's `## Out of scope — do NOT` s
 5. Bundle a definition file under `definitions/engines/` only if the plan lists it; imported definitions
    start disabled.
 
-### 8.3 Add a migration
+### 8.3 Wire a long-lived component
+
+A component that nothing constructs is not implemented, however complete its own package is. `NewX` without
+a call site is the single most common way a task passes its own tests and still ships nothing, so:
+
+1. A task that introduces a constructor, a background goroutine or a job handler **must** name its
+   composition-root call site — `cmd/dl-tool/main.go` or `internal/api/server.go` — in its own `Files`
+   table, and must have a step that calls the constructor, registers the handler or starts the goroutine.
+   There is exactly one instance of each component; a second `New…` call for the same thing is a bug.
+2. That step names who cancels it. Anything started under a context is stopped in `OnStop`.
+3. At least one acceptance criterion observes the component through the composition root, not through its
+   own constructor — "`Registry.Get("aria2")` is true after `NewServer`", not "`NewRegistry` returns a
+   registry".
+4. Collaborators a handler needs and `cfg`/`db` cannot supply are built once at the composition root and
+   passed in as one struct, never rebuilt per call site.
+
+A task that cannot satisfy this because the composition root is not in its `Files` table has found a
+planning error, not a reason to skip the wiring: stop and write it under `## Blocked`.
+
+### 8.4 Add a migration
 
 1. Create `internal/store/migrations/000NN_<change>.sql` with the next five-digit number; never edit an
    applied migration.
@@ -300,3 +322,5 @@ Task-local prohibitions belong in the task file's `## Out of scope — do NOT` s
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Removed `internal/compat/` from the §1 repository layout: there is no compatibility façade and no migration subsystem, so no package owns either. Corrected the ADR-0006 slug to the canonical filename. |
 | 2026-09-01 | Moved adapter construction to the composition root to keep the engine package acyclic. |
+| 2026-09-02 | Single-account cleanup: the `user_id` log field no longer mentions ownership decisions — there are none ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Review pass: added §8.3, wiring a long-lived component — a task that introduces a constructor, goroutine or job handler names its composition-root call site in its own `Files` table. The migration checklist becomes §8.4. |

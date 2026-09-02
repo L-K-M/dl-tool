@@ -105,8 +105,7 @@ func (h *TaskHandlers) ListTaskEvents(ctx context.Context, in *ListTaskEventsInp
    codec used by `ListTasks`.
 3. Create `internal/api/tasks_events.go` with the structs above and the handler, converting `at` from Unix
    milliseconds to an RFC 3339 UTC string at the API boundary.
-4. Return `404` `/problems/not-found` for an unknown task id, and for another user's task when the caller
-   is not an admin.
+4. Return `404` `/problems/not-found` for an unknown task id.
 5. Unmarshal `detail_json` into `Detail`, emitting `null` when the column is `NULL`.
 6. Register the operation in `internal/api/server.go` as `list-task-events`.
 7. Confirm that `store.Transition` writes one row per accepted transition and add the missing emission

@@ -65,13 +65,11 @@ Two credentials, both accepted on every authenticated endpoint. There is no anon
   `GET /auth/me`, and is never set as a cookie.
 - Cookie-authenticated mutation without a matching `X-DLTOOL-CSRF` → `403` `/problems/csrf-token-missing`.
 - Missing or invalid credential → `401` `/problems/unauthenticated`.
-- Non-admins act on their own tasks only; another user's task returns `404`, never `403`. Endpoints marked
-  `admin` in §2 return `403` `/problems/forbidden` to everyone else.
 - While no user row exists, every endpoint except `POST /auth/setup` returns `401`
   `/problems/setup-required`.
 - When `DLTOOL_CONFIG_LOCK=true`, mutations under `/settings`, `/engines`, `/indexers`, `/feeds`,
   `/rules`, `/categories`, `/tags`, `/watch-folders` and `/notifications` return `403`
-  `/problems/config-locked`. Reads and task, user, authentication, token and backup operations remain
+  `/problems/config-locked`. Reads and task, authentication, token and backup operations remain
   available.
 
 ### 1.3 Errors — RFC 9457 `application/problem+json`
@@ -106,7 +104,7 @@ Slug registry. No endpoint may invent a slug outside this table.
 | `/problems/csrf-token-missing` | 403 | Cookie auth on a mutating request without a valid `X-DLTOOL-CSRF`. |
 | `/problems/path-rejected` | 403 | A path resolves outside `DLTOOL_DATA_ROOTS`, or is not writable. |
 | `/problems/ssrf-blocked` | 403 | An outbound URL resolved to a blocked address ([`12-security-and-threat-model.md`](12-security-and-threat-model.md)). |
-| `/problems/not-found` | 404 | Unknown id, or a resource owned by another user. |
+| `/problems/not-found` | 404 | Unknown id. |
 | `/problems/conflict` | 409 | Uniqueness violation (category name, tag name, feed URL, username, channel name, watch-folder path). |
 | `/problems/concurrency-limit` | 409 | A **concurrency** limit (`max_active_total`, `max_active_per_engine`) blocks starting this task now. Task creation never raises it — see §5.11. |
 | `/problems/setup-already-complete` | 409 | `POST /auth/setup` after the first user exists. |
@@ -159,14 +157,15 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 
 ## 2. Endpoint summary
 
-`session|token` means either credential; `admin` additionally requires `role = admin`.
+`session|token` means either credential. dl-tool has one account, so every authenticated caller may
+call every endpoint ([ADR-0019](decisions/0019-single-account-no-ownership.md)).
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/auth/setup` | setup token | Create the first admin; 409 afterwards. |
+| POST | `/auth/setup` | setup token | Create the operator account; 409 afterwards. |
 | POST | `/auth/login` | none | Exchange credentials for a session cookie and CSRF token. |
 | POST | `/auth/logout` | session | Destroy the current session. |
-| GET | `/auth/me` | session\|token | Current user, role and CSRF token. |
+| GET | `/auth/me` | session\|token | The current account and the CSRF token. |
 | GET | `/tasks` | session\|token | List and filter tasks. |
 | POST | `/tasks` | session\|token | Create tasks from URIs, a blob or multipart files. |
 | POST | `/tasks/inspect` | session\|token | Parse a submission into a manifest, creating nothing. |
@@ -184,46 +183,46 @@ GID, qBittorrent infohash, yt-dlp job id) never appear in a URL and are never re
 | GET | `/fs/browse` | session\|token | Directories under a path, jailed to the roots. |
 | POST | `/fs/mkdir` | session\|token | Create one directory. |
 | GET | `/fs/free-space` | session\|token | Free and total bytes for a path. |
-| GET·POST·PATCH·DELETE | `/watch-folders[/{id}]` | admin | Watch-folder CRUD. |
-| POST | `/watch-folders/{id}/scan` | admin | Scan one watch folder now. |
+| GET·POST·PATCH·DELETE | `/watch-folders[/{id}]` | session\|token | Watch-folder CRUD. |
+| POST | `/watch-folders/{id}/scan` | session\|token | Scan one watch folder now. |
 | GET | `/categories` | session\|token | List categories and their save paths. |
-| POST·PATCH·DELETE | `/categories[/{name}]` | admin | Category create, update, delete — per-category default paths are admin-managed. |
+| POST·PATCH·DELETE | `/categories[/{name}]` | session\|token | Category create, update, delete — categories are global and carry a default path. |
 | GET | `/tags` | session\|token | Every tag with its task count. |
-| PATCH·DELETE | `/tags/{name}` | admin | Rename a tag everywhere; detach and delete it. |
+| PATCH·DELETE | `/tags/{name}` | session\|token | Rename a tag everywhere; detach and delete it. |
 | GET | `/indexers` | session\|token | List indexers. |
-| POST·PATCH·DELETE | `/indexers[/{id}]` | admin | Indexer create, update, delete. |
-| POST | `/indexers/{id}/test` | admin | One capability probe, with timing. |
-| POST | `/indexers/import` | admin | Import `.dlsearch.yaml`, `.dlm`, `.py`, or a Torznab URL. |
+| POST·PATCH·DELETE | `/indexers[/{id}]` | session\|token | Indexer create, update, delete. |
+| POST | `/indexers/{id}/test` | session\|token | One capability probe, with timing. |
+| POST | `/indexers/import` | session\|token | Import `.dlsearch.yaml`, `.dlm`, `.py`, or a Torznab URL. |
 | GET | `/indexers/categories` | session\|token | Newznab category tree for the search filter. |
 | POST | `/search` | session\|token | Start an asynchronous search job. |
 | GET | `/search/{id}` | session\|token | Poll partial results and per-engine status. |
 | DELETE | `/search/{id}` | session\|token | Discard a search job and its results. |
 | GET | `/feeds[/{id}]` | session\|token | Feed and item reads — feeds are global. |
-| POST·PATCH·DELETE | `/feeds[/{id}]` | admin | Feed writes; a feed is shared state every rule can see. |
+| POST·PATCH·DELETE | `/feeds[/{id}]` | session\|token | Feed writes; a feed is shared state every rule can see. |
 | POST | `/feeds/{id}/refresh` | session\|token | Force one poll now. |
 | PATCH | `/feeds/{id}/items` | session\|token | Mark items read or unread. |
 | POST | `/feeds/{id}/items/read-all` | session\|token | Mark every item of the feed read. |
 | GET | `/feeds/{id}/items` | session\|token | Items of one feed. |
 | GET | `/rules[/{id}]` | session\|token | Rule reads. |
-| POST·PATCH·DELETE | `/rules[/{id}]` | admin | Rule writes — a rule creates tasks on someone's behalf, the same reason `/watch-folders` is admin (§15). |
+| POST·PATCH·DELETE | `/rules[/{id}]` | session\|token | Rule writes; a rule creates tasks unattended (§15). |
 | POST | `/rules/test` | session\|token | Dry-run an unsaved rule. Creates nothing. |
-| POST | `/rules/{id}/run` | admin | Applies a saved rule — it creates tasks as the rule's owner, so it carries the same privilege as a rule write. |
+| POST | `/rules/{id}/run` | session\|token | Applies a saved rule now, creating tasks. |
 | GET | `/settings` | session\|token | Read settings, secrets redacted. |
-| PATCH | `/settings` | admin | Partial settings update. |
+| PATCH | `/settings` | session\|token | Partial settings update. |
 | GET | `/settings/schedule` | session\|token | The 24×7 bandwidth grid. |
-| PUT | `/settings/schedule` | admin | Replace all 168 cells. |
-| GET·PUT | `/prefs` | session\|token | The caller's server-side UI preference document. |
-| GET | `/settings/export` | admin | Versioned portable settings document. |
-| POST | `/settings/import` | admin | Apply such a document, dry-run first. |
+| PUT | `/settings/schedule` | session\|token | Replace all 168 cells. |
+| GET·PUT | `/prefs` | session\|token | The server-side UI preference document. |
+| GET | `/settings/export` | session\|token | Versioned portable settings document. |
+| POST | `/settings/import` | session\|token | Apply such a document, dry-run first. |
 | GET | `/engines` | session\|token | Engines, capabilities and health. |
-| POST | `/engines/{id}/test` | admin | Connectivity probe against one engine. |
-| GET·POST·PATCH·DELETE | `/notifications[/{id}]` | admin | Notification-channel CRUD. |
-| POST | `/notifications/{id}/test` | admin | Deliver a test event; returns the raw upstream reply. |
+| POST | `/engines/{id}/test` | session\|token | Connectivity probe against one engine. |
+| GET·POST·PATCH·DELETE | `/notifications[/{id}]` | session\|token | Notification-channel CRUD. |
+| POST | `/notifications/{id}/test` | session\|token | Deliver a test event; returns the raw upstream reply. |
 | GET·PATCH | `/account` | session\|token | Read the operator account, or change its password. |
 | GET·POST·DELETE | `/api-tokens[/{id}]` | session\|token | Token list, create, revoke. |
 | GET | `/system/info` | session\|token | Version, engine health, task counts. |
-| GET | `/system/logs` | admin | Recent structured logs, redacted. |
-| POST | `/system/backup` | admin | `VACUUM INTO` a consistent copy. |
+| GET | `/system/logs` | session\|token | Recent structured logs, redacted. |
+| POST | `/system/backup` | session\|token | `VACUUM INTO` a consistent copy. |
 
 ---
 
@@ -295,8 +294,8 @@ requires any field to be present will crash on the first delta.
 
 ### 4.1 `POST /auth/setup`
 
-Create the first admin. Callable only while `users` is empty. The one-time setup token is printed to stdout
-at boot and written to `<config>/setup-token` with mode `0600`; it is deleted on success.
+Create the operator account. Callable only while `users` is empty. The one-time setup token is printed to
+stdout at boot and written to `<config>/setup-token` with mode `0600`; it is deleted on success.
 
 Body: `setup_token` (string, required) · `username` (string, required) · `password` (string, required,
 ≥ 12 characters) · `locale` (string, optional, default `"en"`).
@@ -312,7 +311,7 @@ Content-Type: application/json
 HTTP/1.1 201 Created
 Set-Cookie: dltool_session=6f1c...; Path=/; HttpOnly; SameSite=Lax
 
-{"user":{"id":"usr_01JKQ7X1AA0000000000000000","username":"alice","role":"admin","enabled":true,
+{"user":{"id":"usr_01JKQ7X1AA0000000000000000","username":"alice","enabled":true,
  "locale":"en","last_login_at":null,
  "created_at":"2026-09-01T09:00:00Z"},
  "csrf_token":"K7sB2h1QpVmNc0aZ"}
@@ -322,7 +321,7 @@ Statuses: `201` · `401` `/problems/unauthenticated` (wrong token) · `409`
 `/problems/setup-already-complete` · `422` `/problems/validation-failed` (password under 12 characters) ·
 `429` `/problems/rate-limited` — the login throttle of
 [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.3 covers this endpoint while it is
-callable, because a guessed token mints the admin account.
+callable, because a guessed token mints the operator account.
 
 ### 4.2 `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`
 
@@ -421,7 +420,7 @@ HTTP/1.1 201 Created
 was created, even if others were rejected.
 
 A rejected search source carries only `search_result_id`; its `uri` member is absent, and its detail never
-contains provider data. Unknown, expired and another user's result are indistinguishable `not-found` errors.
+contains provider data. Unknown and expired results are indistinguishable `not-found` errors.
 
 Statuses: `201` · `403` `/problems/path-rejected` · `403`
 `/problems/ssrf-blocked` (see the note below) · `413` `/problems/payload-too-large` · `422` `/problems/validation-failed` (empty
@@ -478,7 +477,7 @@ Statuses: `200` · `403` `/problems/ssrf-blocked` · `404` `/problems/not-found`
 
 ### 5.4 `GET /tasks/{id}`
 
-One Task object. `200` · `404` `/problems/not-found` for an unknown id or another user's task.
+One Task object. `200` · `404` `/problems/not-found` for an unknown id.
 
 ### 5.5 `PATCH /tasks/{id}`
 
@@ -523,7 +522,7 @@ in this order, and never approximate any step:
 | # | Step | Rule |
 |---|---|---|
 | 1 | Enumerate the targets | Only rows of `task_files` for this task, resolved against `tasks.destination`. Never a glob, never a directory walk, never `content_path` alone. |
-| 2 | Validate every target | Before any side effect, each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS` **and** the caller's jail (§7.2). One failure returns `403` `/problems/path-rejected`; the engine and filesystem remain untouched. |
+| 2 | Validate every target | Before any side effect, each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS` (§7.2). One failure returns `403` `/problems/path-rejected`; the engine and filesystem remain untouched. |
 | 3 | Remove the engine handle | Call `Engine.Remove`, which always instructs the engine to retain payload data. This must finish before any unlink so no file remains open by the engine. |
 | 4 | Unlink through `internal/fsx` | One `unlink(2)` per validated file. Then remove the task's own directory only while empty; leave a non-empty directory in place. Engine adapters never perform this step. |
 | 5 | Record it | In a database transaction write `task.removed`; for `delete_data=true`, also write `task.data_deleted` with the file count and byte total. |
@@ -713,8 +712,9 @@ Server rules:
   unparseable or older than the ring, send one message with `full_update: true`, `seq_gap: true` and the
   entire task list.
 - Emit `retry: 3000` on the first message of every connection.
-- Emit a comment line every 15 seconds while idle (`send.Comment("hb")` → the wire bytes `: hb`) so proxies
-  do not time the stream out.
+- Emit a client-observable keep-alive every 15 seconds while idle: the named event `hb` with `data: {}`,
+  preceded by a comment line (`send.Comment("hb")` → the wire bytes `: hb`) so proxies do not time the
+  stream out either. `EventSource` never surfaces a comment, so the comment alone cannot carry liveness.
 - `rid` is monotonic per process and resets to `0` on restart, so the first message after a restart carries
   `full_update: true` and `seq_gap: true`.
 
@@ -967,9 +967,9 @@ and `cursor`, which apply to `results` only.
   `-1`, never a fabricated `1`. Indexers with `seeders_unknown:true` always report `null`.
 - `leechers` is computed as `peers - seeders` when the source supplies only `peers`.
 - Results contain metadata and an opaque `res_` id only. `download_url`, `magnet_uri` and `details_url`
-  are absent from the response schema for every role.
+  are absent from the response schema.
 
-`200` · `404` (unknown, deleted, or another user's job). `DELETE /search/{id}` → `204` · `404`; it cascades
+`200` · `404` (unknown or deleted job). `DELETE /search/{id}` → `204` · `404`; it cascades
 to the job's results. To turn results into tasks, `POST /tasks` with
 `search_result_ids: ["res_…"]`.
 
@@ -1069,9 +1069,9 @@ destination, and the **resolved** value is what must lie inside the roots. The c
 time, because the roots can change under a saved rule.
 
 - Tasks a rule creates go through the ordinary task-creation path and are subject to the same admission
-  limits (§5.11), and appear only in that user's listings — the grabbed item is processed through the
-  control, so a held item is grabbed with `rule_matches.status =
-  'failed'`, never a task that escapes accounting. A `failed` row is retryable, like a failed hand-off:
+  limits (§5.11): the grabbed item passes through that same admission control, so a held item is grabbed
+  with `rule_matches.status = 'failed'`, never a task that escapes accounting. A `failed` row is retryable,
+  like a failed hand-off:
   it does not mark the episode seen, and the item re-enters the candidate set on later runs.
 
 `POST /rules/{id}/run` applies a saved rule to the items already stored:
@@ -1200,12 +1200,12 @@ never returned. `POST /engines/{id}/test` → `200`
 
 ### 11.4 `GET /prefs` and `PUT /prefs`
 
-One server-side preference document per user, so the same account sees the same grid in every browser
+One server-side preference document, so the account sees the same grid in every browser
 ([FR-144](02-requirements.md#fr-144-persist-server-side-ui-preferences)). It is stored as `ui_prefs`
 rows keyed by the document's top-level members; the API travels the whole document.
 
-- `GET /prefs` returns the caller's document, or the server defaults when they have never saved one. It never
-  returns another user's document and takes no `user_id` parameter — the caller's identity is the key.
+- `GET /prefs` returns the stored document, or the server defaults when none has ever been saved. It takes
+  no parameters.
 - `PUT /prefs` **replaces** the document wholesale; there is no `PATCH`. Unknown members are stored verbatim
   and returned unchanged, so the SPA can add a preference without a server change.
 - `version` is an integer the SPA owns and bumps when it migrates its own shape; the server never inspects
@@ -1256,7 +1256,7 @@ backup file is a different operation and belongs to the CLI →
 | `indexers` | `name`, `kind`, `enabled`, `url`, `definition_id`, `priority`, `settings`; never `api_key`. |
 | `feeds` | `url`, `title`, `enabled`, `refresh_interval_s`, `item_cap`. |
 | `rules` | `name`, `enabled`, `priority`, `definition`. |
-| `watch_folders` | `path`, `enabled`, `destination`, `category`, `delete_after_load`, `poll_interval_s`; `owner` as a username. |
+| `watch_folders` | `path`, `enabled`, `destination`, `category`, `delete_after_load`, `poll_interval_s`. |
 | `schedule` | The 168-element `cells` array and `enabled`, exactly as §11.2. |
 
 **Deliberately excluded, in every export, without an option to include them:** `sessions`, `users` (and
@@ -1274,7 +1274,7 @@ GET /settings/export →
            "enabled":true,"refresh_interval_s":0,"item_cap":50}],
  "rules":[{"name":"Linux ISOs","enabled":true,"priority":10,"definition":{}}],
  "watch_folders":[{"path":"/data/watch","enabled":true,"destination":"/data/iso","category":"linux",
-                   "delete_after_load":true,"poll_interval_s":10,"owner":"alice"}],
+                   "delete_after_load":true,"poll_interval_s":10}],
  "schedule":{"enabled":true,"cells":[1,1,1,"…165 more…"]}}
 ```
 
@@ -1299,9 +1299,9 @@ POST /settings/import  {"document":{…},"dry_run":true} → 200
 
 - A `dry_run: true` call is side-effect free and returns exactly the report a committing call would produce.
 - Import is transactional: with `dry_run: false` either every accepted row lands or none does.
-- Paths are re-validated against the importing host's roots and the caller's jail (§7.2); a path that fails
-  is `rejected`, never silently rewritten.
-- `200` · `403` `/problems/forbidden` · `409` `/problems/conflict` when `document_version` is newer than the
+- Paths are re-validated against the importing host's roots (§7.2); a path that fails is `rejected`, never
+  silently rewritten.
+- `200` · `409` `/problems/conflict` when `document_version` is newer than the
   binary understands · `413` · `422` `/problems/validation-failed` for a malformed document, with
   `errors[].location` naming the offending collection and index.
 
@@ -1340,7 +1340,7 @@ POST /api-tokens  {"name":"bookmarklet","expires_at":null} → 201
 ```
 
 The `token` member appears **only** in that creation response: it is never stored in clear text, never
-logged and never returned again. Callers see only their own tokens, admins included.
+logged and never returned again.
 `DELETE /api-tokens/{id}` revokes immediately — the next request carrying it gets `401`.
 
 A bearer token plus `POST /tasks` is the whole integration surface: the documented bookmarklet posts one
@@ -1380,7 +1380,7 @@ default `info`, minimum level of `debug` \| `info` \| `warn` \| `error`) · `sin
 
 `POST /system/backup` takes no body, runs `VACUUM INTO` and returns `201`
 `{"path":"/config/backups/dl-tool.db.20260901T094500Z.bak","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}`.
-`403` · `409` `/problems/conflict` when a backup is already running · `500` `/problems/internal`.
+`409` `/problems/conflict` when a backup is already running · `500` `/problems/internal`.
 
 ### 13.1 Process endpoints outside `/api/v1`
 
@@ -1451,8 +1451,7 @@ POST /notifications/{id}/test → 200
 - `request.url` has its credentials and query secrets redacted; the stored `secret` is never echoed.
 - A test send is not recorded against `event_mask` and writes no `task_events` row.
 
-`200` · `403` `/problems/forbidden` · `403` `/problems/ssrf-blocked` when the target resolves to a blocked
-address · `404`.
+`200` · `403` `/problems/ssrf-blocked` when the target resolves to a blocked address · `404`.
 
 ---
 
@@ -1474,8 +1473,7 @@ GET /watch-folders →
 `delete_after_load` and `poll_interval_s`; `PATCH /watch-folders/{id}` accepts
 the same set; `DELETE /watch-folders/{id}` → `204` and never touches the directory or its contents.
 
-- `path` and `destination` are both resolved and both checked against the roots **and** against the named
-  owner's jail (§7.2): a watch folder may not write outside the subtree the owner could reach by hand.
+- `path` and `destination` are both resolved and both checked against the roots (§7.2).
 - `path` is unique; a second watch folder on the same directory is `409` `/problems/conflict`.
 - Tasks created by a watch folder go through the ordinary task-creation path and are subject to
   concurrency limits (§5.11).
@@ -1498,7 +1496,7 @@ POST /watch-folders/{id}/scan → 200
   `path_rejected`.
 - A disabled watch folder still scans on demand; the scan is what the button does, not the schedule.
 
-Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · `403`
+Statuses across this group: `200`/`201`/`204` · `403`
 `/problems/path-rejected` · `404` · `409` `/problems/conflict` · `422` (unknown category, unknown
 `poll_interval_s` below `1`).
 
@@ -1546,3 +1544,5 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Security review: specified the environment-only configuration lock and its stable error slug. |
 | 2026-09-01 | Security review: replaced client-visible search acquisition URLs with opaque result ids. |
 | 2026-09-02 | Multi-user model dropped: `/users` CRUD replaced by `GET`/`PATCH /account`; `owner_id`/`owner_username` removed from the Task, rule and watch-folder objects and the `owner` list filter; §7.2 recast as root containment only; §5.11 recast as concurrency versus disk space with `/problems/quota-exceeded` retired; every admin-only distinction collapsed, with the indexer-key and feed-credential rules restated as redaction rather than visibility ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Single-account cleanup: the §1.2 ownership and `admin` rules deleted, the §2 `admin` Auth column collapsed to `session\|token`, `/auth/setup` and `/auth/me` restated without `role`, the `not-found`, search-result, task, search-job and `/prefs` texts stripped of "another user", the jail clause dropped from `delete_data`, `/settings/import` and `/watch-folders`, the watch-folder export `owner` member removed, the §10.2 admission sentence repaired, and the now-unreachable `403 /problems/forbidden` dropped from the import, notification-test and watch-folder status lists ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Review pass: the SSE keep-alive is a named `hb` event, not only a comment line — `EventSource` never surfaces a comment, so the comment alone could not carry the liveness rule doc 09 §10.8 builds on. |

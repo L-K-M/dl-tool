@@ -4,13 +4,27 @@
 |---|---|
 | **ID** | T088 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | deferred — see `## Blocked` |
 | **Depends on** | T016, T087 |
-| **Blocks** | T090 |
+| **Blocks** | — (T090 no longer depends on it; see `## Blocked`) |
 | **Parallel-safe** | no — it edits `internal/engine/router.go` |
 | **Implements** | [FR-002](../02-requirements.md#fr-002-route-each-uri-to-an-engine-by-scheme) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |
 | **Est. size** | 3 new files, ~250 LOC |
+
+## Blocked
+**This task is not implementable as written; do not start it.** Its premise is that yt-dlp can be asked to
+print its extractor URL patterns and that those patterns compile with Go's `regexp`. Both were measured
+against the pinned yt-dlp 2026.08.19 and both are false — see
+[`docs/06-download-engines.md` §7.2](../06-download-engines.md#72-routing-check) for the numbers.
+Step 1 ("identify the flag that enumerates extractors") has no answer, and step 4's drop-on-compile-failure
+rule would discard YouTube.
+
+Row 3 of the routing table still needs an offline, cheap answer. Choosing the replacement changes how the
+media lane is routed, so it needs an ADR under [`docs/decisions/`](../decisions/), not an edit here. Until
+that record exists this task stays `deferred` and `MediaMatcher` stays nil, which
+[T016](T016-engine-interface-and-router.md) already defines as "fall through to rows 4-6": a yt-dlp URL is
+then routed to aria2 rather than mis-routed, and nothing else in the plan breaks.
 
 ## Goal
 Row 3 of the routing table answers from a cache built once at start-up: `Accepts(uri)` is a regexp match

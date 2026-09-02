@@ -102,7 +102,6 @@ QBT_PASSWORD=
   aria2 image (`deploy/aria2/` does not exist yet) and owns only the config-level behaviour above.
 - [ ] `docker compose config` renders sentinel credentials nowhere but the `secrets:` definitions: no
       service `environment` block contains the aria2 secret or the qBittorrent password.
-- [ ] The `gluetun` service has no `env_file`, and its environment names only VPN variables.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

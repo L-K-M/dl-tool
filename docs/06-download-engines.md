@@ -567,7 +567,7 @@ object with `code` and `message`. In an options struct the key is the long optio
 | `Files` | `aria2.getFiles([secret], gid)` | |
 | `Pause` | `aria2.pause([secret], gid)` | "If the download was active, the download is placed in the front of waiting queue." |
 | `Resume` | `aria2.unpause([secret], gid)` | Changes `paused` → `waiting`. |
-| `Remove` | `aria2.remove`, then `aria2.removeDownloadResult` | Retains payload data. Use `aria2.forceRemove` only after `remove` times out. |
+| `Remove` | `aria2.remove`, then `aria2.removeDownloadResult` | Retains payload data. Use `aria2.forceRemove` only after `remove` times out. `aria2.remove` **errors** on a download that has already stopped (`Active Download not found for GID#…`), which is the normal case for a completed or failed task — treat that one error as success and go on to `removeDownloadResult`. |
 | `SetFiles` (select) | `aria2.changeOption([secret], gid, {"select-file": "1,3,5"})` | Selection only; a non-nil `priorities` map returns `ErrNotSupported`. |
 | `SetLocation` | `aria2.changeOption([secret], gid, {"dir": "…"})` | ⚠️ Restarts the download — §4.6. |
 | `SetRateLimits` (task) | `aria2.changeOption([secret], gid, {"max-download-limit": …, "max-upload-limit": …})` | Both are in the safe list that does **not** restart the download. |
@@ -663,6 +663,11 @@ be changed at all.
 ### 4.7 `errorCode` mapping
 
 `tellStatus.errorCode` carries aria2's exit-status values as a string. `0` means success and sets no error code.
+
+JSON-RPC **faults** are a different channel and carry no such detail: every aria2 fault comes back as
+`code: 1`, and only the `message` string distinguishes "GID not found" from a malformed parameter. An
+adapter that maps faults to `engine.ErrNotFound` must therefore match on the message, and must treat an
+unrecognised message as a generic error rather than as "not found".
 
 | aria2 code (verbatim meaning) | `tasks.error_code` |
 |---|---|
@@ -994,10 +999,23 @@ args := []string{
 
 ### 7.2 Routing check
 
-Row 3 of §2 must be **cheap** and must answer without a network call. Shell out once at start-up to enumerate
-extractor URL patterns, cache them, and make `Accepts(uri)` a regexp match against that cache, **skipping the
-`generic` extractor, which matches everything**. Never run a metadata extraction to answer `Accepts`.
-<!-- UNVERIFIED: the exact enumeration flag was not verbatim-confirmed; T088 must confirm it against the pinned yt-dlp build. -->
+Row 3 of §2 must be **cheap** and must answer without a network call, **skipping the `generic` extractor,
+which matches everything**. Never run a metadata extraction to answer `Accepts`.
+
+> **OPEN — the mechanism is undecided, and the one this document used to prescribe does not exist.**
+> The rule was "shell out once at start-up to enumerate extractor URL patterns and make `Accepts` a regexp
+> match against that cache". Measured against the pinned yt-dlp 2026.08.19:
+>
+> - **No flag enumerates URL patterns.** `--list-extractors` prints 1752 *names* only (`10play`,
+>   `17live`, …); `--extractor-descriptions` prints prose. The patterns live in each class's `_VALID_URL`
+>   and are not reachable from the CLI at all.
+> - **The patterns are Python `re`, not RE2.** Compiling all 1702 `_VALID_URL` values with Go's `regexp`
+>   fails on **284 of them (16.7 %)**, `(?x)` verbose mode being the commonest cause. `Youtube`,
+>   `YoutubePlaylist` and `YoutubeTab` are all in that set, so a "drop any pattern that fails to compile"
+>   rule silently stops routing YouTube — the single most important case — to the media lane.
+>
+> [T088](tasks/T088-ytdlp-extractor-cache.md) is `deferred` until this is decided. Whatever replaces it must
+> keep row 3 offline and cheap, and must route YouTube. It needs a decision record, not a patch.
 
 ### 7.3 Reading progress: files, not stdout
 
@@ -1014,8 +1032,16 @@ line-delimited JSON progress on stdout via `--progress-template`, and the final 
 key and the progress attributes are accessible under the `progress` key."
 
 ```
---newline --progress-template 'download:{"status":"%(progress.status)s","downloaded":%(progress.downloaded_bytes)d,"total":%(progress.total_bytes)d,"est":%(progress.total_bytes_estimate)d,"speed":%(progress.speed)d,"eta":%(progress.eta)d,"frag":%(progress.fragment_index)d,"frags":%(progress.fragment_count)d,"file":"%(progress.filename)s"}'
+--newline --progress-template 'download:{"status":"%(progress.status)s","downloaded":%(progress.downloaded_bytes|0)d,"total":%(progress.total_bytes|null)j,"est":%(progress.total_bytes_estimate|null)j,"speed":%(progress.speed|null)j,"eta":%(progress.eta|null)j,"frag":%(progress.fragment_index|null)j,"frags":%(progress.fragment_count|null)j,"file":"%(progress.filename)s"}'
 ```
+
+**Every optional numeric carries a `|null` default and the `j` conversion, and this is not cosmetic.**
+yt-dlp renders an absent numeric as the bare literal `NA`, which is not JSON, so the obvious
+`%(progress.total_bytes)d` form produces a line no parser accepts. Measured against yt-dlp 2026.08.19 on a
+plain HTTPS download: without the defaults, 13 of 13 emitted lines failed `json.loads`, each carrying
+`"est":NA,"speed":NA,"eta":NA`; with them, every line parsed. `total_bytes`, `total_bytes_estimate`,
+`speed`, `eta`, `fragment_index` and `fragment_count` are all routinely absent, so all six take the default;
+`downloaded_bytes` is always present and takes `|0` only as a belt-and-braces guard.
 <!-- UNVERIFIED: the `%(progress)j` whole-dict conversion was not verbatim-confirmed; the per-field form above and -j/-J/--print-json are the safe interfaces. -->
 
 Progress field semantics, verbatim from `yt_dlp/YoutubeDL.py`:
@@ -1293,8 +1319,19 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | Pin yt-dlp by version and hash; never self-update at runtime — §7.6 |
 
 ## Open questions
-- [NEEDS CLARIFICATION: T088 must confirm, against the pinned `yt-dlp_musllinux` build, the exact flag that
-  enumerates extractor URL patterns for the cheap `Accepts()` check in §7.2.]
+- [NEEDS CLARIFICATION: **the runtime image has no `ffmpeg`.** The package list in
+  [`10-deployment-and-compose.md`](10-deployment-and-compose.md) §5 is `su-exec ca-certificates tzdata 7zip
+  nodejs`, and §7.1's argv passes no `--format`, so yt-dlp's default `bestvideo*+bestaudio/best` selection
+  has nothing to merge with. yt-dlp warns and silently falls back to the best *pre-merged* format, so every
+  media download quietly caps below the quality the site offers. Either add `ffmpeg` to the image — a
+  dependency, so it needs an ADR under [`decisions/`](decisions/) — or pin an explicit single-stream
+  `--format` here and say in §7 that merged formats are out of scope for v1. Decide before T087.]
+- [NEEDS CLARIFICATION: **whether Alpine's `7zip` package carries the RAR codec.** RAR extraction is not
+  redistributable under 7-Zip's own licence terms and distributions routinely build without it. T074's
+  acceptance criterion asserts a `.rar` extracts, and [FR-100](02-requirements.md#fr-100-auto-extract-the-supported-archive-formats)
+  lists `.rar` as a supported format, so if the codec is absent that criterion cannot pass. T074 must run
+  `7zz i` against the built image and, if RAR is missing, either add a codec package with an ADR or drop
+  `.rar` from FR-100 and from §7. Do not discover this at the acceptance-criterion stage.]
 - [NEEDS CLARIFICATION: T101 must confirm the qBittorrent queueing-limit preference key names against
   `GET /api/v2/app/preferences` on `release-5.2.3` before §9.1 names them.]
 - [NEEDS CLARIFICATION: T113 must confirm the yt-dlp rate-limit flag used by the fan-out in §10.1.]
@@ -1313,3 +1350,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | Corrected qBittorrent 5.2.3 session, add-result and delta-recovery contracts. |
 | 2026-09-01 | Made the engine registry instance-injected so abstract and concrete packages remain acyclic. |
 | 2026-09-02 | The aria2 RPC secret is read from a mounted secret file by the entrypoint rather than passed as a container environment variable. |
+| 2026-09-02 | Review pass: corrected the `--progress-template` of §7.3, whose unguarded numerics render the literal `NA` and produce invalid JSON (measured 13 of 13 lines against yt-dlp 2026.08.19); recorded that §7.2's extractor-pattern enumeration does not exist and that 284 of 1702 `_VALID_URL` patterns do not compile with Go `regexp`, deferring T088; noted that `aria2.remove` errors on an already-stopped download and that every aria2 JSON-RPC fault is `code: 1`; raised the missing `ffmpeg` and the RAR-codec question as open. |

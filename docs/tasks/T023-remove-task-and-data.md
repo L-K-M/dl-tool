@@ -13,7 +13,7 @@
 | **Est. size** | 2 new files, ~300 LOC |
 
 ## Goal
-`DELETE /api/v1/tasks/{id}` removes the task row and, with `delete_data=true`, unlinks exactly the files
+`DELETE /api/v1/tasks/{id}` marks the task `removed` and, with `delete_data=true`, unlinks exactly the files
 recorded in `task_files` after re-checking every resolved path. The response reports what happened, so a
 client never has to guess.
 
@@ -29,7 +29,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 |---|---|---|
 | `internal/api/tasks_delete.go` | create | The `DELETE /tasks/{id}` handler and the six-step sequence. |
 | `internal/api/tasks_delete_test.go` | create | Cases for both flags, an escaping path and an unreachable engine. |
-| `internal/store/tasks.go` | modify | Add `Delete` and `ListFiles` for the recorded targets. |
+| `internal/store/tasks.go` | modify | Add `MarkRemoved` and `ListFiles` for the recorded targets. |
 | `internal/api/server.go` | modify | Register `delete-task`. |
 
 No other file may be modified.
@@ -50,7 +50,7 @@ type DeleteTaskInput struct {
 // already gone; that is not an error.
 type DeleteTaskOutput struct {
 	Body struct {
-		Deleted       bool  `json:"deleted"`
+		Removed       bool  `json:"removed"`
 		DeleteData    bool  `json:"delete_data"`
 		FilesUnlinked int   `json:"files_unlinked"`
 		BytesUnlinked int64 `json:"bytes_unlinked"`
@@ -65,32 +65,34 @@ The six steps, in this order and never approximated:
 
 | # | Step | Rule |
 |---|---|---|
-| 1 | Stop the task at its engine | `Engine.Pause` then `Engine.Remove`; never unlink a file an engine still has open. |
-| 2 | Enumerate the targets | Only `task_files` rows for this task, resolved against `tasks.destination`. Never a glob, never a directory walk, never `content_path` alone. |
-| 3 | Re-check every path before unlinking any of them | Each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS` and inside the caller's jail. One failing path aborts the whole request with `403` `/problems/path-rejected` and an `errors[]` entry naming it; nothing at all is unlinked. |
+| 1 | Enumerate the targets | Only `task_files` rows for this task, resolved against `tasks.destination`. Never a glob, never a directory walk, never `content_path` alone. |
+| 2 | Validate every path before any side effect | Each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS`. One failing path aborts the whole request with `403` `/problems/path-rejected` and an `errors[]` entry naming it; the engine and the filesystem stay untouched. |
+| 3 | Remove the engine handle | `Engine.Pause` then `Engine.Remove`, which always instructs the engine to retain payload data; it must finish before any unlink so no file is still open. |
 | 4 | Unlink | One `unlink(2)` per recorded file, then remove the task's own directory only while it is empty. |
 | 5 | Record it | One `task_events` row, `level:"warn"`, `code:"task.data_deleted"`, with the file count and byte total in `detail`, written before the response. |
-| 6 | Delete the row | `tasks`; `task_files`, `task_trackers` and `task_tags` go by cascade. |
+| 6 | Mark the tombstone | In the same transaction as step 5 set `state="removed"`, clear `engine_ref`, zero both rates and clear ETA. The task row and every child row are retained; only T091's retention sweep ever hard-deletes. |
 
 Status codes: `200` with the body above · `404` `/problems/not-found` · `422`
 `/problems/validation-failed` when both flags are true · `403` `/problems/path-rejected` from step 3 ·
-`503` `/problems/engine-unavailable` when step 1 could not complete, in which case the task is **not**
+`503` `/problems/engine-unavailable` when step 3 could not complete, in which case the task is **not**
 deleted and no file is unlinked.
 
 ## Steps
-1. Add `Delete` and `ListFiles` to `internal/store/tasks.go`, both with explicit column lists.
+1. Add `MarkRemoved` and `ListFiles` to `internal/store/tasks.go`, both with explicit column lists.
+   `MarkRemoved` transitions to `removed` and never deletes a row.
 2. Create `internal/api/tasks_delete.go` with the input and output structs above.
 3. Reject `delete_data=true` together with `force_complete=true` as `422` before any other work.
-4. Implement step 1; on `engine.ErrUnavailable` return `503` and leave the row and every byte in place.
-5. Implement step 2 by joining `task_files.path` onto `tasks.destination` with `filepath.Join`, and never
+4. Implement step 3; on `engine.ErrUnavailable` return `503` and leave the row and every byte in place.
+5. Implement step 1 by joining `task_files.path` onto `tasks.destination` with `filepath.Join`, and never
    by reading the filesystem.
-6. Implement step 3 with `fsx.ResolveDestination` over every target, collecting failures first and
+6. Implement step 2 with `fsx.ResolveDestination` over every target, collecting failures first and
    aborting before the first unlink when any path fails.
 7. Implement step 4, counting `files_unlinked`, `bytes_unlinked` and `missing`; a recorded file that no
    longer exists increments `missing` and is not an error.
 8. Leave a non-empty task directory in place, and add the code comment that a hardlinked file's removal is
    expected and safe because the library copy survives.
-9. Implement steps 5 and 6 in one transaction, with the `task_events` row written before the response.
+9. Implement steps 5 and 6 in one transaction, with the `task_events` row written before the response;
+   the row is retained, so `GET /tasks/{id}/events` still answers after removal.
 10. Implement `force_complete=true` as a transition to `completed` with no unlink at all.
 11. Create `internal/api/tasks_delete_test.go`: `delete_data=false` leaves every file on disk;
     `delete_data=true` removes exactly the recorded files; a `task_files` row escaping the root returns
@@ -98,7 +100,7 @@ deleted and no file is unlinked.
     `422`.
 
 ## Acceptance criteria
-- [ ] `delete_data=false` removes the row and unlinks nothing.
+- [ ] `delete_data=false` leaves the task row in state `removed` and unlinks nothing.
 - [ ] `delete_data=true` unlinks exactly the recorded files and reports the counts in the body.
 - [ ] One escaping path aborts the request with `403` and leaves every file present.
 - [ ] `503` from the engine leaves the task row present.

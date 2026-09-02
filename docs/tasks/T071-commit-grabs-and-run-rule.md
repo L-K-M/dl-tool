@@ -48,7 +48,7 @@ package rss
 
 // TaskCreator hands a grabbed item to the ordinary task-creation path. internal/api implements it
 // by calling TaskHandlers.CreateTasks, so a rule grab passes the same normalisation, routing,
-// destination jail, quota and concurrency checks a pasted URI passes.
+// destination containment and concurrency checks a pasted URI passes.
 type TaskCreator interface {
 	CreateForRule(ctx context.Context, g GrabRequest) (taskID string, err error)
 }
@@ -99,7 +99,7 @@ package api
 
 // ruleTaskCreator adapts the existing task handlers to rss.TaskCreator. It builds the same body
 // POST /tasks accepts and reuses its validation; it never writes the tasks table directly.
-type ruleTaskCreator struct{ tasks *TaskHandlers; ownerID string }
+type ruleTaskCreator struct{ tasks *TaskHandlers }
 
 func (c ruleTaskCreator) CreateForRule(ctx context.Context, g rss.GrabRequest) (string, error)
 
@@ -116,8 +116,8 @@ type RunRuleOutput struct {
 func (h *RuleHandlers) RunRule(ctx context.Context, in *RunRuleInput) (*RunRuleOutput, error)
 ```
 
-A rule-created task is owned by the admin who owns the rule; grabs count against that user's quota and
-concurrency limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule id ·
+A rule-created task goes through the ordinary creation path, so a grab counts against the concurrency
+limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule id ·
 `503 /problems/engine-unavailable` when the engine refuses every grab.
 
 ## Steps
@@ -177,7 +177,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   forget action instead.
 - Do NOT back-fill `rule_matches.info_hash` from a fetched `.torrent` here; the metainfo path owns that.
 - Do NOT retry a failed grab automatically in v1; the `fallback` rows exist so a later task can.
-- Do NOT let a rule bypass the destination jail, the storage quota or the concurrency limiter.
+- Do NOT let a rule bypass the destination containment check or the concurrency limiter.
 
 ## Forbidden shortcuts
 - Do NOT skip/xfail a test, weaken an assertion, or delete a test to make a check pass.

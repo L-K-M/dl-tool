@@ -68,7 +68,6 @@ export function formatBytes(bytes: number | null, locale: string = activeLocale(
 {
   "problem": {
     "path-rejected": "That folder is outside the allowed download roots.",
-    "quota-exceeded": "This download would exceed your storage quota.",
     "engine-unavailable": "The download engine is not reachable right now.",
     "unsupported-scheme": "That kind of link is not supported."
   },

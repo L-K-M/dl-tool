@@ -62,9 +62,9 @@ type SearchJob struct {
 }
 
 func CreateSearchJob(ctx context.Context, db *sqlx.DB, j SearchJob) (SearchJob, error)
-func GetSearchJob(ctx context.Context, db *sqlx.DB, id, ownerID string) (SearchJob, error) // ErrNotFound
+func GetSearchJob(ctx context.Context, db *sqlx.DB, id string) (SearchJob, error) // ErrNotFound
 func FinishSearchJob(ctx context.Context, db *sqlx.DB, id string, total int, lastErr *string, now int64) error
-func DeleteSearchJob(ctx context.Context, db *sqlx.DB, id, ownerID string) error
+func DeleteSearchJob(ctx context.Context, db *sqlx.DB, id string) error
 func PurgeSearchJobs(ctx context.Context, db *sqlx.DB, olderThan int64) (int64, error) // 24 h retention
 
 // SearchResultRow mirrors the search_results DDL. Package store never imports
@@ -188,17 +188,18 @@ Operation ids added inside `RegisterSearchRoutes`: `start-search` (`202`), `get-
    snapshot in place until `DELETE /search/{id}` or the 24-hour purge calls `Forget`.
 6. Add `StartSearch` to `internal/api/search.go`: validate a non-empty query, default `indexer_ids` to every
    enabled indexer, return `503` `/problems/engine-unavailable` when none is enabled and `422` for an unknown
-   id, create the `search_jobs` row owned by the caller, seed the tracker with every engine `queued`, enqueue
+   id, create the `search_jobs` row, seed the tracker with every engine `queued`, enqueue
    the job with `EnqueueJob(ctx, db, "search", nil, payload, now)` and answer `202`.
-7. Add `GetSearch`: read the job by id **and** owner, take the tracker snapshot, page the results, and
+7. Add `GetSearch`: read the job by id, take the tracker snapshot, page the results, and
    reconstruct the engine list from `search_results` counts when the tracker has forgotten the job.
 8. Add `DeleteSearch`: delete the row, rely on the `ON DELETE CASCADE` for results, call `Forget`, and answer
-   `204`; a job owned by another user answers `404`, never `403`.
+   `204`; an unknown id answers `404`.
 9. Register the three operations inside `RegisterSearchRoutes`, and edit `cmd/dl-tool/main.go` to call
-   `worker.Register("search", jobs.NewSearchHandler(...))` in `OnStart`.
+   `worker.Register("search", jobs.NewSearchHandler(db, log, deps.Defs, deps.Runner, deps.Indexers,
+   deps.HTTP))` in `OnStart`, reusing the single `api.Deps` value T055 step 9 built.
 10. Extend `internal/api/search_test.go` with `TestStartSearchReturns202AndID`,
     `TestPollShowsPartialThenFinished` against two stub indexers with 50 ms and 400 ms latencies,
-    `TestDeleteRemovesJobAndResults`, `TestOtherUsersJobIs404`, `TestEmptyQueryIs422` and
+    `TestDeleteRemovesJobAndResults`, `TestUnknownJobIs404`, `TestEmptyQueryIs422` and
     `TestNoEnabledIndexerIs503`.
 11. Run the verification command and paste its output under `## Evidence`.
 
@@ -207,7 +208,7 @@ Operation ids added inside `RegisterSearchRoutes`: `start-search` (`202`), `get-
 - [ ] `TestPollShowsPartialThenFinished` asserts a first poll with `finished:false` and a non-empty `results`, and a later poll with `finished:true`.
 - [ ] `DELETE /search/{id}` leaves zero rows in `search_results` for that job.
 - [ ] A second execution of the same job row writes no duplicate results.
-- [ ] `GET /search/{id}` for a job owned by another user returns `404` `/problems/not-found`.
+- [ ] `GET /search/{id}` for an unknown id returns `404` `/problems/not-found`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

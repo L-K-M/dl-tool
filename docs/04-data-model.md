@@ -216,6 +216,8 @@ CREATE TABLE notification_channels (
   config_json TEXT NOT NULL,            -- non-secret channel configuration; shape per kind, see §4.8
   secret_enc TEXT,                      -- encrypted at rest; never returned by an API, never logged
   event_mask TEXT NOT NULL DEFAULT '["*"]',  -- JSON array of task_events.code values; ["*"] = every code
+  last_send_at INTEGER,                 -- unix ms of the last delivery attempt; written by T077
+  last_error TEXT,                      -- failure text of the last attempt, NULL after a success
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE INDEX idx_notification_channels_enabled ON notification_channels(enabled);
 ```
@@ -436,10 +438,6 @@ CREATE INDEX idx_feed_items_pub ON feed_items(feed_id, published_at DESC);
 
 CREATE TABLE rules (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
-                                         -- tasks a rule creates are owned by this user and
-                                         -- count against their quota and jail (05 §10.2); RESTRICT, not
-                                         -- CASCADE: deleting a user must not silently destroy shared
-                                         -- automation and match history (05 §12 returns 409 instead)
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
   priority INTEGER NOT NULL DEFAULT 0,  -- lower is evaluated first; ties broken by name
   definition_json TEXT NOT NULL,        -- the rule document; schema in 08-rss-automation.md
@@ -578,7 +576,7 @@ extract_failed                 extract_failed_wrong_password  extract_failed_inv
 extract_failed_quota_reached   extract_failed_disk_full       unknown
 ```
 
-Plus seven dl-tool additions:
+Plus six dl-tool additions:
 
 | Value | Raised when |
 |---|---|
@@ -814,3 +812,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Security review: separated server-only acquisition sources from API display references. |
 | 2026-09-02 | Multi-user model dropped: removed `owner_id` from `tasks`, `rules`, `search_jobs` and `sessions`, their indexes, `users.role`, `users.default_destination`, `users.quota_bytes`, the `max_active_per_user` setting and the `quota_exceeded` error code. `users` now holds exactly one operator row. §4.7 recast as concurrency versus disk space ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | The store now enforces `0700` on the configuration directory and `0600` on the database, its sidecars and every backup, independent of `UMASK`; `VACUUM INTO` creates its target with `O_CREATE\|O_EXCL` at `0600`. |
+| 2026-09-02 | Review pass: added `notification_channels.last_send_at` and `.last_error`, which four consumers already read; removed the orphaned `rules.owner_id` comment block left inside `CREATE TABLE rules` by the multi-user cut, which T006 would otherwise have transcribed into `00001_init.sql`; corrected §4.2's count of the dl-tool `error_code` additions from seven to six. |

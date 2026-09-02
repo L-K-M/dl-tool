@@ -6,6 +6,58 @@
 > **Every critical finding re-checked against `d8e81d3`** — see [Status against current
 > main](#status-against-current-main)
 
+## Second pass — 2026-09-02
+
+> **The [Status against current main](#status-against-current-main) table below is superseded.** It was
+> written against `d8e81d3`. A second review pass has since worked the plan and **all 25 critical findings
+> are now addressed in the plan documents**, together with the six patterns, the ADR-0019 residue the
+> multi-user cut left behind, and a set of defects this review did not find. What follows in the rest of
+> this document is kept as the record of how the plan got here, not as a description of its current state.
+
+That pass re-derived its own findings rather than trusting this one, and three of the claims below did not
+survive re-measurement against the pinned tools:
+
+- **"Go's RE2 rejects them, so the rule silently discards most extractors."** Measured: 284 of yt-dlp
+  2026.08.19's 1702 `_VALID_URL` patterns fail `regexp.Compile`, **16.7 %**, not most. The finding still
+  stands and is worse than "most" would suggest, because `Youtube`, `YoutubePlaylist` and `YoutubeTab` are
+  all in the failing set — `(?x)` verbose mode is the usual cause. The deeper problem is the one above it:
+  no yt-dlp flag emits URL patterns at all, so there is nothing to compile. T088 is now `deferred` pending
+  an ADR.
+- **`testcontainers.DaemonHost` "is not a function in the pinned API".** It exists in v0.44.0, as a method
+  on `*DockerProvider`. The direction *is* inverted, which is the part that matters: the fix is
+  `WithHostPortAccess(port)` plus the `testcontainers.HostInternal` hostname.
+- **The `--progress-template` claim was understated, not overstated.** Confirmed live: 13 of 13 emitted
+  lines fail `json.loads`, each carrying `"est":NA,"speed":NA,"eta":NA`. Adding `|null` defaults with the
+  `j` conversion fixes it.
+
+Two findings in this document were also incomplete. F602's fix needed a `Config` field as well as a task
+edit — the variable existed in doc 11 and in `.env.example` but had no field to be parsed into. And the
+qBittorrent contract needed more than the login predicate: doc 06 §5.3 forbids recovering identity by
+diffing `torrents/info`, which is exactly what T029 prescribed.
+
+Defects this review did not report, found in the second pass:
+
+- **NFR-030 (`DLTOOL_CONFIG_LOCK`) is a `must` that no task implemented.** Doc 02 named T095; T095's
+  `## Out of scope` said "no M7 task owns it"; the deferral register was empty. Specified in five
+  documents, built by nobody.
+- **The CSP contradicted itself on sub-path deployment.** `1362620` set `base-uri 'self'` in doc 12 and
+  explained why the injected `<base>` needs it; T095 still declared `base-uri 'none'`, and T013/T014 still
+  specified the inline bootstrap script `script-src 'self'` blocks.
+- **The runtime image has no `ffmpeg`**, so yt-dlp's default `bestvideo*+bestaudio/best` silently degrades
+  to a pre-merged format on every media download.
+- **`request.timeout_seconds` (max 30 s) sat inside a 15 s per-engine deadline**, so the knob could not do
+  what it said.
+- Smaller drift: a duplicated `DLTOOL_ALLOWED_HOSTS` row in doc 11 §2; `DLTOOL_CONFIG_LOCK` homed in a file
+  no task creates; doc 04 §4.2 counting six additions as seven; doc 02 restating the `error_code` enum five
+  values out of date; FR-095 implemented by T098 but cited by nobody; a `:?` on `VPN_SERVICE_PROVIDER` that
+  fails a core-only `docker compose up` for the same reason `fea56aa` fixed for aria2; T125 asserting a
+  property of a service it does not ship.
+
+The one class fix worth naming: pattern 1 is now a rule rather than ten patches.
+[`docs/14-conventions.md` §8.3](docs/14-conventions.md#83-wire-a-long-lived-component) requires a task that
+introduces a constructor, goroutine or job handler to name its composition-root call site in its own
+`Files` table, and at least one acceptance criterion must observe the component through that root.
+
 ## Verdict
 
 The plan is strong in the ways plans usually fail and weak in one way it did not anticipate.

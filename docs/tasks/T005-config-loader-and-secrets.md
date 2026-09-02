@@ -61,6 +61,8 @@ package config
 type Config struct {
 	HTTPAddr           string        // DLTOOL_HTTP_ADDR,           default ":8080"
 	BasePath           string        // DLTOOL_BASE_PATH,           default ""
+	AllowedHosts       []string      // DLTOOL_ALLOWED_HOSTS,       default empty, split on ","
+	ConfigLock         bool          // DLTOOL_CONFIG_LOCK,         default false
 	ConfigDir          string        // DLTOOL_CONFIG_DIR,          default "/config"
 	DataRoots          []string      // DLTOOL_DATA_ROOTS,          default ["/data"], split on ":"
 	DBPath             string        // DLTOOL_DB_PATH,             default "/config/dl-tool.db"
@@ -68,7 +70,7 @@ type Config struct {
 	LogFormat          string        // DLTOOL_LOG_FORMAT,          default "json"
 	TrustedProxies     []netip.Prefix// DLTOOL_TRUSTED_PROXIES,     default empty, split on ","
 	SessionTTL         time.Duration // DLTOOL_SESSION_TTL,         default 720h
-	MetricsAddr        string        // DLTOOL_METRICS_ADDR,        default "127.0.0.1:9090"
+	MetricsAddr        string        // DLTOOL_METRICS_ADDR,        default "127.0.0.1:9090", "off" disables
 	Aria2URL           string        // DLTOOL_ARIA2_URL
 	Aria2Secret        secure.Secret // DLTOOL_ARIA2_SECRET
 	QBittorrentURL     string        // DLTOOL_QBITTORRENT_URL
@@ -80,8 +82,7 @@ type Config struct {
 	SSRFAllowPrivate   bool          // DLTOOL_SSRF_ALLOW_PRIVATE,  default false
 	WatchDir           string        // DLTOOL_WATCH_DIR,           preference seed
 	NotifyURL          string        // DLTOOL_NOTIFY_URL,          preference seed
-	SessionKey         secure.Secret // secrets.env DLTOOL_SESSION_KEY
-	CSRFKey            secure.Secret // secrets.env DLTOOL_CSRF_KEY
+	SecretKey          secure.Secret // secrets.env DLTOOL_SECRET_KEY, the at-rest encryption key
 }
 
 // Load reads the environment, validates it and generates any missing secret.
@@ -110,28 +111,37 @@ func (e *FatalError) Error() string
    then running the validation table of doc 11 §8 in that order. An empty string means unset, never an empty
    value.
 5. Implement the fatal checks: `config_missing` for the aria2 and qBittorrent credential pairs;
-   `config_malformed` for a bad `host:port`, a `BasePath` without a leading `/` or with a trailing `/`, and
-   any non-absolute path; `config_path_unwritable` after one `MkdirAll` attempt on `ConfigDir`, the database
-   directory and each data root.
-6. Implement `writeSecrets`: read `<ConfigDir>/secrets.env`, and for each of `ARIA2_RPC_SECRET`,
-   `DLTOOL_SESSION_KEY` and `DLTOOL_CSRF_KEY` that is missing, generate 32 bytes from `crypto/rand`,
-   base64url-encode them, and rewrite the file with mode `0600`. Load `SessionKey` and `CSRFKey` from it.
-7. Log every `warn` row of doc 11 §8 — a missing `yt-dlp`, JS runtime or `7zz` binary, a `WatchDir` outside
-   every data root — and continue.
+   `config_malformed` for a bad `host:port`, a `BasePath` without a leading `/` or with a trailing `/`, a
+   `DLTOOL_ALLOWED_HOSTS` entry carrying a scheme, path, port or wildcard, and any non-absolute path;
+   `config_path_unwritable` after one `MkdirAll` attempt on `ConfigDir` and the database directory. A data
+   root is **not** in that list: doc 11 §8 makes a missing or unwritable data root a `warn` and forbids
+   `MkdirAll` on it, because creating the directory would silently mask an unmounted volume.
+6. Implement `writeSecrets`: read `<ConfigDir>/secrets.env`, and for each of `ARIA2_RPC_SECRET` and
+   `DLTOOL_SECRET_KEY` that is missing, generate 32 bytes from `crypto/rand`, base64url-encode them, and
+   rewrite the file with mode `0600`. Load `SecretKey` from it. There is no session or CSRF key: doc 11 §6
+   states why neither exists.
+7. Log every `warn` row of doc 11 §8 — a data root that is missing or not writable
+   (`data_root_not_writable`, recorded on the root so `GET /system/info` and the UI banner can show it, and
+   never `MkdirAll`-ed), a missing `yt-dlp`, JS runtime or `7zz` binary, a `WatchDir` outside every data
+   root — and continue.
 8. Edit `cmd/dl-tool/main.go` to call `config.Load`, exit 1 after logging one `error` record with the
    `err_code` attribute on failure, and pass `cfg.LogLevel` and `cfg.LogFormat` to `obs.NewLogger`.
 9. Write `internal/config/config_test.go` covering: all defaults with an empty environment; `_FILE` preferred
    over its inline form; both forms set giving `config_conflict`; a malformed `BASE_PATH` giving
-   `config_malformed`; two `Load` calls against two fresh directories giving different `SessionKey` values;
+   `config_malformed`; two `Load` calls against two fresh directories giving different `SecretKey` values;
    and `fmt.Sprintf("%v", cfg.Aria2Secret)` returning `[REDACTED]`.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] Every variable in doc 11 §2 has a field, a default and a test.
 - [ ] Each fatal row of doc 11 §8 returns a `*FatalError` with exactly the documented `err_code`.
-- [ ] `TestSecretsAreDistinctPerInstance` shows two fresh config directories yielding different session keys.
+- [ ] `TestUnwritableDataRootIsNotFatal` shows `Load` succeeding with one `warn` carrying
+      `err_code=data_root_not_writable` for a missing and for a read-only data root, and no `MkdirAll`
+      attempt on either.
+- [ ] `TestSecretsAreDistinctPerInstance` shows two fresh config directories yielding different
+      `DLTOOL_SECRET_KEY` values.
 - [ ] `TestSecretNeverPrints` asserts `%v`, `%s` and `json.Marshal` all render `[REDACTED]`.
-- [ ] `secrets.env` is written with mode `0600` and is not overwritten when it already holds all three keys.
+- [ ] `secrets.env` is written with mode `0600` and is not overwritten when it already holds both values.
 - [ ] `Load` opens no network connection and no database.
 
 ## Verification

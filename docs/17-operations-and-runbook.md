@@ -263,7 +263,7 @@ Any failure before step 4 removes only the temporary stage and leaves the live d
 `GET /settings/export` and `POST /settings/import` move configuration between instances without carrying a
 database file. The export **deliberately excludes** sessions, users and password hashes, API tokens, engine
 and notification-channel secrets, indexer API keys and every task table. It is not a backup: after importing
-settings into a fresh instance, the operator still creates the first admin through the setup wizard.
+settings into a fresh instance, the operator still creates the account through the setup wizard.
 
 ---
 
@@ -418,3 +418,4 @@ deliberate, local operator action.
 | 2026-09-01 | Resolved the backup-naming open question: the §13 example in [`05-api-contract.md`](05-api-contract.md) was corrected to the `dl-tool.db.<UTC>.bak` form used here and in [`04-data-model.md`](04-data-model.md) §6. |
 | 2026-09-01 | Made migration backup and database restore idempotent, lock-protected and crash-safe. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Single-account cleanup: the restore note says the account rather than the first admin ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |

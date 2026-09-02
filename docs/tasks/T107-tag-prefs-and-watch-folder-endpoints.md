@@ -14,7 +14,7 @@
 
 ## Goal
 Every table in the data model is reachable: `PATCH`/`DELETE /tags/{name}` rename and detach a tag without
-deleting a task, `GET`/`PUT /prefs` carry one server-side preference document per user, and
+deleting a task, `GET`/`PUT /prefs` carry the one server-side preference document, and
 `/watch-folders` plus `/watch-folders/{id}/scan` manage and trigger the loader built in T083.
 
 ## Context you need
@@ -73,7 +73,6 @@ type WatchFolderView struct {
 	ID              string     `json:"id"` // wfd_ + ULID
 	Path            string     `json:"path"`
 	Enabled         bool       `json:"enabled"`
-	OwnerUsername   string     `json:"owner_username"`
 	Destination     string     `json:"destination"`
 	Category        *string    `json:"category"`
 	DeleteAfterLoad bool       `json:"delete_after_load"`
@@ -99,41 +98,38 @@ func (s *SettingsStore) RenameTag(ctx context.Context, name, newName string) err
 // DeleteTag detaches the tag from every task and deletes the row. NO TASK IS EVER DELETED.
 func (s *SettingsStore) DeleteTag(ctx context.Context, name string) error
 
-// Prefs returns the caller's ui_prefs rows assembled into one document, or the server defaults.
+// Prefs returns the account's ui_prefs rows assembled into one document, or the server defaults.
 func (s *SettingsStore) Prefs(ctx context.Context, userID string) (map[string]any, error)
 
 // PutPrefs replaces the document wholesale in one transaction, keyed on the document's top-level
-// members. It never reads or writes another user's rows.
+// members.
 func (s *SettingsStore) PutPrefs(ctx context.Context, userID string, doc map[string]any) error
 ```
 
-Statuses: tags `200`/`204` · (`GET` is
-open) · `404` · `409` · `422` for an empty `new_name` or a name containing `,` or `/`. Prefs `200` · `401` ·
-`413` `/problems/payload-too-large` above 64 KiB · `422` when the body is not a JSON object. Watch folders
-take `403` `/problems/path-rejected` for a `path` or `destination` outside the
-roots or outside the named owner's jail, `409` on a duplicate `path`, and `422` for an unknown category, an
-`poll_interval_s` below `1`.
+Statuses: tags `200`/`204` · `404` · `409` · `422` for an empty `new_name` or a name containing `,` or
+`/`. Prefs `200` · `401` · `413` `/problems/payload-too-large` above 64 KiB · `422` when the body is not a
+JSON object. Watch folders
+take `403` `/problems/path-rejected` for a `path` or `destination` outside the configured roots, `409` on a
+duplicate `path`, and `422` for an unknown category or a `poll_interval_s` below `1`.
 
 ## Steps
 1. Add `RenameTag`, `DeleteTag`, `Prefs`, `PutPrefs` and the watch-folder create, update and delete writes
    to `internal/store/settings.go`, each with an explicit column list and the multi-row writes in one
    `sqlx.Tx`.
 2. Create `internal/api/prefs.go` with the prefs pair and the tag pair. `PUT /prefs` replaces the document;
-   unknown members are stored and returned verbatim; the caller's identity is the only key.
+   unknown members are stored and returned verbatim.
 3. Cap the prefs body at 64 KiB and return `413` above it; reject a non-object body with `422`.
 4. Decode the percent-encoded name for `PATCH` and `DELETE /tags/{name}`, and return `409` on a
    rename onto an existing tag.
 5. Create `internal/api/watchfolders.go` with the CRUD verbs and `Scan`.
-6. Validate `path` and `destination` against the configured roots **and** the named owner's jail, defaulting
-   `poll_interval_s` to `10`.
+6. Validate `path` and `destination` against the configured roots, defaulting `poll_interval_s` to `10`.
 7. Implement `Scan` by calling `jobs.Watcher.ScanOnce` and returning its result unchanged; a disabled folder
    still scans on demand.
 8. Edit `internal/api/server.go` to register the seven operations.
 9. Create `internal/api/prefs_test.go`: tag three tasks, rename the tag and assert all three carry the new
    name, then delete it and assert the three tasks still exist with no tags; assert a rename onto an
-   existing tag is `409`; store a column order, widths and visibility, read them back as a second client for
-   the same user and assert equality under `go-cmp`, and assert a second user's document is unaffected;
-   assert an unknown prefs member survives a round trip; create a watch folder, drop a fixture `.torrent`
+   existing tag is `409`; store a column order, widths and visibility, read them back as a second client
+   and assert equality under `go-cmp`; assert an unknown prefs member survives a round trip; create a watch folder, drop a fixture `.torrent`
    into it, `POST .../scan` and assert the task appears without waiting for the interval; assert a watch
    folder outside every root is `403` `/problems/path-rejected`.
 10. Run the verification command and paste its output under `## Evidence`.
@@ -141,7 +137,7 @@ roots or outside the named owner's jail, `409` on a duplicate `path`, and `422` 
 ## Acceptance criteria
 - [ ] Renaming a tag changes it for every task at once and deletes no task.
 - [ ] Deleting a tag detaches it everywhere and deletes no task.
-- [ ] A preference document round-trips per user, including unknown members, and never leaks across users.
+- [ ] A preference document round-trips unchanged, including unknown members.
 - [ ] A prefs body above 64 KiB is `413`.
 - [ ] `POST /watch-folders/{id}/scan` creates the task synchronously, without waiting for the interval.
 - [ ] A watch folder outside the configured roots is `403` `/problems/path-rejected`.

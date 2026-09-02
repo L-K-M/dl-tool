@@ -23,7 +23,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/05-api-contract.md` §13.1 Process endpoints outside `/api/v1`](../05-api-contract.md#131-process-endpoints-outside-apiv1)
    — the three paths, their listeners and their bodies.
 2. [`docs/11-config-reference.md` §2 `DLTOOL_` variables](../11-config-reference.md#2-dltool_-variables-application)
-   — `DLTOOL_METRICS_ADDR`, and that an empty value disables metrics entirely.
+   — `DLTOOL_METRICS_ADDR`, and that the exact lowercase value `off` disables metrics entirely, while an
+   empty value means unset and falls back to the default.
 3. [`docs/14-conventions.md` §3 Logging](../14-conventions.md#3-logging) — the standard attribute keys.
 
 ## Files
@@ -67,10 +68,19 @@ type Metrics struct{ Registry *prometheus.Registry }
 
 func NewMetrics() *Metrics
 
-// ListenAndServe serves GET /metrics on addr. An empty addr disables metrics and
-// returns nil immediately.
+// ListenAndServe serves GET /metrics on addr. The exact value "off" disables metrics and
+// returns nil immediately; an empty addr means unset and falls back to the default
+// (11-config-reference.md section 2).
 func (m *Metrics) ListenAndServe(ctx context.Context, addr string) error
 ```
+
+Every series below is registered here and **written elsewhere**, so `*Metrics` is passed to the components
+that observe the events: the reconciler (`poll_duration`, `engine_errors`, `bytes_transferred`), the task
+store (`task_transitions`), the worker pool (`jobs_total`), the SSE hub (`sse_clients`) and a 15-second
+`tasks_total` sampler over `SELECT state, engine, count(*) FROM tasks GROUP BY 1, 2`. A task that adds one
+of those components wires its metric at the same composition-root call site, per
+[`14-conventions.md` §8.3](../14-conventions.md#83-wire-a-long-lived-component). A registered series that
+nothing ever sets is a defect, not an empty gauge.
 
 Metric set — names and labels are fixed here and used by every later milestone:
 
@@ -104,12 +114,15 @@ GET /readyz   -> 503 {"type":"/problems/not-ready","title":"Not ready","status":
    cancelled.
 5. Edit `internal/api/server.go` to register `GET /healthz` and `GET /readyz` on the base sub-router, outside
    the `/api/v1` group, and therefore outside the `Authenticate` middleware. Register no `/metrics` route.
-6. Edit `cmd/dl-tool/main.go`: build `obs.NewHealth(db)` and `obs.NewMetrics()`, call `MarkReady` after
+6. Edit `cmd/dl-tool/main.go`: build `obs.NewHealth(db)` and `obs.NewMetrics()`, keep the `*Metrics` in
+   scope so later components can be handed it, start the `tasks_total` sampler on a 15 s ticker under the
+   server context, call `MarkReady` after
    `store.Open` returns, start the metrics listener in `OnStart` and cancel it in `OnStop`.
 7. Write `internal/obs/health_test.go` covering: `/healthz` returns 200 with the exact body while the
    database handle is nil; `/readyz` returns 503 `/problems/not-ready` before `MarkReady` and 200 after;
    `/metrics` on the main listener returns 404; the metrics listener returns a body containing
-   `dltool_tasks_total` and `process_start_time_seconds`; an empty `DLTOOL_METRICS_ADDR` starts no listener.
+   `dltool_tasks_total` and `process_start_time_seconds`; `DLTOOL_METRICS_ADDR=off` starts no listener while
+   an empty value still listens on the default address.
 8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria

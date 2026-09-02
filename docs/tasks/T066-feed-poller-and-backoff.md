@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T012, T054, T065 |
 | **Blocks** | T067, T071, T072, T081, T083, T091, T117 |
-| **Parallel-safe** | no — adds `POST /feeds/{id}/refresh` to T065's `internal/api/feeds.go` |
+| **Parallel-safe** | no — adds `POST /feeds/{id}/refresh` to T065's `internal/api/feeds.go` and edits the shared files `internal/api/server.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-071](../02-requirements.md#fr-071-poll-feeds-politely-with-conditional-get-and-backoff) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md) |
 | **Est. size** | 3 new files, 4 touched, ~400 LOC |
@@ -37,6 +37,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/rss/poll_test.go` | create | `httptest` cases for 200/304/500, jitter and the ladder. |
 | `internal/jobs/cron.go` | create | The `robfig/cron/v3` entry that enqueues the `rss_poll` job. |
 | `internal/api/feeds.go` | edit | Add `POST /feeds/{id}/refresh`. |
+| `internal/api/server.go` | edit | Pass the guarded client and the parser into `NewFeedHandlers`. |
+| `cmd/dl-tool/main.go` | edit | Register the `rss_poll` handler and start the `Scheduler` in `OnStart`; stop it in `OnStop`. |
 
 No other file may be modified.
 
@@ -103,7 +105,6 @@ const (
 	acceptHeader = "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.5"
 	acceptEnc    = "gzip, deflate"
 	maxBody      = 16 << 20        // 16 MiB
-	connTimeout  = 10 * time.Second
 	totalTimeout = 60 * time.Second
 	startupGrace = 15 * time.Minute
 	pollParallel = 4
@@ -116,9 +117,12 @@ and `If-Modified-Since`.
 ## Steps
 1. Create `internal/rss/poll.go` with the constants, `Jitter`, `EffectiveInterval`, `NextFetchAt`,
    `BackoffPeriods`, `NewPoller`, `Poll` and `PollDue`.
-2. Build each request with the three headers plus the two conditional headers when the stored validators
-   exist, read the body through `io.LimitReader(resp.Body, maxBody+1)`, and fail the poll with
-   `feed body exceeds 16 MiB` when the limit is passed.
+2. Wrap each poll in `context.WithTimeout(ctx, totalTimeout)`: the shared client's 120 s
+   ([`12-security-and-threat-model.md`](../12-security-and-threat-model.md) §2.4) is a ceiling and doc 08
+   §2.1's 60 s total is this deadline. Build each request with the three headers plus the two conditional
+   headers when the stored validators exist, read the body with `secure.ReadCapped(resp, maxBody)` so an
+   over-cap declared `Content-Length` is rejected before a byte is read (doc 12 §2.2 rule 7), and fail the
+   poll with `feed body exceeds 16 MiB` when the cap is passed.
 3. On `304`: set `last_fetch_at` and `last_success_at`, decrement `escalation_level` by one with a floor of
    `0`, clear `last_error`, reschedule, and parse nothing.
 4. On `200`: call `p.parser.ParseFeed`, `store.UpsertFeedItems`, then `store.TrimFeedItems` with the feed's
@@ -138,11 +142,18 @@ and `If-Modified-Since`.
    consecutive `500`s give levels 1, 2, 3 and `disabled_till` deltas of 60, 300 and 900 seconds; a success
    after them decrements to 2; a 17 MiB body fails without an item; `Jitter` is stable per id and within
    `[-0.10, +0.10]`; `EffectiveInterval` never returns under 300 s.
-10. Run the verification command and paste its output under `## Evidence`.
+10. Edit `internal/api/server.go` to pass the shared `secure.NewClient` handle and the parser into
+    `NewFeedHandlers`, so the refresh endpoint and the job share one `Poller`.
+11. Edit `cmd/dl-tool/main.go` in `OnStart` to build `rss.NewPoller(db, hc, parser, log, time.Now)`, call
+    `worker.Register("rss_poll", poller.PollDue)` and start `jobs.NewScheduler(db, log).Start(ctx)`;
+    cancel that context in `OnStop`. This is the single cron call site every later entry (T081, T083,
+    T091) extends.
+12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestConditionalGetSendsBothValidators` and `TestNotModifiedAddsNoItems` pass.
 - [ ] `TestBackoffLadderEscalatesAndDecrements` asserts the exact seconds 60, 300, 900.
+- [ ] A response declaring a 17 MiB `Content-Length` fails the poll before its body is read.
 - [ ] `TestBodyCapRejectsOversizeFeed` passes and no partial item is stored.
 - [ ] `TestJitterIsDeterministicAndBounded` passes.
 - [ ] `POST /feeds/{id}/refresh` polls a feed whose `disabled_till` is in the future.

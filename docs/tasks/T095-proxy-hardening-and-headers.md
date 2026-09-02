@@ -8,12 +8,13 @@
 | **Depends on** | T007, T013, T094 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
-| **Implements** | [NFR-006](../02-requirements.md#nfr-006-work-when-hosted-under-a-sub-path), [NFR-010](../02-requirements.md#nfr-010-always-verify-tls-certificates), [NFR-013](../02-requirements.md#nfr-013-reject-unexpected-host-headers), [NFR-021](../02-requirements.md#nfr-021-serve-strict-security-headers), [NFR-024](../02-requirements.md#nfr-024-validate-login-redirects-as-relative-paths) |
+| **Implements** | [NFR-006](../02-requirements.md#nfr-006-work-when-hosted-under-a-sub-path), [NFR-010](../02-requirements.md#nfr-010-always-verify-tls-certificates), [NFR-013](../02-requirements.md#nfr-013-reject-unexpected-host-headers), [NFR-021](../02-requirements.md#nfr-021-serve-strict-security-headers), [NFR-024](../02-requirements.md#nfr-024-validate-login-redirects-as-relative-paths), [NFR-030](../02-requirements.md#nfr-030-lock-configuration-from-the-environment) |
 | **Decisions** | [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md), [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 1 new source file, 1 test file and 2 proxy snippets, ~380 LOC |
 
 ## Goal
 Every HTML response carries the eight documented security headers, an unexpected `Host` is answered `421`,
+an operator-configuration mutation under `DLTOOL_CONFIG_LOCK` is answered `403`,
 a login redirect is honoured only when it is a single-slash relative path, and the shipped Caddy and Traefik
 snippets serve dl-tool at both a subdomain and a subfolder without buffering the event stream.
 
@@ -24,11 +25,12 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 3. [`docs/12-security-and-threat-model.md` §6.7 Open redirects, configuration lock, exposure](../12-security-and-threat-model.md#67-open-redirects-configuration-lock-exposure) — the redirect rule and `config_lock`.
 4. [`docs/10-deployment-and-compose.md` §7.3 Base-path requirements](../10-deployment-and-compose.md#73-base-path-requirements) — the eight hard requirements.
 5. [`docs/10-deployment-and-compose.md` §7.1 Caddy](../10-deployment-and-compose.md#71-caddy--deploycaddycaddyfileexample) and [§7.2 Traefik](../10-deployment-and-compose.md#72-traefik--deploytraefiklabelsmd) — the two snippets, verbatim.
+6. [`docs/11-config-reference.md` §2](../11-config-reference.md#2-dltool_-variables-application) — the `DLTOOL_ALLOWED_HOSTS` and `DLTOOL_CONFIG_LOCK` rows and the two paragraphs after the table.
 
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
-| `internal/api/security.go` | create | Host allowlist, security-header and redirect-validation middleware. |
+| `internal/api/security.go` | create | Host allowlist, security-header, configuration-lock and redirect-validation middleware. |
 | `internal/api/security_test.go` | create | Header, `421`, HSTS, redirect and base-path cases. |
 | `deploy/caddy/Caddyfile.example` | create | The subdomain and subfolder snippets of doc 10 §7.1. |
 | `deploy/traefik/labels.md` | create | The label set of doc 10 §7.2. |
@@ -51,13 +53,20 @@ func SecurityHeaders(next http.Handler) http.Handler
 // ContentSecurityPolicy is the exact policy string, single-spaced, sent on every HTML response.
 const ContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; " +
 	"img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; " +
-	"base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	"base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+// ConfigLock answers 403 /problems/config-locked to every mutation under the operator-configuration
+// prefixes of 05-api-contract.md section 1.2 when DLTOOL_CONFIG_LOCK is true. Reads, and every task,
+// account, authentication, token and backup operation, pass through. Nothing changes the lock itself.
+func ConfigLock(locked bool) func(http.Handler) http.Handler
 
 // HostAllowlist answers 421 Misdirected Request when the request Host is neither implicitly
 // allowed nor configured. There is no switch that turns it off.
 //
 // Implicitly allowed, port stripped: "localhost", "localhost.", and any literal IPv4 or IPv6 address.
-// Additionally allowed: every name in extra.
+// Additionally allowed: every name in extra, which is cfg.AllowedHosts — the parsed
+// DLTOOL_ALLOWED_HOSTS of 11-config-reference.md section 2, lowercased with one trailing root dot
+// removed. Passing nil makes every reverse-proxied hostname answer 421.
 func HostAllowlist(extra []string, log *slog.Logger) func(http.Handler) http.Handler
 
 // AllowedHost reports whether host (with or without a port) passes the allowlist. Exported for the
@@ -102,13 +111,21 @@ including the `flush_interval -1` comment and the "do NOT add stripprefix" note.
    offending `Host` value.
 6. Implement `SafeRedirect` rejecting `//host`, `/\host`, any absolute URL and any value containing a
    control character, and always returning a path prefixed by the configured base.
-7. Edit `internal/api/server.go` to mount `HostAllowlist` first, then `SecurityHeaders`, then the existing
+7. Edit `internal/api/server.go` to mount `HostAllowlist(cfg.AllowedHosts, log)` first, then
+   `SecurityHeaders`, then `ConfigLock(cfg.ConfigLock)` on the `/api/v1` sub-router, then the existing
    middleware chain, all on the base sub-router so a request outside the base still returns `404`.
+   `cfg.AllowedHosts` and `cfg.ConfigLock` are the parsed `DLTOOL_ALLOWED_HOSTS` and `DLTOOL_CONFIG_LOCK`
+   ([`11-config-reference.md`](../11-config-reference.md#2-dltool_-variables-application) §2) — they are
+   the only sources either has.
 8. Create `deploy/caddy/Caddyfile.example` and `deploy/traefik/labels.md` from doc 10 §7.1 and §7.2, carrying
    forward the UNVERIFIED note on the Traefik flush-interval label name.
 9. Create `internal/api/security_test.go` with: each header asserted on an HTML response; HSTS absent over
    plain HTTP and present when `X-Forwarded-Proto: https` arrives from a trusted proxy; `Host: evil.example`
-   returning `421`; `Host: localhost:8080` and `Host: 192.168.1.10` succeeding; `SafeRedirect` table cases
+   returning `421`; `Host: localhost:8080` and `Host: 192.168.1.10` succeeding; `Host: dl.example.com`
+   succeeding when `cfg.AllowedHosts` is `["dl.example.com"]` and `421` when it is empty; with
+   `DLTOOL_CONFIG_LOCK=true` a `PATCH /settings` and a `POST /indexers` returning `403`
+   `/problems/config-locked` with no side effect while `POST /tasks/{id}/pause` and a token revocation
+   still succeed; `SafeRedirect` table cases
    for `//evil.example`, `https://evil.example`, `/tasks` and `\\evil.example`; and a repository grep
    asserting no `InsecureSkipVerify: true` outside `testdata/`.
 10. Run the Playwright suite against dl-tool behind Caddy at `/dl-tool/` and confirm login, the grid and the
@@ -117,6 +134,10 @@ including the `flush_interval -1` comment and the "do NOT add stripprefix" note.
 ## Acceptance criteria
 - [ ] All seven headers plus the conditional HSTS behave exactly as doc 12 §6.6 specifies.
 - [ ] `Host: evil.example` returns `421`; `Host: localhost:8080` and a literal IP succeed.
+- [ ] A name in `DLTOOL_ALLOWED_HOSTS` succeeds, with a port and with one trailing root dot, proving
+      `cfg.AllowedHosts` reaches `HostAllowlist`.
+- [ ] `TestConfigLockRejectsOperatorMutations` shows a settings and an indexer mutation returning `403`
+      `/problems/config-locked` without side effects, while task pause and token revocation still work.
 - [ ] `//evil.example` and `https://evil.example` are both ignored and land on the application root.
 - [ ] `GET /anything` outside the configured base returns `404`, not the SPA.
 - [ ] A repository grep finds no `InsecureSkipVerify: true` outside test fixtures.
@@ -142,7 +163,6 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Out of scope — do NOT
 - Do NOT change the base-path mechanism itself; T013 owns `internal/api/static.go` and the `<base href>` rewrite.
-- Do NOT implement the `config_lock` switch; it is a settings concern and no M7 task owns it.
 - Do NOT edit `compose.yaml` to add the `proxy` profile; T094 owns the compose file.
 - Do NOT add a CDN origin, `unsafe-inline` or `unsafe-eval` to the policy to make a component work.
 - Do NOT weaken the Host allowlist behind a configuration switch: it is always on.

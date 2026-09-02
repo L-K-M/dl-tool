@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T006, T007, T008, T054 |
 | **Blocks** | T057, T058, T059, T060, T061, T116 |
-| **Parallel-safe** | no — creates `internal/api/search.go` and registers routes in `internal/api/server.go` |
+| **Parallel-safe** | no — creates `internal/api/search.go` and edits the shared files `internal/api/server.go` and `cmd/dl-tool/main.go` |
 | **Implements** | — (storage and CRUD behind [FR-050](../02-requirements.md#fr-050-query-torznab-and-newznab-indexers) and [FR-056](../02-requirements.md#fr-056-test-an-indexer-on-demand), covered by T054 and T058) |
 | **Decisions** | [ADR-0008](../decisions/0008-torznab-first-declarative-yaml-second.md), [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |
 | **Est. size** | 3 new files, ~520 LOC — of which ~120 lines are the newznab category tree transcribed as data from doc 07 §2.3. CRUD, the category tree and the provider enumeration all read the same sealed `indexers` row and register on one router, so they cannot be split. |
@@ -40,7 +40,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/search/torznab.go` | modify | Add `EnumerateProvider` and `DefaultCategories`. |
 | `internal/api/search.go` | create | `/indexers` CRUD, `/indexers/categories`, the JSON branch of `/indexers/import`. |
 | `internal/api/search_test.go` | create | `humatest` cases for CRUD, secret redaction and enumeration. |
-| `internal/api/server.go` | modify | Call `RegisterSearchRoutes` once, from `NewServer`. |
+| `internal/api/server.go` | modify | Add the `Deps` parameter to `NewServer`, build `SearchHandlers` and call `RegisterSearchRoutes` once. |
+| `cmd/dl-tool/main.go` | modify | Build the guarded client, the indexer store, the definition registry and the runner, and pass them to `NewServer` as one `api.Deps`. |
 
 No other file may be modified.
 
@@ -166,6 +167,19 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 ```
 
 ```go
+// Deps carries the process-wide search collaborators, built exactly once in cmd/dl-tool/main.go
+// and passed into NewServer, so the API and the job worker share one of each
+// (14-conventions.md section 8.3).
+type Deps struct {
+	Indexers *store.IndexerStore
+	Defs     *search.Registry
+	Runner   *search.Runner
+	HTTP     *http.Client // the SSRF-guarded client of T123
+}
+
+// NewServer gains a fourth parameter: NewServer(cfg, db, log, deps).
+func NewSearchHandlers(log *slog.Logger, d Deps) *SearchHandlers
+
 // RegisterSearchRoutes is the single registration point for every /indexers and /search
 // operation. NewServer calls it once; later M4 tasks add their operations inside it and
 // never touch server.go again.
@@ -196,8 +210,13 @@ Operation ids registered here: `list-indexers`, `create-indexer`, `patch-indexer
    `definition_source = 'imported'` and `provenance = 'imported:torznab-provider'`, with the originating
    host recorded in `settings_json.origin`. The settings document also carries
    `allow_private_network: true`, because a provider on the Compose network is private.
-9. Add `RegisterSearchRoutes` to `internal/api/search.go` with the six operations under `/indexers`, and
-   call it once from `NewServer` in `internal/api/server.go`.
+9. Add `RegisterSearchRoutes` to `internal/api/search.go` with the six operations under `/indexers`; add
+   the `Deps` parameter to `NewServer` in `internal/api/server.go` and call it once from there as
+   `RegisterSearchRoutes(api, NewSearchHandlers(log, deps))`. In `cmd/dl-tool/main.go` build the
+   collaborators in exactly this order and pass them as one `api.Deps` value: the guard and
+   `secure.NewClient` → `store.NewIndexerStore(db, cfg.SecretKey)` → `search.NewRegistry(…)` plus
+   `SeedIndexers` (T057) → `search.NewRunner(hc, log, userAgent)` (T058) → `NewServer` → the worker
+   registration of T061. Never build a second instance of any of them.
 10. Create `internal/api/search_test.go` with `humatest`: `TestCreateIndexerRequiresURL`,
     `TestAPIKeyNeverReturned`, `TestPatchIndexerPartial`, `TestDuplicateDefinitionIDConflicts`,
     `TestCategoriesMergeCapsOverDefaults`, `TestImportProviderCreatesDisabledRows`,

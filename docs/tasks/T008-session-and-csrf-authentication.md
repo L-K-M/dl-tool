@@ -45,16 +45,14 @@ No other file may be modified.
 package store
 
 type User struct {
-	ID                 string  `db:"id" json:"id"`
-	Username           string  `db:"username" json:"username"`
-	PasswordHash       string  `db:"password_hash" json:"-"`
-	Role               string  `db:"role" json:"role"`           // "admin" | "user"
-	Enabled            bool    `db:"enabled" json:"enabled"`
-	DefaultDestination *string `db:"default_destination" json:"default_destination"`
-	Locale             string  `db:"locale" json:"locale"`
-	LastLoginAt        *int64  `db:"last_login_at" json:"-"`
-	CreatedAt          int64   `db:"created_at" json:"-"`
-	UpdatedAt          int64   `db:"updated_at" json:"-"`
+	ID           string `db:"id" json:"id"`
+	Username     string `db:"username" json:"username"`
+	PasswordHash string `db:"password_hash" json:"-"`
+	Enabled      bool   `db:"enabled" json:"enabled"`
+	Locale       string `db:"locale" json:"locale"`
+	LastLoginAt  *int64 `db:"last_login_at" json:"-"`
+	CreatedAt    int64  `db:"created_at" json:"-"`
+	UpdatedAt    int64  `db:"updated_at" json:"-"`
 }
 
 type Session struct {
@@ -166,7 +164,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT implement `POST /auth/setup`, `POST /auth/login`, `POST /auth/logout` or `GET /auth/me`; T009 owns
   them and edits `internal/api/auth.go` again.
 - Do NOT implement password hashing; T009 owns `internal/secure/hash.go`.
-- Do NOT implement `/api-tokens` CRUD or the admin role check; T084 owns both.
+- Do NOT implement `/api-tokens` CRUD; T084 owns it.
 - Do NOT create `internal/secure/csrf.go`. The CSRF token is a `sessions` column
   ([`04-data-model.md`](../04-data-model.md#31-identity-and-access)); it is minted in `session.go` and
   checked in `auth.go`.

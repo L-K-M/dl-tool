@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T019, T024, T025 |
 | **Blocks** | T030, T098 |
-| **Parallel-safe** | no — it also edits the shared file `internal/engine/aria2/client.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/engine/aria2/client.go`, `internal/store/tasks.go` and `internal/api/server.go` |
 | **Implements** | [NFR-003](../02-requirements.md#nfr-003-resume-every-task-after-a-restart); the aria2 half of [FR-148](../02-requirements.md#fr-148-ignore-engine-tasks-dl-tool-did-not-create), whose qBittorrent half is T030 |
 | **Decisions** | [ADR-0017](../decisions/0017-exclusive-control-of-engines.md), [ADR-0006](../decisions/0006-sse-with-rid-deltas.md) |
 | **Est. size** | 2 new files, ~300 LOC |
@@ -31,6 +31,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/reconcile.go` | create | `Reconciler`: the boot sweep, the poll loop and the foreign-transfer filter. |
 | `internal/engine/reconcile_test.go` | create | Boot-sweep, foreign-transfer and orphan cases against a fake `Engine`. |
 | `internal/engine/aria2/client.go` | modify | Swap the polling `Events` for the WebSocket notification transport. |
+| `internal/store/tasks.go` | modify | Add `ListNonTerminalByEngine` and `SetEngineRef`. |
+| `internal/api/server.go` | modify | Construct the reconciler, run `Boot` before the listener opens and start `Run`. |
 
 No other file may be modified.
 
@@ -48,14 +50,28 @@ func NewReconciler(reg *Registry, ts TaskWriter, poll time.Duration) *Reconciler
 
 // TaskWriter is the store surface the reconciler needs. internal/store.TaskStore satisfies it.
 type TaskWriter interface {
-	ListByEngineRef(ctx context.Context, engineName string) (map[string]string, error) // engine_ref -> task id
+	// ListNonTerminalByEngine returns engine_ref -> task for one engine, skipping completed,
+	// removed and error. Added to internal/store/tasks.go by this task.
+	ListNonTerminalByEngine(ctx context.Context, engineName string) (map[string]Reconcilable, error)
 	UpdateProgress(ctx context.Context, id string, p Progress) error
+	SetEngineRef(ctx context.Context, id, engineRef string) error
 	Transition(ctx context.Context, id, next, code, message string) error
 }
 
-// Boot runs one full sweep before the HTTP listener opens: every engine is listed, every known
-// engine_ref is written back, every task whose handle the engine no longer knows is marked error
-// with the code engine_unavailable, and every unknown handle is ignored.
+// Reconcilable is the non-terminal task the sweep needs: enough to write state back and, when the
+// handle has vanished, to re-submit it.
+type Reconcilable struct {
+	ID         string
+	State      string // never completed, removed or error
+	SourceURI  *string
+	InfohashV1 *string
+}
+
+// Boot runs one full sweep before the HTTP listener opens, over the non-terminal tasks only (never
+// completed, removed or error): every known engine_ref is written back, a task in downloading,
+// seeding or checking whose handle has vanished is re-submitted from its stored source with resume
+// semantics, a queued or paused task is left alone, and every unknown handle is ignored.
+// See 17-operations-and-runbook.md section 1.6.
 func (r *Reconciler) Boot(ctx context.Context) error
 
 // Run drives Boot and then a poll loop until ctx is cancelled. It is owned by the component that
@@ -69,7 +85,9 @@ Reconciliation rules, all of them:
 |---|---|
 | Engine reports a handle dl-tool knows | Write the normalised `TaskInfo` back: state, byte counters, rates, ETA. |
 | Engine reports a handle dl-tool does not know | Ignore it. It never enters `tasks`, counts toward no limit, and is never paused, relocated or deleted. |
-| dl-tool holds a task whose handle the engine no longer knows | Transition to `error` with `error_code` `engine_unavailable` and one `engine.unavailable` event. |
+| dl-tool holds a `downloading`, `seeding` or `checking` task whose handle the engine no longer knows | Re-submit from `source_uri` (or the infohash, for qBittorrent) with resume semantics, `SetEngineRef` to the new handle and emit `task.reconciled`. An aria2 GID never survives a daemon restart, so this is the expected path, not a failure. |
+| The re-submission itself fails | Transition to `error` with `error_code` `engine_unavailable` and one `engine.unavailable` event. |
+| dl-tool holds a `completed`, `removed` or `error` task | Out of scope: a terminal task is never listed and never touched. |
 | dl-tool holds a task with `engine_ref` still `NULL` | Leave it in `queued`; T098's admission pass owns starting it. |
 | The engine is unreachable | Log at `warn`, retry on the next tick, change no task state. |
 
@@ -77,13 +95,15 @@ Reconciliation rules, all of them:
 1. Create `internal/engine/reconcile.go` with `Reconciler`, `TaskWriter`, `NewReconciler`, `Boot` and
    `Run`.
 2. Implement `Boot` as one `Engine.List` per registered engine, joined against
-   `ListByEngineRef` on the `engine_ref` value.
+   `ListNonTerminalByEngine` on the `engine_ref` value, so a terminal task is never a candidate.
 3. Drop every listed handle that is absent from the map, and add the comment that this is the whole of
    [ADR-0017](../decisions/0017-exclusive-control-of-engines.md): one rule, no options and no setting.
 4. Write back the counters with `UpdateProgress`, and call `Transition` only when the normalised state
    differs from the stored one, so an unchanged task produces no event and no delta.
-5. Mark a task whose handle has vanished as `error` with `engine_unavailable` and one
-   `engine.unavailable` event.
+5. For a vanished handle in `downloading`, `seeding` or `checking`, re-submit through `Engine.Add` with
+   resume semantics, call `SetEngineRef` with the new handle and write one `task.reconciled` event; leave
+   `queued` and `paused` alone. Only a failed re-submission becomes `error` with `engine_unavailable` and
+   one `engine.unavailable` event.
 6. Implement `Run` as `Boot` followed by a ticker at the configured interval, returning `ctx.Err()` on
    cancellation and never leaking the goroutine.
 7. Log every unreachable engine at `warn` with the `engine` attribute, and change no task state on that
@@ -96,15 +116,24 @@ Reconciliation rules, all of them:
 9. Never reply to a notification — it carries no `id` — and reconnect with exponential backoff on drop,
    while continuing to emit a `progress` event from a 1 s `aria2.tellActive` batch so rates keep moving.
 10. Create `internal/engine/reconcile_test.go` with a fake `Engine`: a known handle updates its task; an
-    unknown handle creates nothing and touches nothing; a vanished handle marks its task `error` with
-    `engine_unavailable`; an unreachable engine changes no state.
+    unknown handle creates nothing and touches nothing; a vanished handle for a `downloading` task is
+    re-submitted and adopts the new `engine_ref`; a vanished handle for a `completed` or `removed` task
+    changes nothing; a re-submission that fails marks its task `error` with `engine_unavailable`; an
+    unreachable engine changes no state.
+11. Edit `internal/api/server.go` to build `engine.NewReconciler(reg, taskStore, time.Second)` on the
+    registry T027 step 8 created, call `Boot` once before the HTTP listener opens — logging a failure at
+    `warn` without stopping `NewServer` — and start `Run` in a goroutine under the server context, stopped
+    when that context is cancelled.
 
 ## Acceptance criteria
 - [ ] `Boot` writes every engine-reported state back for handles dl-tool knows.
 - [ ] A handle dl-tool did not create produces no `tasks` row and no `task_events` row.
-- [ ] A vanished handle leaves its task in `error` with `error_code` `engine_unavailable`.
+- [ ] A vanished handle for a non-terminal task is re-submitted and the new handle is stored.
+- [ ] A vanished handle for a `completed` or `removed` task changes nothing.
+- [ ] Only a failed re-submission leaves the task in `error` with `error_code` `engine_unavailable`.
 - [ ] An unreachable engine logs one warning and changes no task state.
 - [ ] `Run` returns when its context is cancelled and leaves no goroutine running.
+- [ ] A server built by `NewServer` has reconciled once before it accepts its first request.
 - [ ] The aria2 `Events` channel closes when its context is cancelled.
 
 ## Verification

@@ -82,8 +82,15 @@ func NewGuard(log *slog.Logger, allowPrivate bool) *Guard
 func (g *Guard) AllowAddr(ip netip.Addr) error
 
 // Check is wired into net.Dialer.ControlContext, never Control. network is "tcp4" or "tcp6";
-// addr is always "ip:port", never a hostname. Ports 80 and 443 are the only ones permitted.
+// addr is always "ip:port", never a hostname. Ports 80 and 443 are the only ones permitted,
+// except on a guard returned by ForOrigin, which also permits that one origin's own port.
 func (g *Guard) Check(ctx context.Context, network, addr string) error
+
+// ForOrigin returns a copy of g that additionally permits u's port, for u's own resolved address
+// and nothing else, when allowPrivate is set. It is how a Prowlarr on :9696 or a Jackett on :9117
+// is reachable while every redirect hop to another host stays limited to 80 and 443
+// (12-security-and-threat-model.md sections 2.2 rule 5 and 2.3).
+func (g *Guard) ForOrigin(u *url.URL) *Guard
 
 // CheckRedirect caps hops at 5 and requires the scheme to stay http or https on every hop.
 func (g *Guard) CheckRedirect(req *http.Request, via []*http.Request) error
@@ -114,7 +121,10 @@ func RedactURL(raw string) string
    for an IPv6 address require membership of `allowed6` and non-membership of `denied6`. Return a
    `*BlockedError` naming the matched prefix, and log exactly one `warn` record per denial.
 5. Write `Check` exactly as doc 12 §2.2 shows it: reject any network other than `tcp4`/`tcp6`, reject any
-   port other than `80` and `443`, parse the host with `netip.ParseAddr`, then delegate to `AllowAddr`.
+   port outside the guard's permitted set, parse the host with `netip.ParseAddr`, then delegate to
+   `AllowAddr`. The set is `{80,443}` on a guard from `NewGuard`; `ForOrigin` adds that origin's own port,
+   for that origin's address only and only while `allowPrivate` is set. Without this, every provider URL
+   shape of [`07-search-and-indexers.md`](../07-search-and-indexers.md) §2.6 is unreachable.
 6. Write `CheckRedirect`: `len(via) >= 5` returns a `*BlockedError` with reason `redirect_cap`; a
    `req.URL.Scheme` other than `http` or `https` returns reason `scheme` — a `301` to
    `file:///etc/passwd` must not pass. Set `Hop` to `len(via)`.

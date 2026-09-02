@@ -28,7 +28,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
-| `internal/engine/bandwidth.go` | create | `Governor`, `Limits`, `ApplyGlobal` and the read-back check. |
+| `internal/engine/bandwidth.go` | create | `Governor`, `RateLimits`, `ApplyGlobal` and the read-back check. |
 | `internal/engine/bandwidth_test.go` | create | Fan-out, unlimited, read-back-mismatch and partial-failure cases. |
 | `internal/store/settings.go` | modify | Add typed `GetInt64` and `SetInt64` over the `settings` table. |
 | `cmd/dl-tool/main.go` | modify | Construct the governor and apply the stored limits at boot. |
@@ -40,9 +40,10 @@ No other file may be modified.
 ```go
 package engine
 
-// Limits is one direction pair in bytes per second. Zero means unlimited. There is no KB/s
-// representation anywhere in dl-tool: doc 04 §1.4 makes bytes the only unit.
-type Limits struct {
+// RateLimits is one direction pair in bytes per second. Zero means unlimited. There is no KB/s
+// representation anywhere in dl-tool: doc 04 §1.4 makes bytes the only unit. The name is not
+// Limits: T098 already declares that type in this package for the concurrency caps.
+type RateLimits struct {
 	Down int64
 	Up   int64
 }
@@ -58,18 +59,18 @@ const (
 
 // Governor owns the global bandwidth state and is the only caller of Engine.SetRateLimits with an
 // empty id. It is safe for concurrent use.
-type Governor struct{ /* reg *Registry; store *store.Store; mu sync.Mutex; current Limits */ }
+type Governor struct{ /* reg *Registry; store *store.Store; mu sync.Mutex; current RateLimits */ }
 
 func NewGovernor(reg *Registry, st *store.Store) *Governor
 
 // Current returns the limits last applied.
-func (g *Governor) Current() Limits
+func (g *Governor) Current() RateLimits
 
 // ApplyGlobal pushes l to every registered, enabled engine and then reads each engine back to
 // confirm. A read-back mismatch is logged at warn with the requested and observed values and does
 // not fail the call. An engine returning ErrNotSupported is skipped. Errors from individual
 // engines are joined with errors.Join so one unreachable daemon never blocks the others.
-func (g *Governor) ApplyGlobal(ctx context.Context, l Limits) error
+func (g *Governor) ApplyGlobal(ctx context.Context, l RateLimits) error
 
 // LoadAndApply reads download_rate_limit and upload_rate_limit from settings and calls ApplyGlobal.
 // It is called once at boot and again after any settings write that touches either key.
@@ -92,7 +93,7 @@ func (s *SettingsStore) SetInt64(ctx context.Context, key string, v int64) error
 ```
 
 ## Steps
-1. Create `internal/engine/bandwidth.go` with `Limits`, `Mode`, `Governor`, `NewGovernor`, `Current`,
+1. Create `internal/engine/bandwidth.go` with `RateLimits`, `Mode`, `Governor`, `NewGovernor`, `Current`,
    `ApplyGlobal` and `LoadAndApply`.
 2. Implement `ApplyGlobal` as a loop over `Registry` entries, calling `SetRateLimits(ctx, "", &down, &up)`
    and skipping an engine that returns `ErrNotSupported`.

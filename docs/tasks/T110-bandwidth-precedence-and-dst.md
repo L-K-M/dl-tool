@@ -56,7 +56,7 @@ func Effective(mode Mode, cell, global, task int64) (rate int64, pause bool)
 //	ModeDefault     → cell limits are download_rate_limit / upload_rate_limit
 //	ModeAlternative → cell limits are alt_download_rate_limit / alt_upload_rate_limit
 //	ModeNoDownload  → pause; no rate is sent to any engine
-func (g *Governor) Resolve(ctx context.Context, t store.Task) (l Limits, pause bool)
+func (g *Governor) Resolve(ctx context.Context, t store.Task) (l RateLimits, pause bool)
 ```
 
 The worked case of [FR-096](../02-requirements.md#fr-096-combine-schedule-global-and-per-task-limits-by-minimum),

@@ -13,9 +13,9 @@
 | **Est. size** | 3 new files, ~360 LOC |
 
 ## Goal
-A `.torrent` file dropped into an enabled watch folder becomes a task owned by that folder's owner, in that
-folder's destination and category, within one poll interval. Registration uses inotify and falls back to
-polling when inotify is unavailable. With `delete_after_load` the source file is unlinked only after the
+A `.torrent` file dropped into an enabled watch folder becomes a task in that folder's destination and
+category, within one poll interval. Registration uses inotify and falls back to polling when inotify is
+unavailable. With `delete_after_load` the source file is unlinked only after the
 engine accepted the task.
 
 ## Context you need
@@ -89,7 +89,7 @@ var newOSWatcher = newPollWatcher
 
 // TaskCreator is the T020 creation path, injected so the watcher never re-implements it.
 type TaskCreator interface {
-	CreateFromTorrent(ctx context.Context, ownerID string, blob []byte, dest, category string) (taskID string, err error)
+	CreateFromTorrent(ctx context.Context, blob []byte, dest, category string) (taskID string, err error)
 }
 ```
 
@@ -118,9 +118,8 @@ for when the two differ, per the Task object in
    `newOSWatcher` and the polling implementation.
 3. In `ScanOnce`, read each directory entry, skip anything not ending in `.torrent` with `SkipNotATorrent`,
    parse it with the T031 metainfo parser and skip an unparsable file with `SkipNotATorrent`.
-4. Create the task through `TaskCreator` with the folder's `destination` and `category`; map a
-   rejected destination to `SkipPathRejected`, a known infohash to `SkipDuplicate` and a quota refusal to
-   `SkipQuota`.
+4. Create the task through `TaskCreator` with the folder's `destination` and `category`; map a rejected
+   destination to `SkipPathRejected` and a known infohash to `SkipDuplicate`.
 5. Unlink the source file only after the creator returned a task id, and only when `delete_after_load` is
    set; a failed hand-off always leaves the file in place.
 6. Record the loaded files so a re-scan skips them with `SkipAlreadyLoaded`, keyed on the torrent's
@@ -137,10 +136,10 @@ for when the two differ, per the Task object in
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] A dropped `.torrent` becomes a task within one poll interval, owned by the folder's owner.
+- [ ] A dropped `.torrent` becomes a task within one poll interval, in the folder's destination.
 - [ ] `delete_after_load` unlinks the source only after the engine accepted the task.
 - [ ] A second scan skips the file with `already_loaded`; nothing is imported twice.
-- [ ] Every skip carries one of the six documented reasons and no other string.
+- [ ] Every skip carries one of the five documented reasons and no other string.
 - [ ] The task's `destination` is the resolved path and `requested_destination` is non-null when they differ.
 - [ ] An inotify registration failure falls back to polling and the same files are still loaded.
 

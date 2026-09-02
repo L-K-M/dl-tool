@@ -14,8 +14,9 @@
 
 ## Goal
 A fresh instance prints a one-time setup token, writes it to `<config>/setup-token` mode `0600`, and answers
-every endpoint except `POST /auth/setup` with 401 `/problems/setup-required`. Setup creates the first admin
-with an argon2id password hash, deletes the token file, and returns 409 on any later attempt. Login, logout
+every endpoint except `POST /auth/setup` with 401 `/problems/setup-required`. Setup creates the single
+operator account with an argon2id password hash, deletes the token file, and returns 409 on any later
+attempt. Login, logout
 and `GET /auth/me` work with the session that setup issued.
 
 ## Context you need
@@ -84,7 +85,7 @@ Content-Type: application/json
 HTTP/1.1 201 Created
 Set-Cookie: dltool_session=6f1c...; Path=/; HttpOnly; SameSite=Lax
 
-{"user":{"id":"usr_01JKQ7X1AA0000000000000000","username":"alice","role":"admin","enabled":true,
+{"user":{"id":"usr_01JKQ7X1AA0000000000000000","username":"alice","enabled":true,
  "locale":"en","last_login_at":null,
  "created_at":"2026-09-01T09:00:00Z"},
  "csrf_token":"K7sB2h1QpVmNc0aZ"}
@@ -101,8 +102,8 @@ Set-Cookie: dltool_session=6f1c...; Path=/; HttpOnly; SameSite=Lax
    `secure.NewToken`, write it mode `0600`, and log it at `info` on its own line so it is visible in
    `docker compose logs`.
 5. Implement `POST /auth/setup`: compare `setup_token` in constant time; reject a password under 12
-   characters with 422 `/problems/validation-failed`; create the user with `role = "admin"`; delete the
-   token file; issue a session; return 201 with the envelope above. A second call returns 409
+   characters with 422 `/problems/validation-failed`; create the account; delete the token file; issue a
+   session; return 201 with the envelope above. A second call returns 409
    `/problems/setup-already-complete`.
 6. Implement `POST /auth/login`: identical `detail` and comparable timing for a wrong password, a disabled
    account and an unknown user; on success rotate the session id and call `TouchLastLogin`.
@@ -145,7 +146,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Out of scope — do NOT
 - Do NOT build the setup wizard screen; T039 and T040 own the SPA shell and its first-run route.
 - Do NOT implement `/account` or `/api-tokens`; T084 and T120 own them.
-- Do NOT accept an admin password from an environment variable, in any form, ever.
+- Do NOT accept the account password from an environment variable, in any form, ever.
 - Do NOT add a "disabled for local addresses" or anonymous mode; there is none.
 
 ## Forbidden shortcuts

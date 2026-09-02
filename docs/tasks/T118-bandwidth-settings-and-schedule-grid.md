@@ -198,7 +198,7 @@ files this task creates are untracked, and `git diff --name-only` never lists an
 - Do NOT resolve the active cell in the browser. `active_mode` is read-only and comes from the server so a
   DST boundary is never computed twice.
 - Do NOT build the per-task limit controls; T082 owns them and they live in the task detail pane.
-- Do NOT build the Downloads, BitTorrent, Users, Notifications or Advanced sections, or per-root
+- Do NOT build the Downloads, BitTorrent, Account, Notifications or Advanced sections, or per-root
   `min_free_space`; T119, T120 and T121 own those.
 - Do NOT convert a limit to or from KB/s, and do NOT add a settings key: doc 11 §5 is the authoritative list.
 

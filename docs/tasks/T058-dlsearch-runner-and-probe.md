@@ -123,7 +123,7 @@ type TestIndexerOutput struct {
 func (h *SearchHandlers) TestIndexer(ctx context.Context, in *IndexerIDInput) (*TestIndexerOutput, error)
 ```
 
-Operation id: `test-indexer`, `POST /indexers/{id}/test`, admin only, added inside T055's
+Operation id: `test-indexer`, `POST /indexers/{id}/test`, added inside T055's
 `RegisterSearchRoutes`. `internal/api/server.go` is not touched again.
 
 ## Steps

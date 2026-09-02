@@ -36,10 +36,9 @@ specify HTTP shapes, DDL, env vars or UI layout — those live in their own docu
 only by recording the deferral in [`docs/tasks/00-task-index.md`](tasks/00-task-index.md).
 
 Vocabulary used below and owned by the brief: task states are
-`queued downloading seeding paused checking extracting moving completed error removed`; error codes are
-Download Station's 26 `error_detail` values plus `ssrf_blocked`, `path_rejected`,
-`engine_unavailable`, `unsupported_scheme` and `concurrency_limit`; all rates and sizes are bytes or
-bytes/second.
+`queued downloading seeding paused checking extracting moving completed error removed`; the `error_code`
+enum is owned by [`04-data-model.md` §4.2](04-data-model.md#42-taskserror_code); all rates and sizes are
+bytes or bytes/second.
 
 ### Permanently unused requirement identifiers
 
@@ -889,7 +888,7 @@ The dl-tool task event log shall record, per task, at least the events `created`
 | T024 | must |
 
 ### FR-151 Expose system logs with secrets redacted
-The dl-tool system-log endpoint shall return recent structured log records to admins with `Authorization`, `Cookie`, `X-Api-Key`, `apikey`, `token` and `passkey` values replaced by a redaction marker.
+The dl-tool system-log endpoint shall return recent structured log records to an authenticated caller with `Authorization`, `Cookie`, `X-Api-Key`, `apikey`, `token` and `passkey` values replaced by a redaction marker.
 
 **Verify:** T096 makes a request carrying an indexer URL with a `passkey=` query parameter and asserts the stored log line contains the marker and not the passkey.
 
@@ -1010,7 +1009,7 @@ The dl-tool HTTP client shall verify TLS certificates on every outbound request,
 | T095 | must |
 
 ### NFR-011 Ship no default credentials
-The dl-tool distribution shall contain no built-in account, no default password and no anonymous mode, and shall accept no admin password from an environment variable in the shipped compose file.
+The dl-tool distribution shall contain no built-in account, no default password and no anonymous mode, and shall accept no account password from an environment variable in the shipped compose file.
 
 **Verify:** T009 greps the image and compose file for any credential literal and asserts none, then asserts a fresh instance rejects every login until setup completes — the lesson of CVE-2023-30801.
 
@@ -1183,7 +1182,7 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 ### NFR-030 Lock configuration from the environment
 When `DLTOOL_CONFIG_LOCK=true`, dl-tool shall reject every API mutation of settings, engines, indexers,
 feeds, rules, categories, tags, watch folders and notification channels with HTTP 403
-`/problems/config-locked`. Task, user, authentication, token and backup operations shall remain available,
+`/problems/config-locked`. Task, authentication, token and backup operations shall remain available,
 and no API shall change the lock itself.
 
 **Verify:** T095 enables the lock, asserts a settings mutation and an indexer mutation return 403 without
@@ -1216,8 +1215,11 @@ side effects, then asserts task pause and token revocation still work.
 
 - FR-071: the RSS poll-interval option values are not fixed by prior art. Download Station's dropdown values
   are **UNVERIFIED**; the shipped set must be chosen in [`08-rss-automation.md`](08-rss-automation.md).
-- FR-002: the cheap yt-dlp extractor pre-check is marked **INFERRED** in the research; the exact matching
-  mechanism must be settled in [`06-download-engines.md`](06-download-engines.md).
+- FR-002: the cheap yt-dlp extractor pre-check has no mechanism yet. The one the plan assumed — enumerate
+  extractor URL patterns from the CLI and match them with Go `regexp` — was measured against the pinned
+  yt-dlp and does not work; see [`06-download-engines.md` §7.2](06-download-engines.md#72-routing-check).
+  T016 ships the routing table and the hook; populating the hook is deferred to an ADR and recorded in
+  [`tasks/00-task-index.md`](tasks/00-task-index.md).
 - FR-050 and FR-055: the Torznab category tree used by the search category filter is **INFERRED** from
   convention; confirm the concrete category IDs in [`07-search-and-indexers.md`](07-search-and-indexers.md).
 - This document exceeds the 700-line budget suggested for it because the mandated coverage list does not fit
@@ -1248,3 +1250,5 @@ side effects, then asserts task pause and token revocation still work.
 | 2026-09-01 | Security review: made search-result acquisition handles server-only. |
 | 2026-09-02 | Multi-user model dropped: FR-118 – FR-124 deleted and retired, FR-115 restated for a single operator account. Authentication, API tokens, the data-root jail and opaque search-result ids are unaffected ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | NFR-023 extended: configuration directories are `0700` and sensitive files `0600` regardless of `UMASK`, which now governs only the data roots. |
+| 2026-09-02 | Single-account cleanup: NFR-030 no longer exempts user operations — there is no user API; FR-151 serves logs to any authenticated caller and NFR-011 says account password rather than admin password ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Review pass: the `error_code` vocabulary is no longer restated here (it was five additions out of date); FR-002's open question records the measured result that its assumed matching mechanism does not exist. |

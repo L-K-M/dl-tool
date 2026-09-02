@@ -90,10 +90,13 @@ Subtest obligations, exactly these:
 8. Create `internal/engine/aria2/contract_test.go` with `//go:build integration`, building the container
    with `testcontainers.FromDockerfile` over `deploy/aria2/Dockerfile` and an explicit
    `wait.ForListeningPort("6800/tcp")`; the default wait deadline is 60 s.
-9. Reach the `Fixture` server from inside the container by binding `httptest` to `0.0.0.0`, resolving the
-   host with `testcontainers.DaemonHost(ctx)` and rewriting the fixture URL's host to it, plus
-   `testcontainers.WithHostPortAccess(port)`. A URL of `127.0.0.1:<port>` is the container's own loopback and
-   the download will hang until the subtest deadline.
+9. Reach the `Fixture` server from inside the container by binding `httptest` to `0.0.0.0`, passing
+   `testcontainers.WithHostPortAccess(port)`, and rewriting the fixture URL's host to
+   `testcontainers.HostInternal` (`"host.testcontainers.internal"`, `port_forwarding.go`) — that option is
+   what makes the name resolve. Do **not** use `DaemonHost`: in the pinned v0.44.0 it is a method on
+   `*DockerProvider`, not a package function, and it names the Docker daemon rather than the test process.
+   A URL of `127.0.0.1:<port>` is the container's own loopback and the download hangs until the subtest
+   deadline.
 10. Have the container `Cmd` pass `--enable-rpc`, `--rpc-listen-all`, `--dir=/downloads` and `--rpc-secret`
     matching the `Config.Secret` the test constructs, and call `enginetest.RunContract(t, newAria2)`.
 
