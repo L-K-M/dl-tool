@@ -131,6 +131,9 @@ func NewID(prefix string) string
 - [ ] `TestPreMigrationBackup` asserts the `.bak` file exists and no `.bak.tmp` file remains.
 - [ ] `TestNewID` asserts the 26-character ULID body and 10 000 collision-free identifiers.
 - [ ] No `SELECT *` appears anywhere in `internal/store`.
+- [ ] The configuration directory is `0700` and `dl-tool.db` is `0600` after `Open`, with `UMASK=002` set.
+- [ ] The `-wal` and `-shm` sidecars are `0600` after a write transaction, inheriting the database's mode.
+- [ ] A symlink or non-regular file at `DLTOOL_DB_PATH` is a fatal boot error, not a silent follow.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

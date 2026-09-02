@@ -141,7 +141,7 @@ through to the application variables of the same name.
 | `DLTOOL_PORT` | `8091` | Published host port mapped to container `8080`. |
 | `DLTOOL_QBITTORRENT_URL` | *(empty — lane disabled; an empty string counts as unset, §1)* | Passes straight through to the application variable of the same name (§2): a non-empty value enables the BitTorrent lane, and `QBT_USERNAME`/`QBT_PASSWORD` must then be set or boot fails with `config_missing`. |
 | `QBT_USERNAME` | *(empty)* | `DLTOOL_QBITTORRENT_USERNAME`. The same credentials must be set in qBittorrent's own WebUI; the linuxserver image does not read them. |
-| `QBT_PASSWORD` | *(empty)* | `DLTOOL_QBITTORRENT_PASSWORD`. The `_FILE` variant (`DLTOOL_QBITTORRENT_PASSWORD_FILE`) is supported by the application (§2) but is not wired by the shipped compose — using it means adding a `secrets:` stanza by hand. |
+| `QBT_PASSWORD` | *(empty)* | Sources the `qbt_password` Compose secret, mounted at `/run/secrets/qbt_password` mode `0400` and read through `DLTOOL_QBITTORRENT_PASSWORD_FILE`. It never becomes a service environment variable. |
 | `DLTOOL_ARIA2_URL` | *(empty — lane disabled)* | Passes straight through to the application variable of the same name (§2). Set together with `ARIA2_RPC_SECRET` **and** the `aria2` profile (`COMPOSE_PROFILES=aria2`): a URL with an empty secret is a fatal `config_missing` at dl-tool's boot (§8), a URL without the profile enables a lane whose backend container is not running and fails at runtime with `engine_unavailable`. |
 | `ARIA2_RPC_SECRET` | *(none)* | The aria2 service's RPC secret **and** dl-tool's `DLTOOL_ARIA2_SECRET`. One value, two consumers, guarded twice: dl-tool's boot fails with `config_missing` when `DLTOOL_ARIA2_URL` is set and this is empty, and the aria2 entrypoint refuses an empty value when that profile is active. |
 | `QBT_WEBUI_PORT` | `8080` | qBittorrent's in-container WebUI port. The URL is no longer derived from it — changing the port means updating `DLTOOL_QBITTORRENT_URL` to match. |
@@ -182,8 +182,8 @@ lives in its own table and is replaced through `PUT /settings/schedule`. Per-use
 
 | Secret | Carrier | Never |
 |---|---|---|
-| `DLTOOL_ARIA2_SECRET` | env or `DLTOOL_ARIA2_SECRET_FILE` | logged, returned by any endpoint, or written to a backup export |
-| `DLTOOL_QBITTORRENT_PASSWORD` | env or `DLTOOL_QBITTORRENT_PASSWORD_FILE` | logged, returned by any endpoint, or written to a backup export |
+| `DLTOOL_ARIA2_SECRET` | `DLTOOL_ARIA2_SECRET_FILE`; the shipped compose mounts `/run/secrets/aria2_rpc_secret` mode `0400` | logged, returned by any endpoint, or written to a backup export |
+| `DLTOOL_QBITTORRENT_PASSWORD` | `DLTOOL_QBITTORRENT_PASSWORD_FILE`; the shipped compose mounts `/run/secrets/qbt_password` mode `0400` | logged, returned by any endpoint, or written to a backup export |
 | `extract_passwords` (the shared list) | `settings` row, encrypted at rest with `DLTOOL_SECRET_KEY` (see below) | returned in clear by `GET /settings` — it renders as `"__redacted__"` |
 | `tasks.extract_password` (per task) | `tasks` column, encrypted at rest with `DLTOOL_SECRET_KEY` | returned by any API at all — it is absent from every Task object ([`05-api-contract.md`](05-api-contract.md) §3) |
 | indexer `api_key` | `indexers.api_key_enc`, encrypted at rest | returned by `GET /indexers`, or included in a log line or an error message |
@@ -378,3 +378,4 @@ stated fallback.
 | 2026-09-01 | Added `DLTOOL_ALLOWED_HOSTS`, the previously unspecified knob behind the Host-allowlist defence in `12-security-and-threat-model.md` §6.5. |
 | 2026-09-01 | Security review: added the Host allowlist and environment-only configuration lock; made the trusted-proxy example deny forwarded headers by default. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Engine credentials are wired as Compose named secrets rather than service environment variables; the `_FILE` convention is now what the shipped compose uses, not a manual alternative. |

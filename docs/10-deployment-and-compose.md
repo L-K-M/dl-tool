@@ -100,9 +100,22 @@ services:
       # the lane (11-config-reference.md §8: a set URL with missing credentials is fatal).
       DLTOOL_QBITTORRENT_URL: "${DLTOOL_QBITTORRENT_URL:-}"
       DLTOOL_QBITTORRENT_USERNAME: "${QBT_USERNAME:-}"
-      DLTOOL_QBITTORRENT_PASSWORD: "${QBT_PASSWORD:-}"
+      # Credentials arrive as mounted files, never as environment: `docker inspect`
+      # and `docker compose config` then show a path, not a value (section 6.1).
+      DLTOOL_QBITTORRENT_PASSWORD_FILE: "/run/secrets/qbt_password"
       DLTOOL_ARIA2_URL: "${DLTOOL_ARIA2_URL:-}"
-      DLTOOL_ARIA2_SECRET: "${ARIA2_RPC_SECRET:-}"
+      DLTOOL_ARIA2_SECRET_FILE: "/run/secrets/aria2_rpc_secret"
+    secrets:
+      - source: aria2_rpc_secret
+        target: aria2_rpc_secret
+        uid: "${PUID:-1000}"
+        gid: "${PGID:-1000}"
+        mode: 0400
+      - source: qbt_password
+        target: qbt_password
+        uid: "${PUID:-1000}"
+        gid: "${PGID:-1000}"
+        mode: 0400
     volumes:
       - ${CONFIG_DIR:-./config}/dl-tool:/config
       - ${DATA_DIR:-/srv/data}:/data          # ONE mount — see §3
@@ -150,11 +163,13 @@ services:
     container_name: aria2
     environment:
       <<: *common-env
-      # Interpolated with a default, not `:?`: Compose resolves required
-      # variables for every service in the file, before profile filtering, so a
-      # `:?` here breaks a core-only `docker compose up -d`. The entrypoint
-      # refuses an empty secret when this profile is active (§5.1).
-      ARIA2_RPC_SECRET: "${ARIA2_RPC_SECRET:-}"
+      ARIA2_RPC_SECRET_FILE: "/run/secrets/aria2_rpc_secret"
+    secrets:
+      - source: aria2_rpc_secret
+        target: aria2_rpc_secret
+        uid: "${PUID:-1000}"
+        gid: "${PGID:-1000}"
+        mode: 0400
     volumes:
       - ${CONFIG_DIR:-./config}/aria2:/config
       - ${DATA_DIR:-/srv/data}:/data
@@ -177,10 +192,24 @@ services:
     container_name: gluetun
     cap_add: [NET_ADMIN]
     devices: ["/dev/net/tun:/dev/net/tun"]
-    env_file: [.env]                               # VPN_*, WIREGUARD_*, FIREWALL_* — see section 8
+    # No `env_file: [.env]`: that hands the VPN container every value in the file,
+    # including the qBittorrent password and the aria2 RPC secret it has no use for.
+    # Name the VPN variables explicitly and mount the two credentials as secrets.
     environment:
       TZ: "${TZ:-Etc/UTC}"
       VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:?required for the vpn profile}"
+      VPN_TYPE: "${VPN_TYPE:-wireguard}"
+      SERVER_COUNTRIES: "${SERVER_COUNTRIES:-}"
+      FIREWALL_VPN_INPUT_PORTS: "${FIREWALL_VPN_INPUT_PORTS:-}"
+      WIREGUARD_PRIVATE_KEY_SECRETFILE: "/run/secrets/wireguard_private_key"
+      WIREGUARD_ADDRESSES_SECRETFILE: "/run/secrets/wireguard_addresses"
+    secrets:
+      - source: wireguard_private_key
+        target: wireguard_private_key
+        mode: 0400
+      - source: wireguard_addresses
+        target: wireguard_addresses
+        mode: 0400
     volumes:
       - ${CONFIG_DIR:-./config}/gluetun:/gluetun
     ports:
@@ -200,6 +229,20 @@ services:
       - ./deploy/caddy/Caddyfile.example:/etc/caddy/Caddyfile:ro
       - ${CONFIG_DIR:-./config}/caddy/data:/data
       - ${CONFIG_DIR:-./config}/caddy/config:/config
+
+# Environment-sourced secrets. Compose reads each value from `.env` once and exposes it to the
+# named services only, as a file under /run/secrets. It never becomes a service environment
+# variable, so it does not appear in `docker inspect`, `docker compose config`, `/proc/<pid>/environ`
+# or a crash dump's environment block. A service that does not list a secret cannot read it.
+secrets:
+  aria2_rpc_secret:
+    environment: "ARIA2_RPC_SECRET"
+  qbt_password:
+    environment: "QBT_PASSWORD"
+  wireguard_private_key:
+    environment: "WIREGUARD_PRIVATE_KEY"
+  wireguard_addresses:
+    environment: "WIREGUARD_ADDRESSES"
 ```
 
 Notes a reader must not lose:
@@ -222,6 +265,19 @@ Notes a reader must not lose:
 |---|---|---|---|
 | `/config` | `${CONFIG_DIR}/<service>` | one directory per service; dl-tool's holds `dl-tool.db`, `definitions/`, `backups/`, `logs/`, `torrents/`, `secrets/` | yes |
 | `/data` | `${DATA_DIR}` | every download and every library folder, one filesystem | yes |
+
+Create the per-service configuration directories `0700` before the first `up`, so an engine that writes
+its own state broadly cannot widen what the host exposes:
+
+```bash
+export CONFIG_DIR=./config
+mkdir -p "$CONFIG_DIR"/{dl-tool,qbittorrent,aria2,gluetun,caddy}
+chmod 0700 "$CONFIG_DIR"/{dl-tool,qbittorrent,aria2,gluetun,caddy}
+chmod 0600 .env
+```
+
+`.env` holds the aria2 RPC secret, the qBittorrent password and the WireGuard key. It is `0600`, and it is
+in `.gitignore`; only `.env.example` is committed.
 
 **IMPORTANT** Mount `/data` exactly once, at the same container path, in every service. Two bind mounts are
 two mount points inside the container's mount namespace, so `st_dev` differs, `link(2)` and `rename(2)`
@@ -312,8 +368,8 @@ as root, in exactly this order:
 3. `umask "$UMASK"`. `002` gives `775` directories and `664` files; `022` gives `755`/`644`.
 4. Create group `dltool` with GID `$PGID` and user `dltool` with UID `$PUID` if they do not already exist
    (`addgroup -g`, `adduser -D -H -u`).
-5. `chown $PUID:$PGID /config` and its contents. **Never recursively chown `/data`** — it can hold terabytes
-   and the operator owns its permissions.
+5. `chown $PUID:$PGID /config` and its contents, then `chmod 0700 /config`. **Never recursively chown
+   `/data`** — it can hold terabytes and the operator owns its permissions.
 6. Verify `/data` is writable as `$PUID:$PGID`; if not, log a `data_root_not_writable` warning and continue,
    so the UI can show the problem instead of the container crash-looping.
 7. If the effective UID is already non-root (compose `user:` was used), skip steps 4–5 and go to step 9.
@@ -323,8 +379,15 @@ as root, in exactly this order:
 
 Rules that follow:
 
-- Every file-creating call site uses permissive modes and relies on the umask. Hardcoding `0644` is the most
-  common regression in this class of app.
+- `UMASK` governs files created under **the data roots only**. Downloaded data is meant to be readable by
+  the household's other services, which is what `002` is for; the configuration directory is not. Every
+  file-creating call site under `/data` uses permissive modes and relies on the umask — hardcoding `0644`
+  there is the most common regression in this class of app.
+- Configuration state is mode-enforced regardless of `UMASK`: `/config` and each service's directory under
+  it are `0700`, and the database, its `-wal` and `-shm` sidecars, `secrets.env`, backups, logs and
+  diagnostic bundles are `0600`. With `UMASK=002` an unenforced database would be group-readable, and it
+  holds the argon2id password hash, session rows, API tokens and every encrypted credential. dl-tool
+  enforces these itself at boot ([`04-data-model.md`](04-data-model.md) §1) rather than trusting the umask.
 - `/custom-cont-init.d` and `DOCKER_MODS` are deliberately **not** implemented: both execute third-party code
   fetched or mounted at runtime, which contradicts
   [ADR-0010](decisions/0010-never-execute-third-party-definitions.md).
@@ -1008,3 +1071,4 @@ document's change log.
 | 2026-09-01 | Review pass: §7.3 item 6 now specifies the cookie prefix pair (`__Host-` at the root, `__Secure-` under a base path) instead of dropping prefixes; the earlier unprefixed wording weakened §12's hardening for no benefit. |
 | 2026-09-01 | Replaced the inline base-path bootstrap with the CSP-compatible document base URL. |
 | 2026-09-01 | Security review: wired the Host allowlist and configuration lock through Compose and narrowed trusted-proxy guidance. |
+| 2026-09-02 | Engine credentials moved from service environments into Compose named secrets mounted `0400`, so `docker inspect` shows a path rather than a value; gluetun no longer receives the whole `.env`; configuration directories are created `0700` and `.env` `0600`; `UMASK` is scoped to the data roots. |

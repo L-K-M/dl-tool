@@ -36,166 +36,32 @@ No other file may be modified.
 
 ## Interface contract
 
-`compose.yaml` — doc 10 §2 with the `gluetun` and `caddy` services omitted (T094 adds them):
+[`docs/10-deployment-and-compose.md` §2](../10-deployment-and-compose.md#2-composeyaml) **owns
+`compose.yaml` verbatim**. Copy it from there rather than from this file — a second copy in a task file is
+how the two drift, and the compose file has already changed twice since this task was written. Reproduce it
+exactly, with these three deltas:
 
-```yaml
-# compose.yaml — dl-tool reference stack. `docker compose up -d` starts dl-tool and
-# qbittorrent; COMPOSE_PROFILES=aria2 adds the HTTP/FTP engine.
+| Delta | Why |
+|---|---|
+| Omit the `gluetun` and `caddy` services and the `vpn` and `proxy` profiles | T094 adds them, together with the VPN secrets and the reverse-proxy volumes |
+| Omit the `wireguard_private_key` and `wireguard_addresses` entries from the top-level `secrets:` block | They exist only for `gluetun`; keep `aria2_rpc_secret` and `qbt_password` |
+| Keep the `aria2` profile and its service | The HTTP/FTP lane is M1 and must be startable now |
 
-x-common-env: &common-env
-  PUID: "${PUID:-1000}"
-  PGID: "${PGID:-1000}"
-  TZ: "${TZ:-Etc/UTC}"
-  UMASK: "${UMASK:-002}"
+Everything else is verbatim, including the `x-common-env` and `x-service-defaults` anchors, the named
+secrets mounted `0400` through the `_FILE` variables, the single `/data` mount, the healthchecks,
+`stop_grace_period`, `security_opt: no-new-privileges:true`, and the absence of a top-level `version:` key.
 
-x-service-defaults: &service-defaults
-  restart: unless-stopped
-  security_opt:
-    - no-new-privileges:true
+`.env.example` carries every compose-level variable of
+[`docs/11-config-reference.md` §4](../11-config-reference.md#4-compose-level-variables-interpolation-only)
+with its documented default, each under a one-line comment, and **no real credential**. The three secret
+values ship empty with a comment naming the command that generates them:
 
-services:
-
-  dl-tool:
-    <<: *service-defaults
-    image: ghcr.io/l-k-m/dl-tool:1
-    container_name: dl-tool
-    environment:
-      <<: *common-env
-      DLTOOL_HTTP_ADDR: ":8080"
-      DLTOOL_CONFIG_DIR: "/config"
-      DLTOOL_DATA_ROOTS: "/data"
-      DLTOOL_DB_PATH: "/config/dl-tool.db"
-      DLTOOL_BASE_PATH: "${DLTOOL_BASE_PATH:-}"
-      DLTOOL_TRUSTED_PROXIES: "${DLTOOL_TRUSTED_PROXIES:-}"
-      DLTOOL_LOG_LEVEL: "${DLTOOL_LOG_LEVEL:-info}"
-      DLTOOL_LOG_FORMAT: "${DLTOOL_LOG_FORMAT:-json}"
-      # An engine lane is enabled by setting its URL; leave the URL empty to
-      # disable the lane (11-config-reference.md §8 makes a set URL with
-      # missing credentials a fatal config_missing).
-      DLTOOL_QBITTORRENT_URL: "${DLTOOL_QBITTORRENT_URL:-}"
-      DLTOOL_QBITTORRENT_USERNAME: "${QBT_USERNAME:-}"
-      DLTOOL_QBITTORRENT_PASSWORD: "${QBT_PASSWORD:-}"
-      DLTOOL_ARIA2_URL: "${DLTOOL_ARIA2_URL:-}"
-      DLTOOL_ARIA2_SECRET: "${ARIA2_RPC_SECRET:-}"
-    volumes:
-      - ${CONFIG_DIR:-./config}/dl-tool:/config
-      - ${DATA_DIR:-/srv/data}:/data          # ONE mount — see doc 10 section 3
-    ports:
-      - "${DLTOOL_PORT:-8091}:8080"
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/dl-tool", "healthcheck"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    stop_grace_period: 60s
-    depends_on:
-      qbittorrent:
-        condition: service_started
-
-  qbittorrent:
-    <<: *service-defaults
-    image: lscr.io/linuxserver/qbittorrent:latest   # pin at implementation time
-    container_name: qbittorrent
-    environment:
-      <<: *common-env
-      WEBUI_PORT: "${QBT_WEBUI_PORT:-8080}"
-      TORRENTING_PORT: "6881"
-    volumes:
-      - ${CONFIG_DIR:-./config}/qbittorrent:/config
-      - ${DATA_DIR:-/srv/data}:/data          # same host path, same container path
-    ports:
-      - "6881:6881"
-      - "6881:6881/udp"
-      # WebUI is deliberately NOT published: only dl-tool talks to it.
-    ulimits:
-      nofile:
-        soft: 65535
-        hard: 65535
-    stop_grace_period: 120s
-
-  aria2:
-    <<: *service-defaults
-    profiles: ["aria2"]
-    image: ghcr.io/l-k-m/dl-tool-aria2:1
-    build:
-      context: ./deploy/aria2
-      dockerfile: Dockerfile
-    container_name: aria2
-    environment:
-      <<: *common-env
-      # Not the `:?` form: Compose resolves required variables for every
-      # service before profile filtering, so `:?` breaks a core-only `up`.
-      # The entrypoint refuses an empty secret when this profile is active.
-      ARIA2_RPC_SECRET: "${ARIA2_RPC_SECRET:-}"
-    volumes:
-      - ${CONFIG_DIR:-./config}/aria2:/config
-      - ${DATA_DIR:-/srv/data}:/data
-    healthcheck:
-      # Liveness only, no token: credentials are checked by POST /engines/{id}/test.
-      test: ["CMD-SHELL", "curl -fsS -X POST -d '{\"jsonrpc\":\"2.0\",\"id\":\"hc\",\"method\":\"aria2.getVersion\",\"params\":[]}' http://127.0.0.1:6800/jsonrpc >/dev/null"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    stop_grace_period: 30s
-```
-
-`compose.dev.yaml` — the only overlay, applied second, and the one `make compose-check` validates:
-
-```yaml
-# compose.dev.yaml — developer overlay
-#   docker compose -f compose.yaml -f compose.dev.yaml up -d --build
-services:
-  dl-tool:
-    image: ghcr.io/l-k-m/dl-tool:dev
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        VERSION: dev
-    environment:
-      DLTOOL_LOG_LEVEL: debug
-      DLTOOL_LOG_FORMAT: text
-      DLTOOL_METRICS_ADDR: "0.0.0.0:9090"
-    ports:
-      - "127.0.0.1:9090:9090"
-```
-
-`.env.example`:
-
-```dotenv
-# ---- identity and permissions (container-level, handled by the entrypoint) ----
-PUID=1000
-PGID=1000
-TZ=Etc/UTC
-UMASK=002
-
-# ---- host paths and published port (compose-level) ----
-# CONFIG_DIR gets one subdirectory per service. DATA_DIR is ONE filesystem.
-# 8091 avoids DSM's 5000/5001 and the crowded 8080.
-CONFIG_DIR=./config
-DATA_DIR=/srv/data
-DLTOOL_PORT=8091
-
-# ---- engines (compose-level) ----
-# An engine lane is disabled until its URL is set; a set URL without its
-# credentials is a fatal config_missing at boot. For qBittorrent, also set the
-# same username/password in its own WebUI — the image does not read these vars.
-#   DLTOOL_QBITTORRENT_URL=http://qbittorrent:8080
-QBT_USERNAME=admin
-QBT_PASSWORD=
-# Required when the aria2 profile is active. Generate: openssl rand -hex 32
+```sh
+# ARIA2_RPC_SECRET / QBT_PASSWORD: generated on first run into
+# <CONFIG_DIR>/dl-tool/secrets.env; copy them here so Compose can mount them.
+# openssl rand -base64 32
 ARIA2_RPC_SECRET=
-#   DLTOOL_ARIA2_URL=http://aria2:6800/jsonrpc
-QBT_WEBUI_PORT=8080
-
-# ---- app settings surfaced through compose ----
-# Leave DLTOOL_BASE_PATH empty for a subdomain; set /dl-tool to serve under a subfolder.
-DLTOOL_BASE_PATH=
-DLTOOL_TRUSTED_PROXIES=
-DLTOOL_LOG_LEVEL=info
-DLTOOL_LOG_FORMAT=json
+QBT_PASSWORD=
 ```
 
 ## Steps
@@ -234,6 +100,9 @@ DLTOOL_LOG_FORMAT=json
   active must exit non-zero before `aria2c` starts, and that proof is owned by
   [T115](T115-aria2-image-build-and-publish.md)'s "unset secret exits non-zero" criterion — T125 ships no
   aria2 image (`deploy/aria2/` does not exist yet) and owns only the config-level behaviour above.
+- [ ] `docker compose config` renders sentinel credentials nowhere but the `secrets:` definitions: no
+      service `environment` block contains the aria2 secret or the qBittorrent password.
+- [ ] The `gluetun` service has no `env_file`, and its environment names only VPN variables.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
