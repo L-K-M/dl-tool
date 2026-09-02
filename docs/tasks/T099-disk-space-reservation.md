@@ -87,8 +87,9 @@ package store
 func (s *TaskStore) SumRemainingByDestination(ctx context.Context) (map[string]int64, error)
 ```
 
-The default floor is `2147483648` bytes (2 GiB) per configured root, seeded by `00001_init.sql` into the
-`min_free_space` settings key as an object mapping each root path to its byte value.
+The default floor is `2147483648` bytes (2 GiB) per configured root. `00001_init.sql` seeds
+`min_free_space` as `{}`; resolve every missing root entry to that default before building reservations.
+An explicit `0` remains `0` and disables the floor for that root.
 
 ## Steps
 1. Create `internal/fsx/space.go` with `Space`, `FreeSpace` over the stdlib `syscall.Statfs`, and `FilesystemID` derived from the device number of `os.Stat`.

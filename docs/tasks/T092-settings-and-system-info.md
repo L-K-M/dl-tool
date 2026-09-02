@@ -19,7 +19,7 @@ running build, database, engines, task counts, schedule, limits and job counts.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
-1. [`docs/11-config-reference.md` §5 Database-backed settings](../11-config-reference.md#5-database-backed-settings) — the authoritative sixteen keys, their types and defaults.
+1. [`docs/11-config-reference.md` §5 Database-backed settings](../11-config-reference.md#5-database-backed-settings) — the authoritative fifteen keys, their types and defaults.
 2. [`docs/11-config-reference.md` §1 Precedence rule](../11-config-reference.md#1-precedence-rule) — environment wins for infrastructure, the database wins for preferences.
 3. [`docs/11-config-reference.md` §6 Secrets](../11-config-reference.md#6-secrets) — the `"__redacted__"` placeholder and the no-op `PATCH` rule.
 4. [`docs/05-api-contract.md` §11.1 `GET /settings` and `PATCH /settings`](../05-api-contract.md#111-get-settings-and-patch-settings) — the worked body and the status codes.
@@ -65,9 +65,10 @@ type Settings struct {
 // typed struct. It never returns a partially populated value.
 func (s *Store) GetSettings(ctx context.Context) (Settings, error)
 
-// PutSettings writes only the keys present in patch, in one transaction. A key whose value is the
-// literal "__redacted__" is skipped. It returns store.ErrUnknownSettingKey for an unknown key and
-// store.ErrSettingOutOfRange for a value outside its documented domain.
+// PutSettings replaces each top-level key present in patch, in one transaction. The
+// extract_passwords key is skipped when its value is the literal "__redacted__". It returns
+// store.ErrUnknownSettingKey for an unknown key and store.ErrSettingOutOfRange for a value outside
+// its documented domain.
 func (s *Store) PutSettings(ctx context.Context, patch map[string]json.RawMessage) (Settings, error)
 
 var (
@@ -111,25 +112,21 @@ type SystemInfoOutput struct {
 func (h *SystemHandlers) GetSystemInfo(ctx context.Context, in *struct{}) (*SystemInfoOutput, error)
 ```
 
-Worked `GET /settings` body, secrets already replaced:
-
-```json
-{"download_rate_limit":0,"upload_rate_limit":0,
- "alt_download_rate_limit":5242880,"alt_upload_rate_limit":1048576,
- "schedule_enabled":true,"default_destination":"/data",
- "rss_enabled":true,"rss_interval_s":1800,
- "auto_extract":true,"extract_passwords":"__redacted__",
- "process_order":"by_date_created","confirm_on_delete":true}
-```
+The worked `GET /settings` body is owned by
+[`docs/05-api-contract.md` §11.1](../05-api-contract.md#111-get-settings-and-patch-settings); implement it
+without copying a second contract here.
 
 ## Steps
-1. Edit `internal/store/settings.go` to add `Settings`, `GetSettings` and `PutSettings` with the sixteen keys
+1. Edit `internal/store/settings.go` to add `Settings`, `GetSettings` and `PutSettings` with the fifteen keys
    of doc 11 §5 and their documented defaults. Read and write `value_json` as JSON, never as a bare string.
-2. Validate in `PutSettings`: `rss_interval_s` at least `300`; every rate limit and `max_active_*` at least
-   `0`; `process_order` equal to `by_date_created`; `default_destination` non-empty. Return
-   `ErrSettingOutOfRange` otherwise.
-3. Skip any key whose submitted value is exactly `"__redacted__"`, so a client that round-trips
-   `GET /settings` into `PATCH /settings` cannot erase `extract_passwords`.
+2. Skip only `extract_passwords` when its submitted value is exactly `"__redacted__"`, so a client that
+   round-trips `GET /settings` into `PATCH /settings` cannot erase it. The placeholder is invalid for every
+   non-secret key.
+3. Validate in `PutSettings`: `rss_interval_s` at least `300`; every rate limit and `max_active_*` value at
+   least `0`; `min_free_space` a JSON object mapping canonical absolute root paths to integers at least `0`;
+   `process_order` equal to `by_date_created`; `default_destination` non-empty and not `"__redacted__"`.
+   Each supplied top-level value replaces that key's stored JSON wholesale. A value that cannot decode into
+   its documented type also returns `ErrSettingOutOfRange`.
 4. Edit `internal/api/settings.go` to add `GetSettings` and `PatchSettings` on the existing
    `SettingsHandlers`. Serialise `extract_passwords` as the literal `"__redacted__"` string, never as an
    array, and never as the empty string.
@@ -144,13 +141,25 @@ Worked `GET /settings` body, secrets already replaced:
 8. Edit `internal/api/settings_test.go` with: a `GET` asserting `extract_passwords` is exactly
    `"__redacted__"` and that no other field contains a configured secret; a `PATCH` carrying
    `"extract_passwords":"__redacted__"` leaving the stored value unchanged; an unknown key returning `422`;
-   `rss_interval_s` of `120` returning `422` (below the 300-second floor); and a `GET /system/info`
-   whose serialised body contains neither `DLTOOL_ARIA2_SECRET` nor `DLTOOL_QBITTORRENT_PASSWORD`.
+   `rss_interval_s` of `120`, `"rss_interval_s":"300"`, a negative rate limit, a negative `max_active_*`
+   value, a negative `min_free_space` value, a relative or non-canonical `min_free_space` key,
+   `"min_free_space":"__redacted__"` and `"default_destination":"__redacted__"` each returning `422`; a
+   `min_free_space` patch replacing its
+   stored map wholesale and a patch omitting that key leaving it byte-identical; and a `GET /system/info`
+   whose serialised body contains neither configured engine-secret value.
 
 ## Acceptance criteria
+- [ ] `GET /settings` emits exactly the fifteen keys of doc 11 §5, including `min_free_space` and both
+      `max_active_*` keys.
 - [ ] `GET /settings` emits `extract_passwords` as exactly `"__redacted__"`.
 - [ ] `PATCH` with `"__redacted__"` leaves the stored secret byte-identical.
-- [ ] An unknown key and an out-of-range value each return `422`.
+- [ ] An unknown key, `rss_interval_s=120`, `"rss_interval_s":"300"`, a negative rate limit, a negative
+      `max_active_*` value, a negative `min_free_space` value, a relative or non-canonical `min_free_space`
+      key, `"min_free_space":"__redacted__"` and `"default_destination":"__redacted__"` each return `422`.
+- [ ] A `min_free_space` patch replaces the stored map wholesale; roots omitted from that map are absent
+      afterward, while a later top-level patch omitting `min_free_space` leaves the map byte-identical.
+- [ ] `GET /settings` returns the stored `min_free_space` map verbatim (`{}` after T006's initial
+      migration); the per-root default is resolved only when T099 builds reservations.
 - [ ] `GET /system/info` returns all eleven top-level fields of doc 05 §13.
 - [ ] No response body from either endpoint contains a configured engine secret in any form.
 

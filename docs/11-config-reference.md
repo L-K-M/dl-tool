@@ -169,7 +169,7 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `alt_upload_rate_limit` | integer bytes/s | `1048576` | `PATCH /settings` |
 | `schedule_enabled` | boolean | `false` | `PATCH /settings` |
 | `default_destination` | absolute path inside a data root | first entry of `DLTOOL_DATA_ROOTS` | `PATCH /settings` |
-| `min_free_space` | object, root path → bytes | `2147483648` for every configured root | `PATCH /settings` |
+| `min_free_space` | sparse object, absolute root path → bytes | `2147483648` for every root absent from the stored map | `PATCH /settings` |
 | `max_active_total` | integer, `0` = unlimited | `5` | `PATCH /settings` |
 | `max_active_per_engine` | integer, `0` = unlimited | `3` | `PATCH /settings` |
 | `process_order` | enum `by_date_created` | `by_date_created` | `PATCH /settings` |
@@ -179,9 +179,13 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `extract_passwords` | **secret** array of strings, encrypted at rest (§6) | `[]` | `PATCH /settings` |
 | `confirm_on_delete` | boolean | `true` | `PATCH /settings` |
 
-Seeding does not count toward any `max_active_*` limit. The 168-cell bandwidth grid is not a settings key: it
-lives in its own table and is replaced through `PUT /settings/schedule`. `locale` is not a settings key
-either: it is a column on the single `users` row, changed through `PATCH /account`.
+The initial `min_free_space` map is empty, as defined by
+[`04-data-model.md` §3.2](04-data-model.md#32-configuration); consumers apply the default above only to each
+missing root. An explicit `0` disables the floor for that root. Entries for roots no longer present in
+`DLTOOL_DATA_ROOTS` remain stored but are ignored when reservations are built. Seeding does not count toward
+any `max_active_*` limit. The 168-cell bandwidth grid is not a
+settings key: it lives in its own table and is replaced through `PUT /settings/schedule`. `locale` is not a
+settings key either: it is a column on the single `users` row, changed through `PATCH /account`.
 
 ---
 
@@ -390,3 +394,4 @@ stated fallback.
 | 2026-09-02 | Engine credentials are wired as Compose named secrets rather than service environment variables; the `_FILE` convention is now what the shipped compose uses, not a manual alternative. |
 | 2026-09-02 | Single-account cleanup: dropped `by_user_round_robin` from the `process_order` enum and repaired the sentence that had merged the per-user default destination into the `locale` note ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Review pass: removed the duplicated `DLTOOL_ALLOWED_HOSTS` row; `DLTOOL_CONFIG_LOCK` now names `internal/api/security.go`, the file a task actually creates; §4 gained the six `DLTOOL_*` pass-throughs and the note that the gluetun variables are not dl-tool configuration; the reference `.env` block is marked as not being the shipped `.env.example`, which ships both engine lanes disabled. |
+| 2026-09-02 | Defined `min_free_space` as a sparse map whose missing roots use the 2 GiB default, whose explicit zero disables a root's floor and whose unconfigured roots remain stored but inactive, matching the host-independent initial seed. |

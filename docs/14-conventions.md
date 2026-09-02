@@ -301,6 +301,10 @@ planning error, not a reason to skip the wiring: stop and write it under `## Blo
 3. Update the DDL and the erDiagram in [`04-data-model.md`](04-data-model.md) in the same commit.
 4. Update the affected row structs in `internal/store/models.go` and every explicit `SELECT` column list that
    must carry the new column, then run `make test`.
+5. For migration `00002` and later, extend the store test to drive `store.Open` from the preceding version
+   through the new one. When the conditional policy in
+   [`04-data-model.md` §5](04-data-model.md#5-schema-migration-policy) requires a backup, assert it exists
+   after a successful open and an injected backup failure leaves the schema at the preceding version.
 
 ## Decisions referenced
 | ADR | Decision |
@@ -324,3 +328,4 @@ planning error, not a reason to skip the wiring: stop and write it under `## Blo
 | 2026-09-01 | Moved adapter construction to the composition root to keep the engine package acyclic. |
 | 2026-09-02 | Single-account cleanup: the `user_id` log field no longer mentions ownership decisions — there are none ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Review pass: added §8.3, wiring a long-lived component — a task that introduces a constructor, goroutine or job handler names its composition-root call site in its own `Files` table. The migration checklist becomes §8.4. |
+| 2026-09-02 | Required every migration after the initial schema to cover the conditional backup path through `store.Open`. |

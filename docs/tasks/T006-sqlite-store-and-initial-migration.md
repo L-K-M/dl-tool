@@ -14,8 +14,9 @@
 
 ## Goal
 `store.Open` returns a `*sqlx.DB` in WAL mode with the four documented pragmas, refuses a database directory
-on a network filesystem, takes a pre-migration backup, applies `00001_init.sql` through goose, and refuses to
-start when the applied schema version is newer than the binary. `store.NewID` mints prefixed ULIDs.
+on a network filesystem, backs up an older nonzero schema before upgrading it, applies `00001_init.sql`
+through goose, and refuses to start when the applied schema version is newer than the binary. `store.NewID`
+mints prefixed ULIDs.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
@@ -51,13 +52,15 @@ var embedMigrations embed.FS
 // ErrNotFound is returned when no row with the given id exists.
 var ErrNotFound = errors.New("store: not found")
 
-// Open builds the DSN from dbPath, applies the connection pool limits, backs the
-// database up, migrates it and returns a ready handle. It refuses to run when the
-// directory holding dbPath is on nfs, nfs4, cifs, smb3 or a fuse filesystem, and when the
-// applied schema version is newer than the newest embedded migration.
+// Open builds the DSN from dbPath, applies the connection pool limits, conditionally
+// backs up an older nonzero schema, migrates it and returns a ready handle. It refuses
+// to run when the directory holding dbPath is on nfs, nfs4, cifs, smb3 or a fuse
+// filesystem, and when the applied schema version is newer than the newest embedded migration.
 func Open(ctx context.Context, dbPath, backupDir string) (*sqlx.DB, error)
 
-// SchemaVersion returns MAX(version_id) from goose's version table.
+// SchemaVersion returns MAX(version_id) among goose rows where is_applied=1. A
+// missing version table or NULL maximum is version 0 only when no schema object except
+// goose_db_version or a sqlite_ internal object exists; every other schema or query error is returned.
 func SchemaVersion(ctx context.Context, db *sqlx.DB) (int64, error)
 ```
 
@@ -102,24 +105,35 @@ func NewID(prefix string) string
    `github.com/oklog/ulid/v2` with `crypto/rand` as the entropy source. Do not add row structs yet.
 2. Create `internal/store/migrations/00001_init.sql`. Transcribe doc 04 §3.1 through §3.6 in order, verbatim,
    including every `CHECK`, every index and the `priority IN (0,1,6,7)` constraint on `task_files`.
-3. In the same file seed the four concurrency and reservation `settings` rows of doc 04 §3.2, and the 168
-   `bandwidth_schedule` cells with `mode = 'default'`, using a recursive CTE over day 0–6 and hour 0–23.
+3. In the same file transcribe the `settings` seed rows and the recursive-CTE insert for all 168
+   `bandwidth_schedule` cells from doc 04 §3.2 and §3.6 verbatim.
 4. Write the `-- +goose Down` section dropping every table created above, in reverse order.
 5. Create `internal/store/db.go`. Register `modernc.org/sqlite` under the driver name `"sqlite"`, build the
    DSN exactly as above, and apply `SetMaxOpenConns(1)`, `SetMaxIdleConns(1)`, `SetConnMaxLifetime(0)`.
 6. Before opening, read the filesystem type of `filepath.Dir(dbPath)` from `/proc/self/mountinfo`; if it is
    `nfs`, `nfs4`, `cifs` or `smb3`, or begins with `fuse.`, return an error naming the path and the type. There is no
    degraded fallback.
-7. Run `VACUUM INTO '<backupDir>/dl-tool.db.pre-migration-<version>.bak.tmp'` and rename it into place, then
-   abort the migration if the backup failed. Skip the backup when the database file does not yet exist.
-8. Call `goose.SetBaseFS(embedMigrations)`, `goose.SetDialect("sqlite3")`, then compare `SchemaVersion` with
-   the newest embedded migration; when the applied version is higher, return an error naming both numbers.
-   Otherwise `goose.Up(db, "migrations")`, then run `PRAGMA integrity_check`.
+7. Call `goose.SetBaseFS(embedMigrations)` and `goose.SetDialect("sqlite3")`, then read the applied and
+   highest embedded versions before backup or migration. Per doc 04 §5, a missing version table or `NULL`
+   applied maximum is version `0` only when no schema object except `goose_db_version` or a `sqlite_`
+   internal object exists; refuse every other unrecognised schema and propagate every other query error. The refusal names
+   the offending tables and says to move the foreign file aside. Refuse an applied version above the embedded version. Skip backup for
+   version `0` and when the versions match. Only when `0 < applied < embedded`,
+   take the crash-safe `VACUUM INTO` backup specified by doc 04 §5–6, binding the temporary path as a SQL
+   parameter, then abort before goose if any backup step fails. Put this operation in a private helper whose
+   inputs include the from-version, to-version and UTC start time, so the test injects all three.
+8. Run `goose.Up(db, "migrations")` when migration is needed. Run `PRAGMA integrity_check` after that step
+   on every successful open, including when goose had nothing to apply.
 9. Write `internal/store/db_test.go` covering: `journal_mode` reads back `wal` and `foreign_keys` reads back
-   `1`; a fresh file migrates to version 1 and `bandwidth_schedule` holds 168 rows; `Down` then `Up` is
-   clean; a database stamped with version 999 makes `Open` fail with a message naming both versions; a
-   backup file exists after migrating an existing database; `NewID(PrefixTask)` returns 30 characters with
-   the `tsk_` prefix and two calls never collide.
+   `1`; a fresh file migrates to version 1 and `bandwidth_schedule` holds 168 rows whose IDs combine the
+   documented prefix with a 26-character ULID body and are pairwise distinct, as are the seeded `settings`
+   IDs; `Down` then `Up` is clean; a
+   database stamped with version 999 makes `Open` fail with a message naming both versions; a database with
+   an unrelated table and no goose history is refused unchanged with an error naming that table; neither a
+   nonexistent database nor an existing empty version-0 database produces a backup; the private backup
+   operation exercised directly for a synthetic version 1-to-2 transition at the injected UTC time
+   `2026-09-01T12:00:00.123456789Z` produces the documented final file and no temporary file; and
+   `NewID(PrefixTask)` returns 30 characters with the `tsk_` prefix and two calls never collide.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -128,7 +142,19 @@ func NewID(prefix string) string
 - [ ] `TestSchemaNewerThanBinaryRefuses` asserts `Open` returns an error naming the applied and the embedded
       version.
 - [ ] `TestNetworkFilesystemRefused` asserts the refusal path is reached for a `nfs` mount entry.
-- [ ] `TestPreMigrationBackup` asserts the `.bak` file exists and no `.bak.tmp` file remains.
+- [ ] `TestUnrecognisedDatabaseRefused` asserts a database containing an unrelated table and no goose
+      history is refused without changing that table, and the error names it.
+- [ ] `TestZeroVersionSkipsBackup` asserts a nonexistent database, an empty file and a database containing
+      only goose version 0 each leave no backup artifact.
+- [ ] `TestPreMigrationBackup` exercises the private backup operation with from-version 1, to-version 2 and
+      injected time `2026-09-01T12:00:00.123456789Z`; it asserts
+      `dl-tool.db.pre-migration-1-to-2.20260901T120000.123456789Z.bak` exists and no temporary file remains.
+      It repeats with `2026-09-01T12:00:00Z` and expects
+      `dl-tool.db.pre-migration-1-to-2.20260901T120000.000000000Z.bak`, proving fixed-width padding. It must
+      not add an artificial embedded migration.
+- [ ] `TestInitialSeedIDs` asserts every seeded ID has its documented prefix, a 26-character ULID body and
+      no duplicate within its table; the seeded settings rows are exactly the keys and values documented in
+      doc 04 §3.2.
 - [ ] `TestNewID` asserts the 26-character ULID body and 10 000 collision-free identifiers.
 - [ ] No `SELECT *` appears anywhere in `internal/store`.
 - [ ] The configuration directory is `0700` and `dl-tool.db` is `0600` after `Open`, with `UMASK=002` set.

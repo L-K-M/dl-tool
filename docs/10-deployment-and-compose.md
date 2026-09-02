@@ -892,16 +892,13 @@ scheduling and the schema-newer-than-binary refusal are owned by
   too: a floating `lscr.io/linuxserver/qbittorrent:latest` can change the libtorrent version underneath a
   running library.
 - Manual update is the documented path: `docker compose pull && docker compose up -d && docker image prune -f`.
-- Database schema migrations run on startup, forward-only, after an automatic pre-migration backup of the
-  database ([`04-data-model.md`](04-data-model.md)). No other import or conversion step runs on upgrade.
-- Rollback:
-
-```bash
-docker compose down
-cp ./config/dl-tool/backups/dl-tool.db.pre-migration-<N>.bak ./config/dl-tool/dl-tool.db
-# edit compose.yaml: image: ghcr.io/l-k-m/dl-tool:1.3.7
-docker compose up -d
-```
+- Database schema migrations and their conditional pre-migration backups follow
+  [`04-data-model.md` §5](04-data-model.md#5-schema-migration-policy). No other import or conversion step
+  runs on upgrade.
+- Roll back only through [`17-operations-and-runbook.md` §3.4](17-operations-and-runbook.md#34-dl-tool-restore---from-file):
+  run `docker compose down` and pin the older image in `compose.yaml`; if the upgrade ran a migration, first
+  restore that migration's pre-migration backup. Then run `docker compose up -d`. Never copy the live
+  database or its sidecars by hand; the restore command is the only supported path.
 
 - **Do not recommend `containrrr/watchtower`.** It was archived (read-only) on 2025-12-17; the maintainers
   declined to bless any fork. Community forks exist but are not endorsed here. Operators who want automation
@@ -1111,3 +1108,4 @@ document's change log.
 | 2026-09-01 | Security review: wired the Host allowlist and configuration lock through Compose and narrowed trusted-proxy guidance. |
 | 2026-09-02 | Engine credentials moved from service environments into Compose named secrets mounted `0400`, so `docker inspect` shows a path rather than a value; gluetun no longer receives the whole `.env`; configuration directories are created `0700` and `.env` `0600`; `UMASK` is scoped to the data roots. |
 | 2026-09-02 | Review pass: added §6.1 (why credentials are mounted files) and §6.2 (the qBittorrent first-run credential procedure, absent until now); dropped the `:?` on `VPN_SERVICE_PROVIDER`, which fails a core-only `up` because Compose interpolates before it filters by profile; interpolated the gluetun variables `.env.example` shipped but nothing read, and added the missing `SERVER_COUNTRIES`. |
+| 2026-09-02 | Aligned upgrade and rollback guidance with the canonical conditional-backup policy and atomic restore command. |
