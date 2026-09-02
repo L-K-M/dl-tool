@@ -122,7 +122,31 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make doclint && echo DOCLINT_OK`:
+
+```text
+./scripts/doclint.sh
+🔍 2309 Total (in 211ms) 🔗 541 Unique ✅ 2303 OK 🚫 0 Errors 👻 6 Excluded
+
+DOCLINT_OK
+```
+
+No `doclint:` line on stderr; the last stdout line is `DOCLINT_OK`. lychee 0.24.2 prebuilt musl
+binary (no C linker on the build host for `cargo install`).
+
+`make -n lint`, `make -n test`, `make -n build`, `make -n ci`: all exit 0, zero occurrences of
+"No rule to make target". `scripts/doclint.sh` is mode 0755; `grep -c PINME Makefile` → 0
+(pins: golangci-lint v2.13.2, lychee 0.24.2).
+
+Scope:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+.gitignore
+Makefile
+scripts/doclint.sh
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
