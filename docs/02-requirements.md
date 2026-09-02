@@ -272,9 +272,15 @@ If a submission's `infohash_v1` or `infohash_v2` equals that of an existing task
 | T100 | must |
 
 ### FR-024 Delete downloaded data safely and only on request
-When a client deletes a task with `delete_data=true`, dl-tool shall stop the task at its engine first, unlink only the paths recorded in `task_files`, refuse any path that resolves outside the configured roots, and record the removal as a `task_events` row.
+When a client deletes a task with `delete_data=true`, dl-tool shall first enumerate and validate every path
+recorded in `task_files`, remove the engine handle while requiring the engine to retain all data, unlink the
+validated paths through the jailed filesystem layer, mark the task `removed`, and retain its removal event.
+No engine adapter shall delete payload data.
 
-**Verify:** T111 deletes a seeding task with `delete_data=true` and asserts the engine was stopped before any unlink, that only `task_files` paths are gone, that a recorded path outside the roots is refused with `path_rejected`, and that a hardlinked copy elsewhere still opens with its original contents — removing dl-tool's link leaves the library copy intact.
+**Verify:** T111 deletes a seeding task with `delete_data=true` and asserts path validation precedes every
+side effect, the engine retains data and is stopped before any unlink, only `task_files` paths are gone, an
+outside-root path is refused with `path_rejected`, the removal event remains readable, and a hardlinked copy
+elsewhere still opens with its original contents.
 
 | Covered by | Priority |
 |---|---|
@@ -1276,3 +1282,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Review pass 2: FR-115 gains the regenerate-on-every-boot shall-clause its Verify already asserted, closing the traceability gap. |
 | 2026-09-01 | Dropped the resolved FR-121-anchor open question; `05-api-contract.md` no longer carries the stale anchor. |
 | 2026-09-01 | Required owner filtering for live task deltas, removals and aggregates. |
+| 2026-09-01 | Required soft deletion and confined payload removal outside engine adapters. |

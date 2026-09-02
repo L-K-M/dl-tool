@@ -173,7 +173,7 @@ type Engine interface {
 
 	Pause(ctx context.Context, id string) error
 	Resume(ctx context.Context, id string) error
-	Remove(ctx context.Context, id string, deleteData bool) error
+	Remove(ctx context.Context, id string) error // always retain payload data
 
 	// Optional: return ErrNotSupported when the backing Capability is absent.
 	SetFiles(ctx context.Context, id string, selected []int, priorities map[int]int) error
@@ -556,7 +556,7 @@ object with `code` and `message`. In an options struct the key is the long optio
 | `Files` | `aria2.getFiles([secret], gid)` | |
 | `Pause` | `aria2.pause([secret], gid)` | "If the download was active, the download is placed in the front of waiting queue." |
 | `Resume` | `aria2.unpause([secret], gid)` | Changes `paused` → `waiting`. |
-| `Remove` | `aria2.remove`, then `aria2.removeDownloadResult` | "If the specified download is in progress, it is first stopped. The status of the removed download becomes `removed`." Use `aria2.forceRemove` only after `remove` times out. |
+| `Remove` | `aria2.remove`, then `aria2.removeDownloadResult` | Retains payload data. Use `aria2.forceRemove` only after `remove` times out. |
 | `SetFiles` (select) | `aria2.changeOption([secret], gid, {"select-file": "1,3,5"})` | Selection only; a non-nil `priorities` map returns `ErrNotSupported`. |
 | `SetLocation` | `aria2.changeOption([secret], gid, {"dir": "…"})` | ⚠️ Restarts the download — §4.6. |
 | `SetRateLimits` (task) | `aria2.changeOption([secret], gid, {"max-download-limit": …, "max-upload-limit": …})` | Both are in the safe list that does **not** restart the download. |
@@ -881,7 +881,7 @@ are required. Out-of-range indices give `409`; a non-integer id gives `400 "File
 | recheck | `torrents/recheck` | `hashes` |
 | queue moves | `torrents/topPrio`, `bottomPrio`, `increasePrio`, `decreasePrio` | `hashes` |
 | sequential | `torrents/toggleSequentialDownload` | `hashes` |
-| `Remove` | `torrents/delete` | `hashes`, `deleteFiles` ("If set to `true`, the downloaded data will also be deleted") |
+| `Remove` | `torrents/delete` | `hashes`, with `deleteFiles=false` unconditionally; only the jailed filesystem layer may delete data |
 
 **The pause/resume rename.** There are **no back-compat aliases** in 5.x — a 4.x client calling
 `POST /api/v2/torrents/pause` against 5.x gets a `404`, not a silent no-op. Probe `app/version` once, call the
@@ -1196,7 +1196,7 @@ package enginetest
 // RunContract exercises the full Engine interface against a live daemon.
 // newEngine must return a connected Engine bound to a throwaway container.
 func RunContract(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
-	t.Run("AddURL/Progress/Pause/Resume/Remove", ...)
+	t.Run("AddURL/Progress/Pause/Resume/RemoveRetainsData", ...)
 	t.Run("ListReturnsStableIDs", ...)
 	t.Run("UnknownIDReturnsErrNotFound", ...)
 	t.Run("SpeedLimitRoundTrips", ...)
@@ -1213,6 +1213,8 @@ func RunContract(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
   deadline is 60 s.
 - Gate the suite behind `//go:build integration` so plain `go test ./...` stays fast and needs no Docker. CI runs
   the tagged suite on every PR.
+- `RemoveRetainsData` writes a sentinel payload, removes the engine handle, and asserts the payload still
+  exists for every adapter. The qBittorrent fixture also asserts `deleteFiles=false` on the request.
 - `UnsupportedCapabilityReturnsErrNotSupported` asserts, for every `Capability` the adapter does **not** declare,
   that the corresponding method returns `ErrNotSupported` **and changes nothing**.
 - `StateNormalisationCoversEveryEngineState` is a pure table test with no container, driving every row of §4.6,
@@ -1271,3 +1273,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | Migration subsystem cut: §8 restated as one rule with no options — a transfer dl-tool did not create is ignored; the `adopt` mode and `engines.foreign_task_policy` are deleted, as is every link to the withdrawn migration document. §9 engine conformance is unchanged. |
 | 2026-09-01 | M2 task allocation: §11 now attributes the §8 ownership assertion to T026 and T030; task identifier T102 is retired with the foreign-task policy. |
 | 2026-09-01 | Contradiction fix: dropped `--rpc-allow-origin-all` from the §4.1 daemon flags — `12-security-and-threat-model.md` §10 forbids it in any environment and the entrypoint in `10-deployment-and-compose.md` §5.1 never set it. |
+| 2026-09-01 | Removed engine-side data deletion and required every adapter to retain payloads. |

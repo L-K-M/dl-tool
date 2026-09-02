@@ -269,9 +269,9 @@ CREATE TABLE tasks (
                                          -- at rest with DLTOOL_SECRET_KEY (11-config-reference.md §6)
   added_at INTEGER NOT NULL, started_at INTEGER, completed_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-CREATE UNIQUE INDEX idx_tasks_engine_ref ON tasks(engine, engine_ref) WHERE engine_ref IS NOT NULL;
-CREATE UNIQUE INDEX idx_tasks_infohash_v1 ON tasks(infohash_v1) WHERE infohash_v1 IS NOT NULL;
-CREATE UNIQUE INDEX idx_tasks_infohash_v2 ON tasks(infohash_v2) WHERE infohash_v2 IS NOT NULL;
+CREATE UNIQUE INDEX idx_tasks_engine_ref ON tasks(engine, engine_ref) WHERE engine_ref IS NOT NULL AND state <> 'removed';
+CREATE UNIQUE INDEX idx_tasks_infohash_v1 ON tasks(infohash_v1) WHERE infohash_v1 IS NOT NULL AND state <> 'removed';
+CREATE UNIQUE INDEX idx_tasks_infohash_v2 ON tasks(infohash_v2) WHERE infohash_v2 IS NOT NULL AND state <> 'removed';
 CREATE INDEX idx_tasks_state ON tasks(state, added_at DESC);
 CREATE INDEX idx_tasks_owner ON tasks(owner_id, added_at DESC);
 CREATE INDEX idx_tasks_category ON tasks(category_id);
@@ -317,6 +317,11 @@ CREATE INDEX idx_task_events_at ON task_events(at);
 
 Every state transition and every job attempt writes one `task_events` row. `code` is machine-readable so the
 UI can translate it with i18next.
+
+Application-level removal never deletes a `tasks` row. In one transaction it inserts the removal event and
+sets `state = 'removed'`, `engine_ref = NULL`, both rates to zero and `eta_seconds = NULL`. Child rows remain
+attached so the event and file history stay queryable. Excluding tombstones from the unique indexes releases
+their engine and infohash identities, allowing the same transfer to be submitted again.
 
 **Infohash normalisation at ingest.** Every hash is stored lowercase hex, never base32 and never uppercase.
 
@@ -790,3 +795,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Added `rules.owner_id`: a rule creates tasks on someone's behalf (the watch-folder privilege rule), so rule-grabbed tasks are owned, quota-accounted and jailed to that user. |
 | 2026-09-01 | Review pass: `rules.owner_id` is `ON DELETE RESTRICT`, not CASCADE — deleting a user must not silently destroy shared automation and match history; `DELETE /users/{id}` answers `409` instead. |
 | 2026-09-01 | Added `tasks.requested_destination` (the column behind FR-044 and the Task object's field of the same name in `05-api-contract.md` §3) and `feeds.priority` (the per-run tie-break `08-rss-automation.md` §5 step 13 sorts on). |
+| 2026-09-01 | Made task removal durable and released unique identities held by removed rows. |
