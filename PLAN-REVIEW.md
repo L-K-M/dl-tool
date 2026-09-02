@@ -18,9 +18,9 @@ of its sharpest calls — sending both spellings of the pause parameter, keying 
 confirmed against live daemons.
 
 The weakness is that **the plan is not yet executable end to end**. 135 defects (25 critical, 110 high)
-survived an adversarial verification pass. They are not scattered: six recurring shapes account for most
-of them, and the first three of those trace back to a single root cause — the hard rule that a task may
-only touch files in its own `Files` table, with no task owning the seams between them.
+survived an adversarial verification pass. They are not scattered: six recurring patterns account for
+most of them, and the first three of those trace back to a single root cause — the hard rule that a task
+may only touch files in its own `Files` table, with no task owning the seams between them.
 
 Concretely, following the plan literally today:
 
@@ -58,8 +58,8 @@ separately as leads rather than established defects.
 
 ## The six patterns
 
-These are recurring shapes, not a partition of the 135 findings: each section names the confirmed
-findings that illustrate it, and defects that fit no shape are listed only in
+These are recurring patterns, not a partition of the 135 findings: each section names the confirmed
+findings that illustrate it, and defects that fit no pattern are listed only in
 [`PLAN-REVIEW-FINDINGS.md`](PLAN-REVIEW-FINDINGS.md), which is the authoritative per-finding list. Where
 a fix below is described as fixing "the class", it addresses patterns 1 to 3; patterns 4 to 6 have to be
 worked finding by finding.
