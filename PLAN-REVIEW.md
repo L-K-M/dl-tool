@@ -2,7 +2,9 @@
 
 > **Reviewed:** 2026-09-02 · **Reviewing:** the plan at commit `57d37de`, 122 task files (numbered
 > non-contiguously to T125; T102, T112 and T114 are permanently retired) and 20 plan documents ·
-> **Full findings:** [`PLAN-REVIEW-FINDINGS.md`](PLAN-REVIEW-FINDINGS.md)
+> **Full findings:** [`PLAN-REVIEW-FINDINGS.md`](PLAN-REVIEW-FINDINGS.md) ·
+> **Every critical finding re-checked against `d8e81d3`** — see [Status against current
+> main](#status-against-current-main)
 
 ## Verdict
 
@@ -22,10 +24,8 @@ survived an adversarial verification pass. They are not scattered: six recurring
 most of them, and the first three of those trace back to a single root cause — the hard rule that a task
 may only touch files in its own `Files` table, with no task owning the seams between them.
 
-Concretely, following the plan literally today:
+Concretely, at `57d37de` and still true on current `main` unless marked:
 
-- `docker compose up -d` from the shipped `.env.example` **exits before any container starts**, and the
-  M0 exit checkpoint cannot be reached (F005, F006, F028).
 - Every SPA request goes to `/api/v1/api/v1/…` and 404s, while `make typecheck` passes (F001).
 - `internal/store` **does not compile** at T017, and `internal/engine` does not compile at T079 —
   duplicate declarations across a task boundary (F013, F020).
@@ -36,8 +36,11 @@ Concretely, following the plan literally today:
   downloads — cannot complete (F004, F096).
 - Every qBittorrent task is invisible to dl-tool and gets marked `error` on the first sweep, so the M2
   checkpoint is unreachable (F023).
-- Behind the reverse-proxy snippets the plan itself ships, **every request answers 421** — the Host
-  allowlist has no configuration source anywhere in the plan (F602, F142).
+- `docker compose up -d` from the shipped `.env.example` exited before any container started, taking the
+  M0 checkpoint with it — **fixed on current main** by `fea56aa` (F005, F006, F028).
+- Behind the reverse-proxy snippets the plan itself ships, every request answers 421 — **partly fixed**:
+  `DLTOOL_ALLOWED_HOSTS` now exists in doc 11, but T095 still builds the allowlist from an `extra` that
+  nothing populates (F602, F142).
 
 None of this is fatal to the design. All 135 are fixable in the plan documents, most in a line or two,
 and the fixes are listed with each finding. But they should be fixed **before** T001 starts, because the
@@ -55,6 +58,63 @@ otherwise — converts each of these into a stalled agent rather than a small co
 
 Medium and low findings (505) were de-duplicated but not individually re-verified; they are listed
 separately as leads rather than established defects.
+
+## Status against current main
+
+The plan moved while this review was being written. `main` is now `d8e81d3`, ten commits past the
+`57d37de` the review was made against, and several of those commits fix defects reported here. Every one
+of the 25 critical findings was therefore re-opened against current `main`: **4 are fixed, 7 are partly
+fixed, 14 are still present.** The high, medium and low findings were not re-checked, so some of those
+will be stale too.
+
+| ID | Status | Fixed by | Finding |
+|---|---|---|---|
+| F001 | still present | — | Huma operations registered at /api/v1/... on the base mux while Servers URL and the TS client baseUrl… |
+| F002 | still present | — | DELETE /tasks/{id} hard-deletes the tasks row (cascading task_events away) while doc 04 defines… |
+| F003 | still present | — | Admission control is bypassed: T020 hands every new task to the engine at creation and T022 resumes… |
+| F004 | still present | — | No legal transition reaches `completed` for a plain download, and post-processing entry state… |
+| F005 | **fixed** | fea56aa | `.env.example` ships an empty ARIA2_RPC_SECRET while compose.yaml uses `:?` on it, so the M0 checkpoint… |
+| F006 | **fixed** | fea56aa | Default stack cannot boot even after V1: `.env.example` ships an empty QBT_PASSWORD while compose always… |
+| F007 | partly fixed | df1f5c2 | Doc 10 §4 / T124 entrypoint say a non-writable data root is a warning; doc 11 §8 / T005 make it fatal —… |
+| F008 | still present | — | No M1 task constructs the aria2 client, builds the engine registry or calls Connect() |
+| F010 | still present | — | T026's vanished-handle rule contradicts doc 17 §1.6 (its own cited context) and NFR-003, and is not… |
+| F013 | still present | — | ErrNotFound is declared twice in package store (T006 db.go and T017 tasks.go) — compile error |
+| F016 | partly fixed | df1f5c2 | Unwritable data root: doc 10/17 say the container keeps running, doc 11 §8 and T005 make it fatal; the… |
+| F017 | still present | — | Generated api/openapi.json and web/src/api/schema.d.ts are never regenerated after M0, so the gen-drift… |
+| F018 | partly fixed | 813590d (doc 09 only) | SSE liveness rule contradicts the server's push cadence, and heartbeat comments are invisible to… |
+| F020 | still present | — | engine.Limits is declared twice in package internal/engine (T098 admission vs T079 bandwidth) |
+| F021 | partly fixed | c6ba20b | Rules are creatable by any authenticated user, but grabs run as an undefined 'admin who owns the rule' —… |
+| F023 | still present | — | qBittorrent ownership predicate is never installed: T030 defaults to 'accept nothing' and no task calls… |
+| F024 | still present | — | T029 must Register a *qbittorrent.Client that does not yet implement engine.Engine… |
+| F025 | partly fixed | cc06926 | Every provider URL shape in doc 07 §2.6 uses a port the mandated SSRF client rejects (80/443 only) |
+| F028 | **fixed** | fea56aa | Default stack (no aria2 profile) hands dl-tool DLTOOL_ARIA2_URL with an empty secret, which doc 11 §8… |
+| F085 | partly fixed | 813590d | Feed body cap and total timeout contradict: doc 08/T066 say 16 MiB and 60 s with a raw LimitReader, doc… |
+| F096 | still present | — | Transition table forbids the transitions the engine normalisation tables produce (downloading→completed,… |
+| F132 | **fixed** | 813590d | Global poll interval default and minimum contradict across doc 08, doc 11, T065, T066, T092 and T117 |
+| F133 | still present | — | T066 cannot register the `rss_poll` handler or start its Scheduler: the wiring file is not in its Files… |
+| F602 | partly fixed | 7626ff4 | The Host allowlist has no configuration source anywhere in the plan, so every proxied hostname gets 421 |
+| F624 | still present | — | notification_channels has no last_send_at / last_error columns, yet the API object, T106, T120 and T077… |
+
+**The partly-fixed seven share one shape, and it is worth naming.** In each, the *reference document*
+was corrected and the *task file that implements it* was left untouched, so the plan now contradicts
+itself in the opposite direction:
+
+- F007 / F016 — doc 11 §8 now says a non-writable data root is a **warning** (`df1f5c2`), but T005 step 5
+  still makes it a fatal `MkdirAll`.
+- F018 — doc 09 now derives client liveness from the 15 s heartbeat (`813590d`); T051 still declares the
+  client offline after 2 s of silence.
+- F021 — `rules.owner_id`, admin-only rule writes and jail validation all landed in docs 04 and 05
+  (`c6ba20b`); T071 still creates grabs with no identity on the poll path.
+- F025 — doc 12 rule 5 now lifts the 80/443 restriction for configured private-network origins
+  (`cc06926`); T123 still builds the guard without the switch.
+- F085 — doc 12 now names doc 08 as the owner of the 16 MiB feed cap (`813590d`); T123 and T066 still
+  carry the old 8 MiB `ReadCapped` and the raw `LimitReader`.
+- F602 — `DLTOOL_ALLOWED_HOSTS` now exists in doc 11 (`7626ff4`); T095 still builds the allowlist from an
+  `extra` that nothing populates.
+
+This is pattern 4 one level up: the fix commits correctly treat the reference documents as the single
+home of a fact, but nothing propagates the change into the task files that must implement it. Grepping
+`docs/tasks/` for the changed identifier before closing each fix would catch it.
 
 ## The six patterns
 
@@ -136,9 +196,11 @@ finishes hits `ErrIllegalTransition` on every poll tick, and there is no path to
 > Extend the transition table with the engine-driven edges and state that the reconciler may adopt any
 > state an engine reports; then re-derive doc 03 §8.1 from it rather than maintaining both.
 
-### 5. The default deployment does not boot
+### 5. The default deployment did not boot — fixed on current main
 
-Three independent causes, any one of which is enough:
+**Resolved by `fea56aa`, which adopts exactly the fix recommended below.** Recorded here because the
+shape recurs and the recommendation is what shipped. Three independent causes, any one of which was
+enough:
 
 1. `.env.example` ships `ARIA2_RPC_SECRET=` empty and `compose.yaml` uses the `:?` form on it. Compose
    interpolates the whole file **before** applying profiles, and `:?` fails on empty as well as unset, so
@@ -150,13 +212,14 @@ Three independent causes, any one of which is enough:
    log. No document owns how the operator gets that value into `.env` (F006, F153). I confirmed the
    behaviour live: `A temporary password is provided for this session: …`.
 
-The plan is aware of the tension — T125's own verification exports `ARIA2_RPC_SECRET=checkonly` to get
-past it — but the shipped default remains unbootable, and the M0 exit checkpoint is written as
+The plan was aware of the tension — T125's own verification exported `ARIA2_RPC_SECRET=checkonly` to get
+past it — but the shipped default was unbootable while the M0 exit checkpoint was written as
 `cp .env.example .env && docker compose … up -d`.
 
-> Make each engine lane follow its profile: `DLTOOL_ARIA2_URL: "${DLTOOL_ARIA2_URL:-}"` (doc 11 already
-> says an empty URL disables the lane), and give the qBittorrent credential a documented first-run
-> procedure or a generated password in the compose file.
+> **The fix that shipped:** each engine lane now follows its URL — `DLTOOL_ARIA2_URL:
+> "${DLTOOL_ARIA2_URL:-}"` and the same for qBittorrent, with both commented out in `.env.example`, so an
+> unconfigured engine simply stays off. T125 gained an acceptance criterion asserting a clean
+> `docker compose config` from the shipped defaults.
 
 ### 6. External-software details that do not survive contact
 
@@ -200,8 +263,9 @@ architecture's control flow, so it should be decided deliberately.
 
 ## Recommended order of work
 
-1. **Unblock the boot path** — F005, F006, F028, F007/F016, then F001. Without these the M0 checkpoint
-   is unreachable, and every later milestone's verification runs through it.
+1. **Finish the half-applied fixes** — the seven partly-fixed criticals in [Status against current
+   main](#status-against-current-main). Each is a task file that still contradicts a reference document
+   already corrected on `main`, so each is a few lines in one task file.
 2. **Fix the two compile errors and the state machine** — F013, F020, F004/F096. These are single-table
    or single-declaration edits that unblock M1 and M6.
 3. **Add the wiring** — the pattern-1 defects, ideally by amending the task template so the class cannot
@@ -212,15 +276,20 @@ architecture's control flow, so it should be decided deliberately.
    plan's own fact-ownership rules.
 6. **Correct the external-software claims** — the table in pattern 6. Every one has a tested replacement
    in the findings file.
-7. **Decide the two design issues** — rule ownership and admission control — as ADRs, since both change
-   behaviour the plan states elsewhere.
+7. **Decide the two design issues** — admission control, and the half of rule ownership `c6ba20b` did not
+   reach (the poll path still has no identity) — as ADRs, since both change behaviour the plan states
+   elsewhere.
 
-Items 1 and 2 are eleven edits and would move the plan from "cannot start" to "starts and reaches M1".
+Items 1 and 2 are about a dozen edits and would move the plan from "starts but cannot reach M1" to
+"reaches M1".
 
 ## What this review did not cover
 
 - Medium and low findings were not individually verified. 505 of them are listed in part 2 of the
   findings file as leads.
+- Only the 25 critical findings were re-checked against current `main`. The 110 high findings were
+  verified at `57d37de` and not re-opened, so some are likely fixed too — check each against `main`
+  before acting on it.
 - Reviewer effort was not uniform. M0 and M1 drew the most attention (161 and 119 findings); M7 and the
   M6 user-management tasks the least (21 and 47). A thinner list there means less looking, not a cleaner
   plan.
