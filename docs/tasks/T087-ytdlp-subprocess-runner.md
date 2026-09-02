@@ -69,7 +69,7 @@ func Argv(cfg Config, req engine.AddRequest, archivePath, infoJSONPath string, r
 
 // Proc is one live yt-dlp process.
 type Proc struct {
-	ID        string // engine-namespaced, e.g. "ytdlp:01JB0Q7M8WQ0F1R2S3T4U5V6W7"
+	ID        string // engine-namespaced, e.g. "ytdlp:01JB0Q7M8WQ0F1R2S3T4V5W6X7"
 	Cmd       *exec.Cmd
 	SaveDir   string
 	InfoPath  string

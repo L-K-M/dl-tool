@@ -116,8 +116,8 @@ correct and must stay.
 | Milestone | Theme | Exit checkpoint |
 |---|---|---|
 | **M0** | Foundations: repo, CI, config, store, auth, health, SSE skeleton, image and compose stack | `docker compose up -d` serves the app on `${DLTOOL_PORT:-8091}`; `/healthz` returns `{"status":"ok"}`; CI green. The rendered login page arrives with M3 |
-| **M1** | Task core and the aria2 engine | A pasted HTTPS URL downloads to `/data`, progress streams over SSE, pause/resume/remove work |
-| **M2** | BitTorrent via qBittorrent | A magnet added with a file-selection step downloads and seeds; per-file priorities apply |
+| **M1** | Task core and the aria2 engine | A pasted HTTPS URL downloads to `/data`, progress streams over SSE, pause/resume/remove work — verified with `COMPOSE_PROFILES=aria2` and the aria2 lane enabled in `.env` ([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §2) |
+| **M2** | BitTorrent via qBittorrent | A magnet added with a file-selection step downloads and seeds; per-file priorities apply — with the qBittorrent lane enabled (`DLTOOL_QBITTORRENT_URL` plus credentials in `.env`, and the same credentials set once in qBittorrent's WebUI; mirrors the M1 aria2 note) |
 | **M3** | Web UI | The full Download-Station-equivalent screen works in a browser; Playwright E2E green |
 | **M4** | Search | The bundled engines return results; a result becomes a task in one click |
 | **M5** | RSS | A rule auto-downloads the Arch Linux release feed; the dry run explains every non-match |
