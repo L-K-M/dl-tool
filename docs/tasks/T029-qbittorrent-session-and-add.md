@@ -21,7 +21,7 @@ engine registry under `qbittorrent`.
 Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/06-download-engines.md` §5 qBittorrent adapter](../06-download-engines.md#5-qbittorrent-adapter-internalengineqbittorrent)
 2. [`docs/06-download-engines.md` §5.1 Version probe](../06-download-engines.md#51-version-probe)
-3. [`docs/06-download-engines.md` §5.2 Login and the SID cookie](../06-download-engines.md#52-login-and-the-sid-cookie)
+3. [`docs/06-download-engines.md` §5.2 Login and the SID cookie](../06-download-engines.md#52-login-and-the-session-cookie)
 4. [`docs/06-download-engines.md` §5.3 `torrents/add`](../06-download-engines.md#53-torrentsadd)
 5. [`docs/06-download-engines.md` §5.5 `torrents/info`](../06-download-engines.md#55-torrentsinfo)
 6. [`docs/06-download-engines.md` §5.6 State normalisation](../06-download-engines.md#56-state-normalisation--reproduce-exactly-accept-both-spellings)
