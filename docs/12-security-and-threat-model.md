@@ -209,7 +209,7 @@ Owned by `internal/fsx/safepath.go`. No unsanitised remote string may reach a fi
 | HTTP `Content-Disposition` | `filename` and `filename*` match case-insensitively; when both are present use `filename*` and ignore `filename`. Percent-decode `filename*` per RFC 8187 (which obsoletes RFC 5987) **exactly once**, then sanitise. |
 | `.torrent` `info.name`, `info.files[].path[]` | Each element is one segment; the whole torrent is rejected if any element is `..` or absolute. |
 | BEP 47 symlink entries | Never materialised — dl-tool creates no symlink or hardlink from remote metadata. |
-| API `destination` | Must resolve inside `DLTOOL_DATA_ROOTS`, and inside the caller's jail for a non-admin. |
+| API `destination` | Must resolve inside `DLTOOL_DATA_ROOTS`, after symlink resolution. |
 
 RFC 6266 §4.3 governs and belongs in the code comment: "Recipients MUST NOT be able to write into any
 location other than one to which they are specifically entitled"; "never trust folder name information
@@ -478,7 +478,7 @@ adopt Transmission's token approach instead. Three layers, because proxies break
 | Parameters | `m=19456` KiB (19 MiB), `t=2`, `p=1`, `saltLen=16`, `hashLen=32` — the OWASP mid-point, comfortable on a Raspberry Pi 4 class NAS |
 | Storage | the full PHC string `$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>`, so parameters can be raised and the hash re-derived on the next successful login |
 | Comparison | `crypto/subtle.ConstantTimeCompare` |
-| Minimum length | 12 characters, enforced by `POST /auth/setup` and `PATCH /users/{id}` |
+| Minimum length | 12 characters, enforced by `POST /auth/setup` and `PATCH /account` |
 | Failure response | identical text and identical timing for a wrong password, a disabled account and an unknown user |
 
 Brute-force controls in `internal/secure/session.go`: per-account exponential backoff starting at 1 s,
@@ -580,7 +580,7 @@ script element.
 
 Indexer download URLs, detail URLs and magnets may embed tracker credentials. They stay in server-only search
 and task source fields. `GET /search/{id}` returns metadata and an opaque result id; `POST /tasks` and
-`POST /tasks/inspect` accept that id and resolve it in the task service after checking job ownership. Task
+`POST /tasks/inspect` accept that id and resolve it in the task service. Task
 DTOs derive `source_uri` only from `source_display_uri`, and errors are redacted before storage. This applies
 to admins too: role is not a reason to move a provider secret into a browser
 ([FR-058](02-requirements.md#fr-058-create-a-task-from-a-search-result-in-one-click)).
@@ -666,7 +666,7 @@ Chosen policy
   or indexer image request leaks the operator's IP on every page load; posters are proxied through the
   §2 client and cached locally, or not shown.
 - **Logging.** The default level records no full URL with a query string, because tracker and indexer
-  URLs routinely carry a per-user passkey in the path or query. Redact `Authorization`, `Cookie`,
+  URLs routinely carry a tracker passkey in the path or query. Redact `Authorization`, `Cookie`,
   `X-Api-Key`, `?apikey=`, `?token=` and `passkey=` from every request log, error message and
   diagnostics bundle. Wrap secrets in a `type Secret string` whose `String`, `MarshalJSON` and `%v`
   render `"[REDACTED]"`.
@@ -746,3 +746,4 @@ the repository owner decides.
 | 2026-09-01 | Aligned the sub-path base element with CSP without permitting inline scripts. |
 | 2026-09-01 | Security review: bound Host validation and configuration locking to documented environment variables and exact resource scopes. |
 | 2026-09-01 | Security review: contained provider acquisition credentials behind opaque result ids. |
+| 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |

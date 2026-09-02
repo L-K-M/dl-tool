@@ -31,7 +31,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
-| `internal/store/users.go` | create | Row structs and queries for `users`, `sessions` and `api_tokens`. |
+| `internal/store/users.go` | create | Row structs and queries for the single `users` row, `sessions` and `api_tokens`. |
 | `internal/secure/session.go` | create | Token minting, SHA-256 hashing, constant-time CSRF comparison. |
 | `internal/api/auth.go` | create | The authentication and CSRF middleware and the request identity. |
 | `internal/api/auth_test.go` | create | `humatest` coverage of 401, 403 and 2xx for both credentials. |
@@ -51,7 +51,6 @@ type User struct {
 	Role               string  `db:"role" json:"role"`           // "admin" | "user"
 	Enabled            bool    `db:"enabled" json:"enabled"`
 	DefaultDestination *string `db:"default_destination" json:"default_destination"`
-	QuotaBytes         int64   `db:"quota_bytes" json:"quota_bytes"`
 	Locale             string  `db:"locale" json:"locale"`
 	LastLoginAt        *int64  `db:"last_login_at" json:"-"`
 	CreatedAt          int64   `db:"created_at" json:"-"`
@@ -168,7 +167,6 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   them and edits `internal/api/auth.go` again.
 - Do NOT implement password hashing; T009 owns `internal/secure/hash.go`.
 - Do NOT implement `/api-tokens` CRUD or the admin role check; T084 owns both.
-- Do NOT implement owner filtering of tasks; T085 owns it.
 - Do NOT create `internal/secure/csrf.go`. The CSRF token is a `sessions` column
   ([`04-data-model.md`](../04-data-model.md#31-identity-and-access)); it is minted in `session.go` and
   checked in `auth.go`.

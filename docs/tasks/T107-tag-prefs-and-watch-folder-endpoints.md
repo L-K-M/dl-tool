@@ -6,9 +6,9 @@
 | **Milestone** | M6 |
 | **Status** | todo |
 | **Depends on** | T050, T083, T084 |
-| **Blocks** | T108, T109, T119 |
+| **Blocks** | T108, T119 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/server.go`, `internal/store/settings.go` |
-| **Implements** | [FR-033](../02-requirements.md#fr-033-list-rename-and-delete-tags), [FR-046](../02-requirements.md#fr-046-manage-watch-folders-and-scan-one-on-demand), [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences-per-user), [FR-031](../02-requirements.md#fr-031-assign-free-form-tags-and-filter-by-them) |
+| **Implements** | [FR-033](../02-requirements.md#fr-033-list-rename-and-delete-tags), [FR-046](../02-requirements.md#fr-046-manage-watch-folders-and-scan-one-on-demand), [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences), [FR-031](../02-requirements.md#fr-031-assign-free-form-tags-and-filter-by-them) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md) |
 | **Est. size** | 3 new files, ~390 LOC |
 
@@ -52,7 +52,7 @@ type PutPrefsInput struct{ Body PrefsBody }
 func (h *PrefsHandlers) Get(ctx context.Context, in *struct{}) (*PrefsOutput, error)
 func (h *PrefsHandlers) Put(ctx context.Context, in *PutPrefsInput) (*PrefsOutput, error)
 
-// TagView is one row of GET /tags. For a non-admin, TaskCount counts that caller's tasks only.
+// TagView is one row of GET /tags.
 type TagView struct {
 	Name      string `json:"name"`
 	TaskCount int    `json:"task_count"`
@@ -73,7 +73,6 @@ type WatchFolderView struct {
 	ID              string     `json:"id"` // wfd_ + ULID
 	Path            string     `json:"path"`
 	Enabled         bool       `json:"enabled"`
-	OwnerID         string     `json:"owner_id"`
 	OwnerUsername   string     `json:"owner_username"`
 	Destination     string     `json:"destination"`
 	Category        *string    `json:"category"`
@@ -108,12 +107,12 @@ func (s *SettingsStore) Prefs(ctx context.Context, userID string) (map[string]an
 func (s *SettingsStore) PutPrefs(ctx context.Context, userID string, doc map[string]any) error
 ```
 
-Statuses: tags `200`/`204` · `403` `/problems/forbidden` (`PATCH` and `DELETE` are admin-only, `GET` is
+Statuses: tags `200`/`204` · (`GET` is
 open) · `404` · `409` · `422` for an empty `new_name` or a name containing `,` or `/`. Prefs `200` · `401` ·
 `413` `/problems/payload-too-large` above 64 KiB · `422` when the body is not a JSON object. Watch folders
-are admin-only throughout, with `403` `/problems/path-rejected` for a `path` or `destination` outside the
+take `403` `/problems/path-rejected` for a `path` or `destination` outside the
 roots or outside the named owner's jail, `409` on a duplicate `path`, and `422` for an unknown category, an
-unknown `owner_id` or `poll_interval_s` below `1`.
+`poll_interval_s` below `1`.
 
 ## Steps
 1. Add `RenameTag`, `DeleteTag`, `Prefs`, `PutPrefs` and the watch-folder create, update and delete writes
@@ -122,11 +121,11 @@ unknown `owner_id` or `poll_interval_s` below `1`.
 2. Create `internal/api/prefs.go` with the prefs pair and the tag pair. `PUT /prefs` replaces the document;
    unknown members are stored and returned verbatim; the caller's identity is the only key.
 3. Cap the prefs body at 64 KiB and return `413` above it; reject a non-object body with `422`.
-4. Make `PATCH` and `DELETE /tags/{name}` admin-only, decode the percent-encoded name, and return `409` on a
+4. Decode the percent-encoded name for `PATCH` and `DELETE /tags/{name}`, and return `409` on a
    rename onto an existing tag.
-5. Create `internal/api/watchfolders.go` with the CRUD verbs and `Scan`, all admin-only.
+5. Create `internal/api/watchfolders.go` with the CRUD verbs and `Scan`.
 6. Validate `path` and `destination` against the configured roots **and** the named owner's jail, defaulting
-   `owner_id` to the calling admin and `poll_interval_s` to `10`.
+   `poll_interval_s` to `10`.
 7. Implement `Scan` by calling `jobs.Watcher.ScanOnce` and returning its result unchanged; a disabled folder
    still scans on demand.
 8. Edit `internal/api/server.go` to register the seven operations.

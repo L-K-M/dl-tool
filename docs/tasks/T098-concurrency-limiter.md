@@ -6,9 +6,9 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T017, T019, T020, T024, T026 |
-| **Blocks** | T086, T099 |
+| **Blocks** | T099 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/tasks_actions.go`, `internal/store/tasks.go` |
-| **Implements** | [FR-020](../02-requirements.md#fr-020-cap-the-number-of-concurrently-active-tasks), [FR-021](../02-requirements.md#fr-021-exclude-seeding-tasks-from-every-concurrency-limit), [FR-123](../02-requirements.md#fr-123-enforce-a-per-user-concurrency-limit) |
+| **Implements** | [FR-020](../02-requirements.md#fr-020-cap-the-number-of-concurrently-active-tasks), [FR-021](../02-requirements.md#fr-021-exclude-seeding-tasks-from-every-concurrency-limit) |
 | **Decisions** | [ADR-0017](../decisions/0017-exclusive-control-of-engines.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
 | **Est. size** | 2 new files, ~330 LOC |
 
@@ -20,8 +20,8 @@ releases queued tasks to their engine only while every applicable limit still ha
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/03-architecture.md` §6.4 Admission control](../03-architecture.md#64-admission-control--the-concurrency-limiter)
-2. [`docs/05-api-contract.md` §5.11 Quotas and concurrency limits](../05-api-contract.md#511-quotas-and-concurrency-limits)
-3. [`docs/04-data-model.md` §4.7 Storage quota versus concurrency limit](../04-data-model.md#47-storage-quota-versus-concurrency-limit)
+2. [`docs/05-api-contract.md` §5.11 Quotas and concurrency limits](../05-api-contract.md#511-concurrency-limits)
+3. [`docs/04-data-model.md` §4.7 Storage quota versus concurrency limit](../04-data-model.md#47-concurrency-limit-versus-disk-space)
 4. [`docs/11-config-reference.md` §5 Database-backed settings](../11-config-reference.md#5-database-backed-settings)
 5. [`docs/06-download-engines.md` §9.4 Why the engine queues are raised](../06-download-engines.md#94-why-the-engine-queues-are-raised-not-used)
 
@@ -44,7 +44,6 @@ package engine
 type Limits struct {
 	MaxActiveTotal     int
 	MaxActivePerEngine int
-	MaxActivePerUser   int
 }
 
 // ActiveCounts is one snapshot of the counted set: tasks in state downloading, checking, extracting
@@ -73,7 +72,6 @@ type AdmissionStore interface {
 // Candidate is one queued task considered for release.
 type Candidate struct {
 	ID        string
-	OwnerID   string
 	Engine    string
 	EngineRef *string // nil when the task has never been handed to an engine
 }
@@ -90,7 +88,7 @@ The counted set and the two limit models:
 
 | | Storage quota | Concurrency limit |
 |---|---|---|
-| Lives in | `users.quota_bytes` | `settings` keys `max_active_total`, `max_active_per_engine`, `max_active_per_user` |
+| Lives in | `settings` key `min_free_space` | `settings` keys `max_active_total`, `max_active_per_engine` |
 | Counted set | `SUM(total_bytes)` over the owner's tasks whose state is not `removed` | tasks in `downloading`, `checking`, `extracting`, `moving`; `seeding` excluded |
 | `POST /tasks` when breached | rejected, `403` `/problems/quota-exceeded` | accepted, `201`, state `queued`, `error_code` `concurrency_limit` |
 | `resume` when breached | per-id `/problems/quota-exceeded` | per-id `/problems/concurrency-limit`, `409`, task stays `queued` |
@@ -115,13 +113,12 @@ The counted set and the two limit models:
 10. Create `internal/engine/admission_test.go`: with `max_active_total=2` and `max_active_per_engine=1`,
     submit six tasks split across two engines and assert exactly two are released with at most one per
     engine; fill `max_active_total` with `seeding` tasks and assert a queued download still starts; with
-    `max_active_per_user=1`, queue three tasks for user A and one for user B and assert exactly one per
+    `max_active_total=1`, queue three tasks and assert exactly one starts and the rest stay `queued`
     user is active and every held task carries `concurrency_limit`.
 
 ## Acceptance criteria
 - [ ] `max_active_total=2` with `max_active_per_engine=1` releases exactly two tasks, one per engine.
 - [ ] Tasks in `seeding` are counted by none of the three limits.
-- [ ] `max_active_per_user=1` releases one task per user and holds the rest.
 - [ ] Every held task stays in `queued` with `error_code` `concurrency_limit`.
 - [ ] A released task has its `error_code` cleared.
 - [ ] `0` for any limit means unlimited for that dimension.
@@ -144,9 +141,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
-- Do NOT enforce the storage quota here; it is `users.quota_bytes` and T085 owns it.
 - Do NOT check free space; T099 adds that gate to the same `Pass`.
-- Do NOT implement `process_order` by owner round robin; T085 owns it, and this task orders by
+- Do NOT invent any ordering other than creation date; this task orders by
   `added_at` only.
 - Do NOT raise an engine's own queue limit; T101 owns conformance.
 

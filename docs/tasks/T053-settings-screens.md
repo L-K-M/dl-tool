@@ -8,7 +8,7 @@
 | **Depends on** | T027, T045, T047, T050, T052 |
 | **Blocks** | T104, T116, T117, T118, T119, T120, T121 |
 | **Parallel-safe** | no — it also edits the shared file `web/src/App.tsx` |
-| **Implements** | — (renders [FR-143](../02-requirements.md#fr-143-list-engines-and-test-connectivity), covered by T027, and the client half of [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences-per-user), covered by T107) |
+| **Implements** | — (renders [FR-143](../02-requirements.md#fr-143-list-engines-and-test-connectivity), covered by T027, and the client half of [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences), covered by T107) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |
 | **Est. size** | 4 new files, ~400 LOC. The shell cannot compile without at least the two sections it routes to. |
 
@@ -142,7 +142,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   [FR-092](../02-requirements.md#fr-092-store-and-edit-a-247-schedule-grid).
 - Do NOT build the Indexers, RSS, Downloads, BitTorrent, Users, Notifications or Advanced forms;
   [T116](T116-indexers-settings-section.md), [T117](T117-rss-settings-section.md),
-  [T119](T119-downloads-and-bittorrent-settings.md), [T120](T120-users-auth-and-notifications-settings.md)
+  [T119](T119-downloads-and-bittorrent-settings.md), [T120](T120-account-and-notifications-settings.md)
   and [T121](T121-advanced-settings-and-log-viewer.md) own them, one section at a time.
 - Do NOT render an engine password, secret or token field, even disabled.
 - Do NOT reorder or rename a section; a Download Station user must find them where doc 09 §9 puts them.

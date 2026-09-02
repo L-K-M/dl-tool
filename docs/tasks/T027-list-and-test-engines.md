@@ -28,7 +28,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | Path | Action | Purpose |
 |---|---|---|
 | `internal/api/settings.go` | create | The `GET /engines` and `POST /engines/{id}/test` handlers. |
-| `internal/api/settings_test.go` | create | Cases for a healthy engine, a stopped engine and a non-admin caller. |
+| `internal/api/settings_test.go` | create | Cases for a healthy engine and a stopped engine. |
 | `internal/store/settings.go` | create | New file. `ListEngines` and `TouchEngine` over the `engines` table; every later task that adds a settings-table query extends this file. |
 | `internal/api/server.go` | modify | Register `list-engines` and `test-engine`. |
 
@@ -104,7 +104,7 @@ func (s *Store) TouchEngine(ctx context.Context, id string, version, lastErr *st
    `404` `/problems/not-found` for an unknown engine id.
 8. Register both operations in `internal/api/server.go` as `list-engines` and `test-engine`.
 9. Create `internal/api/settings_test.go`: a stub aria2 returning `1.37.0` yields `connected:true` and that
-   version; a stopped engine yields `ok:false` with the transport error and still `200`; a non-admin
+   version; a stopped engine yields `ok:false` with the transport error and still `200`.
    receives `403`; and no response body contains the configured secret.
 
 ## Acceptance criteria
@@ -112,7 +112,6 @@ func (s *Store) TouchEngine(ctx context.Context, id string, version, lastErr *st
 - [ ] A healthy probe returns `{"ok":true}` with the version and a non-zero `elapsed_ms`.
 - [ ] A stopped engine returns `200` with `ok:false` and the transport error in `error`.
 - [ ] Neither response contains `DLTOOL_ARIA2_SECRET` in any form.
-- [ ] A non-admin receives `403` `/problems/forbidden` from both operations.
 - [ ] An unknown engine id returns `404` `/problems/not-found`.
 
 ## Verification
@@ -121,7 +120,7 @@ Run exactly this. Paste the output under "Evidence".
 make lint && make test PKG=./internal/api/...
 ```
 Expected: `make lint` prints nothing, then `ok  	github.com/L-K-M/dl-tool/internal/api` followed by its
-elapsed time, with `TestListEngines`, `TestTestEngineFailureIs200` and `TestEnginesRequireAdmin` all
+elapsed time, with `TestListEngines` and `TestTestEngineFailureIs200` both
 running. No `FAIL`.
 
 Also confirm scope:

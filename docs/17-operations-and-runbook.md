@@ -305,9 +305,9 @@ download manager runs a schema migration with nobody watching — use a monitor-
 | `ENOSPC` | From any write path | Set `disk_full` and keep the task resumable. **Partial data is never deleted**; the task resumes when space returns. |
 | Hardlinks | — | A hardlinked library copy consumes no extra space, so `du` over `/data` double-counts. Free space comes from `statvfs`, never from `du`. |
 
-Storage quota (`users.quota_bytes` → `quota_exceeded`) and the concurrency limits (`max_active_*` →
+The concurrency limits (`max_active_*` →
 `concurrency_limit`) are separate mechanisms with separate codes; see
-[`04-data-model.md` §4.7](04-data-model.md#47-storage-quota-versus-concurrency-limit).
+[`04-data-model.md` §4.7](04-data-model.md#47-concurrency-limit-versus-disk-space).
 
 ---
 
@@ -326,7 +326,7 @@ including `debug`. Values are typed `secure.Secret`, whose `String`, `Format` an
 | Indexer `api_key`, notification `secret_enc`, engine `secret_enc` | Configuration tables |
 | `extract_passwords` | `settings` |
 | Headers `Authorization`, `Cookie`, `X-Api-Key` | Requests |
-| Query or path parameters `apikey`, `token`, `passkey` | Indexer and tracker URLs, which routinely embed a per-user passkey |
+| Query or path parameters `apikey`, `token`, `passkey` | Indexer and tracker URLs, which routinely embed a tracker passkey |
 | URL userinfo (`https://user:pass@host/…`) | FTP and HTTP task sources |
 
 Redaction happens **before the record is stored**, not at read time, so an operator who reads
@@ -360,7 +360,7 @@ works whether or not the server is running.
 | `/config/secrets.env` | `DLTOOL_SECRET_KEY` and `ARIA2_RPC_SECRET`. |
 | `users`, `sessions`, `api_tokens` rows | Identities and credentials. |
 | Task names, source URIs, destinations, file names | A file list is the most privacy-sensitive data in the product. Only counts and state histograms are included. |
-| Indexer URLs and API keys, feed URLs, tracker URLs | Carry per-user passkeys. |
+| Indexer URLs and API keys, feed URLs, tracker URLs | Carry tracker passkeys. |
 | Anything under `/data` | Never read by this command. |
 
 The bundle is written with mode `0600` owned by `PUID:PGID`. There is no endpoint that returns it: it is a
@@ -372,7 +372,7 @@ deliberate, local operator action.
 
 | Symptom | Most likely cause | Fix |
 |---|---|---|
-| Tasks sit in `queued` with error code `concurrency_limit` and nothing starts | A `max_active_*` limit is reached. Seeding does not count toward any of them, so a queue of seeders is not the cause. | Raise `max_active_total`, `max_active_per_engine` or `max_active_per_user` in Settings. The engines' own queues are deliberately raised out of the way — raising them does nothing. |
+| Tasks sit in `queued` with error code `concurrency_limit` and nothing starts | A `max_active_*` limit is reached. Seeding does not count toward any of them, so a queue of seeders is not the cause. | Raise `max_active_total` or `max_active_per_engine` in Settings. The engines' own queues are deliberately raised out of the way — raising them does nothing. |
 | Speeds are far below the configured limit, and no per-task limit is set | A 24×7 schedule cell is active and applying the alternative-speed pair. | Check the active mode on `GET /system/info` (`schedule.active_mode`) and the grid in Settings. Precedence is `min(cell, global, per-task)` → [`06-download-engines.md` §10](06-download-engines.md#10-bandwidth-precedence-and-fan-out). |
 | Everything dl-tool started is paused at the same minute every day | The active cell is `0` No Download, which **pauses** rather than throttles. Tasks the user paused stay paused. | Edit that cell. dl-tool resumes exactly the tasks it paused when the cell changes. |
 | Files land somewhere other than the chosen destination, and move again later | qBittorrent's Automatic Torrent Management is on and relocates by category, overriding `tasks.destination`. | Apply the conformance warning's "fix it for me" action, which sets `auto_tmm_enabled=false` (§1.5). Then move the affected tasks with `PATCH /tasks/{id}`. |
@@ -417,3 +417,4 @@ deliberate, local operator action.
 | 2026-09-01 | Review pass: the never-logged table names `secrets.env` as an at-rest home of the aria2 secret, so an inventory or scrub does not miss the stale copy. |
 | 2026-09-01 | Resolved the backup-naming open question: the §13 example in [`05-api-contract.md`](05-api-contract.md) was corrected to the `dl-tool.db.<UTC>.bak` form used here and in [`04-data-model.md`](04-data-model.md) §6. |
 | 2026-09-01 | Made migration backup and database restore idempotent, lock-protected and crash-safe. |
+| 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |

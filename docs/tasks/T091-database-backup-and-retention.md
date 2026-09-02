@@ -108,13 +108,13 @@ Worked response, admin only, `201`:
    doc 04 §7. `search_results` follows its `ON DELETE CASCADE`; write no separate delete for it.
 6. Create `internal/api/system.go` with `SystemHandlers`, its constructor taking the store and the config
    directory, and `CreateBackup` calling `BackupInto(ctx, cfg.ConfigDir+"/backups")` then `PruneBackups(…, 7)`.
-7. Map `ErrBackupRunning` to `409` `/problems/conflict`, a non-admin caller to `403` `/problems/forbidden`
+7. Map `ErrBackupRunning` to `409` `/problems/conflict`
    and any other failure to `500` `/problems/internal`.
 8. Edit `internal/jobs/cron.go` to add three entries to T066's `Scheduler`: `0 3 * * *` running the backup
    then `PruneBackups(7)` then the two nightly prunes, and `@hourly` running `PruneSearchJobs`.
 9. Edit `internal/api/server.go` to register the operation as `create-backup` on `POST /system/backup`.
 10. Create `internal/api/system_test.go`: a successful backup returns `201` and a file that opens and
-    answers `PRAGMA integrity_check` with `ok`; a second concurrent call returns `409`; a non-admin gets
+    answers `PRAGMA integrity_check` with `ok`; a second concurrent call returns `409`.
     `403`; and a forced failure mid-statement leaves no file matching `dl-tool-*.db`.
 
 ## Acceptance criteria
@@ -124,7 +124,6 @@ Worked response, admin only, `201`:
 - [ ] A failed statement leaves no file matching `dl-tool-*.db` in the backup directory.
 - [ ] Eight nightly runs leave exactly seven files.
 - [ ] `PruneTaskEvents` deletes rows older than 90 days and leaves a row exactly 89 days old.
-- [ ] A non-admin caller receives `403` `/problems/forbidden`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

@@ -85,7 +85,7 @@ func ModeToCell(m store.ScheduleMode) int
 `enabled` is the `schedule_enabled` settings key, default `false`. `timezone` is `time.Local.String()`, the
 container's `TZ`, and is read-only: a client cannot set it. `active_mode` is read-only too; T110 fills it
 from the cell in force at the moment of the call. Until T110 lands, return the cell for the current hour. Statuses: `200` · `403` `/problems/forbidden`
-for a non-admin `PUT` · `422` `/problems/validation-failed` when `cells` is not exactly 168 elements or
+· `422` `/problems/validation-failed` when `cells` is not exactly 168 elements or
 holds a value outside `0..2`.
 
 ## Steps
@@ -103,8 +103,8 @@ holds a value outside `0..2`.
 7. Edit `internal/api/server.go` to register `get-schedule` and `put-schedule` on the existing Huma API.
 8. Create `internal/api/settings_schedule_test.go` with `humatest`: write a grid containing all three values,
    read it back and assert the array is identical; assert 167 and 169 elements are `422`; assert a value of
-   `3` and of `-1` are `422`; assert a rejected `PUT` left the stored grid unchanged; assert a non-admin
-   `PUT` is `403` and a non-admin `GET` is `200`; assert `timezone` is present and non-empty.
+   `3` and of `-1` are `422`; assert a rejected `PUT` left the stored grid unchanged; assert `timezone`
+   is present and non-empty.
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -112,7 +112,6 @@ holds a value outside `0..2`.
 - [ ] `cells` of length 167 or 169 is `422` and nothing is written.
 - [ ] A cell value outside `0..2` is `422` and nothing is written.
 - [ ] `ReplaceSchedule` is transactional: a rejected write leaves all 168 stored rows unchanged.
-- [ ] A non-admin `PUT` is `403`; a non-admin `GET` is `200`.
 - [ ] Both responses carry the active `timezone` and `active_mode`, and both are read-only.
 
 ## Verification

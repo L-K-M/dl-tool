@@ -44,7 +44,6 @@ package store
 // Task is one row of the tasks table. Column names and types are owned by docs/04-data-model.md §3.3.
 type Task struct {
 	ID             string  `db:"id"              json:"id"`
-	OwnerID        string  `db:"owner_id"        json:"owner_id"`
 	Engine         string  `db:"engine"          json:"engine"`
 	EngineRef      *string `db:"engine_ref"      json:"engine_ref"`
 	SourceKind     string  `db:"source_kind"     json:"source_kind"`

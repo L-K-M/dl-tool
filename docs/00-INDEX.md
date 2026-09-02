@@ -121,7 +121,7 @@ correct and must stay.
 | **M3** | Web UI | The full Download-Station-equivalent screen works in a browser; Playwright E2E green |
 | **M4** | Search | The bundled engines return results; a result becomes a task in one click |
 | **M5** | RSS | A rule auto-downloads the Arch Linux release feed; the dry run explains every non-match |
-| **M6** | Post-processing, scheduling, multi-user | Auto-extract, the 24×7 grid, and per-user destinations and quotas all work end to end |
+| **M6** | Post-processing and scheduling | Auto-extract, the watch folder and the 24×7 grid all work end to end |
 | **M7** | Media downloads, packaging, release | yt-dlp works; a signed multi-arch image is published |
 
 ## Decisions referenced

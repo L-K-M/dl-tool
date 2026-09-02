@@ -173,7 +173,7 @@ func RegisterSearchRoutes(api huma.API, h *SearchHandlers)
 ```
 
 Operation ids registered here: `list-indexers`, `create-indexer`, `patch-indexer`, `delete-indexer`,
-`indexer-categories`, `import-indexer`. Writes are admin-only.
+`indexer-categories`, `import-indexer`.
 
 ## Steps
 1. Create `internal/store/indexers.go` with `Indexer`, `IndexerPatch` and `NewIndexerStore`, deriving the

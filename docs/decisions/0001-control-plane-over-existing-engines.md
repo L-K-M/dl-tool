@@ -4,6 +4,10 @@
 > **Date:** 2026-09-01
 > **Deciders:** repository owner
 
+> **Amended 2026-09-02 by [ADR-0019](0019-single-account-no-ownership.md):** the multi-user
+> differentiator cited below is withdrawn. dl-tool authenticates one operator account. The decision
+> itself — build a control plane over existing engines — stands, on its other three grounds.
+
 ## Context and Problem Statement
 
 Synology Download Station's feature set is spread across roughly five separate daemons (qBittorrent,

@@ -394,7 +394,7 @@ Enforce every one of these in `internal/search/dlsearch.go`; they are not config
 | Selector/regex input cap | 2 MiB of parsed document | bounds parser and matcher cost |
 | Redirects | 5 maximum, SSRF checks re-run on **every** hop | redirect-based SSRF bypass |
 | Schemes | `http`, `https` only, including after redirect | |
-| Ports | 80 and 443 for public destinations; unrestricted for the configured origin where the engine's `allow_private_network` flag or `DLTOOL_SSRF_ALLOW_PRIVATE` applies |
+| Ports | 80 and 443 for public destinations; unrestricted for the configured origin where the engine's `allow_private_network` flag or `DLTOOL_SSRF_ALLOW_PRIVATE` applies | a Prowlarr or Jackett side-car listens on 9696 or 9117 |
 | Rate limit | `request.rate_limit_per_minute`, default 30, maximum 120, per engine | politeness and back-off |
 | Total deadline | 15 s per engine per search, including all redirects and parsing | one hostile definition cannot starve the pool |
 | Results per page | 1000 maximum | matches Jackett's own per-indexer cap |
@@ -785,9 +785,9 @@ Normalisation rules — all six are mandatory:
 6. **Acquisition handles never leave the server.** A Torznab download URL, enclosure, details URL or magnet
    can embed the operator's tracker passkey. They remain in the private `source` field; the API mapper emits
    metadata and the opaque result id for every role. `POST /tasks` takes that id and the service resolves the
-   source. Separately, a key-bearing indexer is rejected at `POST /search` for a non-admin caller and excluded
+   source. Separately, a stored `api_key` is never returned by any endpoint and excluded
    from every job's fan-out ([`05-api-contract.md`](05-api-contract.md) §9.1). Cross-engine deduplication runs
-   only over the engines the requester may see, so a key-bearing engine's row cannot merge into a non-admin's
+   only over the engines in the job, so a key-bearing engine's row cannot merge into another job's
    result. Both controls are server-side; list hiding and client pruning are insufficient. The asset
    justification is [`12-security-and-threat-model.md`](12-security-and-threat-model.md) §1.
 
@@ -895,3 +895,4 @@ Documentation ships as a commented-out Compose snippet the user must deliberatel
 | 2026-09-01 | §5 gains normalisation rule 6: results of key-bearing indexers are served to admins only, because Torznab download URLs embed the operator's per-user tracker passkey. |
 | 2026-09-01 | Review pass 2: rule 6 is enforced server-side at `POST /search` and in the per-job fan-out, not by list-hiding; cross-engine dedup runs only over engines the requester may see. |
 | 2026-09-01 | Security review: made provider acquisition handles private and queueing opaque. |
+| 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |

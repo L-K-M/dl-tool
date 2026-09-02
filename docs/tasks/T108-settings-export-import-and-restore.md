@@ -5,7 +5,7 @@
 | **ID** | T108 |
 | **Milestone** | M6 |
 | **Status** | todo |
-| **Depends on** | T080, T086, T106, T107 |
+| **Depends on** | T080, T106, T107 |
 | **Blocks** | T121 |
 | **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/api/server.go`, `internal/store/db.go` |
 | **Implements** | [FR-145](../02-requirements.md#fr-145-export-and-import-portable-settings), [FR-146](../02-requirements.md#fr-146-restore-a-backup-from-the-command-line) |

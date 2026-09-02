@@ -3,7 +3,7 @@
 A self-hosted replacement for **Synology Download Station**, deployed with Docker Compose.
 
 One queue for every protocol. One folder picker. Pluggable search. RSS rules that can land anywhere.
-Real multi-user. A modern UI that works on a phone.
+A modern UI that works on a phone.
 
 > ### Status: planning
 >
@@ -31,8 +31,7 @@ stopped working on it. The evidence is in Synology's own release notes:
 
 Meanwhile the self-hosted alternatives are individually excellent and collectively incoherent. A composed
 stack of qBittorrent, SABnzbd, aria2, Prowlarr and Unpackerr beats Download Station on capability and
-loses to it badly on "paste a link, pick a folder, walk away" — and on "my flatmate can use it too
-without seeing my downloads". See [`docs/16-prior-art-and-research.md`](docs/16-prior-art-and-research.md)
+loses to it badly on "paste a link, pick a folder, walk away". See [`docs/16-prior-art-and-research.md`](docs/16-prior-art-and-research.md)
 for the full survey and the feature-parity matrix.
 
 ## What dl-tool is
@@ -44,7 +43,7 @@ engines that already exist and are good at their job:
 flowchart LR
   user["Browser / installable PWA"]
   subgraph host["Docker Compose project"]
-    app["dl-tool<br/>queue · users · search · RSS · UI<br/>:8080"]
+    app["dl-tool<br/>queue · search · RSS · UI<br/>:8080"]
     qb["qBittorrent-nox<br/>BitTorrent"]
     ar["aria2c<br/>HTTP / FTP / SFTP"]
     yt["yt-dlp<br/>media sites"]
@@ -65,12 +64,17 @@ dl-tool does not pretend to *be* Download Station to other software: there is no
 qBittorrent API emulation, and it is not a drop-in download client for anything. It has one API, its
 own, and one interface, the one you look at.
 
+It is **single-tenant**: one operator account, created by the first-run wizard. Authentication is still
+mandatory and there are no default credentials, but there are no roles, no per-user destinations and no
+quotas — see [`ADR-0019`](docs/decisions/0019-single-account-no-ownership.md).
+
 ### The five things it owns that nothing else does
 
 1. **One queue across every protocol** — HTTP, HTTPS, FTP, FTPS, SFTP, magnet, `.torrent`, and media-site
    URLs, in one list, with one set of controls.
-2. **Real multi-user** — task ownership, per-user default destination, per-user quota. qBittorrent's
-   request for this has been open for about a decade.
+2. **Auto-extraction driven by the queue** — `.zip`, `.tar`, `.gz`, `.tgz`, `.rar` and `.7z` on completion
+   against a shared password list, triggered by the download that produced the file rather than by a
+   separate watcher.
 3. **A server-side destination browser** — the folder picker Download Station has and no self-hosted
    engine exposes at all.
 4. **Search as a user feature** — Torznab/Newznab providers plus declarative YAML engines, with a proper
@@ -88,7 +92,7 @@ own, and one interface, the one you look at.
 | 2048 tasks for admins, 256 for other users; 50 URLs per add | No arbitrary caps; the 50-line hint is a soft warning, never a silent truncation |
 | Errors hidden inside "Inactive Downloads" | A dedicated **Error** filter, an error column, and a per-task event log |
 | BT search plugins are PHP that runs on your NAS | Declarative definitions only. dl-tool executes no third-party code, ever |
-| Local DSM users only — no domain or LDAP users | Built-in users with per-user default destinations, storage and concurrency quotas, a destination jail, and revocable API tokens |
+| No API for automation beyond the undocumented DS2 endpoints | One documented `/api/v1` with an OpenAPI spec generated from the handlers, and revocable API tokens |
 | No dark mode, no mobile layout | Both, in v1 |
 
 ## Quickstart (once it exists)
@@ -100,7 +104,7 @@ docker compose up -d
 ```
 
 Then open `http://<host>:8091` and complete the first-run setup wizard. There are **no default
-credentials** — the wizard creates the first administrator.
+credentials** — the wizard creates the operator account.
 
 The full deployment reference, including the single `/data` mount rule, reverse-proxy snippets, optional
 VPN routing, and notes for Synology, QNAP, Unraid and TrueNAS, is in

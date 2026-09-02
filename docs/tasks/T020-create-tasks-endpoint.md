@@ -6,7 +6,7 @@
 | **Milestone** | M1 |
 | **Status** | todo |
 | **Depends on** | T007, T008, T015, T016, T017, T019 |
-| **Blocks** | T021, T022, T023, T024, T027, T031, T033, T046, T049, T050, T071, T083, T085, T098, T099, T100, T122 |
+| **Blocks** | T021, T022, T023, T024, T027, T031, T033, T046, T049, T050, T071, T083, T098, T099, T100, T122 |
 | **Parallel-safe** | no — adds the shared `internal/api/tasks.go` |
 | **Implements** | [FR-001](../02-requirements.md#fr-001-add-tasks-from-a-batch-of-pasted-uris), [FR-009](../02-requirements.md#fr-009-supply-ftp-credentials-for-a-single-task), [FR-010](../02-requirements.md#fr-010-recurse-an-ftp-directory-when-the-uri-ends-in-a-slash) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md), [ADR-0012](../decisions/0012-single-data-mount.md) |
@@ -105,7 +105,7 @@ Status codes, exactly these: `201` with at least one created task · `403` `/pro
 1. Create `internal/fsx/safepath.go` with `ErrPathRejected` and `ResolveDestination`; resolve symlinks
    with `filepath.EvalSymlinks`, compare the result against each resolved root plus a trailing separator,
    and never build the path by string concatenation of request input.
-2. Apply the jail argument as a second containment check with the same comparison, so a non-admin is
+2. Apply the roots check with the same comparison everywhere, so a destination is
    confined to the subtree of their `default_destination`.
 3. Create `internal/api/tasks.go` with `TaskHandlers`, its constructor taking the store, the registry and
    the configured roots, and the input and output structs above.
@@ -161,7 +161,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   uploads.
 - Do NOT implement `POST /tasks/inspect`; T031 owns it.
 - Do NOT implement `sanitiseSegment`, `safeJoin` or the 30-row hostile-path table; T046 extends
-  `internal/fsx/safepath.go` with them, and T109 wires the per-user jail across `/fs/*`.
+  `internal/fsx/safepath.go` with them.
 - Do NOT enforce `max_active_*`; T098 owns admission control.
 - Do NOT check free space; T099 owns the reservation gate.
 

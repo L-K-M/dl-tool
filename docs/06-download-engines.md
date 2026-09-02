@@ -1151,7 +1151,7 @@ invoked.
 
 ### 9.4 Why the engine queues are raised, not used
 
-dl-tool enforces `max_active_total`, `max_active_per_engine` and `max_active_per_user` itself
+dl-tool enforces `max_active_total` and `max_active_per_engine` itself
 ([`11-config-reference.md`](11-config-reference.md), task **T098**). Each engine can see only its own queue,
 so an engine-side limit would silently reorder a queue dl-tool believes it owns and would make
 `process_order` meaningless. Tasks in state `seeding` count toward none of the three limits.

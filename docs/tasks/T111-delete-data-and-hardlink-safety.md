@@ -5,7 +5,7 @@
 | **ID** | T111 |
 | **Milestone** | M6 |
 | **Status** | todo |
-| **Depends on** | T023, T076, T085, T109 |
+| **Depends on** | T023, T076 |
 | **Blocks** | — |
 | **Parallel-safe** | no — extends `internal/api/tasks_delete.go` and `internal/api/tasks_actions.go` |
 | **Implements** | [FR-024](../02-requirements.md#fr-024-delete-downloaded-data-safely-and-only-on-request) |
@@ -22,7 +22,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/05-api-contract.md` §5.6 `DELETE /tasks/{id}`](../05-api-contract.md#56-delete-tasksid)
 2. [`docs/05-api-contract.md` §5.7 `POST /tasks/actions`](../05-api-contract.md#57-post-tasksactions)
 3. [`docs/02-requirements.md` FR-024](../02-requirements.md#fr-024-delete-downloaded-data-safely-and-only-on-request)
-4. [`docs/05-api-contract.md` §7.2 The per-user jail](../05-api-contract.md#72-the-per-user-jail)
+4. [`docs/05-api-contract.md` §7.2 The per-user jail](../05-api-contract.md#72-containment)
 5. [`docs/tasks/T023-remove-task-and-data.md`](T023-remove-task-and-data.md)
 
 ## Files
@@ -90,7 +90,7 @@ The caller's obligations, in order, with the failure behaviour that must be test
 ## Steps
 1. Create `internal/fsx/delete.go` with `DeleteResult`, `Target` and `DeleteData`.
 2. Implement step 3 as a complete pass over every target before the first unlink, using `Jail.Contains`
-   from T109 so the roots check and the caller's jail check are the same code.
+   so the roots check is the same code everywhere.
 3. Implement step 4: one `unlink(2)` per target, counting a missing file into `Missing` rather than failing,
    then one `os.Remove` of the task directory that is allowed to fail when the directory is not empty.
 4. Edit `internal/api/tasks_delete.go` to call the executor between its existing step 1 and step 5, deleting
@@ -144,7 +144,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   copy is the intended outcome of the single `/data` mount, not a partial deletion.
 - Do NOT delete a transfer dl-tool did not create, or data it did not record; ADR-0017 leaves them alone.
 - Do NOT remove a non-empty task directory recursively.
-- Do NOT delete anything on `ENOSPC`, on a quota breach, or on an extraction failure; T099, T085 and T074
+- Do NOT delete anything on `ENOSPC` or on an extraction failure; T099 and T074
   all pause instead.
 - Do NOT add a "delete all completed" or "empty trash" endpoint.
 
