@@ -891,12 +891,14 @@ scheduling and the schema-newer-than-binary refusal are owned by
 - The shipped compose pins a **major** tag (`ghcr.io/l-k-m/dl-tool:1`), never `:latest`. Pin engine images
   too: a floating `lscr.io/linuxserver/qbittorrent:latest` can change the libtorrent version underneath a
   running library.
-- Manual update is the documented path: `docker compose pull && docker compose up -d && docker image prune -f`.
+- Manual update is the documented path: `docker compose pull && docker compose up -d`. Defer image pruning
+  until the rollback conditions in [`17-operations-and-runbook.md` §4](17-operations-and-runbook.md#4-upgrade-and-rollback)
+  are satisfied.
 - Database schema migrations and their conditional pre-migration backups follow
   [`04-data-model.md` §5](04-data-model.md#5-schema-migration-policy). No other import or conversion step
   runs on upgrade.
 - Follow [`17-operations-and-runbook.md` §4](17-operations-and-runbook.md#4-upgrade-and-rollback) for every
-  rollback. When its recorded schema versions require a database restore, use only the
+  rollback. When the schema versions recorded there require a database restore, use only the
   [`restore --from` procedure](17-operations-and-runbook.md#34-dl-tool-restore---from-file). Never copy the
   live database or its sidecars by hand.
 

@@ -51,7 +51,7 @@ flowchart TD
   F -->|"applied = embedded"| H["S6 PRAGMA integrity_check"]
   G --> H["S6 PRAGMA integrity_check"]
   H -->|"exactly one ok row"| I["S7 mount and hardlink self-check"]
-  H -->|"any other result"| X5["exit 1, database integrity error"]
+  H -->|"any other result"| X5["exit 1, integrity_check_failed"]
   I --> J["S8 bind listeners, serve /healthz"]
   J --> K["S9 engine capability probe and conformance"]
   K --> L["S10 boot reconciliation"]
@@ -106,7 +106,8 @@ refusal.
    and fsync it, atomically rename it, then fsync the directory and log the final path. Any failure exits with
    `backup_failed` before goose runs.
 6. Run embedded migrations forward, logging each file and duration.
-7. Run `PRAGMA integrity_check`; continue only when its result is exactly one row equal to `ok`.
+7. Run `PRAGMA integrity_check`; continue only when its result is exactly one row equal to `ok`; otherwise,
+   exit with `integrity_check_failed`, naming the database path.
 
 Migration file naming, the mandatory `-- +goose Down` section and the version query live in
 [`04-data-model.md` §5](04-data-model.md#5-schema-migration-policy).
@@ -276,14 +277,16 @@ settings into a fresh instance, the operator still creates the account through t
 2. **Upgrade.** Record `database.schema_version` from `GET /system/info`, then run
    `docker compose pull && docker compose up -d`. Record every final pre-migration backup path logged after
    this upgrade attempt begins: an automatic restart may produce more than one. After a successful startup,
-   record the new schema version. Do not prune the previous image until the rollback backup has been tested.
+   record the new schema version. Do not prune the previous image until the operator's rollback window has
+   expired and any rollback backup has been tested.
 3. **Verify.** `curl -fsS localhost:8091/healthz`, then check `GET /system/info` for the expected `version`
    and recorded `database.schema_version`.
 4. **Roll back.** Run `docker compose down` and pin the previous tag. From the paths recorded for this
    upgrade attempt, restore the first whose `<from>` equals the pre-upgrade schema version; ignore paths from
    later automatic retries. If there is no such path, do not restore a database: a stale backup would discard
    later writes. Then start Compose. This rule also covers startup failing before the post-upgrade
-   `GET /system/info` is available.
+   `GET /system/info` is available. If the previous instance was already down and its schema version could
+   not be recorded, use the `<from>` version of the first backup logged for this attempt.
 
 ```bash
 docker compose down

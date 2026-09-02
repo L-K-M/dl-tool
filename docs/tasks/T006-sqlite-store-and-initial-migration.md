@@ -30,6 +30,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    [§6 Backup and restore](../04-data-model.md#6-backup-and-restore).
 5. [`docs/14-conventions.md` §2.4 SQL and sqlx](../14-conventions.md#24-sql-and-sqlx) and
    [§8.4 Add a migration](../14-conventions.md#84-add-a-migration).
+6. [`docs/11-config-reference.md` §8 Boot validation](../11-config-reference.md#8-boot-validation).
 
 ## Files
 | Path | Action | Purpose |
@@ -126,8 +127,8 @@ func NewID(prefix string) string
    to-version and UTC start time, so the test injects all three.
 8. Run `goose.Up(db, "migrations")` when migration is needed. Run `PRAGMA integrity_check` after that step
    on every open, including when goose had nothing to apply. Read every result row and pass them to a private
-   validator taking `dbPath`; return an error naming that path unless the result is exactly one row equal to
-   `ok`.
+   validator taking `dbPath`; return an `integrity_check_failed` error naming that path unless the result is
+   exactly one row equal to `ok`.
 9. Write `internal/store/db_test.go` covering: `journal_mode` reads back `wal` and `foreign_keys` reads back
    `1`; a fresh file migrates to version 1 and `bandwidth_schedule` holds 168 rows whose IDs combine the
    documented prefix with a 26-character ULID body and are pairwise distinct, as are the seeded `settings`
@@ -152,7 +153,7 @@ func NewID(prefix string) string
 - [ ] `TestZeroVersionSkipsBackup` asserts a nonexistent database, an empty file and a database containing
       only goose's initial applied version-0 row each leave no backup artifact.
 - [ ] `TestIntegrityCheckResult` asserts the private validator accepts one `ok` row and rejects zero rows,
-      multiple rows or any non-`ok` row with an error naming the database path.
+      multiple rows or any non-`ok` row with an `integrity_check_failed` error naming the database path.
 - [ ] `TestPreMigrationBackup` exercises the private backup operation with from-version 1, to-version 2 and
       injected time `2026-09-01T12:00:00.123456789Z`; it asserts
       `dl-tool.db.pre-migration-1-to-2.20260901T120000.123456789Z.bak` exists and no temporary file remains.
