@@ -4,13 +4,13 @@
 |---|---|
 | **ID** | T005 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T004 |
 | **Blocks** | T006, T007, T029, T054, T056, T087, T092, T123 |
 | **Parallel-safe** | no — it edits `cmd/dl-tool/main.go` |
 | **Implements** | [FR-141](../02-requirements.md#fr-141-resolve-settings-from-environment-then-database), [NFR-023](../02-requirements.md#nfr-023-generate-secrets-on-first-run-and-support-file-based-secrets) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0012](../decisions/0012-single-data-mount.md) |
-| **Est. size** | 3 new source files, 1 test file, ~330 LOC |
+| **Est. size** | 5 source files, ~1,050 added LOC |
 
 ## Goal
 `config.Load` turns the `DLTOOL_*` environment into one validated struct, dies with a named `err_code` on
@@ -133,16 +133,16 @@ func (e *FatalError) Error() string
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] Every variable in doc 11 §2 has a field, a default and a test.
-- [ ] Each fatal row of doc 11 §8 returns a `*FatalError` with exactly the documented `err_code`.
-- [ ] `TestUnwritableDataRootIsNotFatal` shows `Load` succeeding with one `warn` carrying
+- [x] Every variable in doc 11 §2 has a field, a default and a test.
+- [x] Each fatal row of doc 11 §8 returns a `*FatalError` with exactly the documented `err_code`.
+- [x] `TestUnwritableDataRootIsNotFatal` shows `Load` succeeding with one `warn` carrying
       `err_code=data_root_not_writable` for a missing and for a read-only data root, and no `MkdirAll`
       attempt on either.
-- [ ] `TestSecretsAreDistinctPerInstance` shows two fresh config directories yielding different
+- [x] `TestSecretsAreDistinctPerInstance` shows two fresh config directories yielding different
       `DLTOOL_SECRET_KEY` values.
-- [ ] `TestSecretNeverPrints` asserts `%v`, `%s` and `json.Marshal` all render `[REDACTED]`.
-- [ ] `secrets.env` is written with mode `0600` and is not overwritten when it already holds both values.
-- [ ] `Load` opens no network connection and no database.
+- [x] `TestSecretNeverPrints` asserts `%v`, `%s` and `json.Marshal` all render `[REDACTED]`.
+- [x] `secrets.env` is written with mode `0600` and is not overwritten when it already holds both values.
+- [x] `Load` opens no network connection and no database.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -174,7 +174,21 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+```text
+$ make test PKG=./internal/config/... && echo CONFIG_OK
+go test -race -count=1 ./internal/config/...
+ok  	github.com/L-K-M/dl-tool/internal/config	1.065s
+CONFIG_OK
+```
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+internal/config/config.go
+internal/config/config_test.go
+internal/config/env.go
+internal/secure/secret.go
+```
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+None.
