@@ -1,7 +1,8 @@
 # Review of the dl-tool implementation plan
 
-> **Reviewed:** 2026-09-02 · **Reviewing:** the plan at commit `57d37de`, 122 task files and 20 plan
-> documents · **Full findings:** [`PLAN-REVIEW-FINDINGS.md`](PLAN-REVIEW-FINDINGS.md)
+> **Reviewed:** 2026-09-02 · **Reviewing:** the plan at commit `57d37de`, 122 task files (numbered
+> non-contiguously to T125; T102, T112 and T114 are permanently retired) and 20 plan documents ·
+> **Full findings:** [`PLAN-REVIEW-FINDINGS.md`](PLAN-REVIEW-FINDINGS.md)
 
 ## Verdict
 
@@ -17,9 +18,9 @@ of its sharpest calls — sending both spellings of the pause parameter, keying 
 confirmed against live daemons.
 
 The weakness is that **the plan is not yet executable end to end**. 135 defects (25 critical, 110 high)
-survived an adversarial verification pass. They are not scattered: they cluster into six systemic
-patterns, and five of the six trace back to the same root cause — the hard rule that a task may only
-touch files in its own `Files` table, with no task owning the seams between them.
+survived an adversarial verification pass. They are not scattered: six recurring shapes account for most
+of them, and the first three of those trace back to a single root cause — the hard rule that a task may
+only touch files in its own `Files` table, with no task owning the seams between them.
 
 Concretely, following the plan literally today:
 
@@ -57,7 +58,13 @@ separately as leads rather than established defects.
 
 ## The six patterns
 
-### 1. Nothing wires the components together (10 confirmed defects)
+These are recurring shapes, not a partition of the 135 findings: each section names the confirmed
+findings that illustrate it, and defects that fit no shape are listed only in
+[`PLAN-REVIEW-FINDINGS.md`](PLAN-REVIEW-FINDINGS.md), which is the authoritative per-finding list. Where
+a fix below is described as fixing "the class", it addresses patterns 1 to 3; patterns 4 to 6 have to be
+worked finding by finding.
+
+### 1. Nothing wires the components together
 
 The plan specifies components precisely and then never constructs them. `engine.Registry` is defined
 (T019) but no task calls `NewRegistry` or `aria2.New` (F008). `Reconciler.Boot`/`Run` exist but nothing
@@ -76,7 +83,7 @@ that create a component are structurally unable to plug it in, and no task exist
 > in the `Files` table. Where several tasks in a milestone each need one line in `server.go`, an explicit
 > per-milestone wiring task is cleaner than eleven concurrent edits to the same file.
 
-### 2. Generated artefacts are gated in CI but owned by nobody (3 confirmed defects)
+### 2. Generated artefacts are gated in CI but owned by nobody
 
 `api/openapi.json` and `web/src/api/schema.d.ts` are committed, and `gen-drift` is a blocking CI job
 (T002). Only T007 and T014 list them in a `Files` table. Every later task that registers a Huma
@@ -89,7 +96,7 @@ rule 1 and Definition-of-Done item 8.
 > State once, in doc 13 §7.1 and doc 14 §7, that the two generated files are implicitly part of the
 > `Files` table of any task that changes a Huma operation, and add `make gen` to those tasks' Steps.
 
-### 3. The one-file-per-task partition does not check the Go package namespace (2 confirmed defects)
+### 3. The one-file-per-task partition does not check the Go package namespace
 
 `store.ErrNotFound` is declared by T006 in `db.go` and again by T017 in `tasks.go` — same package,
 `redeclared in this block`, and T017 may not edit `db.go` to remove the first (F013). `engine.Limits` is
@@ -99,7 +106,7 @@ that a literal implementer cannot fix without breaking rule 1.
 > A cheap guard: before implementation starts, grep every task file's interface contract for `^type ` and
 > `^var ` / `^func ` at package scope and assert no identifier is declared twice within one Go package.
 
-### 4. Authoritative documents contradict each other on facts an implementer must act on (40 confirmed)
+### 4. Authoritative documents contradict each other on facts an implementer must act on
 
 The plan's "each fact has exactly one home" rule is well designed but not enforced, and the same fact
 ended up in two homes with different values:
@@ -129,7 +136,7 @@ finishes hits `ErrIllegalTransition` on every poll tick, and there is no path to
 > Extend the transition table with the engine-driven edges and state that the reconciler may adopt any
 > state an engine reports; then re-derive doc 03 §8.1 from it rather than maintaining both.
 
-### 5. The default deployment does not boot (5 confirmed defects)
+### 5. The default deployment does not boot
 
 Three independent causes, any one of which is enough:
 
@@ -151,7 +158,7 @@ past it — but the shipped default remains unbootable, and the M0 exit checkpoi
 > says an empty URL disables the lane), and give the qBittorrent credential a documented first-run
 > procedure or a generated password in the compose file.
 
-### 6. External-software details that do not survive contact (25 confirmed)
+### 6. External-software details that do not survive contact
 
 The engine research is unusually good, so the remaining errors are concentrated where the plan itself
 flagged uncertainty — but they are load-bearing. I verified each against the real tool:
