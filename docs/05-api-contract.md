@@ -69,6 +69,10 @@ Two credentials, both accepted on every authenticated endpoint. There is no anon
   `admin` in §2 return `403` `/problems/forbidden` to everyone else.
 - While no user row exists, every endpoint except `POST /auth/setup` returns `401`
   `/problems/setup-required`.
+- When `DLTOOL_CONFIG_LOCK=true`, mutations under `/settings`, `/engines`, `/indexers`, `/feeds`,
+  `/rules`, `/categories`, `/tags`, `/watch-folders` and `/notifications` return `403`
+  `/problems/config-locked`. Reads and task, user, authentication, token and backup operations remain
+  available.
 
 ### 1.3 Errors — RFC 9457 `application/problem+json`
 
@@ -98,6 +102,7 @@ Slug registry. No endpoint may invent a slug outside this table.
 | `/problems/setup-required` | 401 | No user exists yet; only `POST /auth/setup` is callable. |
 | `/problems/unauthenticated` | 401 | Absent, expired or revoked cookie or bearer token. |
 | `/problems/forbidden` | 403 | Authenticated but not permitted (non-admin on an admin endpoint). |
+| `/problems/config-locked` | 403 | An environment lock forbids this configuration mutation. |
 | `/problems/csrf-token-missing` | 403 | Cookie auth on a mutating request without a valid `X-DLTOOL-CSRF`. |
 | `/problems/path-rejected` | 403 | A path resolves outside `DLTOOL_DATA_ROOTS`, or is not writable. |
 | `/problems/ssrf-blocked` | 403 | An outbound URL resolved to a blocked address ([`12-security-and-threat-model.md`](12-security-and-threat-model.md)). |
@@ -1566,3 +1571,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Scoped live task deltas, removals and aggregates to the authenticated caller. |
 | 2026-09-01 | Replaced destructive task-row deletion with retained tombstones and confined filesystem removal. |
 | 2026-09-01 | Aligned the backup API filename with the canonical recovery format. |
+| 2026-09-01 | Security review: specified the environment-only configuration lock and its stable error slug. |

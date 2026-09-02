@@ -528,7 +528,11 @@ protection"; its `settings.json` keys are `rpc-host-whitelist-enabled` (default 
 | Enabled | always; no switch turns it off |
 | Implicitly allowed | `localhost`, `localhost.`, and any literal IPv4 or IPv6 address, port stripped |
 | Additionally allowed | the names the operator configures through `DLTOOL_ALLOWED_HOSTS` ([`11-config-reference.md`](11-config-reference.md) §2) — a reverse proxy's public hostname belongs here |
+| Additionally allowed | exact names in `DLTOOL_ALLOWED_HOSTS`, after lowercasing and removing one trailing root dot |
 | Mismatch | `421 Misdirected Request`, logged with the offending `Host` value |
+
+The allowlist contains DNS names only: no scheme, path, port or wildcard. Validation strips a valid port
+from the received `Host` and never substitutes `X-Forwarded-Host`, including for trusted proxies.
 
 ### 6.6 Response headers
 
@@ -563,9 +567,10 @@ script element.
 - A login redirect parameter is honoured only when it is a relative path beginning with a single `/`;
   `//evil.example` and `https://evil.example` are ignored and the user lands on the application root.
   Sonarr shipped CVE-2024-45247 (CWE-601) in exactly this place.
-- `internal/config` exposes a `config_lock` switch, settable from the environment only, that makes
-  every settings-mutating endpoint return `403`. SABnzbd names precisely this control as the mitigation
-  for both of its RCE advisories, and it costs almost nothing.
+- `DLTOOL_CONFIG_LOCK=true`, settable from the environment only, makes mutations of settings, engines,
+  indexers, feeds, rules, categories, tags, watch folders and notification channels return `403`
+  `/problems/config-locked`. Task, user, authentication, token and backup operations remain available.
+  SABnzbd names precisely this control as the mitigation for both of its RCE advisories.
 - Do not expose dl-tool directly to the internet. Put it behind a reverse proxy that terminates TLS and
   preferably behind an identity layer or a private network overlay; the proxy profiles are in
   [`10-deployment-and-compose.md`](10-deployment-and-compose.md). Every incident in §7 that was
@@ -730,3 +735,4 @@ the repository owner decides.
 | 2026-09-01 | Setup-token hardening: §6.4 pins the token at 256 bits from `crypto/rand` (base64url), regenerates it on every boot while unused, and puts `POST /auth/setup` behind the §6.3 throttle — a guessed token mints the admin account and there is no account to lock out afterwards. |
 | 2026-09-01 | Review pass: failed setup attempts carry their own `auth.setup_failed` event code (a fresh-install takeover attempt is a different signal from password spraying) while the shipped filter still matches both. |
 | 2026-09-01 | Aligned the sub-path base element with CSP without permitting inline scripts. |
+| 2026-09-01 | Security review: bound Host validation and configuration locking to documented environment variables and exact resource scopes. |

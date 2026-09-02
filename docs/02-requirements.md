@@ -1085,9 +1085,9 @@ The dl-tool API shall enforce CSRF using a per-session synchroniser token suppli
 | T008 | must |
 
 ### NFR-013 Reject unexpected Host headers
-If an incoming request carries a `Host` header outside the configured allowlist, then dl-tool shall reject it with HTTP 421, with loopback names and literal IP addresses implicitly allowed.
+If an incoming request carries a `Host` header outside `DLTOOL_ALLOWED_HOSTS`, then dl-tool shall reject it with HTTP 421, with loopback names and literal IP addresses implicitly allowed.
 
-**Verify:** T095 sends `Host: evil.example` and asserts 421, and sends `Host: localhost:8080` and asserts success — the lesson of CVE-2018-5702.
+**Verify:** T095 configures `DLTOOL_ALLOWED_HOSTS=dl.example.com`, asserts that host and `localhost:8080` succeed, and asserts `Host: evil.example` returns 421 — the lesson of CVE-2018-5702.
 
 | Covered by | Priority |
 |---|---|
@@ -1237,6 +1237,19 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 |---|---|
 | T103 | must |
 
+### NFR-030 Lock configuration from the environment
+When `DLTOOL_CONFIG_LOCK=true`, dl-tool shall reject every API mutation of settings, engines, indexers,
+feeds, rules, categories, tags, watch folders and notification channels with HTTP 403
+`/problems/config-locked`. Task, user, authentication, token and backup operations shall remain available,
+and no API shall change the lock itself.
+
+**Verify:** T095 enables the lock, asserts a settings mutation and an indexer mutation return 403 without
+side effects, then asserts task pause and token revocation still work.
+
+| Covered by | Priority |
+|---|---|
+| T095 | must |
+
 ---
 
 ## Decisions referenced
@@ -1290,3 +1303,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Required owner filtering for live task deltas, removals and aggregates. |
 | 2026-09-01 | Required soft deletion and confined payload removal outside engine adapters. |
 | 2026-09-01 | Required a process lock and staged atomic database restore. |
+| 2026-09-01 | Security review: made the Host allowlist configurable and specified the environment-only configuration lock. |
