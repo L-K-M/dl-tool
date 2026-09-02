@@ -28,8 +28,14 @@ It lives at the repository root, alongside [`PLAN-REVIEW.md`](PLAN-REVIEW.md), s
    `## Evidence` section. Never write Evidence you did not observe.
 5. Flip the task's row to `done` in the index, in the same commit as the work.
    Commit message `T0NN: <imperative summary>`, one commit per task.
-6. Open a pull request for that one task. Get it reviewed and merged before
-   starting the next one.
+6. Open a pull request for that one task, address the review, and get it
+   **merged** before starting the next one.
+
+Step 6 is not optional bookkeeping. Rule 9 of the Definition of Done puts the
+flip of the index row to `done` inside the task's own commit, so until that
+commit is on `main` the row still reads `todo` there. A session that stops at
+"PR opened" leaves the next session — which starts from `main` — picking the
+same task again. The loop only advances when the PR merges.
 
 M0 is blocking: nothing outside it starts until every M0 row is `done`.
 
@@ -120,4 +126,9 @@ anything you wrote under `## Blocked`.
 
 Do not attempt all 119 tasks in one session. Context degrades and the Evidence
 discipline is the first thing to go. The plan is built for one task per session:
-start fresh, pick the next row, and stop when its PR is merged.
+start fresh from `main`, pick the next row, and stop once that task's PR is
+merged — not once it is opened, for the reason under the loop above.
+
+If you are not permitted to merge, say so and stop there rather than starting the
+next task on top of an unmerged branch. Stacking tasks on one branch breaks the
+one-task-one-PR rule and makes the review useless.
