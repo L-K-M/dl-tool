@@ -291,7 +291,7 @@ throttle:
 | `score.formats[].name` | string | — | Label shown in the dry run. |
 | `score.formats[].pattern` | string | — | Regex, always case-insensitive, matched against the haystack. |
 | `score.formats[].weight` | int | — | Added once when the pattern matches. Negative values are outright vetoes when large enough to sink the total below `minimum`. |
-| `action.destination` | string | the global default destination | Absolute path under a configured data root; an omitted value resolves to the owner's `users.default_destination`, else the global default, and the resolved value must still pass the jail check. Validated at save time and again at grab time ([`05-api-contract.md`](05-api-contract.md) §10.2). |
+| `action.destination` | string | the global default destination | Absolute path under a configured data root; an omitted value resolves to the global default destination, and the resolved value must still lie inside the roots. Validated at save time and again at grab time ([`05-api-contract.md`](05-api-contract.md) §10.2). |
 | `action.category` | string | `""` | Category name; must exist. |
 | `action.paused` | bool | `false` | Create the task in `paused` state. |
 | `action.content_layout` | enum | `original` | `original` \| `subfolder` \| `no_subfolder`. |
@@ -591,3 +591,4 @@ distribution or a public-domain catalogue.
 | 2026-09-01 | Review pass 3: `fallback` rows obey the same one-row-per-`(rule_id, feed_item_id)` upsert rule, so a perpetually failing winner cannot grow the table through its re-recorded losers either. |
 | 2026-09-01 | Closed the `feed_priority` open question: it is `feeds.priority` (`04-data-model.md` §3.5), default 0, lower preferred. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Single-account cleanup: an omitted `action.destination` resolves to the global default and is checked against the data roots — there is no per-user default and no jail ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |

@@ -151,7 +151,7 @@ it from there instead of inventing new key names for the same concept.
 | `request_id` | string | Every record produced during an HTTP request |
 | `task_id` | `tsk_…` | Every record about one task, including engine calls and jobs |
 | `engine` | `aria2` \| `qbittorrent` \| `ytdlp` | Every engine call, poll and conformance check |
-| `user_id` | `usr_…` | Every authenticated request and every ownership decision |
+| `user_id` | `usr_…` | Every authenticated request |
 
 ### 3.2 Levels
 
@@ -322,3 +322,5 @@ planning error, not a reason to skip the wiring: stop and write it under `## Blo
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Removed `internal/compat/` from the §1 repository layout: there is no compatibility façade and no migration subsystem, so no package owns either. Corrected the ADR-0006 slug to the canonical filename. |
 | 2026-09-01 | Moved adapter construction to the composition root to keep the engine package acyclic. |
+| 2026-09-02 | Single-account cleanup: the `user_id` log field no longer mentions ownership decisions — there are none ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Review pass: added §8.3, wiring a long-lived component — a task that introduces a constructor, goroutine or job handler names its composition-root call site in its own `Files` table. The migration checklist becomes §8.4. |

@@ -101,7 +101,7 @@ services:
       DLTOOL_QBITTORRENT_URL: "${DLTOOL_QBITTORRENT_URL:-}"
       DLTOOL_QBITTORRENT_USERNAME: "${QBT_USERNAME:-}"
       # Credentials arrive as mounted files, never as environment: `docker inspect`
-      # and `docker compose config` then show a path, not a value (section 6.1).
+      # and `docker compose config` then show a path, not a value (§6.1).
       DLTOOL_QBITTORRENT_PASSWORD_FILE: "/run/secrets/qbt_password"
       DLTOOL_ARIA2_URL: "${DLTOOL_ARIA2_URL:-}"
       DLTOOL_ARIA2_SECRET_FILE: "/run/secrets/aria2_rpc_secret"
@@ -567,7 +567,7 @@ DLTOOL_PORT=8091
 # ---- engines (compose-level) ----
 # An engine lane is disabled until its URL is set. Set a URL without its
 # credentials and dl-tool exits with config_missing (11-config-reference.md §8).
-# For qBittorrent also set the same username/password in its own WebUI once:
+# For qBittorrent, follow the first-run procedure in section 6.2 before setting its URL:
 # the linuxserver image does not read these variables.
 #   DLTOOL_QBITTORRENT_URL=http://qbittorrent:8080
 QBT_USERNAME=admin
@@ -603,6 +603,35 @@ VPN_PORT_FORWARDING=off
 the lane off and reports it in `GET /system/info`. The aria2 secret is guarded twice — an empty value is
 rejected by the aria2 entrypoint when that profile is active (§5.1), and by dl-tool's `config_missing`
 boot check whenever `DLTOOL_ARIA2_URL` is set.
+
+### 6.1 Why credentials are mounted files
+
+Every engine credential reaches dl-tool through a Compose named secret and its `_FILE` variable, never
+through a service `environment:` entry. Compose reads the value from `.env` once and exposes it only to the
+services that list it, as a file under `/run/secrets` mode `0400` owned by `PUID:PGID`. `docker inspect`,
+`docker compose config`, `/proc/<pid>/environ` and a crash dump's environment block therefore show a path,
+not a value, and a service that does not list a secret cannot read it. The `_FILE` convention itself is
+[`11-config-reference.md`](11-config-reference.md) §6.
+
+### 6.2 Enabling the BitTorrent lane on first run
+
+Do this before setting `DLTOOL_QBITTORRENT_URL`, because qBittorrent's WebUI password cannot be known in
+advance: since 4.6.1 it generates a random temporary password on every start that has no saved one and
+prints it to its own log. Its WebUI is never published (§1), so:
+
+1. `docker compose up -d qbittorrent`
+2. Read the temporary password: `docker compose logs qbittorrent | grep -i "temporary password"`.
+3. Reach the WebUI without publishing it, by adding `ports: ["127.0.0.1:8080:8080"]` to the `qbittorrent`
+   service temporarily, or through a throwaway container on its network namespace:
+   `docker run --rm -it --network container:qbittorrent alpine sh`.
+4. Log in as `admin` with that password and set a permanent username and password under
+   **Options → Web UI → Authentication**. Remove the temporary port mapping again.
+5. Put the same pair in `.env` as `QBT_USERNAME` and `QBT_PASSWORD`, set
+   `DLTOOL_QBITTORRENT_URL=http://qbittorrent:8080`, and `docker compose up -d`.
+
+Setting `DLTOOL_QBITTORRENT_URL` before step 5 is a fatal `config_missing`
+([`11-config-reference.md`](11-config-reference.md) §8), deliberately: a half-configured engine is worse
+than a disabled one.
 
 ---
 
@@ -1081,3 +1110,4 @@ document's change log.
 | 2026-09-01 | Replaced the inline base-path bootstrap with the CSP-compatible document base URL. |
 | 2026-09-01 | Security review: wired the Host allowlist and configuration lock through Compose and narrowed trusted-proxy guidance. |
 | 2026-09-02 | Engine credentials moved from service environments into Compose named secrets mounted `0400`, so `docker inspect` shows a path rather than a value; gluetun no longer receives the whole `.env`; configuration directories are created `0700` and `.env` `0600`; `UMASK` is scoped to the data roots. |
+| 2026-09-02 | Review pass: added §6.1 (why credentials are mounted files) and §6.2 (the qBittorrent first-run credential procedure, absent until now); dropped the `:?` on `VPN_SERVICE_PROVIDER`, which fails a core-only `up` because Compose interpolates before it filters by profile; interpolated the gluetun variables `.env.example` shipped but nothing read, and added the missing `SERVER_COUNTRIES`. |

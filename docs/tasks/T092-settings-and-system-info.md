@@ -53,7 +53,7 @@ type Settings struct {
 	MinFreeSpace        map[string]int64  `json:"min_free_space"`
 	MaxActiveTotal      int               `json:"max_active_total"`
 	MaxActivePerEngine  int               `json:"max_active_per_engine"`
-	ProcessOrder        string            `json:"process_order"` // by_date_created | by_user_round_robin
+	ProcessOrder        string            `json:"process_order"` // by_date_created
 	RSSEnabled          bool              `json:"rss_enabled"`
 	RSSIntervalS        int               `json:"rss_interval_s"`
 	AutoExtract         bool              `json:"auto_extract"`
@@ -126,23 +126,22 @@ Worked `GET /settings` body, secrets already replaced:
 1. Edit `internal/store/settings.go` to add `Settings`, `GetSettings` and `PutSettings` with the sixteen keys
    of doc 11 §5 and their documented defaults. Read and write `value_json` as JSON, never as a bare string.
 2. Validate in `PutSettings`: `rss_interval_s` at least `300`; every rate limit and `max_active_*` at least
-   `0`; `process_order` one of the two enum values; `default_destination` non-empty. Return
+   `0`; `process_order` equal to `by_date_created`; `default_destination` non-empty. Return
    `ErrSettingOutOfRange` otherwise.
 3. Skip any key whose submitted value is exactly `"__redacted__"`, so a client that round-trips
    `GET /settings` into `PATCH /settings` cannot erase `extract_passwords`.
 4. Edit `internal/api/settings.go` to add `GetSettings` and `PatchSettings` on the existing
    `SettingsHandlers`. Serialise `extract_passwords` as the literal `"__redacted__"` string, never as an
    array, and never as the empty string.
-5. Map `ErrUnknownSettingKey` and `ErrSettingOutOfRange` to `422`
-   `/problems/forbidden`. `GET /settings` is available to any authenticated user.
+5. Map `ErrUnknownSettingKey` and `ErrSettingOutOfRange` to `422` `/problems/validation-failed`. Both
+   `GET /settings` and `PATCH /settings` are available to any authenticated caller.
 6. Edit `internal/api/system.go` to add `GetSystemInfo` on `SystemHandlers`, filling `version`, `commit` and
    `built_at` from the `main` package ldflags variables, `database` from the DB path, file size and
    `goose_db_version`, `engines` from the registry and the `engines` rows, `tasks` from one grouped count
-   query, `schedule` from the settings and the container `TZ`, `limits` from the three `max_active_*` keys
+   query, `schedule` from the settings and the container `TZ`, `limits` from the two `max_active_*` keys
    and `jobs` from one grouped count over `jobs`.
-7. Restrict `GET /system/info` to admins and return `403` `/problems/forbidden` otherwise.
-8. Edit `internal/api/server.go` to register `get-settings`, `patch-settings` and `get-system-info`.
-9. Edit `internal/api/settings_test.go` with: a `GET` asserting `extract_passwords` is exactly
+7. Edit `internal/api/server.go` to register `get-settings`, `patch-settings` and `get-system-info`.
+8. Edit `internal/api/settings_test.go` with: a `GET` asserting `extract_passwords` is exactly
    `"__redacted__"` and that no other field contains a configured secret; a `PATCH` carrying
    `"extract_passwords":"__redacted__"` leaving the stored value unchanged; an unknown key returning `422`;
    `rss_interval_s` of `120` returning `422` (below the 300-second floor); and a `GET /system/info`
@@ -162,8 +161,8 @@ make lint && make test PKG=./internal/...
 ```
 Expected: `make lint` prints nothing, then `ok` lines for `github.com/L-K-M/dl-tool/internal/store` and
 `.../internal/api`, with `TestSettingsRedactsExtractPasswords`, `TestPatchRedactedIsNoOp`,
-`TestPatchUnknownKeyIs422`, `TestPatchOutOfRangeIs422`, `TestPatchRequiresAdmin` and
-`TestSystemInfoCarriesNoSecret` all listed as passing. No `FAIL`.
+`TestPatchUnknownKeyIs422`, `TestPatchOutOfRangeIs422` and `TestSystemInfoCarriesNoSecret` all listed as
+passing. No `FAIL`.
 
 Also confirm scope:
 ```bash

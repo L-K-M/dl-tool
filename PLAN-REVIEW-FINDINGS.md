@@ -2,6 +2,12 @@
 
 Companion to [`PLAN-REVIEW.md`](PLAN-REVIEW.md), which explains the method and the patterns behind these findings.
 
+> **Historical.** These findings were taken against `57d37de` and re-checked against `d8e81d3`. A second
+> review pass on 2026-09-02 worked the plan and every critical finding below is now addressed, so a
+> "Status: confirmed" line here describes the plan as it was, not as it is. Three of the claims below did
+> not survive re-measurement — see [Second pass](PLAN-REVIEW.md#second-pass--2026-09-02). Check any finding
+> against the current documents before acting on it.
+
 **640 findings after de-duplication** — critical 25, high 110, medium 314, low 191.
 Every critical and high finding was put through an independent adversarial verification pass whose
 instruction was to refute it; 26 findings were refuted there and are not listed. Medium and low findings

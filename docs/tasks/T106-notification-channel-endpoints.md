@@ -131,7 +131,7 @@ make lint && make test PKG="./internal/api/... ./internal/store/..." && echo NOT
 Expected: `ok  github.com/L-K-M/dl-tool/internal/api` and `ok  github.com/L-K-M/dl-tool/internal/store`,
 with `TestChannelCrudAllKinds`, `TestSecretNeverReturned`, `TestRedactedLeavesSecret`,
 `TestNullClearsSecret`, `TestEventMaskFilters`, `TestKindImmutable`, `TestDuplicateNameConflict`,
-`TestTestReturnsRawUpstreamReply` and `TestNonAdminForbidden` each reported as `--- PASS`. The final line of
+`TestTestReturnsRawUpstreamReply` each reported as `--- PASS`. The final line of
 stdout is exactly `NOTIFY_API_OK`. No `FAIL`.
 
 Also confirm scope:

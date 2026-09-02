@@ -174,9 +174,9 @@ The feed poller, the rule engine, dry-run and the RSS screens. Exit checkpoint: 
 | [T072](T072-rss-feeds-screen.md) | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066 | todo |
 | [T073](T073-rule-editor-and-live-preview.md) | Build the rule editor with the live dry-run preview | T047, T050, T068, T070, T071, T072 | todo |
 
-## M6 — Post-processing and multi-user
+## M6 — Post-processing, automation and the account
 
-Extraction, the bandwidth schedule, watch folders, users and quotas, notifications, the backup, settings and system-info endpoints, and the settings sections that read them. Exit checkpoint: Auto-extract, the 24×7 grid, and per-user destinations and quotas all work end to end.
+Extraction, the bandwidth schedule, watch folders, the operator account and its API tokens, notifications, the backup, settings and system-info endpoints, and the settings sections that read them. Exit checkpoint: Auto-extract, the 24×7 grid, watch folders and the account and notification settings sections all work end to end.
 
 | Task | Title | Depends on | Status |
 |---|---|---|---|
@@ -210,9 +210,9 @@ The yt-dlp engine, the release hardening of the image and the compose stack, the
 | Task | Title | Depends on | Status |
 |---|---|---|---|
 | [T087](T087-ytdlp-subprocess-runner.md) | Run yt-dlp as a supervised subprocess | T005, T016 | todo |
-| [T088](T088-ytdlp-extractor-cache.md) | Cache the yt-dlp extractor patterns for the router | T016, T087 | todo |
+| [T088](T088-ytdlp-extractor-cache.md) | Cache the yt-dlp extractor patterns for the router | T016, T087 | deferred |
 | [T089](T089-ytdlp-progress-and-exit-codes.md) | Parse yt-dlp progress lines and exit codes | T087 | todo |
-| [T090](T090-ytdlp-engine-registration.md) | Register the yt-dlp engine and run the contract suite | T028, T088, T089 | todo |
+| [T090](T090-ytdlp-engine-registration.md) | Register the yt-dlp engine and run the contract suite | T028, T089 | todo |
 | [T093](T093-harden-runtime-image.md) | Harden the runtime image for a multi-arch release | T124 | todo |
 | [T094](T094-harden-compose-and-release-verification.md) | Harden the compose stack and document release verification | T093, T125 | todo |
 | [T095](T095-proxy-hardening-and-headers.md) | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | todo |
@@ -230,6 +230,7 @@ reason and the task that will carry it.
 |---|---|---|---|
 | M0 exit: a rendered login page | brief §8 | T013 embeds a placeholder `index.html`; the login screen is a React route. | T040 |
 | M0 exit: the `integration` CI job green | brief §8 | `make test-integration` has no adapter to exercise until M1/M2. | T028 |
+| Populating row 3 of the routing table, so a yt-dlp URL reaches the media lane | [FR-002](../02-requirements.md#fr-002-route-each-uri-to-an-engine-by-scheme) | The mechanism T088 assumed does not exist in yt-dlp, and 284 of its 1702 patterns do not compile with Go `regexp` ([`06-download-engines.md`](../06-download-engines.md#72-routing-check) §7.2). T016 still ships the routing table and its `mediaMatch` hook; only the hook's data source is deferred, and a nil hook routes such a URL to aria2 rather than mis-routing it. Needs an ADR. | T088, after the ADR |
 | M3 exit: the eight remaining settings sections | brief §8 | T053 ships the settings shell with General and Connection and lists the rest in `IMPLEMENTED`; each remaining section needs endpoints that do not exist in M3. | T116, T117, T118, T119, T120, T121 |
 
 ## A note on identifier order
@@ -401,9 +402,9 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
 | T087 | Run yt-dlp as a supervised subprocess | T005, T016 | yes | todo | [T087](T087-ytdlp-subprocess-runner.md) |
-| T088 | Cache the yt-dlp extractor patterns for the router | T016, T087 | no | todo | [T088](T088-ytdlp-extractor-cache.md) |
+| T088 | Cache the yt-dlp extractor patterns for the router | T016, T087 | no | deferred | [T088](T088-ytdlp-extractor-cache.md) |
 | T089 | Parse yt-dlp progress lines and exit codes | T087 | yes | todo | [T089](T089-ytdlp-progress-and-exit-codes.md) |
-| T090 | Register the yt-dlp engine and run the contract suite | T028, T088, T089 | no | todo | [T090](T090-ytdlp-engine-registration.md) |
+| T090 | Register the yt-dlp engine and run the contract suite | T028, T089 | no | todo | [T090](T090-ytdlp-engine-registration.md) |
 | T093 | Harden the runtime image for a multi-arch release | T124 | yes | todo | [T093](T093-harden-runtime-image.md) |
 | T094 | Harden the compose stack and document release verification | T093, T125 | no | todo | [T094](T094-harden-compose-and-release-verification.md) |
 | T095 | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | no | todo | [T095](T095-proxy-hardening-and-headers.md) |

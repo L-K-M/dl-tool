@@ -150,15 +150,14 @@ input; the database path and size come from `GET /system/info`.
 5. Add `Import settings`: a file input, a mandatory `dry_run: true` call, the totals and per-collection
    table, the `rejected` list with each `detail`, an `on_conflict` selector, and a confirm that repeats the
    call with `dry_run: false`. A `409` for a newer `document_version` renders as a named refusal.
-6. Add `Reset to defaults`: a confirm dialog that names what it does not touch — users, categories,
+6. Add `Reset to defaults`: a confirm dialog that names what it does not touch — the account, categories,
    indexers, feeds, rules, watch folders, the schedule, `default_destination`, `min_free_space` and
    `extract_passwords` — then one `PATCH /settings` carrying exactly `SETTINGS_DEFAULTS`.
 7. Render the three `infrastructure` rows as static text per the contract, with no input of any kind.
 8. Add `LogViewer` in the same module: `GET /system/logs` with a level select (`debug`, `info`, `warn`,
    `error`, default `info`), an optional `since`, `limit=100`, a `Load more` that passes `next_cursor`, and
    a `Refresh`. Render `at` through `Intl`, `level` as a badge, `msg`, and `attrs` in an expandable row.
-9. Render the empty result as `Nothing logged yet.` and a `403 /problems/forbidden` as
-   `System logs are visible to administrators only.`, never as a blank screen.
+9. Render the empty result as `Nothing logged yet.`, never as a blank screen.
 10. Edit `SettingsScreen.tsx` to add `'advanced'` to `IMPLEMENTED` and render `AdvancedSection`, and edit
     `App.tsx` to route `/logs` to `LogViewer`; change nothing else in either file.
 11. Create `AdvancedSection.test.tsx` covering the acceptance criteria below against stubbed endpoints.
@@ -175,8 +174,7 @@ input; the database path and size come from `GET /system/info`.
       `input`, `select` or `textarea`.
 - [ ] `TestLogViewerPagesWithCursor` asserts the second request carries the first response's `next_cursor`
       and that records render newest first.
-- [ ] `TestLogViewerEmpty` asserts `Nothing logged yet.` for an empty page and the
-      message for a `403`.
+- [ ] `TestLogViewerEmpty` asserts `Nothing logged yet.` for an empty page.
 - [ ] The viewer renders `attrs` values verbatim and offers no control that would reveal a redacted value.
 
 ## Verification
@@ -205,7 +203,7 @@ of these files are new and `git diff --name-only` never lists an untracked file.
   have the reset touch any table other than `settings`.
 - Do NOT add an un-redact, decode or "show raw secret" affordance to the log viewer; records are redacted
   before storage and the plaintext does not exist to show.
-- Do NOT build the Downloads, BitTorrent, Users or Notifications sections; **T119** and **T120** own them.
+- Do NOT build the Downloads, BitTorrent, Account or Notifications sections; **T119** and **T120** own them.
 - Do NOT change `web/src/components/Settings/SettingsScreen.tsx` beyond `IMPLEMENTED` and the new section
   branch, or `web/src/App.tsx` beyond the `/logs` element; T116–T120 edit the same files.
 

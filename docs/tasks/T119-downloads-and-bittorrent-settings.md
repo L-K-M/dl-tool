@@ -65,7 +65,6 @@ export interface WatchFolderRow {
   id: string;
   path: string;
   enabled: boolean;
-  owner_username: string;
   destination: string;
   category: string | null;
   delete_after_load: boolean;
@@ -106,7 +105,7 @@ Controls, each against its doc 11 §5 key or its own endpoint:
 | Auto-extract archives | `auto_extract` | Off by default. |
 | Shared password list | `extract_passwords` | Write-only, per the redaction rule above. |
 | Minimum free space per root | `min_free_space` | One number input per root from `GET /fs/roots`, in bytes. |
-| Watch folders | `/watch-folders` CRUD + `POST /watch-folders/{id}/scan` | Columns: path, destination, category, owner, `Delete loaded .torrent files`, enabled, last scan, last error. |
+| Watch folders | `/watch-folders` CRUD + `POST /watch-folders/{id}/scan` | Columns: path, destination, category, `Delete loaded .torrent files`, enabled, last scan, last error. |
 | Category → path | `/categories` CRUD | Columns: name, save path, task count. |
 
 ```tsx
@@ -161,8 +160,7 @@ dirty.
    its `reason`; render `last_error` as a warning cell.
 7. Build the category table with Add, Edit and Delete over `/categories`, showing `task_count` read-only and
    stating that deleting a category leaves its tasks' data alone.
-8. Surface a `403 /problems/forbidden` from any write as the section-level note that these writes are
-   and a `403 /problems/path-rejected` as a field error on the path that caused it.
+8. Surface a `403 /problems/path-rejected` from any write as a field error on the path that caused it.
 9. Create `BitTorrentSection.tsx` per the contract: the read-only row list, the `qbittorrent` engine status
    from `GET /engines`, the ADR-0017 sentence, and no form controls.
 10. Edit `SettingsScreen.tsx` to add `'downloads'` and `'bittorrent'` to `IMPLEMENTED` and render the two
@@ -206,7 +204,7 @@ of these files are new and `git diff --name-only` never lists an untracked file.
 - Do NOT proxy qBittorrent preferences. dl-tool writes only the conformance keys T101 owns; DHT, PeX, LSD,
   encryption and max-peers stay in that daemon's own UI.
 - Do NOT touch the Bandwidth section or the 24×7 grid; **T118** owns them.
-- Do NOT touch the Users, Notifications or Advanced sections; **T120** and **T121** own them.
+- Do NOT touch the Account, Notifications or Advanced sections; **T120** and **T121** own them.
 - Do NOT change `web/src/components/Settings/SettingsScreen.tsx` beyond `IMPLEMENTED` and the two new
   section branches; T116, T117, T118, T120 and T121 all edit that same file.
 

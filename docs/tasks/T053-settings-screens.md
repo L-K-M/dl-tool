@@ -46,7 +46,7 @@ No other file may be modified.
 ```tsx
 // web/src/components/Settings/SettingsScreen.tsx
 export const SECTIONS = ['general','connection','bandwidth','bittorrent','downloads',
-                         'rss','indexers','users','notifications','advanced'] as const;
+                         'rss','indexers','account','notifications','advanced'] as const;
 export type Section = (typeof SECTIONS)[number];
 
 /** Sections whose endpoints exist at M3. Every other section renders the one-line note
@@ -140,7 +140,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT build the 24×7 schedule grid or the bandwidth section;
   [T118](T118-bandwidth-settings-and-schedule-grid.md) owns them, against
   [FR-092](../02-requirements.md#fr-092-store-and-edit-a-247-schedule-grid).
-- Do NOT build the Indexers, RSS, Downloads, BitTorrent, Users, Notifications or Advanced forms;
+- Do NOT build the Indexers, RSS, Downloads, BitTorrent, Account, Notifications or Advanced forms;
   [T116](T116-indexers-settings-section.md), [T117](T117-rss-settings-section.md),
   [T119](T119-downloads-and-bittorrent-settings.md), [T120](T120-account-and-notifications-settings.md)
   and [T121](T121-advanced-settings-and-log-viewer.md) own them, one section at a time.

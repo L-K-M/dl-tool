@@ -84,9 +84,9 @@ func ModeToCell(m store.ScheduleMode) int
 
 `enabled` is the `schedule_enabled` settings key, default `false`. `timezone` is `time.Local.String()`, the
 container's `TZ`, and is read-only: a client cannot set it. `active_mode` is read-only too; T110 fills it
-from the cell in force at the moment of the call. Until T110 lands, return the cell for the current hour. Statuses: `200` · `403` `/problems/forbidden`
-· `422` `/problems/validation-failed` when `cells` is not exactly 168 elements or
-holds a value outside `0..2`.
+from the cell in force at the moment of the call. Until T110 lands, return the cell for the current hour.
+Statuses: `200` · `422` `/problems/validation-failed` when `cells` is not exactly 168 elements or holds a
+value outside `0..2`.
 
 ## Steps
 1. Add `ScheduleMode`, `Schedule` and `ReplaceSchedule` to `internal/store/settings.go` with explicit
@@ -98,14 +98,12 @@ holds a value outside `0..2`.
 4. Read `schedule_enabled` for `Enabled` and write it inside the same transaction as the cells.
 5. Set `Timezone` from `time.Local` on both responses so the UI can display it beside the grid, and ignore
    any `timezone` a client sends.
-6. Restrict `PUT` to admins using the request identity installed by T008 in `internal/api/auth.go`; `GET` is
-   open to any authenticated caller.
-7. Edit `internal/api/server.go` to register `get-schedule` and `put-schedule` on the existing Huma API.
-8. Create `internal/api/settings_schedule_test.go` with `humatest`: write a grid containing all three values,
+6. Edit `internal/api/server.go` to register `get-schedule` and `put-schedule` on the existing Huma API.
+7. Create `internal/api/settings_schedule_test.go` with `humatest`: write a grid containing all three values,
    read it back and assert the array is identical; assert 167 and 169 elements are `422`; assert a value of
    `3` and of `-1` are `422`; assert a rejected `PUT` left the stored grid unchanged; assert `timezone`
    is present and non-empty.
-9. Run the verification command and paste its output under `## Evidence`.
+8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] A grid containing `0`, `1` and `2` round-trips byte-identically through `PUT` then `GET`.
@@ -121,7 +119,7 @@ make lint && make test PKG="./internal/api/... ./internal/store/..." && echo SCH
 ```
 Expected: `ok  github.com/L-K-M/dl-tool/internal/api` and `ok  github.com/L-K-M/dl-tool/internal/store`,
 with `TestScheduleRoundTrips`, `TestWrongLengthRejected`, `TestCellOutOfRangeRejected`,
-`TestRejectedPutLeavesGridUnchanged`, `TestNonAdminPutForbidden` and `TestTimezoneReported` each reported as
+`TestRejectedPutLeavesGridUnchanged` and `TestTimezoneReported` each reported as
 `--- PASS`. The final line of stdout is exactly `SCHEDULE_OK`. No `FAIL`.
 
 Also confirm scope:

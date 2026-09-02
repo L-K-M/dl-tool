@@ -71,7 +71,7 @@ func classifyUpload(f UploadedFile) (kind string, err error)
 // subfolderDestination returns filepath.Join(destination, sanitiseSegment(manifestName)) when
 // createSubfolder is set and the manifest holds more than one file, and destination otherwise. The
 // result is re-checked with fsx.ResolveDestination before use.
-func subfolderDestination(roots []string, jail, destination, manifestName string, createSubfolder bool) (string, error)
+func subfolderDestination(roots []string, destination, manifestName string, createSubfolder bool) (string, error)
 
 // FileSelectionRequest is one entry of the create body's select_files. It reuses the priority vocabulary
 // of 06 §1.1 and is applied to the first multi-file manifest of the submission.

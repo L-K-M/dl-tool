@@ -93,7 +93,7 @@ type Request struct {
 	Query              map[string]string `yaml:"query"`
 	Headers            map[string]string `yaml:"headers"` // Authorization and Cookie are rejected
 	RateLimitPerMinute int               `yaml:"rate_limit_per_minute"` // default 30, max 120
-	TimeoutSeconds     int               `yaml:"timeout_seconds"`       // default 20, max 30
+	TimeoutSeconds     int               `yaml:"timeout_seconds"`       // default 15, max 15
 }
 
 type Response struct {
@@ -194,7 +194,9 @@ func (e *DefinitionError) Error() string
 8. Validate transforms: every `op` in `TransformOps`, `replace` with exactly two args, `split` with two,
    `regex_capture` with one pattern that compiles with `regexp.Compile` and is at most `MaxPatternBytes`.
 9. Clamp and validate the request limits — `rate_limit_per_minute` default 30 maximum 120, `timeout_seconds`
-   default 20 maximum 30 — and reject the headers `Authorization` and `Cookie` case-insensitively.
+   default 15 maximum 15, because it sits inside the 15 s per-engine deadline of
+   [`07-search-and-indexers.md`](../07-search-and-indexers.md) §4 and can only lower it — and reject the
+   headers `Authorization` and `Cookie` case-insensitively.
 10. Validate `entries[]`: at most `MaxStaticEntries`, `title` and `category` present, `category` a declared
     `caps.categories` key, at least one of `download`, `magnet`, `infohash`, and every URL `https`.
 11. Create `internal/search/definition_test.go` with `TestLoadValidRSSDefinition`,

@@ -105,7 +105,7 @@ request:
   path: rss.xml
   method: GET
   rate_limit_per_minute: 6
-  timeout_seconds: 20
+  timeout_seconds: 15
 response:
   rows: "rss > channel > item"
   fields:

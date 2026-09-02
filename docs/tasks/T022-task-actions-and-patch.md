@@ -103,7 +103,7 @@ Action to engine call and state transition:
 3. In `Actions`, validate `ids` and `action` first; an empty list, more than 500 ids or an unknown action
    is `422` `/problems/validation-failed` for the whole request.
 4. Load every id in one query, and record `{"ok":false,"type":"/problems/not-found"}` for an id that does
-   not exist or belongs to another user when the caller is not an admin.
+   not exist.
 5. Per id, call the engine, then apply the transition through `store.Transition` with the task-event code
    `task.paused`, `task.resumed`, `task.removed`, `task.rechecking` or `task.force_completed`.
 6. Map `engine.ErrUnavailable` to a per-id `/problems/engine-unavailable` and

@@ -405,3 +405,4 @@ The `prose` filter strips fenced code blocks, so an example or template cannot t
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: corrected the ADR-0005 and ADR-0007 links to the canonical filenames and removed the resolved open question about ADR slugs. |
+| 2026-09-02 | Review pass: §7.1 now states who regenerates `api/openapi.json` and `web/src/api/schema.d.ts` — they are part of the `Files` table of any task that changes a Huma operation, the one standing exception to hard rule 1. |

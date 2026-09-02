@@ -209,15 +209,14 @@ sequenceDiagram
     API-->>UI: 200 manifest, no task created
     UI->>UI: operator ticks the files to keep
     UI->>API: POST /api/v1/tasks with select_files indices
-    API->>ENG: route by scheme magnet
+    API->>API: route by scheme magnet, insert the row queued with engine_ref NULL
+    API-->>UI: 201 with task id tsk_01J...
+    Note over API,QBT: nothing below runs inside POST /tasks; the admission pass of 6.4 releases the task
     ENG->>QBT: POST /api/v2/torrents/add with stopped true and paused true
-    QBT-->>ENG: 200, empty body, no identifier returned
-    ENG->>QBT: GET /api/v2/torrents/info to correlate the infohash
-    QBT-->>ENG: torrent list including the new infohash
+    QBT-->>ENG: 200 with added_torrent_ids carrying the infohash
     ENG->>QBT: POST /api/v2/torrents/filePrio, pipe-separated ids, priority 0 for unticked files
     ENG->>QBT: POST /api/v2/torrents/start then POST /api/v2/torrents/resume
-    ENG-->>API: engine_ref infohash
-    API-->>UI: 201 with task id tsk_01J...
+    ENG-->>API: engine_ref infohash, stored with SetEngineRef
     Note over API,QBT: a magnet with no cached metainfo yields an empty files array,<br/>so inspect offers all-or-nothing selection instead
 ```
 
@@ -556,3 +555,4 @@ The D-list in §4 is the full map, D14 excluded. ADRs that shape this document d
 | 2026-09-01 | M2 task allocation: task identifier T102 retired with the foreign-task policy; the §8.8 rule is asserted by T026 and T030. |
 | 2026-09-01 | Added authenticated projection to the SSE ring so live updates cannot expose another user's tasks or aggregates. |
 | 2026-09-01 | Moved concrete engine construction to the composition root, removing the adapter import cycle. |
+| 2026-09-02 | Review pass: §8.1 re-derived from T017's transition table, which now admits the edges the engine normalisation tables of [`06-download-engines.md`](06-download-engines.md) produce. Post-processing enters `extracting`/`moving` from `completed` or `seeding` and returns to `completed`; `removed` is the only terminal state. §6.1 no longer adds to the engine inside `POST /tasks`: admission control releases the task. |

@@ -142,7 +142,13 @@ Failure mapping: `ErrWrongPassword` → `extract_failed_wrong_password`; `ErrInv
 
 ## Acceptance criteria
 - [ ] `auto_extract` defaults to `false` and no extraction runs until it is enabled.
+- [ ] `7zz i` against the built runtime image is pasted under `## Evidence`, and the formats asserted below
+      are exactly the ones it lists. If RAR is absent, stop and resolve the open question in
+      [`docs/06-download-engines.md`](../06-download-engines.md#open-questions) rather than weakening this
+      criterion.
 - [ ] One archive of each of `.zip`, `.tar`, `.gz`, `.tgz`, `.rar` and `.7z` extracts successfully.
+- [ ] A `.tgz` yields its contents, not an intermediate `.tar`: 7-Zip decompresses one container per pass,
+      so the handler runs a second pass when the first output is itself an archive.
 - [ ] The task holds `extracting` with `unzip_progress` advancing from `0` to `100`.
 - [ ] A truncated archive sets `error_code` `extract_failed_invalid_archive` and writes nothing.
 - [ ] A `../escape` member is rejected in pass 1; the destination directory is unchanged.

@@ -148,8 +148,8 @@ type magnetInspector interface {
 9. Return the rejected entries in the `{uri, type, detail}` shape T020 already defines, and map the status
    codes of 05 §5.3 — `413` above the cap, `422` for validation or an unsupported scheme, `503` when the
    magnet path needs an engine that is down.
-10. Register `inspect-tasks` in `internal/api/server.go` as `POST /tasks/inspect`, for any authenticated
-    alike, with the same authentication and CSRF requirements as `POST /tasks`.
+10. Register `inspect-tasks` in `internal/api/server.go` as `POST /tasks/inspect`, with the same
+    authentication and CSRF requirements as `POST /tasks`.
 11. Create `internal/api/tasks_inspect_test.go` with `humatest` cases for: a `.torrent` blob manifest, a
     magnet resolved through a fake `magnetInspector`, a magnet timing out into `metadata_pending`, an
     HTTP URL manifest, an `ed2k:` rejection, an oversized blob, and an assertion that

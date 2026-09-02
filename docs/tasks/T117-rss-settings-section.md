@@ -111,8 +111,8 @@ Control-to-carrier map — every row of doc 09 §9's RSS cell, and nothing else:
    restores the seeded state and issues no request.
 8. On `Save`, send one `PATCH /settings` with only the changed keys, then one `PATCH /feeds/{id}` per feed
    whose `item_cap` differs; a `422` on the settings call leaves the feed calls unsent.
-9. Surface a `422` on the interval against the input itself using `errors[].location`, and a `403`
-   `/problems/forbidden` as "only an administrator can change these settings" with the form left dirty.
+9. Surface a `422` on the interval against the input itself using `errors[].location`, leaving the form
+   dirty.
 10. Edit `SettingsScreen.tsx` to add `'rss'` to `IMPLEMENTED` and render `<RssSection />`; do not reorder
     `SECTIONS`.
 11. Create `RssSection.test.tsx` with `msw`: an interval of 1800 renders `30`; saving 30 sends

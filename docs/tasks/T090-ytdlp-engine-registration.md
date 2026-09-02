@@ -5,7 +5,7 @@
 | **ID** | T090 |
 | **Milestone** | M7 |
 | **Status** | todo |
-| **Depends on** | T028, T088, T089 |
+| **Depends on** | T028, T089 |
 | **Blocks** | T113 |
 | **Parallel-safe** | no — it edits `internal/engine/registry.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-002](../02-requirements.md#fr-002-route-each-uri-to-an-engine-by-scheme), [FR-143](../02-requirements.md#fr-143-list-engines-and-test-connectivity), [FR-096](../02-requirements.md#fr-096-combine-schedule-global-and-per-task-limits-by-minimum) |
@@ -111,6 +111,7 @@ func TestYtdlpContract(t *testing.T) {
 
 ## Steps
 1. Create `internal/engine/ytdlp/engine.go` wrapping the `Runner` from T087, the `ExtractorCache` from T088
+   (deferred — leave `MediaMatcher` nil and route such a URL to aria2 until its ADR lands)
    and the parsers from T089. Assert `var _ engine.Engine = (*Engine)(nil)` at package scope.
 2. Implement `Connect`: load the extractor cache, and log one `warn` line and leave the lane disabled when
    the load failed. `Connect` never returns an error for a missing binary — `Health` reports it instead.
@@ -127,8 +128,13 @@ func TestYtdlpContract(t *testing.T) {
    `deleteData` is true.
 8. Return `engine.ErrNotSupported` from `SetFiles`, `SetLocation`, `SetCategory` and `SetShareLimits`, and
    `engine.ErrNotFound` from every method given an unknown id.
-9. Edit `internal/engine/registry.go` to register the adapter under `ytdlp`, and edit `cmd/dl-tool/main.go`
-   to construct it from `config.Config` and call `router.SetMediaMatcher(eng.Accepts)`.
+9. Edit `cmd/dl-tool/main.go` to construct the adapter from `config.Config` and pass it to
+   `engine.NewRegistry` beside aria2 and qBittorrent. Do **not** edit `internal/engine/registry.go`:
+   `internal/engine` never imports a concrete adapter ([`14-conventions.md` §8.1](../14-conventions.md#81-add-an-engine-adapter)),
+   and doing so re-creates the import cycle the composition root exists to avoid. `Route`'s `mediaMatch`
+   argument stays nil until [T088](T088-ytdlp-extractor-cache.md)'s deferral is resolved, so a media URL
+   routes to aria2 rather than being mis-routed; that is recorded in the deferral register of
+   [`00-task-index.md`](00-task-index.md).
 10. Create `internal/engine/ytdlp/contract_test.go` with `//go:build integration`, calling
     `enginetest.RunContract`; `t.Skip` when the binary is absent and skip the per-file-priority subtest
     because the capability is not declared.

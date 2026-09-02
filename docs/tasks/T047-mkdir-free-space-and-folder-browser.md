@@ -13,7 +13,7 @@
 | **Est. size** | 3 new files, ~370 LOC |
 
 ## Goal
-`POST /fs/mkdir` creates one directory under the caller's jail with the process umask, `GET /fs/free-space`
+`POST /fs/mkdir` creates one directory inside a configured root with the process umask, `GET /fs/free-space`
 reports plain integer bytes, and every `Select` button in the product opens one nested dialog that browses
 the server, creates folders and refuses unwritable directories.
 
@@ -24,7 +24,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 2. [`docs/09-web-ui-spec.md` §4.1 Server-side folder browser](../09-web-ui-spec.md#41-server-side-folder-browser)
    — the wireframe, the two error strings, the lock badge and the keyboard model.
 3. [`docs/tasks/T046-filesystem-roots-and-browse.md`](T046-filesystem-roots-and-browse.md) — `fsx.Browse`,
-   `fsx.SafeJoin` and the jail resolution this task reuses.
+   `fsx.SafeJoin` and the root containment this task reuses.
 4. [`docs/tasks/T099-disk-space-reservation.md`](T099-disk-space-reservation.md) — `fsx.FreeSpace` and
    `fsx.Space`, which report bytes and never KB.
 5. [`docs/09-web-ui-spec.md` §10.4 Accessibility](../09-web-ui-spec.md#104-accessibility) — dialogs use the
@@ -34,7 +34,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | Path | Action | Purpose |
 |---|---|---|
 | `internal/api/fs.go` | edit | Add the `Mkdir` and `FreeSpace` operations. |
-| `internal/api/fs_test.go` | edit | Umask, conflict, jail and integer-byte cases. |
+| `internal/api/fs_test.go` | edit | Umask, conflict, containment and integer-byte cases. |
 | `web/src/components/FolderBrowser/FolderBrowserDialog.tsx` | create | The nested destination picker. |
 | `web/src/components/FolderBrowser/FolderBrowserDialog.test.tsx` | create | Navigation, errors, lock badge and `New folder`. |
 | `web/src/locales/en/dialogs.json` | create | Dialog strings for this and later dialogs. |
@@ -76,8 +76,8 @@ func (h *FSHandlers) FreeSpace(ctx context.Context, in *FreeSpaceInput) (*FreeSp
 ```
 
 `name` goes through `fsx.SafeJoin(resolvedPath, []string{name})`; a `name` containing `/` or `..` is
-`422 /problems/validation-failed`, an existing name is `409 /problems/conflict`, a path outside the jail is
-`403 /problems/path-rejected`. `mkdir` applies the process umask and sets no mode of its own.
+`422 /problems/validation-failed`, an existing name is `409 /problems/conflict`, a path outside the
+configured roots is `403 /problems/path-rejected`. `mkdir` applies the process umask and sets no mode of its own.
 
 ```tsx
 // web/src/components/FolderBrowser/FolderBrowserDialog.tsx
@@ -104,12 +104,12 @@ Behaviour, from doc 09 §4.1:
 
 ## Steps
 1. Edit `internal/api/fs.go` to add `Mkdir` and `FreeSpace`, registered in `Register` beside the T046
-   operations, resolving the caller's jail the same way.
+   operations, resolving every path against the configured roots the same way.
 2. Implement `FreeSpace` over `fsx.FreeSpace`, returning `fsx.Space` values unchanged: plain integer bytes,
    never kibibytes and never a float.
 3. Edit `internal/api/fs_test.go`: `mkdir` creates the directory and returns `201`; the mode reflects the
    process umask; a second identical call is `409 /problems/conflict`; `name` of `a/b` and `..` are `422`;
-   `mkdir` outside the jail is `403`; `free-space` returns non-zero integers for a root.
+   `mkdir` outside the roots is `403`; `free-space` returns non-zero integers for a root.
 4. Create `web/src/locales/en/dialogs.json` with the folder-browser strings, including the two error
    sentences verbatim.
 5. Create `FolderBrowserDialog.tsx` on shadcn/ui's `dialog`, with a breadcrumb, the directory list, the
@@ -150,7 +150,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT list files, only directories; T046 fixed that contract.
 - Do NOT let the dialog write a destination anywhere; it returns a path through `onSelect` and nothing else.
 - Do NOT add a free-text destination field to any caller; doc 09 §4 keeps the destination read-only.
-- Do NOT implement the per-user jail rules again in the client; the server already filters the roots.
+- Do NOT implement the containment rules again in the client; the server already enforces the roots.
 - Do NOT add a delete, rename or upload action to the browser.
 
 ## Forbidden shortcuts

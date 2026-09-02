@@ -307,7 +307,7 @@ model. There are no expressions beyond the closed template set in §3.3 and no r
 | `request.query` | map | no | values are templates (§3.3) |
 | `request.headers` | map | no | values are templates; `Authorization` and `Cookie` are rejected |
 | `request.rate_limit_per_minute` | integer | no | default `30`, hard maximum `120` |
-| `request.timeout_seconds` | integer | no | default `20`, hard maximum `30` |
+| `request.timeout_seconds` | integer | no | default `15`, hard maximum `15`, and it is a per-HTTP-request ceiling *inside* the 15 s total deadline of §4 — never a way to exceed it |
 | `response.rows` | string | yes for `rss`/`json`/`html` | JSONPath (`json`), CSS selector (`html`), element path (`rss`); forbidden for `torznab` and `static` |
 | `response.total` | string | no | same dialect as `rows`; absent means "count the rows" |
 | `response.fields` | map | yes for `rss`/`json`/`html` | see below |
@@ -396,7 +396,7 @@ Enforce every one of these in `internal/search/dlsearch.go`; they are not config
 | Schemes | `http`, `https` only, including after redirect | |
 | Ports | 80 and 443 for public destinations; unrestricted for the configured origin where the engine's `allow_private_network` flag or `DLTOOL_SSRF_ALLOW_PRIVATE` applies | a Prowlarr or Jackett side-car listens on 9696 or 9117 |
 | Rate limit | `request.rate_limit_per_minute`, default 30, maximum 120, per engine | politeness and back-off |
-| Total deadline | 15 s per engine per search, including all redirects and parsing | one hostile definition cannot starve the pool |
+| Total deadline | 15 s per engine per search, including all redirects and parsing. This is the ceiling; `request.timeout_seconds` (§3.2) can only lower it | one hostile definition cannot starve the pool |
 | Results per page | 1000 maximum | matches Jackett's own per-indexer cap |
 | Regex engine | Go `regexp` — RE2 semantics, linear time, **no backreferences, no lookaround** | ReDoS is structurally impossible |
 | Regex pattern length | 512 bytes per `regex_capture` pattern | bounds compile cost |
@@ -429,7 +429,7 @@ request:
   path: feeds/releases/
   method: GET
   rate_limit_per_minute: 6
-  timeout_seconds: 20
+  timeout_seconds: 15
 response:
   rows: "rss > channel > item"
   fields:
@@ -489,7 +489,7 @@ request:
   path: advancedsearch.php
   method: GET
   rate_limit_per_minute: 30
-  timeout_seconds: 20
+  timeout_seconds: 15
   query:
     q: '{{ if .Config.title_only }}title:({{ .Keywords }}){{ else }}{{ .Keywords }}{{ end }} AND format:("Archive BitTorrent"){{ if .Categories }} AND mediatype:({{ join .Categories " OR " }}){{ else }}{{ end }}'
     "fl[]": "identifier,title,mediatype,item_size,downloads,btih,publicdate"
@@ -784,7 +784,7 @@ Normalisation rules — all six are mandatory:
    `infohash` is dropped and counted in the engine's error tally.
 6. **Acquisition handles never leave the server.** A Torznab download URL, enclosure, details URL or magnet
    can embed the operator's tracker passkey. They remain in the private `source` field; the API mapper emits
-   metadata and the opaque result id for every role. `POST /tasks` takes that id and the service resolves the
+   metadata and the opaque result id, never an acquisition handle. `POST /tasks` takes that id and the service resolves the
    source. Separately, a stored `api_key` is never returned by any endpoint and excluded
    from every job's fan-out ([`05-api-contract.md`](05-api-contract.md) §9.1). Cross-engine deduplication runs
    only over the engines in the job, so a key-bearing engine's row cannot merge into another job's
@@ -896,3 +896,5 @@ Documentation ships as a commented-out Compose snippet the user must deliberatel
 | 2026-09-01 | Review pass 2: rule 6 is enforced server-side at `POST /search` and in the per-job fan-out, not by list-hiding; cross-engine dedup runs only over engines the requester may see. |
 | 2026-09-01 | Security review: made provider acquisition handles private and queueing opaque. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Single-account cleanup: normalisation rule 6 drops the per-role wording — the result mapper emits metadata and an opaque id for every caller ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Review pass: `request.timeout_seconds` can no longer exceed the 15 s total deadline it lives inside; the worked examples follow. |

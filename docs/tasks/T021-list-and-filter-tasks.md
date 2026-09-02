@@ -13,9 +13,9 @@
 | **Est. size** | 1 new file, ~330 LOC |
 
 ## Goal
-`GET /api/v1/tasks` returns cursor-paginated Task objects filtered by state, sidebar filter, category, tag,
-owner and a name substring, sorted by any documented column. `GET /api/v1/tasks/{id}` returns one Task and
-`404` for an unknown id or another user's task.
+`GET /api/v1/tasks` returns cursor-paginated Task objects filtered by state, sidebar filter, category, tag
+and a name substring, sorted by any documented column. `GET /api/v1/tasks/{id}` returns one Task and `404`
+for an unknown id.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
@@ -93,20 +93,19 @@ Sort allowlist, exactly these and no others, each accepting a leading `-`:
 7. Add the `GET /tasks` and `GET /tasks/{id}` handlers to `internal/api/tasks.go`, mapping
    `store.ErrNotFound` to `404` `/problems/not-found` and `store.ErrStaleCursor` to `422`
    `/problems/validation-failed`.
-8. Reject an unknown filter key with `422`, so a mistyped query is never silently ignored and another
-   user's task returns `404` rather than `403`.
+8. Reject an unknown filter key with `422`, so a mistyped query is never silently ignored.
 9. Register both operations in `internal/api/server.go` as `list-tasks` and `get-task`.
 10. Extend `internal/store/tasks_test.go`: seed one task in each of the ten states and assert the
     membership of all seven filters; seed 5 000 tasks and assert the cursor walk returns every row exactly
     once with no duplicate and no gap.
-11. Extend `internal/api/tasks_test.go` with a `422` case for `sort=owner`, a `422` case for a cursor
-    reused under a different filter, and a `404` case for another user's task.
+11. Extend `internal/api/tasks_test.go` with a `422` case for a sort key outside the allowlist, a `422`
+    case for a cursor reused under a different filter, and a `404` case for an unknown id.
 
 ## Acceptance criteria
 - [ ] Each of the seven sidebar filters returns exactly the states in the table above.
 - [ ] A 5 000-row cursor walk returns every id exactly once.
 - [ ] `total` counts the filter and ignores the cursor.
-- [ ] `sort=owner` returns `422` `/problems/validation-failed`.
+- [ ] A sort key outside the allowlist returns `422` `/problems/validation-failed`.
 - [ ] A cursor replayed under a different filter returns `422`, never a wrong page.
 
 ## Verification

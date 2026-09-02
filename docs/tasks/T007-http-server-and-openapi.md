@@ -93,7 +93,6 @@ const (
 	SlugCSRFTokenMissing = "/problems/csrf-token-missing"
 	SlugPathRejected = "/problems/path-rejected"
 	SlugSSRFBlocked = "/problems/ssrf-blocked"
-	SlugQuotaExceeded = "/problems/quota-exceeded"
 	SlugNotFound = "/problems/not-found"
 	SlugConflict = "/problems/conflict"
 	SlugConcurrencyLimit = "/problems/concurrency-limit"

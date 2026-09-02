@@ -138,7 +138,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT build the sidebar, toolbar or status bar; T042 and T044 own them, and this task leaves the three
   region slots empty.
 - Do NOT open an `EventSource` or fetch `/tasks`; T041 and T051 own live data.
-- Do NOT implement `/users`, password change or API-token screens; M6 owns them.
+- Do NOT implement the account, password-change or API-token screens; M6 owns them.
 - Do NOT read `location.pathname` to guess the base path; use `basePath()` from T014.
 - Do NOT add a "remember me" control, a second auth mode or an anonymous mode; ADR-0013 forbids it.
 

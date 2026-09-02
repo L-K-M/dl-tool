@@ -256,9 +256,7 @@ because `/data` is routinely re-exported over SMB.
    component, refuse any symlink, then compare the fully resolved real path against the resolved
    `root` plus a trailing separator.
 5. Open the final file `O_CREAT|O_EXCL|O_NOFOLLOW`. Never `O_TRUNC` on a path dl-tool did not create.
-6. Non-admins are additionally jailed to the subtree of their `users.default_destination` — the same
-   function with `root` set to the jail.
-7. Collisions: keep a per-download `map[string]int` keyed on the case-folded name and append ` (2)`,
+6. Collisions: keep a per-download `map[string]int` keyed on the case-folded name and append ` (2)`,
    ` (3)` … **before** the extension. APFS, NTFS and case-insensitive ZFS or SMB datasets silently
    overwrite otherwise, so a torrent carrying both `Movie.mkv` and `movie.mkv` is an overwrite
    primitive.
@@ -499,14 +497,14 @@ built-in account, no default password, no anonymous mode, no "disabled for local
    `<config>/setup-token` mode `0600`. The token is regenerated on every boot while the `users` table is
    still empty, so a token leaked in an old log is worthless after the next restart.
 2. Every endpoint except `POST /auth/setup` returns `401` `/problems/setup-required`.
-3. `POST /auth/setup` requires that token and creates the first admin with a password of at least 12
+3. `POST /auth/setup` requires that token and creates the operator account with a password of at least 12
    characters; on success the token file is deleted and the endpoint returns `409` thereafter. While it
    is callable it sits behind the same per-source-IP token bucket as login (§6.3), with the identical
-   `429` + `Retry-After`, because a guessed setup token creates the admin account outright and there is
+   `429` + `Retry-After`, because a guessed setup token creates the operator account outright and there is
    no account to lock out afterwards. A failed attempt writes its own stable event code,
    `auth.setup_failed`, so log-based alerting can tell a fresh-install takeover attempt from routine
    password spraying; the shipped fail2ban filter matches both codes.
-4. No admin password is ever accepted from an environment variable in the shipped compose file — it
+4. No account password is ever accepted from an environment variable in the shipped compose file — it
    would land in `docker inspect`, `docker compose config` and shell history.
 
 Why: qBittorrent shipped `admin`/`adminadmin` as defaults (per its wiki, before 4.6.1) and
@@ -581,8 +579,8 @@ script element.
 Indexer download URLs, detail URLs and magnets may embed tracker credentials. They stay in server-only search
 and task source fields. `GET /search/{id}` returns metadata and an opaque result id; `POST /tasks` and
 `POST /tasks/inspect` accept that id and resolve it in the task service. Task
-DTOs derive `source_uri` only from `source_display_uri`, and errors are redacted before storage. This applies
-to admins too: role is not a reason to move a provider secret into a browser
+DTOs derive `source_uri` only from `source_display_uri`, and errors are redacted before storage. No caller is exempt: nothing about the operator's own
+session is a reason to move a provider secret into a browser
 ([FR-058](02-requirements.md#fr-058-create-a-task-from-a-search-result-in-one-click)).
 
 ---
@@ -763,3 +761,5 @@ the repository owner decides.
 | 2026-09-01 | Security review: contained provider acquisition credentials behind opaque result ids. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Added §7.4: engine credentials are mounted secrets rather than service environment variables, and configuration state is mode-enforced independently of `UMASK`. |
+| 2026-09-02 | Single-account cleanup: dropped the §3.3 `default_destination` subtree jail (containment is the data-root check alone) and restated the §6.8 exemption without roles; §6.4 says operator account rather than admin ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Review pass: the `.dlm` import caps are no longer restated here — §5.3 now points at [`07-search-and-indexers.md`](07-search-and-indexers.md) §4.1, which owned stricter numbers, and keeps only the two rules that are security properties rather than format rules. |

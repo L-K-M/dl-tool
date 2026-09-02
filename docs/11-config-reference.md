@@ -144,6 +144,14 @@ through to the application variables of the same name.
 | `DLTOOL_ARIA2_URL` | *(empty — lane disabled)* | Passes straight through to the application variable of the same name (§2). Set together with `ARIA2_RPC_SECRET` **and** the `aria2` profile (`COMPOSE_PROFILES=aria2`): a URL with an empty secret is a fatal `config_missing` at dl-tool's boot (§8), a URL without the profile enables a lane whose backend container is not running and fails at runtime with `engine_unavailable`. |
 | `ARIA2_RPC_SECRET` | *(none)* | The aria2 service's RPC secret **and** dl-tool's `DLTOOL_ARIA2_SECRET`. One value, two consumers, guarded twice: dl-tool's boot fails with `config_missing` when `DLTOOL_ARIA2_URL` is set and this is empty, and the aria2 entrypoint refuses an empty value when that profile is active. |
 | `QBT_WEBUI_PORT` | `8080` | qBittorrent's in-container WebUI port. The URL is no longer derived from it — changing the port means updating `DLTOOL_QBITTORRENT_URL` to match. |
+| `PUID`, `PGID`, `TZ`, `UMASK` | `1000`, `1000`, `Etc/UTC`, `002` | The dropped user, group, zone and umask of every service ([ADR-0011](decisions/0011-alpine-runtime-with-puid-pgid.md)). |
+| `DLTOOL_BASE_PATH`, `DLTOOL_ALLOWED_HOSTS`, `DLTOOL_CONFIG_LOCK`, `DLTOOL_TRUSTED_PROXIES`, `DLTOOL_LOG_LEVEL`, `DLTOOL_LOG_FORMAT` | as in §2 | Each passes straight through to the application variable of the same name (§2); `compose.yaml` interpolates it so an operator can set it in `.env` rather than editing the compose file. |
+
+The `vpn` profile's gluetun variables (`VPN_SERVICE_PROVIDER`, `VPN_TYPE`, `SERVER_COUNTRIES`,
+`WIREGUARD_PRIVATE_KEY`, `WIREGUARD_ADDRESSES`, `OPENVPN_USER`, `OPENVPN_PASSWORD`,
+`FIREWALL_OUTBOUND_SUBNETS`, `FIREWALL_VPN_INPUT_PORTS`, `VPN_PORT_FORWARDING`) are **not** dl-tool
+configuration and never reach the dl-tool process. They ship in `.env.example` and are owned by
+[`10-deployment-and-compose.md`](10-deployment-and-compose.md) §8.
 
 ---
 
@@ -164,7 +172,7 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `min_free_space` | object, root path → bytes | `2147483648` for every configured root | `PATCH /settings` |
 | `max_active_total` | integer, `0` = unlimited | `5` | `PATCH /settings` |
 | `max_active_per_engine` | integer, `0` = unlimited | `3` | `PATCH /settings` |
-| `process_order` | enum `by_date_created\|by_user_round_robin` | `by_date_created` | `PATCH /settings` |
+| `process_order` | enum `by_date_created` | `by_date_created` | `PATCH /settings` |
 | `rss_enabled` | boolean | `true` | `PATCH /settings` |
 | `rss_interval_s` | integer seconds, minimum `300` | `1800` | `PATCH /settings` — the global poll interval and its 5-minute floor are owned by [`08-rss-automation.md`](08-rss-automation.md) §2.1 |
 | `auto_extract` | boolean | `false` | `PATCH /settings` |
@@ -172,8 +180,8 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `confirm_on_delete` | boolean | `true` | `PATCH /settings` |
 
 Seeding does not count toward any `max_active_*` limit. The 168-cell bandwidth grid is not a settings key: it
-lives in its own table and is replaced through `PUT /settings/schedule`. Per-user `default_destination`,
-`locale` is a column on the single `users` row, changed through `PATCH /account`.
+lives in its own table and is replaced through `PUT /settings/schedule`. `locale` is not a settings key
+either: it is a column on the single `users` row, changed through `PATCH /account`.
 
 ---
 
@@ -380,3 +388,5 @@ stated fallback.
 | 2026-09-01 | Security review: added the Host allowlist and environment-only configuration lock; made the trusted-proxy example deny forwarded headers by default. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Engine credentials are wired as Compose named secrets rather than service environment variables; the `_FILE` convention is now what the shipped compose uses, not a manual alternative. |
+| 2026-09-02 | Single-account cleanup: dropped `by_user_round_robin` from the `process_order` enum and repaired the sentence that had merged the per-user default destination into the `locale` note ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Review pass: removed the duplicated `DLTOOL_ALLOWED_HOSTS` row; `DLTOOL_CONFIG_LOCK` now names `internal/api/security.go`, the file a task actually creates; §4 gained the six `DLTOOL_*` pass-throughs and the note that the gluetun variables are not dl-tool configuration; the reference `.env` block is marked as not being the shipped `.env.example`, which ships both engine lanes disabled. |

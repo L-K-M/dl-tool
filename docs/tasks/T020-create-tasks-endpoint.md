@@ -14,8 +14,10 @@
 
 ## Goal
 `POST /api/v1/tasks` accepts up to 50 URIs, normalises and routes each one, resolves the destination inside
-a configured data root, inserts one `tasks` row per accepted URI and hands it to its engine. Rejected URIs
-come back in `rejected[]` while the accepted ones are still created.
+a configured data root and inserts one `tasks` row per accepted URI in state `queued`. It does **not**
+hand the task to an engine: T098's admission pass is the only caller of `Engine.Add`, so `max_active_*` is
+enforced for a new task as well as a resumed one. Rejected URIs come back in `rejected[]` while the
+accepted ones are still created.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
@@ -32,7 +34,6 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/tasks_test.go` | create | `humatest` cases for acceptance, partial rejection and every status code below. |
 | `internal/fsx/safepath.go` | create | `ResolveDestination` — root containment after symlink resolution. |
 | `internal/api/server.go` | modify | Register the operation on the existing Huma API. |
-| `internal/store/tasks.go` | modify | Add `CountBytesForOwner` for the storage-quota pre-check. |
 
 No other file may be modified.
 
@@ -41,15 +42,14 @@ No other file may be modified.
 ```go
 package fsx
 
-// ErrPathRejected is returned when a path resolves outside every configured root, or outside the
-// caller's jail. The API maps it to /problems/path-rejected with status 403.
+// ErrPathRejected is returned when a path resolves outside every configured root. The API maps it
+// to /problems/path-rejected with status 403.
 var ErrPathRejected = errors.New("fsx: path rejected")
 
 // ResolveDestination resolves requested against the configured roots, following symlinks, and
-// returns the cleaned absolute path. roots is DLTOOL_DATA_ROOTS in order; jail is the caller's
-// users.default_destination and is "" for an admin. An empty requested returns the first root, or
-// the jail when one is set.
-func ResolveDestination(roots []string, jail, requested string) (string, error)
+// returns the cleaned absolute path. roots is DLTOOL_DATA_ROOTS in order. An empty requested
+// returns the first root.
+func ResolveDestination(roots []string, requested string) (string, error)
 ```
 
 ```go
@@ -97,37 +97,37 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 ```
 
 Status codes, exactly these: `201` with at least one created task · `403` `/problems/path-rejected` ·
-`403` `/problems/quota-exceeded` · `413` `/problems/payload-too-large` · `422`
+`413` `/problems/payload-too-large` · `422`
 `/problems/validation-failed` for an empty submission, more than 50 URIs or an unknown category · `422`
-`/problems/unsupported-scheme` when **every** URI was rejected · `503` `/problems/engine-unavailable`.
+`/problems/unsupported-scheme` when **every** URI was rejected · `503` `/problems/engine-unavailable` when
+the routed engine is not registered at all — routing is resolved here even though the submission is not.
 
 ## Steps
 1. Create `internal/fsx/safepath.go` with `ErrPathRejected` and `ResolveDestination`; resolve symlinks
    with `filepath.EvalSymlinks`, compare the result against each resolved root plus a trailing separator,
    and never build the path by string concatenation of request input.
-2. Apply the roots check with the same comparison everywhere, so a destination is
-   confined to the subtree of their `default_destination`.
+2. Apply the roots check with the same comparison everywhere, so every destination is confined to a
+   configured data root.
 3. Create `internal/api/tasks.go` with `TaskHandlers`, its constructor taking the store, the registry and
    the configured roots, and the input and output structs above.
 4. In `CreateTasks`, reject an empty `uris` and a list longer than 50 with `/problems/validation-failed`
    before any other work.
-5. Resolve the destination once per request: the body value, else the caller's `default_destination`, else
-   the first configured root. Map `fsx.ErrPathRejected` to `403` `/problems/path-rejected`.
-6. Pre-check the owner's storage quota with `CountBytesForOwner`; a breach rejects the whole request with
-   `403` `/problems/quota-exceeded`, and the task is never created.
-7. Per URI: call `uri.Normalize`, then `engine.Route`, then honour an explicit `engine` field only when
+5. Resolve the destination once per request: the body value, else the first configured root. Map
+   `fsx.ErrPathRejected` to `403` `/problems/path-rejected`.
+6. Per URI: call `uri.Normalize`, then `engine.Route`, then honour an explicit `engine` field only when
    that engine's `Accepts()` is true. Map `uri.ErrUnsupportedScheme` and `engine.ErrNoEngine` to a
    `rejected[]` entry of type `/problems/unsupported-scheme`, with the message
    `ed2k is not supported in v1` for the ed2k scheme.
-8. Per accepted URI: insert the `tasks` row through `store.Create` in state `queued` (or `paused` when
+7. Per accepted URI: insert the `tasks` row through `store.Create` in state `queued` (or `paused` when
    `paused` is true) and with `engine_ref` NULL. Never call `Engine.Add` here: T098's admission pass is the
    only caller of `Engine.Add` and `Engine.Resume`, and it stores the handle with `SetEngineRef`.
-9. Pass `ftp_credentials` to the adapter through `engine.AddRequest.Extra` for `ftp`, `ftps` and `sftp`
-   URIs only, and strip userinfo from `tasks.source_uri` so no password is persisted or logged.
-10. Return `422` `/problems/unsupported-scheme` when every URI was rejected; otherwise `201`.
-11. Register the operation in `internal/api/server.go` with `huma.Register` and the operation id
+8. Persist `ftp_credentials` with the row for `ftp`, `ftps` and `sftp` URIs only, so admission can put them
+   into `engine.AddRequest.Extra` later, and strip userinfo from `tasks.source_uri` so no password is
+   persisted or logged.
+9. Return `422` `/problems/unsupported-scheme` when every URI was rejected; otherwise `201`.
+10. Register the operation in `internal/api/server.go` with `huma.Register` and the operation id
     `create-tasks`.
-12. Create `internal/api/tasks_test.go` with `humatest` cases: the four-line FR-001 submission
+11. Create `internal/api/tasks_test.go` with `humatest` cases: the four-line FR-001 submission
     (`https:`, `ftp:`, `magnet:`, garbage) asserting three created and one rejected; an ed2k submission
     asserting `422` and the exact message; a destination of `/etc` asserting `403`
     `/problems/path-rejected`; and an FTP submission asserting the response body contains no password.

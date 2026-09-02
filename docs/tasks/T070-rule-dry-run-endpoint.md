@@ -168,7 +168,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT return only the matches. Returning `matchingArticles` alone is the defect this endpoint exists
   to fix.
 - Do NOT cache the report; the editor calls this endpoint on a 250 ms debounce and expects live results.
-- Do NOT add a rate limit or a per-user quota to this endpoint in v1.
+- Do NOT add a rate limit or a request quota to this endpoint in v1.
 
 ## Forbidden shortcuts
 - Do NOT skip/xfail a test, weaken an assertion, or delete a test to make a check pass.

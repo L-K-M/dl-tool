@@ -53,12 +53,12 @@ type ExportDocument struct {
 	Indexers        []ExportIndexer   `json:"indexers"`      // never api_key
 	Feeds           []ExportFeed      `json:"feeds"`
 	Rules           []ExportRule      `json:"rules"`
-	WatchFolders    []ExportWatch     `json:"watch_folders"` // owner as a username
+	WatchFolders    []ExportWatch     `json:"watch_folders"`
 	Schedule        ExportSchedule    `json:"schedule"`      // enabled + the 168 cells
 }
 
-// Excluded from every export, with no option to include them: sessions, users and therefore every
-// password_hash, api_tokens, notification_channels.secret_enc, engines.secret_enc,
+// Excluded from every export, with no option to include them: sessions, the account row and therefore
+// its password_hash, api_tokens, notification_channels.secret_enc, engines.secret_enc,
 // indexers.api_key, tasks and every task-derived table. An export is safe to attach to a bug report.
 
 type ImportInput struct {
@@ -91,8 +91,8 @@ type RejectedRow struct {
 
 Conflict matching is by `categories.name`, `indexers.definition_id` (else `name`), `feeds.url`,
 `rules.name` and `watch_folders.path`. A committing import is one transaction: either every accepted row
-lands or none does. Paths are re-validated against the importing host's roots and the caller's jail; a
-failing path is `rejected`, never silently rewritten.
+lands or none does. Paths are re-validated against the importing host's roots; a failing path is
+`rejected`, never silently rewritten.
 
 ```go
 package store
@@ -122,8 +122,8 @@ var (
 3. Implement the importer: validate `document_version`, returning `409` `/problems/conflict` when it is
    newer than the binary understands; build the report; and write nothing when `dry_run` is true.
 4. Apply a committing import inside one `sqlx.Tx`, honouring `on_conflict` per the matching keys above.
-5. Re-validate every path against the importing host's roots and the caller's jail, recording a failure in
-   `rejected[]` with `/problems/path-rejected`.
+5. Re-validate every path against the importing host's roots, recording a failure in `rejected[]` with
+   `/problems/path-rejected`.
 6. Add `RestoreFrom` and the three sentinels to `internal/store/db.go`, running the gates in the documented
    order and touching the live database only after all three pass.
 7. Add the `restore --from <file>` subcommand to `cmd/dl-tool/main.go` through the existing `humacli`
@@ -168,7 +168,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Out of scope — do NOT
 - Do NOT import from Download Station, qBittorrent or any other product. There is no migration subsystem,
   no adopt-in-place and no `rules.json` importer. This task is dl-tool's own backup and restore, nothing else.
-- Do NOT include users, sessions, password hashes, API tokens or any secret in an export, under any flag.
+- Do NOT include the account row, sessions, password hashes, API tokens or any secret in an export, under any flag.
 - Do NOT export `tasks` or any task-derived table; a portable settings document is not a database copy.
 - Do NOT add `POST /system/backup` or the nightly `VACUUM INTO` job; T091 owns both.
 - Do NOT restore while the server is running, or skip any of the three gates.

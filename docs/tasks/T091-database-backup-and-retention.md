@@ -30,7 +30,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 |---|---|---|
 | `internal/store/maintenance.go` | create | `BackupInto`, `PruneBackups` and the five retention deletes. |
 | `internal/api/system.go` | create | The `POST /system/backup` handler; later system routes join this file. |
-| `internal/api/system_test.go` | create | Success, conflict, forbidden and partial-file cases. |
+| `internal/api/system_test.go` | create | Success, conflict and partial-file cases. |
 | `internal/jobs/cron.go` | edit | Add the nightly backup and retention entries and the hourly search prune. |
 | `internal/api/server.go` | edit | Register `create-backup`. |
 
@@ -88,7 +88,7 @@ type CreateBackupOutput struct {
 func (h *SystemHandlers) CreateBackup(ctx context.Context, in *struct{}) (*CreateBackupOutput, error)
 ```
 
-Worked response, admin only, `201`:
+Worked response, `201`:
 
 ```json
 {"path":"/config/backups/dl-tool-20260901T094500Z.db","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}
@@ -114,8 +114,8 @@ Worked response, admin only, `201`:
    then `PruneBackups(7)` then the two nightly prunes, and `@hourly` running `PruneSearchJobs`.
 9. Edit `internal/api/server.go` to register the operation as `create-backup` on `POST /system/backup`.
 10. Create `internal/api/system_test.go`: a successful backup returns `201` and a file that opens and
-    answers `PRAGMA integrity_check` with `ok`; a second concurrent call returns `409`.
-    `403`; and a forced failure mid-statement leaves no file matching `dl-tool-*.db`.
+    answers `PRAGMA integrity_check` with `ok`; a second concurrent call returns `409`; and a forced
+    failure mid-statement leaves no file matching `dl-tool-*.db`.
 
 ## Acceptance criteria
 - [ ] The snapshot opens independently and `PRAGMA integrity_check` returns `ok`.

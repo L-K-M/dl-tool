@@ -14,11 +14,11 @@
 
 ## Goal
 `POST /api-tokens` returns a bearer token exactly once; `GET /api-tokens` lists only prefixes and labels;
-`DELETE /api-tokens/{id}` makes the next request carrying it `401`. token, and a revoked token's next use returns `401`.
+`DELETE /api-tokens/{id}` revokes immediately, so the next request carrying that token returns `401`.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
-1. [`docs/05-api-contract.md` §12 Users and API tokens](../05-api-contract.md#12-the-account-and-api-tokens)
+1. [`docs/05-api-contract.md` §12 The account and API tokens](../05-api-contract.md#12-the-account-and-api-tokens)
 2. [`docs/05-api-contract.md` §2 Endpoint summary](../05-api-contract.md#2-endpoint-summary)
 3. [`docs/04-data-model.md` §3.1 Identity and access](../04-data-model.md#31-identity-and-access)
 4. [`docs/12-security-and-threat-model.md` §6.1 Sessions and cookies](../12-security-and-threat-model.md#61-sessions-and-cookies)
@@ -88,8 +88,7 @@ func (s *UserStore) RevokeAPIToken(ctx context.Context, userID, id string) error
 func (s *UserStore) TouchAPIToken(ctx context.Context, id string, at int64) error
 ```
 
-Statuses: `200`/`201`/`204` · `401` for a revoked or
-expired token · `403` `/problems/forbidden` · `404`.
+Statuses: `200`/`201`/`204` · `401` for a revoked or expired token · `404`.
 
 ## Steps
 1. Add the four token functions to `internal/store/users.go` with explicit column lists; never select
@@ -100,17 +99,17 @@ expired token · `403` `/problems/forbidden` · `404`.
    `TokenView` no secret member.
 4. Edit `internal/api/auth.go` so bearer authentication rejects a token whose `revoked_at` is set or whose
    `expires_at` has passed with `401`, and calls `TouchAPIToken` at most once a minute.
-6. Ensure the token value never reaches a log record: log the `tok_` id and the prefix, never the value or
+5. Ensure the token value never reaches a log record: log the `tok_` id and the prefix, never the value or
    its hash.
-7. Create `internal/api/tokens_test.go` with `humatest`: assert the creation response carries `token` and
+6. Create `internal/api/tokens_test.go` with `humatest`: assert the creation response carries `token` and
    the list response carries none; assert a request with the token succeeds and the same request after
-   `DELETE` returns `401`; assert an expired token returns `401`; assert user B cannot see user A's tokens;
-   assert no log line contains the token value.
-8. Run the verification command and paste its output under `## Evidence`.
+   `DELETE` returns `401`; assert an expired token returns `401`; assert no log line contains the token
+   value.
+7. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] The clear-text token appears in the creation response and in no other response, ever.
-- [ ] `GET /api-tokens` returns `prefix` and `name` only, and only the caller's own rows.
+- [ ] `GET /api-tokens` returns `prefix` and `name` only, never a token value.
 - [ ] A revoked token's next request returns `401`.
 - [ ] An expired token returns `401` without being revoked.
 - [ ] The token value appears in no log record and no error message.
@@ -121,9 +120,8 @@ Run exactly this. Paste the output under "Evidence".
 make lint && make test PKG="./internal/api/... ./internal/store/..." && echo TOKENS_OK
 ```
 Expected: `ok  github.com/L-K-M/dl-tool/internal/api` and `ok  github.com/L-K-M/dl-tool/internal/store`,
-with `TestTokenRevealedOnce`, `TestListHasNoSecret`, `TestRevokedTokenIs401`, `TestExpiredTokenIs401`,
-`TestTokensAreCallerScoped`, `TestAdminOnlyPathsForbidNonAdmin` and `TestTokenNeverLogged` each reported as
-`--- PASS`. The final line of stdout is exactly `TOKENS_OK`. No `FAIL`.
+with `TestTokenRevealedOnce`, `TestListHasNoSecret`, `TestRevokedTokenIs401`, `TestExpiredTokenIs401` and
+`TestTokenNeverLogged` each reported as `--- PASS`. The final line of stdout is exactly `TOKENS_OK`. No `FAIL`.
 
 Also confirm scope:
 ```bash
@@ -134,7 +132,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Out of scope — do NOT
 - Do NOT store the token value, a reversible encryption of it, or a hint beyond the 8-character prefix.
-- Do NOT add a token scope, permission or role system; a token carries exactly its user's role.
+- Do NOT add a token scope, permission or role system; a token carries exactly the operator account's access.
 - Do NOT delete a revoked row; `revoked_at` keeps the audit trail.
 - Do NOT implement any third party's authentication protocol; a bearer token plus `POST /tasks` is the
   entire integration surface.

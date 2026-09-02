@@ -93,8 +93,8 @@ export function AccountSection(): JSX.Element;
 ```
 
 Account fields and their writes. dl-tool has one account
-([ADR-0019](../decisions/0019-single-account-no-ownership.md)), so there is no user table, no role column
-and no delete:
+([ADR-0019](../decisions/0019-single-account-no-ownership.md)), so there is no user list, no role and no
+delete:
 
 | Field | Write |
 |---|---|
@@ -162,14 +162,13 @@ export function NotificationsSection(): JSX.Element;
   clears it, and the UI never sends `"__redacted__"`.
 
 ## Steps
-1. Edit `web/src/locales/en/settings.json`: add a `users` subtree (column headers, the quota hint
-   `0 means unlimited`, the password rule, the session-lifetime sentence, the reveal warning) and a
-   `notifications` subtree with one label per `NOTIFIABLE_EVENTS` entry plus the four channel kinds.
+1. Edit `web/src/locales/en/settings.json`: add an `account` subtree (the field labels, the password rule,
+   the session-lifetime sentence, the token column headers and the reveal warning) and a `notifications`
+   subtree with one label per `NOTIFIABLE_EVENTS` entry plus the four channel kinds.
 2. Create `AccountSection.tsx` reading `GET /account` through the T014 `api` client, with a Change-password
    form that sends `password` and `current_password` to `PATCH /account`.
-3. Bind the default-destination field to `FolderBrowserDialog` and the quota field to bytes; state beside
-   the token that its secret is shown once and is not recoverable, and that revocation is a different
-   setting on the Connection section.
+3. State beside the token panel that a token's secret is shown once, is not recoverable, and can only be
+   replaced by revoking it and issuing a new one.
 4. Render the session-lifetime row as static text with the `DLTOOL_SESSION_TTL` sentence and no input.
 5. Build the API-token panel: `GET /api-tokens` listing name, prefix, last used, expires; `POST /api-tokens`
    opening `TokenRevealDialog` with the `token` from the `201` body; `DELETE /api-tokens/{id}` revoking.
@@ -182,18 +181,17 @@ export function NotificationsSection(): JSX.Element;
    `PATCH /notifications/{id}` carrying only `event_mask`.
 9. Add `Send test` per channel, rendering the raw reply exactly as specified, with no error toast on
    `ok:false` and a distinct rendering when `response` is `null`.
-10. Edit `SettingsScreen.tsx` to add `'users'` and `'notifications'` to `IMPLEMENTED` and render the two
+10. Edit `SettingsScreen.tsx` to add `'account'` and `'notifications'` to `IMPLEMENTED` and render the two
     components; change nothing else in that file.
-11. Create `UsersSection.test.tsx` covering the acceptance criteria below against stubbed endpoints.
+11. Create `AccountSection.test.tsx` covering the acceptance criteria below against stubbed endpoints.
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestTokenRevealedOnceOnly` asserts the token text is rendered after `201`, is gone after close, and
       appears in no later render, in no `GET /api-tokens` row and in no storage write.
-- [ ] `TestLastAdminForbiddenRendersInline` asserts a `403 /problems/forbidden` on delete renders the
-      last-admin message on the row, not a generic toast.
-- [ ] `TestPasswordChangeSendsCurrentPassword` asserts the `PATCH /account` body carries both members in
-      bytes and that `0` renders as unlimited.
+- [ ] `TestWrongCurrentPasswordRendersInline` asserts a `403 /problems/forbidden` renders on the
+      `current_password` input, not as a generic toast.
+- [ ] `TestPasswordChangeSendsCurrentPassword` asserts the `PATCH /account` body carries both members.
 - [ ] `TestMatrixRoundTripsUnknownCode` asserts a stored `event_mask` entry outside `NOTIFIABLE_EVENTS`
       survives a save unchanged.
 - [ ] `TestAllEventsRowSendsStar` asserts checking the `All events` row sends `event_mask: ["*"]`.
@@ -204,11 +202,11 @@ export function NotificationsSection(): JSX.Element;
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-make lint && make typecheck && make test-web && echo USERS_NOTIFY_OK
+make lint && make typecheck && make test-web && echo ACCOUNT_NOTIFY_OK
 ```
-Expected: Vitest lists `src/components/Settings/UsersSection.test.tsx` among the passed files, each of the
+Expected: Vitest lists `src/components/Settings/AccountSection.test.tsx` among the passed files, each of the
 six tests named above appears with a `✓`, no file reports a failure, and the final line of stdout is exactly
-`USERS_NOTIFY_OK`.
+`ACCOUNT_NOTIFY_OK`.
 
 Also confirm scope:
 ```bash
@@ -223,7 +221,8 @@ of these files are new and `git diff --name-only` never lists an untracked file.
 - Do NOT add an input for session lifetime, engine credentials or any other `infrastructure` variable of
   [`11-config-reference.md` §2](../11-config-reference.md#2-dltool_-variables-application); the environment
   wins at boot and no API can change it.
-  section, per [`05-api-contract.md` §12](../05-api-contract.md#12-the-account-and-api-tokens).
+- Do NOT add a user list, a role selector, an invite or a delete-account control; there is exactly one
+  account, per [`05-api-contract.md` §12](../05-api-contract.md#12-the-account-and-api-tokens).
 - Do NOT parse, reformat or truncate the `Send test` body; a raw reply that is not raw is useless.
 - Do NOT build the Downloads, BitTorrent, Bandwidth or Advanced sections; **T118**, **T119** and **T121** own
   them.

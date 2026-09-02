@@ -259,7 +259,7 @@ row shows `error_code` in the cell and `error_message` in the tooltip.
 
 ### 3.3 Persistence
 
-One document, persisted server-side per user through `GET`/`PUT /api/v1/prefs`. Write on a 500 ms debounce; never write during an active drag or
+One document, persisted server-side through `GET`/`PUT /api/v1/prefs`. Write on a 500 ms debounce; never write during an active drag or
 resize gesture. Render the built-in defaults immediately and patch them once `GET /api/v1/prefs` resolves,
 accepting a brief default→saved flash in exchange for dropping the client-side cache.
 
@@ -483,8 +483,6 @@ Opened by every `Select` button in the product. A nested dialog with its own foc
   tooltip.
 - Keyboard: `↑` `↓` move, `Enter` or `→` descend, `Backspace` or `←` ascend, `Esc` cancels.
 - The manual `Path` field accepts a typed absolute path and validates it on blur through the same endpoint.
-- Non-admin users see only the subtree of their default destination; the roots list is already filtered
-  server-side, so the client shows whatever it is given without a second rule.
 
 ---
 
@@ -538,7 +536,7 @@ Opened by every `Select` button in the product. A nested dialog with its own foc
 ## 6. Detail pane
 
 A resizable bottom pane. Tabs are left-aligned, `role="tablist"` with roving tabindex; each panel is
-`role="tabpanel"` with `aria-labelledby`. The selected tab is persisted per user. With more than one row
+`role="tabpanel"` with `aria-labelledby`. The selected tab is persisted in that document. With more than one row
 selected, show an aggregate summary (`3 tasks · 12.4 GB · ↓ 4.1 MB/s`) and no tabs.
 
 | Tab | Fields |
@@ -576,8 +574,7 @@ collapses to a centred muted line, `Select a task to see its details`, plus the 
 - **Indexer multi-select**: a popover checkbox list with *All* / *None*; each row shows the indexer name, a
   health dot and its last error in a tooltip. Disabled indexers are greyed with a link to
   `/settings/indexers`. The selection is persisted in the prefs document and pruned against
-  `GET /api/v1/indexers` on load, so an id the server has hidden (a key-bearing indexer,
-  [`05-api-contract.md`](05-api-contract.md) §9.1) or deleted never reaches `POST /search`: the list and
+  `GET /api/v1/indexers` on load, so a deleted id never reaches `POST /search`: the list and
   the effective selection are whatever the server returns, and the client adds no rule of its own.
 - **Category filter** is populated from `GET /api/v1/indexers/categories`; the client never hard-codes a
   category tree.
@@ -697,14 +694,14 @@ appears only when the form is dirty and announces `3 unsaved changes` through `a
 
 | Section | Contents |
 |---|---|
-| **General** | UI language · Theme (System / Light / Dark) · Density (Comfortable / Compact) · Date format (Browser default / ISO 8601) · Confirm on delete · Alternating row colours · Action on double-click, set separately for downloading and completed tasks · Default sidebar filter on startup · Remember last destination · Process order (**By date created** / **By user (one task at a time)**) |
+| **General** | UI language · Theme (System / Light / Dark) · Density (Comfortable / Compact) · Date format (Browser default / ISO 8601) · Confirm on delete · Alternating row colours · Action on double-click, set separately for downloading and completed tasks · Default sidebar filter on startup · Remember last destination · Process order (**By date created**) |
 | **Connection** | Engine endpoints, read-only when supplied by the environment · `max_active_total`, `max_active_per_engine` |
 | **Bandwidth** | Global download and upload limits in bytes per second, `0` = unlimited · Alternative download and upload limits · radio *Immediately* / *Advanced schedule* · the 24×7 grid (§9.1) |
 | **BitTorrent** | Default share-ratio limit, seeding-time limit and the action when reached |
 | **Downloads** | Default destination (folder browser) · Watch folders, each with a path and *Delete loaded .torrent files* · Auto-extract archives plus a shared password list · Category → path mapping table · Per-root `min_free_space` |
 | **RSS** | Enable RSS fetching · Update interval · Maximum articles kept per feed (the per-feed `item_cap`, edited feed by feed) |
 | **Indexers** | Table: Name · Type · URL · Categories · Enabled · Priority · Last test result. Actions: Add · Edit · Test · Test all · Reorder · Import. Imported definitions arrive **disabled** and show their provenance. |
-| **Users & Auth** | Users table (username, role, quota, default destination, enabled) · Add / Edit / Delete · Change password · API tokens with a create-once reveal |
+| **Account & Auth** | The operator account (username, locale) · Change password · API tokens with a create-once reveal |
 | **Notifications** | A per-event × per-channel checkbox matrix. Channels: Webhook, ntfy, Gotify, Apprise. Every channel has **Send test**, which shows the **raw upstream status line and body**. |
 | **Advanced** | Log level (read-only; `DLTOOL_LOG_LEVEL` is environment-only) · Settings export and import · Version and build info |
 
@@ -961,3 +958,5 @@ The justification record for every choice above. Both tables are evidence, not d
 | 2026-09-01 | The add-feed dialog's *Automatically download all items* checkbox is now wired: `auto_download` on `POST /feeds` creates the `auto:<feed_id>` rule (`05-api-contract.md` §10.1). |
 | 2026-09-01 | Security review: made search downloads submit opaque result ids only. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Single-account cleanup: dropped the folder browser's default-destination subtree rule, the *Users & Auth* users table (now *Account & Auth* over `/account`), the hidden key-bearing indexer note and the `by_user_round_robin` process-order label; the preference document is per instance, not per user ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Review pass: client liveness is derived from the named `hb` event of [`05-api-contract.md`](05-api-contract.md) §6.1, not from a heartbeat comment the browser never sees. |
