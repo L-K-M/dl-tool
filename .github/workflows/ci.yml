@@ -1,0 +1,88 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: make setup
+      - run: make lint
+      - run: make vet
+      - run: make typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: make setup
+      - run: make test
+
+  gen-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - run: make setup
+      - name: Regenerate the API contract
+        run: make gen
+      - name: Fail if generated files drifted
+        run: git diff --exit-code -- api/openapi.json web/src/api/schema.d.ts
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: probe
+        run: |
+          test -d internal/engine/enginetest && echo "ready=yes" >> "$GITHUB_OUTPUT" || echo "ready=no" >> "$GITHUB_OUTPUT"
+      - if: steps.probe.outputs.ready == 'yes'
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - if: steps.probe.outputs.ready == 'yes'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - if: steps.probe.outputs.ready == 'yes'
+        run: make setup
+      - if: steps.probe.outputs.ready == 'yes'
+        run: make test-integration
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: probe
+        run: |
+          test -f compose.yaml && echo "ready=yes" >> "$GITHUB_OUTPUT" || echo "ready=no" >> "$GITHUB_OUTPUT"
+      - if: steps.probe.outputs.ready == 'yes'
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - if: steps.probe.outputs.ready == 'yes'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - if: steps.probe.outputs.ready == 'yes'
+        run: make setup
+      - if: steps.probe.outputs.ready == 'yes'
+        run: make compose-check && make docker-build

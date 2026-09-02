@@ -54,7 +54,7 @@ register.
 | Task | Title | Depends on | Status |
 |---|---|---|---|
 | [T001](T001-makefile-and-doclint.md) | Create the Makefile and the doc-lint script | — | done |
-| [T002](T002-ci-workflows-and-openapi-gate.md) | Add the CI workflows and the OpenAPI generation script | T001 | todo |
+| [T002](T002-ci-workflows-and-openapi-gate.md) | Add the CI workflows and the OpenAPI generation script | T001 | done |
 | [T003](T003-web-build-scaffold.md) | Scaffold the Vite SPA build and its toolchain | T001 | todo |
 | [T004](T004-go-module-and-entrypoint.md) | Bootstrap the Go module, pin every dependency and build the entrypoint | T001 | todo |
 | [T005](T005-config-loader-and-secrets.md) | Load the DLTOOL_ environment and generate the boot secrets | T004 | todo |
@@ -260,7 +260,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
 | T001 | Create the Makefile and the doc-lint script | — | no | done | [T001](T001-makefile-and-doclint.md) |
-| T002 | Add the CI workflows and the OpenAPI generation script | T001 | yes | todo | [T002](T002-ci-workflows-and-openapi-gate.md) |
+| T002 | Add the CI workflows and the OpenAPI generation script | T001 | yes | done | [T002](T002-ci-workflows-and-openapi-gate.md) |
 | T003 | Scaffold the Vite SPA build and its toolchain | T001 | yes | todo | [T003](T003-web-build-scaffold.md) |
 | T004 | Bootstrap the Go module, pin every dependency and build the entrypoint | T001 | no | todo | [T004](T004-go-module-and-entrypoint.md) |
 | T005 | Load the DLTOOL_ environment and generate the boot secrets | T004 | no | todo | [T005](T005-config-loader-and-secrets.md) |
