@@ -193,7 +193,7 @@ Their presence after a stop means the shutdown was killed, not graceful.
 | Artefact | Mechanism | Covers |
 |---|---|---|
 | `/config/dl-tool.db` | `VACUUM INTO`, nightly and pre-migration | Everything: users, tasks, settings, indexers, feeds, rules, schedule. |
-| `/config/secrets.env` | Operator copies the file | Session key, CSRF key, `ARIA2_RPC_SECRET`. Losing it invalidates every session; the file is mode `0600`. |
+| `/config/secrets.env` | Operator copies the file | The at-rest secret key `DLTOOL_SECRET_KEY` and `ARIA2_RPC_SECRET`. Losing it makes every stored `*_enc` secret undecryptable (re-enter them) and forces an aria2 secret re-share; the file is mode `0600`. |
 | Portable settings | `GET /settings/export` | Configuration without identities — safe to attach to a bug report ([`05-api-contract.md` §11.5](05-api-contract.md#115-get-settingsexport-and-post-settingsimport)). |
 
 ### 3.2 The nightly job
@@ -305,8 +305,8 @@ including `debug`. Values are typed `secure.Secret`, whose `String`, `Format` an
 
 | Never logged | Where it lives |
 |---|---|
-| `DLTOOL_ARIA2_SECRET`, `DLTOOL_QBITTORRENT_PASSWORD` | Environment or `_FILE` |
-| Session signing key, CSRF HMAC key | `/config/secrets.env` |
+| `DLTOOL_ARIA2_SECRET`, `DLTOOL_QBITTORRENT_PASSWORD` | Environment or `_FILE`; the generated `ARIA2_RPC_SECRET` also rests in `/config/secrets.env` |
+| At-rest secret key `DLTOOL_SECRET_KEY` | `/config/secrets.env` |
 | Password hashes, API token values | `users`, `api_tokens` |
 | Indexer `api_key`, notification `secret_enc`, engine `secret_enc` | Configuration tables |
 | `extract_passwords` | `settings` |
@@ -342,7 +342,7 @@ works whether or not the server is running.
 | Deliberately excluded | Reason |
 |---|---|
 | The database file itself, and any `/config/backups/*` | Contains password hashes, API tokens and every session. |
-| `/config/secrets.env` | Session and CSRF keys. |
+| `/config/secrets.env` | `DLTOOL_SECRET_KEY` and `ARIA2_RPC_SECRET`. |
 | `users`, `sessions`, `api_tokens` rows | Identities and credentials. |
 | Task names, source URIs, destinations, file names | A file list is the most privacy-sensitive data in the product. Only counts and state histograms are included. |
 | Indexer URLs and API keys, feed URLs, tracker URLs | Carry per-user passkeys. |
@@ -389,12 +389,15 @@ deliberate, local operator action.
 
 ## Open questions
 
-- [NEEDS CLARIFICATION: backup file naming is stated two ways. `04-data-model.md` §6 uses
-  `dl-tool.db.<UTC>.bak` and `05-api-contract.md` §13 returns `/config/backups/dl-tool-<UTC>.db`. This
-  document uses the `04` form. One of the two must be corrected before T091.]
+- (none — the backup-naming ambiguity was resolved 2026-09-01 by correcting the example in
+  [`05-api-contract.md`](05-api-contract.md) §13 to the `dl-tool.db.<UTC>.bak` form this document and
+  [`04-data-model.md`](04-data-model.md) §6 already use)
 
 ## Change log
 
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version. |
+| 2026-09-01 | `secrets.env` described correctly: `DLTOOL_SECRET_KEY` (the at-rest encryption key behind every `*_enc` column) and `ARIA2_RPC_SECRET` — no session or CSRF keys exist. |
+| 2026-09-01 | Review pass: the never-logged table names `secrets.env` as an at-rest home of the aria2 secret, so an inventory or scrub does not miss the stale copy. |
+| 2026-09-01 | Resolved the backup-naming open question: the §13 example in [`05-api-contract.md`](05-api-contract.md) was corrected to the `dl-tool.db.<UTC>.bak` form used here and in [`04-data-model.md`](04-data-model.md) §6. |
