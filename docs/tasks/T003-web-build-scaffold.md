@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T003 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T001 |
 | **Blocks** | T013, T039, T124 |
 | **Parallel-safe** | yes — touches only `web/` |
@@ -147,7 +147,74 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Clean verification on this host:
+
+```text
+$ cd web && npm ci && cd .. && make typecheck && make test-web && echo WEB_SCAFFOLD_OK
+
+added 160 packages, and audited 161 packages in 2s
+
+48 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+Startup Error
+Error: Cannot find native binding. npm has a bug related to optional dependencies
+Cannot find module '@rolldown/binding-wasm32-wasi'
+make: *** [Makefile:44: test-web] Error 1
+```
+
+The host's npm selects `@rolldown/binding-linux-x64-musl`, but its Node 22.23.2
+runtime reports glibc 2.36 and Rolldown requests the GNU binding. After installing
+that binding without saving it, the remaining command produced:
+
+```text
+$ make typecheck && make test-web && echo WEB_SCAFFOLD_OK
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/fragile-wolverine/web
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  13:43:39
+   Duration  595ms (transform 53ms, setup 0ms, import 212ms, tests 21ms, environment 227ms)
+
+WEB_SCAFFOLD_OK
+```
+
+The build, asset, lint, and format checks produced:
+
+```text
+vite v8.2.2 building client environment for production...
+✓ 14 modules transformed.
+dist/index.html                  0.31 kB │ gzip:  0.22 kB
+dist/assets/index-Vp0XYip_.js  190.42 kB │ gzip: 59.95 kB
+✓ built in 144ms
+src="./assets/index-Vp0XYip_.js"
+
+> lint
+> eslint .
+
+Checking formatting...
+All matched files use Prettier code style!
+```
+
+Scope confirmation:
+
+```text
+web/eslint.config.js
+web/index.html
+web/package-lock.json
+web/package.json
+web/src/main.test.ts
+web/src/main.tsx
+web/tsconfig.json
+web/vite.config.ts
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
