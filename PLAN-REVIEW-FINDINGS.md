@@ -2,25 +2,25 @@
 
 Companion to [`PLAN-REVIEW.md`](PLAN-REVIEW.md), which explains the method and the patterns behind these findings.
 
-**574 findings after de-duplication** — critical 23, high 106, medium 271, low 174.
+**640 findings after de-duplication** — critical 25, high 110, medium 314, low 191.
 Every critical and high finding was put through an independent adversarial verification pass whose
 instruction was to refute it; 26 findings were refuted there and are not listed. Medium and low findings
 were not verified individually and are listed in summary form in [part 2](#part-2--medium-and-low-findings).
 
 | Area | Critical | High | Medium | Low | Total |
 |---|---:|---:|---:|---:|---:|
-| M0 — foundations, CI, config, store, auth, image, compose | 11 | 32 | 71 | 47 | 161 |
-| M1 — task core and the aria2 engine | 7 | 33 | 55 | 24 | 119 |
-| M2 — BitTorrent via qBittorrent | 0 | 12 | 28 | 16 | 56 |
-| M3 — web UI | 1 | 10 | 41 | 15 | 67 |
-| M4 — search | 2 | 3 | 17 | 31 | 53 |
+| M0 — foundations, CI, config, store, auth, image, compose | 12 | 34 | 87 | 61 | 194 |
+| M1 — task core and the aria2 engine | 7 | 33 | 58 | 24 | 122 |
+| M2 — BitTorrent via qBittorrent | 0 | 12 | 29 | 16 | 57 |
+| M3 — web UI | 1 | 10 | 43 | 16 | 70 |
+| M4 — search | 2 | 3 | 18 | 31 | 54 |
 | M5 — RSS | 1 | 8 | 23 | 14 | 46 |
-| M6 — post-processing, scheduling, multi-user | 1 | 5 | 27 | 14 | 47 |
-| M7 — media downloads, packaging, release | 0 | 3 | 8 | 10 | 21 |
+| M6 — post-processing, scheduling, multi-user | 2 | 6 | 35 | 14 | 57 |
+| M7 — media downloads, packaging, release | 0 | 4 | 20 | 12 | 36 |
 | API contract | 0 | 0 | 1 | 1 | 2 |
 | Security and threat model | 0 | 0 | 0 | 1 | 1 |
 | Requirements and scope | 0 | 0 | 0 | 1 | 1 |
-| **Total** | **23** | **106** | **271** | **174** | **574** |
+| **Total** | **25** | **110** | **314** | **191** | **640** |
 
 ---
 
@@ -118,6 +118,14 @@ Each was confirmed by a verifier that re-opened the cited lines.
 - **Evidence:** T066 Files table: `internal/rss/poll.go` (create), `internal/rss/poll_test.go` (create), `internal/jobs/cron.go` (create), `internal/api/feeds.go` (edit) — "No other file may be modified." T066:81 "PollDue is the jobs.Handler body for kind \"rss_poll\""; T066:132 "Create `internal/jobs/cron.go` with `NewScheduler(db, log)`, `Start(ctx)`". T012:35 "`cmd/dl-tool/main.go` | edit | Start the pool in `OnStart`, drain it in `OnStop`."; T012:125 "Edit `cmd/dl-tool/main.go` to build the worker with size 2". T081:107 "do not edit `cmd/dl-tool/main.go` in this task, because T066's `Start(ctx)` already owns that call site."
 - **Impact:** Nothing T066 may edit can call `Worker.Register("rss_poll", poller.PollDue)`, construct the `Poller` with the guarded client from `internal/secure`, or call `NewScheduler(...).Start(ctx)`. The cron entry and the handler are dead code, feeds are never polled on schedule, and T081/T083/T091 later extend a `Scheduler` that was never started. The M5 exit checkpoint ("A rule auto-downloads a release feed") is unreachable without manual refreshes.
 - **Suggested fix:** Add `cmd/dl-tool/main.go` (edit) and `internal/api/server.go` (edit) to T066's Files table with steps that: pass the `secure.NewClient` handle from server.go into `NewFeedHandlers`/`rss.NewPoller`; build `rss.NewParser`; register `rss_poll` on T012's worker; and call `jobs.NewScheduler(...).Start(ctx)` in `OnStart` and stop it in `OnStop`. Update T066's Parallel-safe note to name the two shared files.
+
+#### F602 · CRITICAL · The Host allowlist has no configuration source anywhere in the plan, so every proxied hostname gets 421
+
+- **Where:** `docs/tasks/T095-proxy-hardening-and-headers.md:60`, `docs/tasks/T095-proxy-hardening-and-headers.md:61`, `docs/tasks/T095-proxy-hardening-and-headers.md:31`, `docs/12-security-and-threat-model.md:516`, `docs/tasks/T005-config-loader-and-secrets.md:60`
+- **Kind:** executability · **Status:** confirmed
+- **Evidence:** T095: `// Additionally allowed: every name in extra.` / `func HostAllowlist(extra []string, log *slog.Logger) func(http.Handler) http.Handler`. Doc 12 §6.5 says `Additionally allowed | the names the operator configures`. But `grep -rn 'ALLOWED_HOSTS' docs/` finds nothing, doc 11 §2 has no such variable, and T005's `type Config struct` (the authoritative field list) has no allowed-hosts field. T095's Files table is `internal/api/security.go`, `internal/api/security_test.go`, `deploy/caddy/Caddyfile.example`, `deploy/traefik/labels.md`, `internal/api/server.go` — it may not touch internal/config or doc 11.
+- **Impact:** `extra` is always empty, so `AllowedHost` accepts only `localhost` and literal IPs. Every deployment behind the very Caddy/Traefik snippets this task ships (a real hostname such as dl.example.com) answers 421 Misdirected Request for every request, and the allowlist is documented as having no off switch. The task cannot fix it inside its own Files table.
+- **Suggested fix:** Define the setting before T095 runs: add `DLTOOL_ALLOWED_HOSTS` (comma-separated names, empty default) to doc 11 §2 with a matching malformed-value row in §8, add `AllowedHosts []string` to T005's `Config` struct and its env reader, then either add `internal/config/config.go` to T095's Files table or make T095 depend on the task that adds it, and have T095 step 7 pass `cfg.AllowedHosts` into `HostAllowlist`. Also add the variable to the `.env.example`/compose environment block in doc 10 so the shipped proxy snippets work out of the box, and add a T095 test asserting a configured name passes.
 
 #### F027 · HIGH · T026 requires a WebSocket client but no WebSocket library is pinned and no ADR allows one
 
@@ -374,6 +382,22 @@ Each was confirmed by a verifier that re-opened the cited lines.
 - **Evidence:** doc 10 line 406 / T124 line 67: "RUN apk add --no-cache su-exec ca-certificates tzdata 7zip nodejs". T093 step 7: "Leave every line T124 wrote that this contract does not name — the `apk add` set ... byte for byte unchanged." doc 06 line 1035 discusses only the JS runtime as "required for full YouTube support". A grep of the whole plan for ffmpeg/ffprobe returns nothing.
 - **Impact:** yt-dlp's README lists ffmpeg/ffprobe as required for merging separate video and audio streams and for most post-processing. Without ffmpeg yt-dlp's default format selector degrades to best/bestvideo+bestaudio (single pre-merged file), which on YouTube means at most 720p progressive; DASH-only and many HLS sources fail outright, and any postprocess: progress or remux step never exists. The media lane therefore under-delivers Download Station parity while every task's acceptance criteria still pass, because nothing in T087-T113 exercises a merged format.
 - **Suggested fix:** Add `ffmpeg` to the runtime `apk add` line in doc 10 §5 and T124 (and name it in T093 step 7 so the frozen set includes it), record the new runtime dependency in an ADR line per AGENTS rule 3 (it is a ~70 MB image cost), extend T113's boot capability probe to run `ffmpeg -version` and surface it in `GET /system/info` beside the yt-dlp and JS-runtime versions, and add a T090 contract subtest that completes a `bv*+ba` fixture. If ffmpeg is deliberately excluded, doc 06 §7 must state the pre-merged-format ceiling and the argv must pass an explicit `-f b` so the fallback is intentional.
+
+#### F601 · HIGH · No task defines the store.Store type that T091 and T092 hang every method on
+
+- **Where:** `docs/tasks/T091-database-backup-and-retention.md:61`, `docs/tasks/T092-settings-and-system-info.md:67`, `docs/tasks/T006-sqlite-store-and-initial-migration.md:58`, `docs/tasks/T017-task-store-and-state-machine.md:92`, `docs/tasks/T007-http-server-and-openapi.md:55`, `docs/tasks/T091-database-backup-and-retention.md:109`
+- **Kind:** executability · **Status:** confirmed (severity or scope adjusted)
+- **Evidence:** T091: `func (s *Store) BackupInto(ctx context.Context, dir string) (BackupResult, error)` and four more `func (s *Store) Prune…` methods. T092: `func (s *Store) GetSettings(ctx context.Context) (Settings, error)`. Its dependency T006 creates only `func Open(ctx context.Context, dbPath, backupDir string) (*sqlx.DB, error)`; T017 creates a differently named type: `type TaskStore struct{ db *sqlx.DB }` / `func NewTaskStore(db *sqlx.DB) *TaskStore`. `grep -rn 'type Store struct' docs/` returns nothing anywhere in the plan. T091 step 6 then says `Create internal/api/system.go with SystemHandlers, its constructor taking the store and the config directory`, while the only server constructor is `func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, error)` — it receives a `*sqlx.DB`, never a store.
+- **Impact:** The two M6/M7 tasks in this batch cannot compile: the receiver type, its fields and its constructor do not exist and neither Files table contains a file where they could be declared without colliding with whatever T027 (which first uses `*Store` in internal/store/settings.go) invented. The api layer additionally has no defined way to obtain a store value, so `SystemHandlers` cannot be constructed inside server.go.
+- **Suggested fix:** Adopt the finding's fix: declare `type Store struct{ db *sqlx.DB }` and `func NewStore(db *sqlx.DB) *Store` in T006's interface contract (it already owns `internal/store/db.go`), state there that every later `internal/store/*.go` file hangs its queries on that receiver, and reconcile T017's `TaskStore` (either fold it in or say explicitly that it is a separate type). Then change T007's `NewServer` signature to take a `*store.Store` (or to call `store.NewStore(db)`) so the `SettingsHandlers`/`SystemHandlers` constructors named in T027, T091 and T092 have a value to receive.
+
+#### F647 · HIGH · `go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)` is the v1-only module path, so `make setup` fails for any current pin
+
+- **Where:** `docs/13-testing-and-verification.md:56`, `docs/tasks/T001-makefile-and-doclint.md:47`, `docs/tasks/T001-makefile-and-doclint.md:97`
+- **Kind:** technical-inaccuracy · **Status:** confirmed
+- **Evidence:** Doc 13 §2 setup: "$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)" with "GOLANGCI_LINT_VERSION ?= PINME # pin at implementation time; make setup fails until it is set". T001 acceptance: "`GOLANGCI_LINT_VERSION` and `LYCHEE_VERSION` both hold a real version string, not `PINME`."
+- **Impact:** golangci-lint v2 (the current major since 2025) is module `github.com/golangci/golangci-lint/v2`; its binary package is `github.com/golangci/golangci-lint/v2/cmd/golangci-lint`. An agent pinning any v2.x version gets "module ... found, but does not contain package .../cmd/golangci-lint" and `make setup` fails, which fails every CI job (T002 runs `make setup` first in each job). The task gives no guidance to pin the abandoned v1 line instead.
+- **Suggested fix:** Change docs/13-testing-and-verification.md:56 to `$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)` and change the comment at :48 to state that the pin must be a v2.x tag (v1.64.8 is the final v1 release, predates Go 1.26 and cannot type-check a Go 1.26 module). T001 copies the head verbatim, so no separate T001 edit is needed beyond re-reading doc 13 §2. No `.golangci.yml` exists anywhere in the plan (T123:169 forbids one), so v2's `version: "2"` config requirement does not apply — defaults are used.
 
 
 ### M1 — task core and the aria2 engine
@@ -1017,6 +1041,14 @@ Each was confirmed by a verifier that re-opened the cited lines.
 - **Impact:** Both files live in package engine. T098 is done (M1) before T079 starts, so T079 cannot compile as written; hard rule 1 forbids T079 from editing admission.go, so a literal implementer must stop under ## Blocked. T081, T082 and T110 all build on T079's Limits.
 - **Suggested fix:** Rename one type before implementation and update every reference: keep `Limits` for admission (T098) and use `RateLimits{Down, Up}` in T079, T081, T082 and T110 (or rename T098's to `AdmissionLimits` and touch T098/T099 instead). Whichever is chosen, edit the interface contracts of all affected task files in the same pass so no task file still shows two `type Limits` in package engine.
 
+#### F624 · CRITICAL · notification_channels has no last_send_at / last_error columns, yet the API object, T106, T120 and T077 all require them and no task adds a migration
+
+- **Where:** `docs/04-data-model.md:201`, `docs/05-api-contract.md:1319`, `docs/tasks/T106-notification-channel-endpoints.md:54`, `docs/tasks/T120-users-auth-and-notifications-settings.md:120`, `docs/tasks/T077-notification-delivery.md:33`
+- **Kind:** contradiction · **Status:** confirmed
+- **Evidence:** docs/04-data-model.md:201 DDL, complete column list: "CREATE TABLE notification_channels (\n id TEXT PRIMARY KEY,\n kind TEXT NOT NULL CHECK (kind IN ('webhook','ntfy','gotify','apprise')),\n name TEXT NOT NULL UNIQUE,\n enabled INTEGER NOT NULL DEFAULT 1 ...,\n config_json TEXT NOT NULL, ...\n secret_enc TEXT, ...\n event_mask TEXT NOT NULL DEFAULT '[\"*\"]', ...\n created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);" — there is no last_send_at and no last_error column. docs/05-api-contract.md:1319 returns "\"last_send_at\":\"2026-09-01T09:30:00Z\",\"last_error\":null". T106:54-55 declares "LastSendAt *time.Time `json:\"last_send_at\"`" and "LastError *string `json:\"last_error\"`". T120:120-121 declares the same two members. T077:33 adds "TouchNotificationChannel" and T077 step: "a blocked target returns `RawReply` with `Error` set and writes `last_error` on the channel".
+- **Impact:** T106's list/get queries select two columns that do not exist; every /notifications read fails at runtime, and T077's TouchNotificationChannel cannot be written. Neither T106 nor T077 lists a migration file in its Files table, and doc 14 §8.3 requires a migration plus a doc 04 DDL update in the same commit, so the implementing agent is blocked by hard rule 1.
+- **Suggested fix:** Add 'last_send_at INTEGER' and 'last_error TEXT' to the notification_channels DDL in docs/04-data-model.md §3.2 (all tasks are still 'todo' and T006 transcribes §3 into 00001_init.sql, so no second migration is needed), or delete both members from doc 05 §14's example, T106's ChannelView and T120's ChannelRow and drop the last_error write from T077 step 4. Record the choice in doc 04 §3.2, which owns the DDL.
+
 #### F088 · HIGH · doc 10 §3.5 (T076's cited context) prescribes a different move helper than T076's contract: umask-masked modes vs hard-coded 0644/0755, dst.part+fsync vs staging-dir+size-verify, and `error` vs `paused` on failure
 
 - **Where:** `docs/10-deployment-and-compose.md:276`, `docs/10-deployment-and-compose.md:281`, `docs/10-deployment-and-compose.md:286`, `docs/10-deployment-and-compose.md:287`, `docs/tasks/T076-exdev-aware-move.md:23`, `docs/tasks/T076-exdev-aware-move.md:53`, `docs/tasks/T076-exdev-aware-move.md:54`, `docs/tasks/T076-exdev-aware-move.md:83`
@@ -1057,6 +1089,14 @@ Each was confirmed by a verifier that re-opened the cited lines.
 - **Impact:** 7-Zip's exit codes are 0 OK, 1 warning, 2 fatal error, 7 command-line error, 8 out of memory, 255 user break; 'Wrong password' and 'Data Error' / 'Can not open the file as archive' all end in 2 (fatal). An implementer following T075 cannot make `TestExhaustedListSetsWrongPassword` and `TestTruncatedArchiveIsInvalid` both pass; whichever mapping they choose, one class of failure gets the wrong error_code and the candidate loop either aborts early or wastes every candidate on a corrupt file.
 - **Suggested fix:** Specify stderr-based discrimination in T075: capture the child's stderr and classify exit 2 as ErrWrongPassword when it contains `Wrong password` (7-Zip prints `ERROR: Wrong password : <name>`, or for formats without a password check `Data Error in encrypted file. Wrong password?`), and ErrInvalidArchive otherwise (`Can not open the file as archive`, `Unexpected end of archive`, `Data Error`). Optionally add the cheaper pre-check: pass 1 already runs `7zz l -slt`, so read `Encrypted = +` and run `7zz t -p<candidate> -y <archive>` per candidate before pass 2. Keep the rule that no candidate ever reaches a log line.
 
+#### F625 · HIGH · T086's orderCandidates operates on []store.Task, but T098's admitter works on []engine.Candidate, which carries no added_at; and nothing plumbs process_order into the Admitter
+
+- **Where:** `docs/tasks/T086-users-and-default-destinations.md:97`, `docs/tasks/T086-users-and-default-destinations.md:105`, `docs/tasks/T086-users-and-default-destinations.md:124`, `docs/tasks/T098-concurrency-limiter.md:66`, `docs/tasks/T098-concurrency-limiter.md:74`
+- **Kind:** executability · **Status:** confirmed (severity or scope adjusted)
+- **Evidence:** T086:105 "func orderCandidates(in []store.Task, order ProcessOrder) []store.Task" with T086:97-103 "OrderByDateCreated → added_at ascending / OrderByUserRoundRobin → one task per owner in added_at order ... ties broken by added_at". T098:66-67 "// SelectQueuedCandidates returns queued tasks in process_order, oldest added_at first.\n\tSelectQueuedCandidates(ctx context.Context, limit int) ([]Candidate, error)" and T098:74 "type Candidate struct {\n\tID string\n\tOwnerID string\n\tEngine string\n\tEngineRef *string\n}". T098 step 2: "Add `SelectQueuedCandidates` ordered by `added_at ASC, id ASC`". T086 step 7: "Edit `internal/engine/admission.go` to read `process_order` and apply `orderCandidates` before the limit checks".
+- **Impact:** The type the admitter actually holds is engine.Candidate, not store.Task, so orderCandidates as specified does not compile against T098's code; engine.Candidate has no added_at field, so neither documented ordering rule is computable; and Admitter.Pass(ctx, Limits) receives only the three max_active_* values, so admission.go has no way to read the process_order setting (Limits has no member for it and package engine has no settings access). T098 also already claims the ordering lives in the store's SQL, so two tasks own the same fact.
+- **Suggested fix:** In T086 restate the helper as 'func orderCandidates(in []Candidate, order ProcessOrder) []Candidate' operating on the already added_at-ordered slice, add a 'ProcessOrder ProcessOrder' field to engine.Limits (declared in admission.go, which T086 may modify) and say explicitly that the load func passed to Admitter.Run reads the process_order setting — naming the task that owns that wiring, since no task currently calls NewAdmitter/Run. Alternatively move the ordering into SelectQueuedCandidates, delete orderCandidates and add internal/store/tasks.go to T086's Files table; either way fix T098's AdmissionStore comment so only one document owns the ordering.
+
 
 ### M7 — media downloads, packaging, release
 
@@ -1083,6 +1123,14 @@ Each was confirmed by a verifier that re-opened the cited lines.
 - **Evidence:** Doc 10:154-156: "# Liveness only: proves the JSON-RPC listener answers HTTP. It carries no token on purpose … test: [\"CMD-SHELL\", \"curl -fsS -X POST -d '{…\\\"method\\\":\\\"aria2.getVersion\\\",\\\"params\\\":[]}' http://127.0.0.1:6800/jsonrpc >/dev/null\"]". T115:99-100: "`curl` is present only so the compose healthcheck can post `aria2.getVersion`". aria2 1.37.0 `HttpServerBodyCommand::sendJsonRpcResponse`: "case 1: // error caught while executing RpcMethod\n httpCode = 400;" — the `Unauthorized` failure is a code-1 error, and `aria2.getVersion` requires the token (only `system.listMethods`/`system.listNotifications` are exempt, doc 06:523).
 - **Impact:** With `-f`, curl exits 22 on the 400, so the `aria2` service is reported `unhealthy` forever on every deployment, and T115 step 9's expectation that an unauthenticated call is "answered at the transport level" is misleading. Any later `depends_on: condition: service_healthy` (e.g. the VPN override pattern in §8.1) would never start.
 - **Suggested fix:** Change the doc 10 §3 healthcheck body to a method that is exempt from the token - `{"jsonrpc":"2.0","id":"hc","method":"system.listMethods"}` returns HTTP 200 unauthenticated - keeping `curl -fsS`; alternatively keep `getVersion` and pass `"params":["token:$ARIA2_RPC_SECRET"]` (CMD-SHELL already allows the interpolation). Reword T115 step 9 and its acceptance criterion to assert HTTP 200 from the chosen probe and a `{"code":1,"message":"Unauthorized"}` body for a token-requiring method, and add a `docker inspect --format '{{.State.Health.Status}}' aria2` check to T115's verification.
+
+#### F603 · HIGH · T087's Proc exposes neither the stdout reader nor the stderr buffer, so T090 cannot read progress or classify the exit
+
+- **Where:** `docs/tasks/T087-ytdlp-subprocess-runner.md:70`, `docs/tasks/T087-ytdlp-subprocess-runner.md:91`, `docs/tasks/T087-ytdlp-subprocess-runner.md:136`, `docs/tasks/T090-ytdlp-engine-registration.md:118`, `docs/tasks/T089-ytdlp-progress-and-exit-codes.md:104`
+- **Kind:** executability · **Status:** confirmed
+- **Evidence:** T087: `// Spawn starts one process … Stdout is returned as a line reader for T089; stderr is captured into a bounded buffer.` — but the returned struct is `type Proc struct { ID string; Cmd *exec.Cmd; SaveDir string; InfoPath string; StartedAt time.Time; cancel context.CancelFunc }` and step 5 says `attach a StdoutPipe and a bounded stderr buffer of 64 KiB`, storing neither. T090 step 3: `start one goroutine that runs ScanProgress over stdout into e.events and calls ClassifyExit when the process exits`, where `ScanProgress(taskID string, r io.Reader)` and `ClassifyExit(exitCode int, stderrTail string)` both need those handles.
+- **Impact:** The pipe was already consumed inside Spawn (a second `Cmd.StdoutPipe()` returns an error), and the stderr buffer is unreachable, so T090 cannot implement its central event loop. T090's Files table does not include `runner.go`, so it may not add the fields; hard rule 1 forces it to stop.
+- **Suggested fix:** In T087's interface contract add `Stdout io.ReadCloser` and either `Stderr *bytes.Buffer` or a `func (p *Proc) StderrTail() string` accessor to `Proc`, and amend step 5 to say Spawn records both on the returned `Proc` (the 64 KiB bound kept on the stderr writer). No change is needed in T090 once the handles exist.
 
 
 ---
@@ -1168,6 +1216,22 @@ to check rather than an established defect.
 | F407 | M | `docs/12-security-and-threat-model.md:398`, `docs/02-requirements.md:1125` | NFR-019 and doc 12 require validation against a bundled JSON Schema; T056 builds none and no schema library is pinned |
 | F416 | M | `docs/13-testing-and-verification.md:166`, `docs/13-testing-and-verification.md:187` | Three different subtest lists and two different undeclared-capability behaviours for the same contract suite |
 | F423 | M | `docs/tasks/T028-engine-contract-test-suite.md:55`, `docs/tasks/T028-engine-contract-test-suite.md:76` | T028's contract fixture serves 8 MiB of random bytes; yt-dlp's generic extractor rejects a non-media URL, so T090's AddURL subtest cannot reach downloading and T090 may not edit the suite |
+| F606 | M | `docs/13-testing-and-verification.md:82`, `docs/13-testing-and-verification.md:137` | make test never prints Go test names, so no Verification block's expected output — nor DoD rule 4 — can be satisfied |
+| F610 | M | `docs/tasks/T087-ytdlp-subprocess-runner.md:88`, `docs/tasks/T087-ytdlp-subprocess-runner.md:132` | T087's New cannot report the archive-directory failure its own step 4 requires |
+| F612 | M | `docs/13-testing-and-verification.md:167`, `docs/13-testing-and-verification.md:187` | The contract suite has four subtests in doc 13 and five in T028, and T090 is told to skip a subtest that does not exist |
+| F620 | M | `docs/tasks/00-task-index.md:208`, `docs/tasks/T097-release-pipeline-and-pin-bump.md:159` | M7's exit checkpoint (image published and signed) is proved by no task's verification |
+| F630 | M | `docs/tasks/T084-api-tokens-and-admin-guard.md:86`, `docs/tasks/T086-users-and-default-destinations.md:83` | No task creates the UserStore and SettingsStore receiver types the M6 tasks hang their queries on; the same files already use two other access styles |
+| F645 | M | `AGENTS.md:47`, `AGENTS.md:58` | Every task must edit two files under docs/ that no Files table lists, while hard rule 1 and T001 forbid it |
+| F646 | M | `docs/13-testing-and-verification.md:131`, `docs/13-testing-and-verification.md:134` | Definition of Done items 1-4 are unsatisfiable for the first tasks (T001-T004); T001 admits it and doc 13 allows no exception |
+| F649 | M | `docs/tasks/T002-ci-workflows-and-openapi-gate.md:93`, `docs/tasks/T002-ci-workflows-and-openapi-gate.md:97` | T002 makes every CI job run `make setup`, which cannot succeed until T003 and T004 land — the guard pattern covers only two jobs |
+| F650 | M | `AGENTS.md:22`, `docs/00-INDEX.md:48` | 39 task files direct the agent to read another task file, which AGENTS.md and 00-INDEX flatly forbid |
+| F651 | M | `docs/tasks/00-task-index.md:54`, `docs/tasks/00-task-index.md:262` | Each task's status lives in three places but the Definition of Done updates only one |
+| F652 | M | `docs/tasks/00-task-index.md:20`, `docs/14-conventions.md:222` | `Parallel-safe: yes` is unachievable: every task's commit must edit the shared task index (twice) |
+| F653 | M | `AGENTS.md:52`, `docs/14-conventions.md:231` | Hard rule 3 (no dependency without an ADR) is violated by the plan's own dependency lists, and no task can create an ADR |
+| F654 | M | `docs/13-testing-and-verification.md:344`, `docs/13-testing-and-verification.md:352` | doclint fails the moment a task records an ambiguity the way the plan tells it to |
+| F655 | M | `docs/14-conventions.md:113`, `docs/tasks/T123-ssrf-guarded-http-client.md:169` | doc 14 promises that a missing doc comment fails `make lint`, but no task ever creates a golangci-lint configuration and T123 forbids one |
+| F656 | M | `docs/tasks/T004-go-module-and-entrypoint.md:90`, `docs/tasks/T004-go-module-and-entrypoint.md:105` | T004's entrypoint requires importing cobra, a direct dependency that is in neither of its two dependency lists |
+| F659 | M | `docs/14-conventions.md:291`, `docs/11-config-reference.md:82` | Open question about the `js_runtime_missing` event code blocks T113, which is not marked blocked |
 | F055 | L | `docs/tasks/T019-aria2-adapter.md:158`, `docs/tasks/T019-aria2-adapter.md:34` | T019's Verification requires `TestRegistry` in package engine but its Files table has no test file for that package |
 | F429 | L | `docs/decisions/0003-chi-huma-code-first-openapi.md:67`, `docs/13-testing-and-verification.md:267` | ADR-0003 names the drift CI job `openapi-drift`; doc 13, T002 and T014 name it `gen-drift` |
 | F430 | L | `docs/decisions/0006-sse-with-rid-deltas.md:69`, `docs/decisions/0006-sse-with-rid-deltas.md:71` | ADR-0006's confirmation names tests (`TestRingReplayFromLastEventID`, `TestSyncEndpointMatchesSSEEnvelope`) that no task creates |
@@ -1215,6 +1279,20 @@ to check rather than an established defect.
 | F572 | L | `docs/13-testing-and-verification.md:199`, `docs/13-testing-and-verification.md:198` | T030's captured fixture cannot satisfy 13 §5: the sibling testdata/README.md and the .golden.json are required but absent from T030's Files table, so DoD rule 8 and the fixture policy … |
 | F574 | L | `docs/06-download-engines.md:1199`, `docs/tasks/T028-engine-contract-test-suite.md:128` | 06 §11 lists StateNormalisationCoversEveryEngineState inside RunContract and names fixtures (qb_info, qb_maindata_delta, qb_files) that no task creates; T028/13 §4 define a different … |
 | F579 | L | `docs/tasks/T061-async-search-jobs.md:141`, `docs/tasks/T012-job-worker-pool.md:58` | T061 says `max_attempts` for kind `search` is 1, but `EnqueueJob` has no way to set it (DDL default 5) |
+| F622 | L | `docs/tasks/T097-release-pipeline-and-pin-bump.md:108`, `docs/tasks/00-task-index.md:25` | T097's release checklist uses a task status (dropped) the task index does not define |
+| F640 | L | `docs/tasks/T106-notification-channel-endpoints.md:148`, `docs/tasks/T053-settings-screens.md:54` | T106 names T053 as the owner of the notifications settings UI; T120 owns it |
+| F641 | L | `docs/tasks/T121-advanced-settings-and-log-viewer.md:36`, `docs/tasks/T121-advanced-settings-and-log-viewer.md:46` | T121 puts two exported components in one file and files a top-level route screen under components/Settings/ |
+| F642 | L | `docs/tasks/T084-api-tokens-and-admin-guard.md:14`, `docs/tasks/T085-ownership-filtering-and-quotas.md:14` | Est. size counts only newly created files, so five-file tasks read as two-file tasks and the plan-mode threshold cannot be applied |
+| F644 | L | `docs/12-security-and-threat-model.md:447`, `docs/tasks/T086-users-and-default-destinations.md:22` | No task rotates the session id on a privilege change, which doc 12 §6.1 requires and only T086 can trigger |
+| F660 | L | `docs/tasks/T001-makefile-and-doclint.md:107`, `docs/tasks/T004-go-module-and-entrypoint.md:129` | The scope-check expectation "in that order" cannot be met: the command sorts, the Files table does not |
+| F661 | L | `AGENTS.md:40`, `docs/13-testing-and-verification.md:120` | `make ci` does not run everything CI runs |
+| F662 | L | `docs/13-testing-and-verification.md:270`, `docs/tasks/T002-ci-workflows-and-openapi-gate.md:76` | docs-lint job installs lychee with an undefined shell variable in doc 13 §7 |
+| F663 | L | `docs/13-testing-and-verification.md:66`, `docs/tasks/T003-web-build-scaffold.md:36` | `npx prettier --check .` in web/ has no ignore file, so `make lint` breaks after any local build or E2E run |
+| F664 | L | `docs/00-INDEX.md:3`, `docs/13-testing-and-verification.md:3` | Plan documents are marked `Status: draft` while AGENTS.md and T001 treat them as finished and authoritative |
+| F665 | L | `docs/13-testing-and-verification.md:6`, `docs/14-conventions.md:6` | Stale reading-scope headers: doc 13 and doc 14 claim to cover tasks T001-T115, but the roster ends at T125 |
+| F666 | L | `docs/14-conventions.md:29`, `docs/decisions/0016-relicense-to-apache-2.md` | `NOTICE` is in the mandated repository layout but no task creates it, and rule 1 prevents adding it later |
+| F667 | L | `CONTRIBUTING.md:50`, `AGENTS.md:7` | CONTRIBUTING.md asks contributors not to contribute until the licence question is settled, contradicting the whole task programme |
+| F668 | L | `docs/tasks/T003-web-build-scaffold.md:57`, `docs/tasks/T003-web-build-scaffold.md:64` | `web/package.json` ships wildcard versions, contradicting the "every package pinned to the exact version string" rule |
 
 ### M1 — task core and the aria2 engine
 
@@ -1275,6 +1353,9 @@ to check rather than an established defect.
 | F419 | M | `docs/tasks/T019-aria2-adapter.md:132`, `docs/tasks/T019-aria2-adapter.md:148` | aria2 returns error code 1 for every failure; T019/T028 need the message strings to map ErrNotFound, and 'cannot be paused now' is not a not-found signal |
 | F425 | M | `docs/tasks/T090-ytdlp-engine-registration.md:116`, `docs/tasks/T090-ytdlp-engine-registration.md:163` | T090's Health has no defined implementation: it must report a missing binary before T113 adds the only probe, which T090 is forbidden to write |
 | F427 | M | `docs/10-deployment-and-compose.md:35`, `docs/10-deployment-and-compose.md:619` | The vpn profile tunnels aria2 and qBittorrent but not yt-dlp, which runs inside dl-tool; the plan never says so and T087's scrubbed environment removes the only workaround |
+| F608 | M | `docs/tasks/T088-ytdlp-extractor-cache.md:30`, `docs/tasks/T088-ytdlp-extractor-cache.md:113` | T088 must add a router test but its Files table lists no router test file |
+| F626 | M | `docs/tasks/T085-ownership-filtering-and-quotas.md:31`, `docs/tasks/T085-ownership-filtering-and-quotas.md:92` | T085 cannot apply the owner predicate to the events, files, trackers and peers endpoints: those files are not in its Files table |
+| F632 | M | `docs/05-api-contract.md:503`, `docs/04-data-model.md:303` | The task.data_deleted audit row is destroyed by the same request that writes it: task_events cascades on tasks delete |
 | F431 | L | `docs/05-api-contract.md:690`, `docs/tasks/T025-rid-deltas-over-sse.md:108` | doc 05 names a `send.Comment("hb")` helper for the SSE heartbeat; Huma's sse Sender is known to expose `Data`, with comments sent via `Message{Comment: ...}` |
 | F432 | L | `docs/tasks/T024-task-event-log.md:115`, `docs/tasks/T024-task-event-log.md:34` | T024 instructs editing web/src/locales/en/tasks.json, which is outside its Files table, and its constant list omits the codes T022 already emits |
 | F433 | L | `docs/05-api-contract.md:397`, `docs/tasks/T015-normalise-submitted-uris.md:91` | doc 05's ed2k rejection example says `ed2k links are not supported in v1`; T015 and T020 assert the exact message `ed2k is not supported in v1` |
@@ -1332,6 +1413,7 @@ to check rather than an established defect.
 | F422 | M | `docs/06-download-engines.md:1009`, `docs/tasks/T089-ytdlp-progress-and-exit-codes.md:102` | yt-dlp exit-code mapping raises private_video, but doc 04 section 4.2 states dl-tool never raises private_video |
 | F424 | M | `docs/tasks/T087-ytdlp-subprocess-runner.md:139`, `docs/tasks/T087-ytdlp-subprocess-runner.md:98` | Cancel's 10 s grace implies a catchable signal, but yt-dlp exits 1 on SIGINT/SIGTERM interruption, which ClassifyExit maps to error instead of paused; only SIGKILL yields the -1 the plan … |
 | F426 | M | `docs/tasks/T089-ytdlp-progress-and-exit-codes.md:79`, `docs/tasks/T089-ytdlp-progress-and-exit-codes.md:127` | Info.Timestamp (the video's upload time) is written into TaskInfo.CreatedAt, which every other adapter fills with the task's add time |
+| F609 | M | `docs/tasks/T090-ytdlp-engine-registration.md:55`, `docs/tasks/T090-ytdlp-engine-registration.md:124` | T090's Engine struct stores no AddRequest or output template, so Resume and Rename cannot be implemented |
 | F466 | L | `docs/06-download-engines.md:1081`, `docs/tasks/T101-engine-conformance-at-boot.md:16` | 06 §9 and T101's Goal put the conformance probe inside the adapter's Connect(), but T101's steps run it from internal/api/settings.go at NewServer time and client.go is outside its Files |
 | F467 | L | `docs/tasks/T036-share-limits-and-mutators.md:100`, `docs/06-download-engines.md:182` | T036 routes PATCH fields to SetTags and SetSequential, which are not Engine methods, and declares no optional interface through which the handler could reach them |
 | F468 | L | `docs/tasks/T029-qbittorrent-session-and-add.md:176`, `docs/tasks/T029-qbittorrent-session-and-add.md:181` | T029 acceptance criterion 6 (Registry.Get after NewServer) has no test in the Files table and cannot be exercised by its Verification command |
@@ -1394,6 +1476,8 @@ to check rather than an established defect.
 | F377 | M | `docs/tasks/T072-rss-feeds-screen.md:93`, `docs/09-web-ui-spec.md:618` | 'Edit URL…' context-menu action has no backend: `PATCH /feeds/{id}` does not accept `url` |
 | F379 | M | `docs/09-web-ui-spec.md:642`, `docs/09-web-ui-spec.md:652` | Rule editor's mandatory **Tags** control has no rule-document member and `GrabRequest` carries no tags |
 | F389 | M | `docs/tasks/T047-mkdir-free-space-and-folder-browser.md:78`, `docs/12-security-and-threat-model.md:243` | T047 calls `SafeJoin(resolvedPath, []string{name})`, breaking §3.3 rule 1, and its 422 rule contradicts what SafeJoin does with `/` and `..` |
+| F627 | M | `docs/tasks/T109-per-user-root-jail.md:31`, `docs/tasks/T109-per-user-root-jail.md:44` | T109 cannot make Jail.Contains the single containment check: the browse and roots jail logic lives in internal/fsx/browse.go, which is not in its Files table |
+| F638 | M | `docs/tasks/T084-api-tokens-and-admin-guard.md:76`, `docs/tasks/T084-api-tokens-and-admin-guard.md:31` | T084's admin-guard list omits category writes and GET /system/logs, and it cannot install the guard on handler groups that register themselves |
 | F470 | L | `docs/tasks/T046-filesystem-roots-and-browse.md:71`, `docs/tasks/T046-filesystem-roots-and-browse.md:8` | T046's Listing/Roots need free_bytes/total_bytes but the task neither depends on nor cites T099's fsx.FreeSpace |
 | F471 | L | `docs/tasks/T053-settings-screens.md:24`, `docs/tasks/T053-settings-screens.md:90` | T053 says doc 09 §2.1 has 'nine' `:section` values; the route table, T053's SECTIONS and its own step 1 have ten |
 | F474 | L | `docs/tasks/T042-virtualised-task-grid.md:115`, `docs/tasks/T044-sidebar-toolbar-and-status-bar.md:105` | Ownership of the §3.6 shortcuts is split across tasks that cannot see each other's components |
@@ -1409,6 +1493,7 @@ to check rather than an established defect.
 | F542 | L | `docs/01-vision-and-scope.md:128`, `docs/02-requirements.md:962` | doc 01's responsiveness scenario (2 000 tasks) does not match NFR-001 (10 000 rows) that is supposed to prove it |
 | F555 | L | `docs/12-security-and-threat-model.md:248`, `docs/12-security-and-threat-model.md:249` | SafeJoin's portable fallback triggers only on ENOSYS; a seccomp profile that blocks openat2 returns EPERM |
 | F587 | L | `docs/09-web-ui-spec.md:591`, `docs/09-web-ui-spec.md:154` | The sidebar 'Saved Searches' branch of doc 09 is excluded by both T044 and T064 |
+| F643 | L | `docs/09-web-ui-spec.md:262`, `docs/09-web-ui-spec.md:299` | doc 09 §3.3, cited by T107, both requires and forbids mirroring the preference document into localStorage |
 
 ### M4 — search
 
@@ -1431,6 +1516,7 @@ to check rather than an established defect.
 | F409 | M | `docs/07-search-and-indexers.md:852`, `docs/tasks/T057-bundled-engine-definitions.md:171` | Doc 07 §7 mandates a `/config/engines` filesystem watcher that no task builds |
 | F410 | M | `docs/tasks/T116-indexers-settings-section.md:84`, `docs/tasks/T057-bundled-engine-definitions.md:81` | `swapPriority` is a no-op when neighbours share a priority, and every bundled row is seeded at 50 |
 | F411 | M | `docs/12-security-and-threat-model.md:413`, `docs/07-search-and-indexers.md:852` | User definition directory is `/config/definitions` in doc 12 but `/config/engines` in doc 07 and T057 |
+| F635 | M | `docs/tasks/T106-notification-channel-endpoints.md:98`, `docs/tasks/T106-notification-channel-endpoints.md:31` | No task owns the at-rest encryption of notification_channels.secret_enc, and T106 has no key to encrypt with |
 | F475 | L | `docs/tasks/T054-torznab-client.md:147`, `docs/tasks/T054-torznab-client.md:118` | T054 must clamp `limit` to the caps `<limits max>` but neither TorznabClient nor the indexers row keeps LimitsMax |
 | F476 | L | `docs/tasks/T054-torznab-client.md:127`, `docs/tasks/T054-torznab-client.md:173` | TestTorznabErrorDocument must assert HTTPStatus for a Prowlarr 429, but the pure ParseFeed(doc, engineID) has no status input |
 | F477 | L | `docs/tasks/T123-ssrf-guarded-http-client.md:85`, `docs/tasks/T123-ssrf-guarded-http-client.md:132` | TestClientBlocksRedirectToMetadata never reaches the redirect: the httptest origin on 127.0.0.1:<random port> is denied on hop 0 by the port rule, so the test passes without proving … |
@@ -1536,6 +1622,14 @@ to check rather than an established defect.
 | F358 | M | `docs/02-requirements.md:721`, `docs/tasks/T074-auto-extract-archives.md:118` | T074 implements FR-106 with a settings key `auto_remove_on_complete` that doc 11 (the sole owner of settings) does not define |
 | F386 | M | `docs/decisions/0010-never-execute-third-party-definitions.md:52`, `docs/decisions/0010-never-execute-third-party-definitions.md:53` | Completion hook contradicts ADR-0010's stated consequence and is absent from the threat model; FR-105 Verify (403) disagrees with T078 (422) |
 | F388 | M | `docs/tasks/T111-delete-data-and-hardlink-safety.md:67`, `docs/tasks/T111-delete-data-and-hardlink-safety.md:74` | T111/doc 05 §5.6 'remove the task's own directory' is undefined for single-file tasks and can delete a user's jail root or shared destination once empty |
+| F628 | M | `docs/04-data-model.md:234`, `docs/tasks/T086-users-and-default-destinations.md:114` | DELETE /users/{id} collides with tasks.owner_id ON DELETE RESTRICT and no document says what happens to a user who owns tasks |
+| F629 | M | `docs/tasks/T084-api-tokens-and-admin-guard.md:85`, `docs/tasks/T084-api-tokens-and-admin-guard.md:104` | T084's CreateAPIToken signature cannot carry the clear-text token between the store and the handler |
+| F631 | M | `docs/tasks/T107-tag-prefs-and-watch-folder-endpoints.md:128`, `docs/tasks/T107-tag-prefs-and-watch-folder-endpoints.md:115` | T107 must validate a watch folder against the owner's jail, but the Jail type is built by T109, which depends on T107 |
+| F633 | M | `docs/tasks/T108-settings-export-import-and-restore.md:82`, `docs/05-api-contract.md:1206` | T108's Counts struct has no JSON tags, so the import report ships Created/Updated/Skipped/Rejected instead of the documented lower-case members |
+| F634 | M | `docs/tasks/T108-settings-export-import-and-restore.md:8`, `docs/tasks/T108-settings-export-import-and-restore.md:31` | T108 reads and writes the settings table but does not depend on T092, which owns GetSettings/PutSettings, and lists no store file of its own |
+| F636 | M | `docs/tasks/T085-ownership-filtering-and-quotas.md:74`, `docs/tasks/T085-ownership-filtering-and-quotas.md:107` | The creation-time storage-quota check has no defined incoming size, and doc 05 §5.11 says it cannot be computed at creation |
+| F637 | M | `docs/tasks/T086-users-and-default-destinations.md:31`, `docs/tasks/T086-users-and-default-destinations.md:145` | T086's TestRoundRobinOrdering has no file to live in: orderCandidates is unexported in package engine and T086 lists no engine test file |
+| F639 | M | `docs/17-operations-and-runbook.md:240`, `docs/tasks/T108-settings-export-import-and-restore.md:104` | The restore_server_running gate must name the lock holder's PID file, but no task creates a PID file and T108 silently drops the requirement |
 | F428 | L | `docs/tasks/T084-api-tokens-and-admin-guard.md:79` | `RequireAdmin(next huma.Middleware) huma.Middleware` is not the shape of a Huma v2 middleware |
 | F440 | L | `docs/02-requirements.md:1098`, `docs/02-requirements.md:1100` | NFR-016's verification names two T084 assertions (query-string token ignored; request log carries the redaction marker) that T084's tests do not include |
 | F502 | L | `docs/tasks/T081-schedule-evaluation-and-alternative-speed.md:13`, `docs/tasks/T081-schedule-evaluation-and-alternative-speed.md:33` | T081 claims `Est. size 2 new files` but its Files table creates exactly one |
@@ -1563,6 +1657,18 @@ to check rather than an established defect.
 | F298 | M | `docs/12-security-and-threat-model.md:598`, `docs/10-deployment-and-compose.md:393` | doc 12 §8 requires base images pinned by digest; the doc 10/T093/T115 Dockerfiles use bare tags and no task or job maintains digests |
 | F360 | M | `docs/02-requirements.md:891`, `docs/17-operations-and-runbook.md:225` | doc 17 §3.3 restores an older backup and migrates it forward, but §3.4/FR-146 — described as 'the same operation' — refuse any backup whose schema version differs |
 | F385 | M | `docs/12-security-and-threat-model.md:546`, `docs/tasks/T095-proxy-hardening-and-headers.md:145` | `config_lock` is specified in doc 12 §6.7 but has no doc 11 variable and no owning task |
+| F604 | M | `docs/tasks/T092-settings-and-system-info.md:144`, `docs/05-api-contract.md:215` | T092 makes GET /system/info admin-only, contradicting the authorization table of the document it cites |
+| F607 | M | `docs/tasks/T091-database-backup-and-retention.md:31`, `docs/tasks/T091-database-backup-and-retention.md:33` | T091's Files table has no store test file for the four store-level tests its Verification names |
+| F611 | M | `docs/tasks/T087-ytdlp-subprocess-runner.md:139`, `docs/tasks/T087-ytdlp-subprocess-runner.md:99` | Runner.Cancel and Runner.Wait both reap the process, so Pause races the Add goroutine on cmd.Wait() |
+| F613 | M | `docs/tasks/T092-settings-and-system-info.md:67`, `docs/tasks/T092-settings-and-system-info.md:133` | Two of the sixteen settings defaults depend on DLTOOL_DATA_ROOTS, which GetSettings has no way to read |
+| F614 | M | `docs/04-data-model.md:671`, `docs/11-config-reference.md:282` | GET /system/info has no field for the integrity-check result or the binary-missing reason the spec says it surfaces |
+| F615 | M | `docs/12-security-and-threat-model.md:546`, `docs/tasks/T095-proxy-hardening-and-headers.md:145` | The config_lock control from doc 12 §6.7 is owned by no task and has no setting in doc 11 |
+| F616 | M | `docs/17-operations-and-runbook.md:322`, `docs/17-operations-and-runbook.md:325` | The diagnostics bundle command documented in the runbook is built by no task |
+| F617 | M | `docs/tasks/T096-log-redaction-and-system-logs.md:151`, `docs/tasks/T096-log-redaction-and-system-logs.md:150` | T096 has no defined way for the API handler to reach the *Recorder it must read |
+| F618 | M | `docs/tasks/T094-harden-compose-and-release-verification.md:146`, `docs/tasks/T094-harden-compose-and-release-verification.md:156` | T094 and T095 demand Evidence from procedures no command in their Verification blocks performs |
+| F619 | M | `docs/tasks/T091-database-backup-and-retention.md:98`, `docs/tasks/T091-database-backup-and-retention.md:104` | Backup file naming: T091 writes dl-tool-<UTC>.db while doc 04 §6 and the restore runbook name dl-tool.db.<UTC>.bak |
+| F657 | M | `docs/tasks/T097-release-pipeline-and-pin-bump.md:159`, `docs/tasks/T097-release-pipeline-and-pin-bump.md:143` | T097's verification command cannot run on a default Docker installation |
+| F658 | M | `docs/tasks/T097-release-pipeline-and-pin-bump.md:151`, `docs/tasks/T097-release-pipeline-and-pin-bump.md:135` | T097's acceptance criterion contradicts its own step 4 and the workflow bodies it prescribes |
 | F439 | L | `docs/10-deployment-and-compose.md:573`, `docs/10-deployment-and-compose.md:574` | doc 10 §7.3 rule 1 says DLTOOL_BASE_PATH is `also editable in Settings`; doc 11 classes it as env-only infrastructure and T092's sixteen settings keys have no base path |
 | F507 | L | `docs/10-deployment-and-compose.md:213`, `docs/11-config-reference.md:67` | The contents of dl-tool's `/config` directory are stated differently in doc 10 §3.1 and doc 11 §2 |
 | F518 | L | `docs/tasks/T097-release-pipeline-and-pin-bump.md:135`, `docs/tasks/T097-release-pipeline-and-pin-bump.md:151` | T097 step 4 lets docker/* actions keep major tags while its acceptance criterion demands every third-party action be SHA-pinned |
@@ -1573,6 +1679,8 @@ to check rather than an established defect.
 | F595 | L | `docs/tasks/T115-aria2-image-build-and-publish.md:31`, `docs/tasks/T115-aria2-image-build-and-publish.md:39` | T115 Files table says the Dockerfile gains a HEALTHCHECK, but the verbatim §5.1 Dockerfile it must reproduce has none |
 | F598 | L | `docs/tasks/T088-ytdlp-extractor-cache.md:100`, `docs/tasks/T088-ytdlp-extractor-cache.md:25` | T088 caps extractor patterns at 4096 bytes while the doc 12 section it cites as its limit says 512 bytes |
 | F600 | L | `docs/decisions/0018-pin-ytdlp-by-version-and-hash.md:72`, `docs/10-deployment-and-compose.md:420` | ADR-0018's confirmation command passes `sh -c ...` through the image ENTRYPOINT, which execs dl-tool with those arguments instead of a shell |
+| F621 | L | `docs/tasks/T092-settings-and-system-info.md:157`, `docs/tasks/T092-settings-and-system-info.md:96` | T092's acceptance criterion counts eleven top-level /system/info fields; the spec and its own struct have twelve |
+| F623 | L | `docs/tasks/T115-aria2-image-build-and-publish.md:144`, `docs/tasks/T094-harden-compose-and-release-verification.md:31` | T115's Out-of-scope credits T094 with the aria2 service that T125 writes |
 
 ### API contract
 

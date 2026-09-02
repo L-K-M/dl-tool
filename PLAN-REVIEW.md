@@ -16,7 +16,7 @@ of its sharpest calls — sending both spellings of the pause parameter, keying 
 `Set-Cookie` header rather than the status code, never executing third-party definition code — I
 confirmed against live daemons.
 
-The weakness is that **the plan is not yet executable end to end**. 129 defects (23 critical, 106 high)
+The weakness is that **the plan is not yet executable end to end**. 135 defects (25 critical, 110 high)
 survived an adversarial verification pass. They are not scattered: they cluster into six systemic
 patterns, and five of the six trace back to the same root cause — the hard rule that a task may only
 touch files in its own `Files` table, with no task owning the seams between them.
@@ -35,8 +35,10 @@ Concretely, following the plan literally today:
   downloads — cannot complete (F004, F096).
 - Every qBittorrent task is invisible to dl-tool and gets marked `error` on the first sweep, so the M2
   checkpoint is unreachable (F023).
+- Behind the reverse-proxy snippets the plan itself ships, **every request answers 421** — the Host
+  allowlist has no configuration source anywhere in the plan (F602, F142).
 
-None of this is fatal to the design. All 129 are fixable in the plan documents, most in a line or two,
+None of this is fatal to the design. All 135 are fixable in the plan documents, most in a line or two,
 and the fixes are listed with each finding. But they should be fixed **before** T001 starts, because the
 plan's own process — read only this task file, touch only these files, stop and write `## Blocked`
 otherwise — converts each of these into a stalled agent rather than a small correction.
@@ -47,10 +49,10 @@ otherwise — converts each of these into a stalled agent rather than a small co
 |---|---|
 | Mechanical checks | Parsed all 122 task files and the index; verified the dependency graph, file ownership, requirement coverage, parallel-safety claims, template conformance; ran the plan's own `scripts/doclint.sh` with `lychee` installed |
 | Live verification | Ran the plan's claims against **yt-dlp 2026.08.19**, **qBittorrent 5.2.3 / WebAPI 2.15.1** (`lscr.io/linuxserver/qbittorrent`), **aria2 1.37.0** and **Alpine 7-Zip 26.01** in containers; resolved every Go and npm version pin against its registry; read the pinned Huma, goose and modernc-sqlite sources |
-| Review | 21 reviewers, each assigned a lens (one per engine, subsystem, milestone batch, plus completeness and product critics) and told to read its files in full and report only defects that would block or mislead an implementing agent |
-| Verification | Every critical and high finding went to an independent verifier whose instruction was to **refute** it; 26 were refuted (mostly duplicates), 129 survived |
+| Review | 24 reviewers, each assigned a lens (one per engine, subsystem, milestone batch, plus completeness and process critics) and told to read its files in full and report only defects that would block or mislead an implementing agent |
+| Verification | Every critical and high finding went to an independent verifier whose instruction was to **refute** it; 28 were refuted (mostly duplicates), 135 survived |
 
-Medium and low findings (445) were de-duplicated but not individually re-verified; they are listed
+Medium and low findings (505) were de-duplicated but not individually re-verified; they are listed
 separately as leads rather than established defects.
 
 ## The six patterns
@@ -110,6 +112,13 @@ ended up in two homes with different values:
 | Post-processing entry state (F004) | doc 03 / T017: from `downloading` | T074 / T076: from `completed` |
 | RSS poll interval (F132) | doc 08: default 1800 s, floor 300 s | doc 11 / T092 / T117: 900 s, floor 60 s |
 | Feed body cap (F085) | doc 08 / T066: 16 MiB, raw `LimitReader` | doc 12 §2.4 / T123: 8 MiB via `secure.ReadCapped` |
+
+A related sub-pattern: columns the API contract and the tasks both depend on are absent from the DDL,
+and no task adds a migration. `tasks.requested_destination` (F044) and
+`notification_channels.last_send_at` / `last_error` (F624) are each read by two or more tasks and
+returned by documented endpoints, but neither exists in doc 04 §3 — so the queries fail at runtime and
+doc 14 §8.3's "a schema change needs a migration plus a doc 04 edit" is unsatisfiable inside the owning
+task's `Files` table.
 
 The state machine is the worst case. T017's transition table forbids `downloading → completed`,
 `paused → seeding`, `queued → seeding`, `checking → seeding` and `completed → seeding` — every one of
@@ -203,11 +212,11 @@ Items 1 and 2 are eleven edits and would move the plan from "cannot start" to "s
 
 ## What this review did not cover
 
-- Medium and low findings were not individually verified. 445 of them are listed in part 2 of the
+- Medium and low findings were not individually verified. 505 of them are listed in part 2 of the
   findings file as leads.
-- Three reviewers (the M6b and M7 task batches, and the process critic) were cut off by a usage limit
-  and re-run; their findings are folded in where they completed, but those three areas had less coverage
-  than the rest. M7 and the M6 user-management tasks are the thinnest.
+- Reviewer effort was not uniform. M0 and M1 drew the most attention (161 and 119 findings); M7 and the
+  M6 user-management tasks the least (21 and 47). A thinner list there means less looking, not a cleaner
+  plan.
 - The 26 `[NEEDS CLARIFICATION]` markers and ~57 `UNVERIFIED` HTML comments already in the plan were
   treated as known open questions, not reported as findings, except where one blocks a task that is not
   marked blocked.
