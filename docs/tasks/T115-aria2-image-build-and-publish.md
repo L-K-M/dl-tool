@@ -122,6 +122,8 @@ The matrix entry added to `.github/workflows/release.yml`, alongside the existin
 - [ ] `/config/aria2.session` survives a stop and start, and in-flight transfers resume.
 - [ ] `.github/workflows/release.yml` builds both images from one matrix.
 - [ ] Nothing in the repository references `p3terx/aria2-pro`.
+- [ ] The entrypoint reads `ARIA2_RPC_SECRET_FILE` and exits non-zero on an empty or missing value; the
+      secret never appears in the container environment.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

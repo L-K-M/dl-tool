@@ -38,48 +38,12 @@ No other file may be modified.
 
 ## Interface contract
 
-`Dockerfile` — doc 10 §5 without the `ytdlp` stage, the `LABEL` block and the cross-compilation arguments (T093 adds those):
+[`docs/10-deployment-and-compose.md` §5](../10-deployment-and-compose.md#5-dockerfile) **owns the
+`Dockerfile` verbatim**. Copy it from there, not from this file, with two deletions that T093 restores:
+the `LABEL` block and the cross-compilation arguments (`TARGETARCH`, `TARGETVARIANT` and the `GOARCH`
+plumbing). Keep every stage otherwise unchanged, including the `ytdlp` stage that downloads the pinned
+`yt-dlp_musllinux` binary and verifies its SHA-256.
 
-```dockerfile
-# syntax=docker/dockerfile:1
-
-FROM node:24-alpine AS web
-WORKDIR /web
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
-COPY web/ ./
-RUN npm run build                     # -> /web/dist, asset URLs relative (vite base: './')
-
-FROM golang:1.26-alpine AS build
-ARG VERSION=dev
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
-COPY . .
-COPY --from=web /web/dist ./internal/api/dist
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath \
-      -ldflags "-s -w -X main.version=${VERSION}" \
-      -o /out/dl-tool ./cmd/dl-tool
-
-FROM alpine:3.22
-RUN apk add --no-cache su-exec ca-certificates tzdata 7zip nodejs
-COPY --from=build /out/dl-tool /usr/local/bin/dl-tool
-COPY deploy/entrypoint.sh     /entrypoint.sh
-ENV PUID=1000 PGID=1000 UMASK=002 TZ=Etc/UTC \
-    DLTOOL_HTTP_ADDR=:8080 \
-    DLTOOL_CONFIG_DIR=/config \
-    DLTOOL_DATA_ROOTS=/data \
-    DLTOOL_DB_PATH=/config/dl-tool.db \
-    DLTOOL_YTDLP_PATH=/usr/local/bin/yt-dlp \
-    DLTOOL_SEVENZIP_PATH=/usr/bin/7zz
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["/usr/local/bin/dl-tool", "healthcheck"]
-ENTRYPOINT ["/entrypoint.sh"]
-CMD ["serve"]
-```
 
 `deploy/entrypoint.sh`, mode `0755`:
 
@@ -213,6 +177,7 @@ func healthcheck() int {
 - [ ] With `--user 1000:1000`, the entrypoint skips user creation and `chown`, and `/data` is never chowned recursively.
 - [ ] `docker inspect --format '{{.State.Health.Status}}' <c>` reads `healthy` within 60 s of start.
 - [ ] `docker stop <c>` returns within 20 s and the container exit code is `0`.
+- [ ] With `UMASK=002`, a file written under `/data` is `664` while `/config` stays `0700`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

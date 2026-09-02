@@ -146,6 +146,14 @@ CREATE TABLE users (
   locale TEXT NOT NULL DEFAULT 'en', last_login_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 
+**File modes are enforced, not inherited.** `UMASK` is an operator setting for downloaded data
+([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §4); a credential-bearing database must not
+depend on it. Before `sql.Open`, the store creates or repairs the parent directory to `0700`, refuses an
+existing symlink or non-regular file at `DLTOOL_DB_PATH`, and sets an existing database to `0600`. On a new
+database it applies `0600` on the first connection, before migrations. SQLite's Unix VFS creates the `-wal`
+and `-shm` sidecars with the database's own mode, so they follow it even under `UMASK=002`. Failure to
+enforce a mode is fatal at boot, not a warning.
+
 `users` holds **exactly one row**, created by the first-run setup wizard and never joined by another
 ([ADR-0019](decisions/0019-single-account-no-ownership.md)). The table shape is kept rather than collapsed
 into a settings row so that adding accounts later is a migration, not a redesign. No other table references
@@ -704,8 +712,10 @@ VACUUM INTO '/config/backups/dl-tool.db.20260901T120000Z.bak';
 - **The target file must not already exist**, or must be an empty file, or the command fails with an error.
   Generate a fresh UTC timestamp for every run; never reuse a name.
 - An interrupted `VACUUM INTO` (unplanned shutdown, power loss) can leave an incomplete and corrupt output.
-  Write to a unique temporary name inside `/config/backups/`, check its integrity, fsync it, then `rename()`
-  it into place and fsync the directory.
+  Create the unique temporary target inside `/config/backups/` with `O_CREATE|O_EXCL` and mode `0600` and
+  close it before running the statement; then check its integrity, enforce `0600`, fsync it, `rename()` it
+  into place and fsync the directory. `O_EXCL` is what makes a colliding name an error rather than a
+  silent overwrite of somebody else's backup.
 - Schedule: nightly via `github.com/robfig/cron/v3 v3.0.1`, retaining the newest 7 files matching exactly
   `dl-tool.db.<UTC>.bak`. Pre-migration and replaced-database backups are never counted or pruned by this job.
   The same operation is exposed at `POST /system/backup`.
@@ -803,3 +813,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Made migration backups idempotent and database restore lock-protected and atomic. |
 | 2026-09-01 | Security review: separated server-only acquisition sources from API display references. |
 | 2026-09-02 | Multi-user model dropped: removed `owner_id` from `tasks`, `rules`, `search_jobs` and `sessions`, their indexes, `users.role`, `users.default_destination`, `users.quota_bytes`, the `max_active_per_user` setting and the `quota_exceeded` error code. `users` now holds exactly one operator row. §4.7 recast as concurrency versus disk space ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | The store now enforces `0700` on the configuration directory and `0600` on the database, its sidecars and every backup, independent of `UMASK`; `VACUUM INTO` creates its target with `O_CREATE\|O_EXCL` at `0600`. |

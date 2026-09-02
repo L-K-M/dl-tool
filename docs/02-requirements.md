@@ -1118,7 +1118,7 @@ The dl-tool web UI shall load every script, stylesheet, font and icon from the d
 | T039 | must |
 
 ### NFR-023 Generate secrets on first run and support file-based secrets
-When dl-tool starts with no generated secrets, it shall create, each from a cryptographic random source: the at-rest secret-encryption key `DLTOOL_SECRET_KEY` and the shared engine secret `ARIA2_RPC_SECRET` (both written to `<CONFIG_DIR>/secrets.env` with mode `0600`), and, while no user exists, the one-time setup token (written to `<CONFIG_DIR>/setup-token` with mode `0600`, per FR-115); and it shall additionally accept any secret through a `_FILE`-suffixed variable pointing at a mounted file.
+When dl-tool starts with no generated secrets, it shall create, each from a cryptographic random source: the at-rest secret-encryption key `DLTOOL_SECRET_KEY` and the shared engine secret `ARIA2_RPC_SECRET` (both written to `<CONFIG_DIR>/secrets.env` with mode `0600`), and, while no user exists, the one-time setup token (written to `<CONFIG_DIR>/setup-token` with mode `0600`, per FR-115); and it shall additionally accept any secret through a `_FILE`-suffixed variable pointing at a mounted file. Every service configuration directory shall be mode `0700`, and the database, its WAL and SHM sidecars, backups, logs and diagnostics shall be mode `0600`, independent of `UMASK`; `UMASK` shall govern only files created under the data roots.
 
 **Verify:** T005 asserts a fresh config directory yields distinct secrets on two separate instances and that a `_FILE` variable is honoured in preference to its inline form.
 
@@ -1247,3 +1247,4 @@ side effects, then asserts task pause and token revocation still work.
 | 2026-09-01 | Security review: made the Host allowlist configurable and specified the environment-only configuration lock. |
 | 2026-09-01 | Security review: made search-result acquisition handles server-only. |
 | 2026-09-02 | Multi-user model dropped: FR-118 – FR-124 deleted and retired, FR-115 restated for a single operator account. Authentication, API tokens, the data-root jail and opaque search-result ids are unaffected ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | NFR-023 extended: configuration directories are `0700` and sensitive files `0600` regardless of `UMASK`, which now governs only the data roots. |

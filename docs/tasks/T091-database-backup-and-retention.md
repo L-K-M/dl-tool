@@ -124,6 +124,7 @@ Worked response, admin only, `201`:
 - [ ] A failed statement leaves no file matching `dl-tool-*.db` in the backup directory.
 - [ ] Eight nightly runs leave exactly seven files.
 - [ ] `PruneTaskEvents` deletes rows older than 90 days and leaves a row exactly 89 days old.
+- [ ] A produced backup is `0600`, and its temporary target was created with `O_CREATE|O_EXCL`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

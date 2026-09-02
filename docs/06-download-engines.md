@@ -484,10 +484,19 @@ and 1.37.0 is feature-complete for HTTP/FTP/SFTP. dl-tool builds its aria2 image
 
 ### 4.1 Daemon flags
 
+The image entrypoint reads `ARIA2_RPC_SECRET_FILE` (the shipped compose mounts
+`/run/secrets/aria2_rpc_secret` mode `0400`) into a shell variable immediately before the `exec`, and
+refuses to start on an empty value. The secret is never a container environment variable, so it does not
+appear in `docker inspect` or `/proc/<pid>/environ`
+([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §7.4).
+
 ```
-aria2c \
+aria2_rpc_secret="$(cat "${ARIA2_RPC_SECRET_FILE:?}")"
+[ -n "$aria2_rpc_secret" ] || { echo "aria2: empty RPC secret" >&2; exit 1; }
+
+exec aria2c \
   --enable-rpc --rpc-listen-all --rpc-listen-port=6800 \
-  --rpc-secret="${ARIA2_RPC_SECRET}" \
+  --rpc-secret="${aria2_rpc_secret}" \
   --dir=/data --continue=true \
   --max-concurrent-downloads=5 --max-connection-per-server=8 --split=8 \
   --file-allocation=falloc \
@@ -1303,3 +1312,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | Removed engine-side data deletion and required every adapter to retain payloads. |
 | 2026-09-01 | Corrected qBittorrent 5.2.3 session, add-result and delta-recovery contracts. |
 | 2026-09-01 | Made the engine registry instance-injected so abstract and concrete packages remain acyclic. |
+| 2026-09-02 | The aria2 RPC secret is read from a mounted secret file by the entrypoint rather than passed as a container environment variable. |

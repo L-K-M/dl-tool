@@ -625,6 +625,21 @@ precedent.
 
 ---
 
+### 7.4 Credentials and configuration state at rest
+
+- **Engine credentials never enter a service environment.** `compose.yaml` sources them as named secrets
+  mounted at `/run/secrets/<name>` mode `0400`, read through the `_FILE` convention. A value in a service
+  environment is visible to anyone who can run `docker inspect` or read `/proc/<pid>/environ`, and it lands
+  in a crash dump's environment block; a mounted file is visible only to the services that list it. The VPN
+  container is given the VPN values explicitly rather than `env_file: [.env]`, so it never receives the
+  qBittorrent password or the aria2 RPC secret it has no use for.
+- **`UMASK` is scoped to the data roots.** The operator default `002` exists so other household services can
+  read downloads. Applied to configuration state it would make the database group-readable, and that
+  database holds the argon2id password hash, session rows, API tokens and every encrypted credential.
+  Configuration directories are therefore `0700` and the database, its sidecars, `secrets.env`, backups,
+  logs and diagnostic bundles are `0600`, enforced by dl-tool at boot rather than inherited from the umask
+  ([`04-data-model.md`](04-data-model.md) §1, [`10-deployment-and-compose.md`](10-deployment-and-compose.md) §4).
+
 ## 8. Supply chain
 
 | Control | Rule |
@@ -747,3 +762,4 @@ the repository owner decides.
 | 2026-09-01 | Security review: bound Host validation and configuration locking to documented environment variables and exact resource scopes. |
 | 2026-09-01 | Security review: contained provider acquisition credentials behind opaque result ids. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-02 | Added §7.4: engine credentials are mounted secrets rather than service environment variables, and configuration state is mode-enforced independently of `UMASK`. |
