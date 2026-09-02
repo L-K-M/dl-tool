@@ -215,8 +215,10 @@ adapter is not precluded.
 | `push_events` | ✅ WebSocket notifications | ❌ poll `sync/maindata` | ✅ subprocess stdout |
 | `nzb` `search` `rss_rules` | ❌ | ❌ | ❌ |
 
-`internal/engine/registry.go` holds `map[string]Engine` keyed by `Name()`; adding an engine touches one
-directory plus one registry line. `internal/engine/router.go` implements §2.
+`internal/engine/registry.go` exposes `NewRegistry(instances ...Engine)` and builds its name map from injected
+instances, rejecting duplicate names. It never imports a concrete adapter. `cmd/dl-tool/engines.go` constructs
+the enabled adapters and passes them in; adding an engine touches its directory plus one composition line.
+`internal/engine/router.go` implements §2.
 
 ### 1.1 File priority vocabulary
 
@@ -1300,3 +1302,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | Contradiction fix: dropped `--rpc-allow-origin-all` from the §4.1 daemon flags — `12-security-and-threat-model.md` §10 forbids it in any environment and the entrypoint in `10-deployment-and-compose.md` §5.1 never set it. |
 | 2026-09-01 | Removed engine-side data deletion and required every adapter to retain payloads. |
 | 2026-09-01 | Corrected qBittorrent 5.2.3 session, add-result and delta-recovery contracts. |
+| 2026-09-01 | Made the engine registry instance-injected so abstract and concrete packages remain acyclic. |
