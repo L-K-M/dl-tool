@@ -689,6 +689,11 @@ data: {"rid":43,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X":{"
 Server rules:
 
 - Keep an in-memory ring buffer of the last **300** deltas keyed by rid (≈5 minutes at 1 Hz).
+- Keep owner ids as internal metadata for every changed or removed task. Before serialization, project the
+  coalesced delta through the authenticated caller: an admin receives all tasks; a non-admin receives only
+  their tasks. Strip the internal metadata from the response.
+- Scope `tasks_removed`, `stats`, and category or tag task counts to the same caller. An id enters
+  `tasks_removed` when a task that was visible to that caller is removed or reassigned away from them.
 - On connect, read the `Last-Event-ID` request header. That header **is** the rid; there is no separate
   client-side bookkeeping.
 - If `Last-Event-ID` is inside the ring, send the coalesced diff from that rid onward. If it is absent,
@@ -711,7 +716,7 @@ in-band — the server closes the connection and `EventSource` reconnects.
 
 Query: `rid` (integer, optional, default `0`) — the last rid the client holds. `0`, or a rid outside the
 ring, forces a full update. The response body is **byte-for-byte the same JSON object** as an SSE `data:`
-payload, delivered as `application/json` with no event framing.
+payload for the same authenticated caller and rid, delivered as `application/json` with no event framing.
 
 ```http
 GET /api/v1/sync?rid=42
@@ -1553,3 +1558,4 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Closed both open questions: `requested_destination` became a `tasks` column, and saved searches are specified as a `search` member of the `/prefs` document (§11.4, task T064) — no `/search/saved` surface. The feed object gains `priority` (the rule engine's per-run tie-break) and `POST /feeds` gains `auto_download`, which creates the `auto:<feed_id>` rule behind the dialog's Download-Station checkbox. `DELETE /users/{id}` for a user who still owns tasks is `409`, matching `ON DELETE RESTRICT`. |
 | 2026-09-01 | Review pass: the users-group `409` enumeration now names the owned-rows case; the saved-search 50-entry cap is stated as client-enforced (the server's bound is the 64 KiB document cap) and `/prefs` is excluded from the settings export; `PATCH /feeds/{id}` accepts `auto_download` so the checkbox is reversible without deleting the feed. |
 | 2026-09-01 | Review pass 2: both feed verbs list `auto_download` explicitly — the earlier "plus" wording read as if `POST /feeds` rejected the field the add dialog sends. |
+| 2026-09-01 | Scoped live task deltas, removals and aggregates to the authenticated caller. |

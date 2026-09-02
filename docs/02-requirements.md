@@ -779,7 +779,12 @@ If a non-admin calls a user-management, engine-configuration, indexer-management
 ### FR-119 Filter tasks by owner for non-admins
 While a non-admin session is active, dl-tool shall return only the tasks owned by that user from every task read endpoint and shall reject actions on tasks owned by anyone else with HTTP 404.
 
-**Verify:** T085 creates tasks for two users and asserts each non-admin sees only their own, an admin sees both, and a cross-owner pause returns 404 rather than 403.
+This includes `GET /events` and `GET /sync`: task deltas, removal identifiers, rates, counts and category or
+tag counts shall reveal only the caller's tasks. Admins receive the system-wide view.
+
+**Verify:** T085 creates tasks for two users and asserts each non-admin sees only their own through the
+task list, SSE and polling fallback, including aggregate fields; an admin sees both; and a cross-owner
+pause returns 404 rather than 403.
 
 | Covered by | Priority |
 |---|---|
@@ -1270,3 +1275,4 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Review pass: FR-115 pins the token at 256 bits (matching §6.4 of the threat model), names the per-source-IP throttle specifically, and its Verify is passable in one run — nine failures, the tenth 429s, the window advances, setup then completes — plus the regenerate-on-restart assertion. |
 | 2026-09-01 | Review pass 2: FR-115 gains the regenerate-on-every-boot shall-clause its Verify already asserted, closing the traceability gap. |
 | 2026-09-01 | Dropped the resolved FR-121-anchor open question; `05-api-contract.md` no longer carries the stale anchor. |
+| 2026-09-01 | Required owner filtering for live task deltas, removals and aggregates. |

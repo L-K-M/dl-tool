@@ -233,8 +233,8 @@ sequenceDiagram
     loop once per second
         POLL->>HUB: snapshot of every task from every engine
         HUB->>HUB: diff against the previous snapshot
-        HUB->>RING: store the delta under rid N
-        HUB->>SSE: event sync, id N, data delta
+        HUB->>RING: store delta plus internal ownership metadata under rid N
+        HUB->>SSE: project delta for the authenticated principal
         SSE->>CL: text/event-stream frame
         CL->>CL: merge changed fields, delete tasks_removed
     end
@@ -464,7 +464,10 @@ grid, which the cron tick reads on each fire.
 | Fallback | `GET /api/v1/sync?rid=N` polled every 2 s after 3 stream failures | Identical envelope, identical reducer. |
 
 The ring lives in `internal/sync/ring.go` and is memory-only; after a restart it is rebuilt from the current
-task snapshot, which is exactly the `seq_gap` case every client already handles.
+task snapshot, which is exactly the `seq_gap` case every client already handles. Ring entries retain
+internal owner metadata for changed and removed tasks. Before serialization, the API projects snapshots,
+deltas, removals and aggregates through the authenticated principal: admins see every task; other users see
+only their own. The internal owner metadata never appears on the wire.
 
 ### 8.7 Engine conformance at boot
 
@@ -544,3 +547,4 @@ The D-list in §4 is the full map, D14 excluded. ADRs that shape this document d
 | 2026-09-01 | Compatibility façades cut: removed D14, ADR-0014, `internal/compat`, the façade actor and its context row. Added §6.4 admission control, §8.7 engine conformance, §8.8 foreign-task policy, ADR-0017 and ADR-0018, and risk R6 (JS runtime). Hardened R2 (pinned yt-dlp) and R4 (refuse to start on a network filesystem). ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: removed the Download Station NAS actor and its migration edge from the §3 context diagram, its external-interface row, and every link to the withdrawn migration document. §8.8 restated as one rule with no setting — foreign tasks are always ignored; `engines.foreign_task_policy` deleted. |
 | 2026-09-01 | M2 task allocation: task identifier T102 retired with the foreign-task policy; the §8.8 rule is asserted by T026 and T030. |
+| 2026-09-01 | Added authenticated projection to the SSE ring so live updates cannot expose another user's tasks or aggregates. |
