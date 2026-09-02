@@ -71,7 +71,7 @@ func (e *BlockedError) Unwrap() error { return ErrSSRFBlocked }
 type Guard struct{ /* denied4, denied6, allowed6, allowPrivate, log */ }
 
 // NewGuard builds the guard from 12-security-and-threat-model.md §2.1. allowPrivate is
-// config.Config.SSRFAllowPrivate for the global guard, or an indexer's own allow_private flag.
+// config.Config.SSRFAllowPrivate for the global guard, or an indexer's own allow_private_network flag.
 // It lifts 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, fc00::/7 and ::1/128 only;
 // 169.254.0.0/16 and fe80::/10 stay denied under every switch.
 func NewGuard(log *slog.Logger, allowPrivate bool) *Guard
@@ -165,7 +165,7 @@ files are untracked, and `git diff --name-only` never lists an untracked file.
 - Do NOT touch the Torznab client, `internal/search/` or any fixture under it; T054 owns all of it.
 - Do NOT call this guard from any handler, poller or notifier; T122 wires the task endpoints and T054,
   T066 and T077 wire their own call sites.
-- Do NOT add the per-indexer `allow_private` column or flag; T055 owns the `indexers` row.
+- Do NOT add the per-indexer `allow_private_network` column or flag; T055 owns the `indexers` row.
 - Do NOT add a repository-wide `depguard` rule or a `.golangci.yml`; this task ships no lint configuration.
 - Do NOT special-case `DLTOOL_ARIA2_URL` or `DLTOOL_QBITTORRENT_URL`: sidecar RPC never goes through this
   client, so the guard needs no exception for it (doc 12 §2.3).
