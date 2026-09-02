@@ -22,7 +22,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/09-web-ui-spec.md` §9 Settings screens](../09-web-ui-spec.md#9-settings-screens) — the RSS row's
    five controls and the dirty-bar rule.
 2. [`docs/11-config-reference.md` §5 Database-backed settings](../11-config-reference.md#5-database-backed-settings)
-   — `rss_enabled` and `rss_interval_s` are the only RSS keys, and the interval's minimum is `60` seconds.
+   — `rss_enabled` and `rss_interval_s` are the only RSS keys, and the interval's minimum is `300` seconds.
 3. [`docs/05-api-contract.md` §11.1 `GET /settings` and `PATCH /settings`](../05-api-contract.md#111-get-settings-and-patch-settings)
    — the flat body, the subset `PATCH` and the `422` for an out-of-range value.
 4. [`docs/05-api-contract.md` §10.1 Feeds](../05-api-contract.md#101-feeds) — `item_cap` is a per-feed
@@ -50,7 +50,7 @@ No other file may be modified.
 /** The two RSS members of GET /settings, doc 11 §5. No other key on this screen exists. */
 export interface RssSettings {
   rss_enabled: boolean;
-  rss_interval_s: number;   // seconds, server minimum 60
+  rss_interval_s: number;   // seconds, server minimum 300
 }
 
 /** The fields of GET /feeds this section reads, doc 05 §10.1. */
@@ -68,8 +68,8 @@ export interface FeedCap {
 export function commonItemCap(feeds: FeedCap[]): number | 'mixed' | null;
 
 /** Minutes are the unit the user edits; seconds are the unit the API stores.
- *  Round-trips: secondsToMinutes(900) === 15, minutesToSeconds(15) === 900. The input's min is 1
- *  because the server rejects rss_interval_s below 60 with 422. */
+ *  Round-trips: secondsToMinutes(1800) === 30, minutesToSeconds(30) === 1800. The input's min is 5
+ *  because the server rejects rss_interval_s below 300 with 422. */
 export function secondsToMinutes(s: number): number;
 export function minutesToSeconds(m: number): number;
 
@@ -79,7 +79,7 @@ export function RssSection(): JSX.Element;
 The two bodies this section sends, verbatim:
 
 ```jsonc
-PATCH /settings      {"rss_enabled":true,"rss_interval_s":900}
+PATCH /settings      {"rss_enabled":true,"rss_interval_s":1800}
 PATCH /feeds/{id}    {"item_cap":50}          // one call per feed, only when the cap changed
 ```
 
@@ -88,7 +88,7 @@ Control-to-carrier map — every row of doc 09 §9's RSS cell, and nothing else:
 | Control | Carrier | Notes |
 |---|---|---|
 | Enable RSS fetching | `rss_enabled` | Off pauses polling; feeds and rules are untouched. |
-| Update interval | `rss_interval_s` | Edited in minutes, sent in seconds, minimum 1 minute. |
+| Update interval | `rss_interval_s` | Edited in minutes, sent in seconds, minimum 5 minutes. |
 | Maximum articles kept per feed | `item_cap` on every feed | One `PATCH /feeds/{id}` per feed, on save only. |
 | Auto-downloader | read-only status + link to `/rss/rules` | `N of M rules enabled`, counted from `GET /rules`. |
 | Smart-episode-filter patterns | read-only | The four patterns of doc 08 §6.4, verbatim, not editable in v1. |
@@ -99,7 +99,7 @@ Control-to-carrier map — every row of doc 09 §9's RSS cell, and nothing else:
 2. Create `RssSection.tsx` reading `GET /settings`, `GET /feeds` and `GET /rules` through the generated
    client; render nothing until all three resolve, then seed the form state once.
 3. Render `Enable RSS fetching` as a checkbox over `rss_enabled`, and `Update interval` as a number input in
-   minutes over `secondsToMinutes(rss_interval_s)` with `min={1}`.
+   minutes over `secondsToMinutes(rss_interval_s)` with `min={5}`.
 4. Render `Maximum articles kept per feed` from `commonItemCap`, handling all three returns; state beside it
    that the cap is stored per feed and that saving applies the typed value to every feed.
 5. Render the auto-downloader row as `N of M rules enabled` with a link to `/rss/rules`, plus one sentence
@@ -115,7 +115,7 @@ Control-to-carrier map — every row of doc 09 §9's RSS cell, and nothing else:
    `/problems/forbidden` as "only an administrator can change these settings" with the form left dirty.
 10. Edit `SettingsScreen.tsx` to add `'rss'` to `IMPLEMENTED` and render `<RssSection />`; do not reorder
     `SECTIONS`.
-11. Create `RssSection.test.tsx` with `msw`: an interval of 900 renders `15`; saving 30 sends
+11. Create `RssSection.test.tsx` with `msw`: an interval of 1800 renders `30`; saving 30 sends
     `{"rss_interval_s":1800}` and no other key; two feeds with different caps render `Mixed` and saving `40`
     sends two `PATCH /feeds/{id}` calls; a settings `422` sends no feed call; the patterns block and the
     rules count render read-only, with no input.
