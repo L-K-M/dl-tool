@@ -64,12 +64,15 @@ column names the package that consumes the parsed field.
 |---|---|---|---|---|---|---|
 | `DLTOOL_HTTP_ADDR` | listen addr | `:8080` | no | infrastructure | Address of the main HTTP listener serving the SPA, `/api/v1`, `/healthz` and `/readyz`. | `internal/api/server.go` |
 | `DLTOOL_BASE_PATH` | url path | *(empty)* | no | infrastructure | Sub-path prefix when reverse-proxied, e.g. `/dl-tool`. Must start with `/` and must not end with `/`. Empty means the app is served at the root. | `internal/api/server.go`, `internal/api/static.go` |
+| `DLTOOL_ALLOWED_HOSTS` | `,`-separated DNS names | *(empty)* | no | infrastructure | Exact additional `Host` names accepted by DNS-rebinding protection. `localhost` and literal IP addresses are always accepted. | `internal/api/server.go` |
+| `DLTOOL_CONFIG_LOCK` | bool | `false` | no | infrastructure | When `true`, rejects API mutations of operator configuration. It cannot be changed through the API. | `internal/api/middleware.go` |
 | `DLTOOL_CONFIG_DIR` | dir path | `/config` | no | infrastructure | Directory holding the database, `secrets.env`, `backups/`, `logs/` and `torrents/`. Must exist and be writable by the dropped user. | `internal/config`, `internal/store/db.go` |
 | `DLTOOL_DATA_ROOTS` | `:`-separated dir paths | `/data` | no | infrastructure | The only directories any destination, browse, mkdir, move or delete-data operation may touch. Order matters: the first root is the fallback default destination. | `internal/fsx/safepath.go` |
 | `DLTOOL_DB_PATH` | file path | `/config/dl-tool.db` | no | infrastructure | SQLite database file. Its directory must be on a local filesystem. | `internal/store/db.go` |
 | `DLTOOL_LOG_LEVEL` | enum `debug\|info\|warn\|error` | `info` | no | infrastructure | Minimum `log/slog` level. | `internal/obs/log.go` |
 | `DLTOOL_LOG_FORMAT` | enum `json\|text` | `json` | no | infrastructure | `json` selects `slog.NewJSONHandler`; `text` selects the `tint` handler for local development. | `internal/obs/log.go` |
 | `DLTOOL_TRUSTED_PROXIES` | `,`-separated CIDRs | *(empty)* | no | infrastructure | Sources whose `X-Forwarded-For` and `X-Forwarded-Proto` are honoured. Empty means no forwarded header is trusted and the peer address is used. | `internal/api/server.go` |
+| `DLTOOL_ALLOWED_HOSTS` | `,`-separated hostnames | *(empty)* | no | infrastructure | Additional `Host` names accepted by the DNS-rebinding defence ([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.5). `localhost`, `localhost.` and literal IP addresses are always allowed and need not be listed. Empty plus a reverse proxy means the proxy's hostname must be listed or requests are rejected with `421`. | `internal/api/server.go` |
 | `DLTOOL_SESSION_TTL` | duration | `720h` | no | infrastructure | Lifetime of a session cookie and its `sessions` row. | `internal/secure/session.go` |
 | `DLTOOL_METRICS_ADDR` | listen addr \| `off` | `127.0.0.1:9090` | no | infrastructure | Separate listener exposing `GET /metrics`. The exact lowercase value `off` disables metrics entirely — an empty string cannot express this, because empty means "unset" and falls back to the default. | `internal/obs/metrics.go` |
 | `DLTOOL_ARIA2_URL` | url | *(empty)* | no | infrastructure | aria2 JSON-RPC endpoint, e.g. `http://aria2:6800/jsonrpc`. Empty disables the aria2 lane and every HTTP/FTP/SFTP/Metalink task fails with `engine_unavailable`. | `internal/engine/aria2/client.go` |
@@ -85,6 +88,26 @@ column names the package that consumes the parsed field.
 | `DLTOOL_NOTIFY_URL` | url | *(empty)* | no | preference | Seeds one enabled `notification_channels` row of kind `webhook` with this URL. | `internal/jobs/handlers_notify.go` |
 
 Every variable marked **secret** also accepts a `_FILE` suffixed sibling — see §6.
+
+One deliberate absence: there is **no** variable, settings key or API field for the completion hook
+([FR-105](02-requirements.md#fr-105-run-a-completion-hook-installed-by-the-operator)). The hook is an
+executable the operator installs at `<DLTOOL_CONFIG_DIR>/hooks/on-complete`; its existence is the switch —
+absent means off, present but not executable by `PUID:PGID` also means off, with the warning emitted by
+the same per-finished-task evaluation that would run it. The check runs per finished task, so installing
+the hook takes effect on the next completion without a restart. The durable invariant behind the
+security claim is **path control, not payload format**: no HTTP endpoint writes any file into
+`<DLTOOL_CONFIG_DIR>` — uploads land in the data roots, settings import writes only database rows, and
+the only writers into the config directory are the process itself and the local `dl-tool restore` CLI,
+which needs host access — so a hijacked web session cannot plant or alter the command that runs. argv,
+environment, timeout and tests are owned by task [T078](tasks/T078-completion-hook.md).
+
+`DLTOOL_ALLOWED_HOSTS` contains ASCII DNS names only: no scheme, path, port or wildcard. Internationalised
+names are supplied in their ASCII Punycode form. Parsing lowercases each name and removes one trailing root
+dot. Request validation removes a syntactically valid port, applies the same normalisation, and requires an
+exact match. It checks the received `Host`, never `X-Forwarded-Host`. An empty list accepts only the implicit
+loopback names and literal IP addresses.
+
+`DLTOOL_CONFIG_LOCK` is environment-only. Settings export and import neither contain nor change it.
 
 ---
 
@@ -145,9 +168,9 @@ flat and lowercase. This table is the authoritative key list referenced by
 | `max_active_per_user` | integer, `0` = unlimited | `3` | `PATCH /settings` |
 | `process_order` | enum `by_date_created\|by_user_round_robin` | `by_date_created` | `PATCH /settings` |
 | `rss_enabled` | boolean | `true` | `PATCH /settings` |
-| `rss_interval_s` | integer seconds, minimum `300` | `900` | `PATCH /settings` |
+| `rss_interval_s` | integer seconds, minimum `300` | `1800` | `PATCH /settings` — the global poll interval and its 5-minute floor are owned by [`08-rss-automation.md`](08-rss-automation.md) §2.1 |
 | `auto_extract` | boolean | `false` | `PATCH /settings` |
-| `extract_passwords` | **secret** array of strings | `[]` | `PATCH /settings` |
+| `extract_passwords` | **secret** array of strings, encrypted at rest (§6) | `[]` | `PATCH /settings` |
 | `confirm_on_delete` | boolean | `true` | `PATCH /settings` |
 
 Seeding does not count toward any `max_active_*` limit. The 168-cell bandwidth grid is not a settings key: it
@@ -162,10 +185,27 @@ lives in its own table and is replaced through `PUT /settings/schedule`. Per-use
 |---|---|---|
 | `DLTOOL_ARIA2_SECRET` | env or `DLTOOL_ARIA2_SECRET_FILE` | logged, returned by any endpoint, or written to a backup export |
 | `DLTOOL_QBITTORRENT_PASSWORD` | env or `DLTOOL_QBITTORRENT_PASSWORD_FILE` | logged, returned by any endpoint, or written to a backup export |
-| `extract_passwords` | `settings` row | returned in clear by `GET /settings` — it renders as `"__redacted__"` |
-| indexer `api_key` | `indexers` row | returned by `GET /indexers`, or included in a log line or an error message |
-| notification channel `secret_enc` | `notification_channels` row | returned by `GET /notifications` |
-| session signing key, CSRF HMAC key | `<CONFIG_DIR>/secrets.env`, mode `0600` | exported, or exposed through any API |
+| `extract_passwords` (the shared list) | `settings` row, encrypted at rest with `DLTOOL_SECRET_KEY` (see below) | returned in clear by `GET /settings` — it renders as `"__redacted__"` |
+| `tasks.extract_password` (per task) | `tasks` column, encrypted at rest with `DLTOOL_SECRET_KEY` | returned by any API at all — it is absent from every Task object ([`05-api-contract.md`](05-api-contract.md) §3) |
+| indexer `api_key` | `indexers.api_key_enc`, encrypted at rest | returned by `GET /indexers`, or included in a log line or an error message |
+| notification channel `secret_enc`, engine `secret_enc` | `notification_channels`/`engines` rows, encrypted at rest | returned by `GET /notifications` or `/engines` |
+| at-rest secret key `DLTOOL_SECRET_KEY`, `ARIA2_RPC_SECRET` | `<CONFIG_DIR>/secrets.env`, mode `0600` | exported, or exposed through any API |
+
+**One value, two names.** `ARIA2_RPC_SECRET` (the compose-level name) and `DLTOOL_ARIA2_SECRET` (the
+application variable) hold the **same** value: `compose.yaml` interpolates the one `.env` entry into the
+aria2 service and into dl-tool's `DLTOOL_ARIA2_SECRET`. The `.env` entry is the single source — an
+operator who copies `ARIA2_RPC_SECRET` into `.env` per step 3 below has configured dl-tool's side too.
+Provisioning `DLTOOL_ARIA2_SECRET` directly (inline or `_FILE`) reaches only dl-tool, so aria2's RPC
+secret must then be made to match by hand; a mismatch shows up as aria2 rejecting every request and the
+engine reading unhealthy.
+
+**At-rest encryption.** Every `*_enc` column and the extraction passwords are sealed with
+`DLTOOL_SECRET_KEY`: XChaCha20-Poly1305 with a 32-byte key and a fresh random nonce per value, the nonce
+stored alongside the ciphertext. The key lives only in `secrets.env` and in process memory; it is never
+logged, exported or returned. Sessions and CSRF tokens do **not** use it — session ids are opaque random
+values stored hashed in `sessions`, and the CSRF token is a per-session random value
+([`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.1–6.2) — so no session or CSRF
+key exists.
 
 Rules:
 
@@ -188,13 +228,19 @@ Rules:
 
 1. Run `dl-tool gen-secrets` (or `openssl rand -base64 32`) before the first `docker compose up`. It writes
    `<CONFIG_DIR>/secrets.env` mode `0600`, owned by `PUID:PGID`, if that file does not already exist.
-2. The file contains three values, each 32 bytes from `crypto/rand`, base64url-encoded:
-   `ARIA2_RPC_SECRET`, `DLTOOL_SESSION_KEY`, `DLTOOL_CSRF_KEY`.
+2. The file contains two values, each 32 bytes from `crypto/rand`, base64url-encoded:
+   `ARIA2_RPC_SECRET` and `DLTOOL_SECRET_KEY` (the at-rest encryption key above).
 3. Copy `ARIA2_RPC_SECRET` into `.env` so Compose can interpolate it into both services.
-4. At every boot dl-tool regenerates any of the three that is missing from `secrets.env`. A regenerated
-   session key invalidates all sessions; a regenerated `ARIA2_RPC_SECRET` does **not** reconfigure the
-   running aria2 container, so dl-tool logs `aria2_secret_rotated` and marks the engine unhealthy until the
-   operator restarts it.
+4. At every boot dl-tool regenerates either value that is missing from `secrets.env`. A regenerated
+   `DLTOOL_SECRET_KEY` makes every encrypted value undecryptable, and every affected surface says so: the
+   boot logs one `warn` record with event code `secret_key_regenerated`, indexers, channels and engines
+   get `last_error = 'secret_lost'` (a row-level error string, not a `tasks.error_code`), the
+   `extract_passwords` settings row is cleared and renders as the literal `"__lost__"` on
+   `GET /settings` — distinct from `"__redacted__"`, so "wiped by key loss" is tellable from "none
+   configured", and `PATCH` treats it like `"__redacted__"` (a no-op) — and each affected task's
+   `extract_password` is nulled with one `task_events` row. Nothing is wiped silently. A regenerated
+   `ARIA2_RPC_SECRET` does **not** reconfigure the running aria2 container, so dl-tool logs
+   `aria2_secret_rotated` and marks the engine unhealthy until the operator restarts it.
 
 ---
 
@@ -236,12 +282,14 @@ ARIA2_RPC_SECRET=Zk8s1QmF3rT9vN2xJ7bH5cW0aY4pL6dE8gU1oI3sK5M
 # --- dl-tool: infrastructure ---
 DLTOOL_HTTP_ADDR=:8080
 DLTOOL_BASE_PATH=
+DLTOOL_ALLOWED_HOSTS=
+DLTOOL_CONFIG_LOCK=false
 DLTOOL_CONFIG_DIR=/config
 DLTOOL_DATA_ROOTS=/data
 DLTOOL_DB_PATH=/config/dl-tool.db
 DLTOOL_LOG_LEVEL=info
 DLTOOL_LOG_FORMAT=json
-DLTOOL_TRUSTED_PROXIES=172.16.0.0/12
+DLTOOL_TRUSTED_PROXIES=
 DLTOOL_SESSION_TTL=720h
 DLTOOL_METRICS_ADDR=127.0.0.1:9090
 DLTOOL_ARIA2_URL=http://aria2:6800/jsonrpc
@@ -280,6 +328,7 @@ stated fallback.
 | Unparseable value | bool, duration, integer, enum, CIDR list | Fatal, naming the variable and the received value. | `config_malformed` |
 | Not a valid `host:port` | `DLTOOL_HTTP_ADDR`, `DLTOOL_METRICS_ADDR` | Fatal. `DLTOOL_METRICS_ADDR` additionally accepts the literal `off`. | `config_malformed` |
 | Missing leading `/`, or trailing `/` | `DLTOOL_BASE_PATH` | Fatal. | `config_malformed` |
+| URL, port, wildcard, non-ASCII or invalid DNS name | `DLTOOL_ALLOWED_HOSTS` | Fatal. | `config_malformed` |
 | Not an absolute path | `DLTOOL_CONFIG_DIR`, `DLTOOL_DATA_ROOTS`, `DLTOOL_DB_PATH`, `DLTOOL_WATCH_DIR` | Fatal. | `config_malformed` |
 | Directory missing or not writable | `DLTOOL_CONFIG_DIR`, directory of `DLTOOL_DB_PATH` | Fatal, after attempting one `MkdirAll`. | `config_path_unwritable` |
 | Directory missing or not writable | any entry of `DLTOOL_DATA_ROOTS` | Warn. Boot continues so the UI can show the problem — a NAS data mount may simply be late — and operations touching that root fail per request with `path_rejected` until it appears. Writability is re-probed after every settings change and lazily on each operation, so recovery needs no restart. The root is never `MkdirAll`-ed: creating the directory would silently mask an unmounted volume. | `data_root_not_writable` |
@@ -317,6 +366,15 @@ stated fallback.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Consistency review: removed the withdrawn ADR-0014 row and the two remaining façade references (the `preference` category description and `DLTOOL_HTTP_ADDR`); corrected the ADR-0011, ADR-0012 and ADR-0018 links to the canonical filenames. |
+| 2026-09-01 | §2 now records the completion hook's deliberate absence from every configuration surface: the fixed path `<DLTOOL_CONFIG_DIR>/hooks/on-complete` is the switch (FR-105, T078). |
+| 2026-09-01 | Secrets corrected: `DLTOOL_SESSION_KEY`/`DLTOOL_CSRF_KEY` removed (opaque server-side sessions and per-session CSRF tokens need no key) and replaced by `DLTOOL_SECRET_KEY`, the previously unspecified key behind every "encrypted at rest" `*_enc` column and the extraction passwords; its loss-and-regeneration behaviour is specified. |
+| 2026-09-01 | Review pass: the `DLTOOL_SECRET_KEY` loss story names every affected surface (row-level `secret_lost` markers — not a `tasks.error_code` — plus the cleared `extract_passwords` setting and one `task_events` row per nulled per-task password); the two extraction-password carriers are split into their own rows; NFR-023 names each secret's file and mode. |
+| 2026-09-01 | Review pass 2: the `secret_key_regenerated` boot log is restored (the aria2 branch's `aria2_secret_rotated` keeps its twin), and a key-lost `extract_passwords` renders as the literal `"__lost__"` — distinct from `"__redacted__"` and a no-op on PATCH — so the wipe is assertable, not vague. |
+| 2026-09-01 | Review pass 4: the `ARIA2_RPC_SECRET` ↔ `DLTOOL_ARIA2_SECRET` equivalence is stated once, explicitly — one `.env` value, interpolated by Compose into both consumers — instead of leaving two names for one secret across the table and step 3. |
+| 2026-09-01 | Review pass 5: the equivalence names the `.env` entry as the single source — a directly set `DLTOOL_ARIA2_SECRET` (inline or `_FILE`) reaches only dl-tool and must be matched by hand on the aria2 side. |
+| 2026-09-01 | Contradiction fix: `rss_interval_s` default 1800 and minimum 300, matching `08-rss-automation.md` §2.1 (30-minute default, 5-minute floor), which owns the value. |
 | 2026-09-01 | §4 gains the engine-lane interpolation variables (`DLTOOL_QBITTORRENT_URL`, `QBT_USERNAME`, `QBT_PASSWORD`, `DLTOOL_ARIA2_URL`); all default to empty, matching the compose fix in [`10-deployment-and-compose.md`](10-deployment-and-compose.md) §2 — an empty URL disables the lane instead of making §8's missing-credential check fatal on a fresh boot. |
 | 2026-09-01 | Review pass: the `ARIA2_RPC_SECRET` and `QBT_WEBUI_PORT` rows were rewritten too (single-source note; the URL is no longer port-derived), and the two `DLTOOL_*_URL` rows read as pass-through application config, not producers of other fields. |
 | 2026-09-01 | Review pass: the aria2 rows state both guards — the fatal `config_missing` boot check when the URL is set and the secret is empty, and the entrypoint refusal under the profile — matching the qBittorrent row's failure model and doc 10's "guarded twice" paragraph. |
+| 2026-09-01 | Added `DLTOOL_ALLOWED_HOSTS`, the previously unspecified knob behind the Host-allowlist defence in `12-security-and-threat-model.md` §6.5. |
+| 2026-09-01 | Security review: added the Host allowlist and environment-only configuration lock; made the trusted-proxy example deny forwarded headers by default. |

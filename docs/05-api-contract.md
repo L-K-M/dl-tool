@@ -69,6 +69,10 @@ Two credentials, both accepted on every authenticated endpoint. There is no anon
   `admin` in §2 return `403` `/problems/forbidden` to everyone else.
 - While no user row exists, every endpoint except `POST /auth/setup` returns `401`
   `/problems/setup-required`.
+- When `DLTOOL_CONFIG_LOCK=true`, mutations under `/settings`, `/engines`, `/indexers`, `/feeds`,
+  `/rules`, `/categories`, `/tags`, `/watch-folders` and `/notifications` return `403`
+  `/problems/config-locked`. Reads and task, user, authentication, token and backup operations remain
+  available.
 
 ### 1.3 Errors — RFC 9457 `application/problem+json`
 
@@ -98,6 +102,7 @@ Slug registry. No endpoint may invent a slug outside this table.
 | `/problems/setup-required` | 401 | No user exists yet; only `POST /auth/setup` is callable. |
 | `/problems/unauthenticated` | 401 | Absent, expired or revoked cookie or bearer token. |
 | `/problems/forbidden` | 403 | Authenticated but not permitted (non-admin on an admin endpoint). |
+| `/problems/config-locked` | 403 | An environment lock forbids this configuration mutation. |
 | `/problems/csrf-token-missing` | 403 | Cookie auth on a mutating request without a valid `X-DLTOOL-CSRF`. |
 | `/problems/path-rejected` | 403 | A path resolves outside `DLTOOL_DATA_ROOTS`, or is not writable. |
 | `/problems/ssrf-blocked` | 403 | An outbound URL resolved to a blocked address ([`12-security-and-threat-model.md`](12-security-and-threat-model.md)). |
@@ -316,7 +321,10 @@ Set-Cookie: dltool_session=6f1c...; Path=/; HttpOnly; SameSite=Lax
 ```
 
 Statuses: `201` · `401` `/problems/unauthenticated` (wrong token) · `409`
-`/problems/setup-already-complete` · `422` `/problems/validation-failed` (password under 12 characters).
+`/problems/setup-already-complete` · `422` `/problems/validation-failed` (password under 12 characters) ·
+`429` `/problems/rate-limited` — the login throttle of
+[`12-security-and-threat-model.md`](12-security-and-threat-model.md) §6.3 covers this endpoint while it is
+callable, because a guessed token mints the admin account.
 
 ### 4.2 `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`
 
@@ -354,7 +362,12 @@ GET /api/v1/tasks?state=active&sort=-download_rate&limit=2
 {"items":[{"id":"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X","state":"downloading"}],"next_cursor":null,"total":8}
 ```
 
-`items` entries are full Task objects; the fragment above is abbreviated. Statuses: `200` · `401` · `422`
+`items` entries are full Task objects; the fragment above is abbreviated.
+
+Normal task lists and every sidebar filter omit `removed` tombstones. An explicit `state=removed` query lists
+them; `GET /tasks/{id}` and its event endpoint remain available after removal.
+
+Statuses: `200` · `401` · `422`
 `/problems/validation-failed` (unknown `sort`, `limit` out of range, stale `cursor`).
 
 ### 5.2 `POST /tasks`
@@ -512,29 +525,29 @@ in this order, and never approximate any step:
 
 | # | Step | Rule |
 |---|---|---|
-| 1 | Stop the task at its engine | A `seeding` or `downloading` task is stopped and its engine handle removed **before** any unlink. Never unlink a file an engine still has open. |
-| 2 | Enumerate the targets | Only rows of `task_files` for this task, resolved against `tasks.destination`. Never a glob, never a directory walk, never `content_path` alone. |
-| 3 | Re-check every path, before unlinking any of them | Each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS` **and** inside the caller's jail (§7.2). One failing path aborts the whole request with `403` `/problems/path-rejected` and an `errors[]` entry naming it; nothing at all is unlinked. |
-| 4 | Unlink | One `unlink(2)` per recorded file. Then remove the task's own directory only while it is empty; a non-empty directory is left in place. |
-| 5 | Record it | Write one `task_events` row with `level:"warn"`, `code:"task.data_deleted"` and the file count and byte total in `detail`. The row survives the task row through the cascade window and is written before the response. |
-| 6 | Delete the row | `tasks`, and its `task_files`, `task_trackers` and `task_tags` rows by cascade. |
+| 1 | Enumerate the targets | Only rows of `task_files` for this task, resolved against `tasks.destination`. Never a glob, never a directory walk, never `content_path` alone. |
+| 2 | Validate every target | Before any side effect, each resolved path, symlinks included, must lie inside `DLTOOL_DATA_ROOTS` **and** the caller's jail (§7.2). One failure returns `403` `/problems/path-rejected`; the engine and filesystem remain untouched. |
+| 3 | Remove the engine handle | Call `Engine.Remove`, which always instructs the engine to retain payload data. This must finish before any unlink so no file remains open by the engine. |
+| 4 | Unlink through `internal/fsx` | One `unlink(2)` per validated file. Then remove the task's own directory only while empty; leave a non-empty directory in place. Engine adapters never perform this step. |
+| 5 | Record it | In a database transaction write `task.removed`; for `delete_data=true`, also write `task.data_deleted` with the file count and byte total. |
+| 6 | Mark the tombstone | In the same transaction set `state="removed"`, clear `engine_ref`, zero both rates, clear ETA, and commit. Retain the task and all child rows. |
 
 - **Hardlinks are expected and safe.** A file dl-tool downloaded and then hardlinked into a media library is
   one inode with two names; unlinking dl-tool's name leaves the library copy byte-for-byte intact and fully
   readable. This is the normal outcome of the single `/data` mount
   ([ADR-0012](decisions/0012-single-data-mount.md)) and is not a partial deletion — do not warn about it and
   do not try to detect it.
-- `delete_data=false`, the default, unlinks nothing at all: the row goes, every byte stays.
+- `delete_data=false`, the default, skips steps 1, 2 and 4: the retained task enters `removed` and every byte stays.
 - A file recorded in `task_files` that no longer exists is not an error; it is counted in `missing`.
 - The response body reports what happened, so a client never has to guess:
 
 ```json
-{"deleted":true,"delete_data":true,"files_unlinked":3,"bytes_unlinked":5583457280,"missing":0}
+{"removed":true,"delete_data":true,"files_unlinked":3,"bytes_unlinked":5583457280,"missing":0}
 ```
 
 `200` with that body · `404` · `422` `/problems/validation-failed` when both flags are true · `403`
-`/problems/path-rejected` (step 3) · `503` `/problems/engine-unavailable` when step 1 could not be
-completed — the task is **not** deleted and no file is unlinked.
+`/problems/path-rejected` (step 2) · `503` `/problems/engine-unavailable` when step 3 could not be
+completed — the task is **not** removed and no file is unlinked.
 
 ### 5.7 `POST /tasks/actions`
 
@@ -697,6 +710,11 @@ data: {"rid":43,"full_update":false,"tasks":{"tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X":{"
 Server rules:
 
 - Keep an in-memory ring buffer of the last **300** deltas keyed by rid (≈5 minutes at 1 Hz).
+- Keep owner ids as internal metadata for every changed or removed task. Before serialization, project the
+  coalesced delta through the authenticated caller: an admin receives all tasks; a non-admin receives only
+  their tasks. Strip the internal metadata from the response.
+- Scope `tasks_removed`, `stats`, and category or tag task counts to the same caller. An id enters
+  `tasks_removed` when a task that was visible to that caller is removed or reassigned away from them.
 - On connect, read the `Last-Event-ID` request header. That header **is** the rid; there is no separate
   client-side bookkeeping.
 - If `Last-Event-ID` is inside the ring, send the coalesced diff from that rid onward. If it is absent,
@@ -719,7 +737,7 @@ in-band — the server closes the connection and `EventSource` reconnects.
 
 Query: `rid` (integer, optional, default `0`) — the last rid the client holds. `0`, or a rid outside the
 ring, forces a full update. The response body is **byte-for-byte the same JSON object** as an SSE `data:`
-payload, delivered as `application/json` with no event framing.
+payload for the same authenticated caller and rid, delivered as `application/json` with no event framing.
 
 ```http
 GET /api/v1/sync?rid=42
@@ -987,14 +1005,26 @@ to the job's results. To turn results into tasks, `POST /tasks` with
 
 ```json
 {"id":"fed_01JKQ7...","url":"https://archlinux.org/feeds/releases/","title":"Arch Linux releases",
- "enabled":true,"refresh_interval_s":0,"item_cap":50,"unread_count":3,
+ "enabled":true,"refresh_interval_s":0,"item_cap":50,"priority":0,"unread_count":3,
  "last_fetch_at":"2026-09-01T09:30:00Z","last_success_at":"2026-09-01T09:30:00Z",
  "next_fetch_at":"2026-09-01T10:30:00Z","escalation_level":0,"disabled_till":null,"last_error":null}
 ```
 
 `refresh_interval_s: 0` means "use the global RSS interval". `POST /feeds` requires `url` and accepts
-`title`, `enabled`, `refresh_interval_s`, `item_cap`; `PATCH /feeds/{id}` accepts the same set;
-`DELETE /feeds/{id}` returns `204` and cascades to the feed's items.
+`title`, `enabled`, `refresh_interval_s`, `item_cap`, `priority` and `auto_download`;
+`PATCH /feeds/{id}` accepts the same set. On both verbs `auto_download: true` creates the
+`auto:<feed_id>` rule when it does not exist and `false` deletes it, so a misticked box is undone without
+deleting the feed and its read state; `DELETE /feeds/{id}` returns `204`, deletes the `auto:` rule and
+cascades to the feed's items. `priority` is only the per-run tie-break of the rule engine
+([`08-rss-automation.md`](08-rss-automation.md) §5 step 13): when two feeds carry the same content, the
+lower `priority` feed's copy wins; it affects neither polling nor display.
+
+The add-dialog's *Automatically download all items* checkbox
+([`09-web-ui-spec.md`](09-web-ui-spec.md) §8.1, Download Station's own option) is **not** a `feeds`
+column: `POST /feeds` accepts it as `auto_download` (boolean, default `false`) and, when true, creates an
+enabled rule named `auto:<feed_id>` scoped to that one feed, with an empty `match` block — which passes
+every item ([`08-rss-automation.md`](08-rss-automation.md) §4.2) — and the caller's default destination
+as `action.destination`.
 
 **Credential-bearing feeds are admin-only**, mirroring §9.1's key-bearing-indexer rule: a feed whose URL
 contains userinfo (`https://user:pass@…`) or a `passkey`, `apikey` or `token` query parameter — the same
@@ -1154,7 +1184,7 @@ defaults and environment counterparts live in [`11-config-reference.md`](11-conf
 {"download_rate_limit":0,"upload_rate_limit":0,
  "alt_download_rate_limit":5242880,"alt_upload_rate_limit":1048576,
  "schedule_enabled":true,"default_destination":"/data",
- "rss_enabled":true,"rss_interval_s":900,
+ "rss_enabled":true,"rss_interval_s":1800,
  "auto_extract":true,"extract_passwords":"__redacted__",
  "process_order":"by_date_created","confirm_on_delete":true}
 ```
@@ -1229,6 +1259,15 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 Both verbs return `200` with the stored document. `401` · `413` `/problems/payload-too-large` above 64 KiB ·
 `422` `/problems/validation-failed` when the body is not a JSON object.
 
+Saved searches ([FR-057](02-requirements.md#fr-057-save-and-re-run-a-search)) ride in this document
+rather than owning endpoints: the SPA stores them under the `search` member (`{indexerIds, categories,
+saved[]}`), the server stores and returns it verbatim like every unknown member, and re-running is
+`POST /search` with the stored selection. The 50-entry cap is client-enforced (T064's
+`TestFiftyEntryCap`); the server's only bound on the whole document is the 64 KiB cap above. The member's
+shape is owned by [`09-web-ui-spec.md`](09-web-ui-spec.md) §3.3 and built by task T064; no `/search/saved`
+surface exists. Like the rest of `/prefs`, the member is per-user UI state and is **not** part of the
+`GET /settings/export` document (§11.5).
+
 ### 11.5 `GET /settings/export` and `POST /settings/import`
 
 A portable, versioned settings document, so an instance can be rebuilt without carrying a database file
@@ -1258,7 +1297,7 @@ therefore every `password_hash`), `api_tokens`, `notification_channels.secret_en
 ```json
 GET /settings/export →
 {"document_version":1,"exported_at":"2026-09-01T09:45:00Z","schema_version":1,
- "settings":{"download_rate_limit":0,"rss_interval_s":900,"auto_extract":true},
+ "settings":{"download_rate_limit":0,"rss_interval_s":1800,"auto_extract":true},
  "categories":[{"name":"linux","save_path":"/data/iso"}],
  "indexers":[{"name":"Internet Archive","kind":"dlsearch","enabled":true,"url":null,
               "definition_id":"internet-archive","priority":50,"settings":{}}],
@@ -1318,6 +1357,11 @@ independently and report different error codes — see §5.11 and
 [`04-data-model.md`](04-data-model.md). `default_destination` doubles as the user's filesystem jail (§7.2),
 so setting it is what makes a non-admin able to browse and download at all.
 
+`tasks.owner_id` is `ON DELETE RESTRICT` ([`04-data-model.md`](04-data-model.md) §3.1), so
+`DELETE /users/{id}` for a user who still owns tasks is `409` `/problems/conflict` naming the task count;
+the caller deletes or re-assigns the tasks first. A user may always be disabled instead
+(`{"enabled":false}` on `PATCH`), which keeps the rows and revokes access at once.
+
 Statuses: `200`/`201`/`204` · `403` `/problems/forbidden` (caller is not an admin, or the request would
 delete or disable the last enabled admin) · `404` · `409` `/problems/conflict` (username exists,
 case-insensitively, or the user still owns tasks or rules — both foreign keys are `ON DELETE RESTRICT`,
@@ -1375,7 +1419,7 @@ default `info`, minimum level of `debug` \| `info` \| `warn` \| `error`) · `sin
 `__redacted__` before a record is stored, not at read time.
 
 `POST /system/backup` is admin-only, takes no body, runs `VACUUM INTO` and returns `201`
-`{"path":"/config/backups/dl-tool-20260901T094500Z.db","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}`.
+`{"path":"/config/backups/dl-tool.db.20260901T094500Z.bak","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}`.
 `403` · `409` `/problems/conflict` when a backup is already running · `500` `/problems/internal`.
 
 ### 13.1 Process endpoints outside `/api/v1`
@@ -1516,12 +1560,9 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 
 ## Open questions
 
-- [NEEDS CLARIFICATION: `04-data-model.md` gives `tasks` a single `destination` column, while
-  [FR-044](02-requirements.md#fr-044-report-the-effective-destination) requires the requested and effective
-  destinations to be distinguishable. This file returns both `destination` (effective) and
-  `requested_destination`; the second needs a column, or 04 must say where it is derived from.]
-- [NEEDS CLARIFICATION: [FR-057](02-requirements.md#fr-057-save-and-re-run-a-search) requires saved
-  searches, but the canonical API surface lists no endpoint for them, so no shape is defined here.]
+- (none — the two former items were resolved 2026-09-01: `requested_destination` is a `tasks` column in
+  [`04-data-model.md`](04-data-model.md) §3.3, and saved searches are a `search` member of the `/prefs`
+  document per §11.4, built by T064)
 
 ## Change log
 
@@ -1531,8 +1572,18 @@ Statuses across this group: `200`/`201`/`204` · `403` `/problems/forbidden` · 
 | 2026-09-01 | Compatibility façades cut: `/api/v2/*`, `/webapi/*`, §14 and the `compat` block on `GET /system/info` removed; dl-tool serves `/api/v1` only. Added `/tags`, `/watch-folders`, `/prefs`, `/notifications`, `/settings/export` and `/settings/import`. Added `/problems/concurrency-limit` and §5.11 quota-versus-concurrency semantics. Specified `delete_data` step by step and the per-user filesystem jail. Corrected the file-priority vocabulary to `skip`/`normal`/`high`/`maximum` = `0`/`1`/`6`/`7`. Added `infohash_v1` and `infohash_v2` to the Task object. ADR links moved to the canonical slugs. |
 | 2026-09-01 | Migration subsystem cut: §16 and the `/migrations/download-station`, `/migrations/qbittorrent` and `/migrations/files` endpoints deleted, together with their report envelope and every Synology Web API call. `GET /settings/export`, `POST /settings/import`, `POST /tasks` file uploads, `POST /tasks/inspect` and the watch folders are unaffected. Spelled out the `.torrent`/`.txt` multipart parts on `POST /tasks`; dropped the ADR-0017 row and the `/migrations/*` open question; removed T114 from the read-before list. |
 | 2026-09-01 | Consistency review: `GET`/`PUT /settings/schedule` now document the read-only `timezone` and `active_mode` members that `09-web-ui-spec.md` and T080/T110 rely on. |
+| 2026-09-01 | `POST /auth/setup` gains `429 /problems/rate-limited`: the login throttle covers it while it is callable. |
 | 2026-09-01 | Privilege review: rule and feed **writes** are admin-only (a rule creates tasks on someone's behalf, mirroring the watch-folder rule), `POST /rules` gains `owner_id` with save-time and grab-time jail validation of `action.destination`, and rule-grabbed tasks are owned by and quota-accounted to that owner through §5.11. Indexers with a stored API key are admin-only across `GET /indexers`, `GET /indexers/categories` and `POST /search`, because their download URLs embed the operator's tracker passkey. |
 | 2026-09-01 | Review pass: `POST /rules/{id}/run` is admin-only like rule writes (it creates tasks as the owner); `POST /rules/test` takes `owner_id` so dry-run jail checks target the right jail; an omitted `action.destination` resolves to the owner's default destination and the resolved value must pass the jail check; credential-bearing feeds (URL userinfo or `passkey`/`apikey`/`token`) are admin-only like key-bearing indexers; `DELETE /users/{id}` is `409` while the user owns tasks or rules (`ON DELETE RESTRICT`). |
 | 2026-09-01 | Review pass 2: `POST /rules/test`'s `owner_id` is admin-only (a non-admin tests as themselves, so the dry run cannot probe another user's jail or read their resolved default destination). |
 | 2026-09-01 | Review pass 3: the `/rules/test` `owner_id` rejection is spelled out — a non-admin naming anyone but themselves gets `403 /problems/forbidden`. |
+| 2026-09-01 | Contradiction fix: the `POST /system/backup` example path now uses the `dl-tool.db.<UTC>.bak` form owned by `04-data-model.md` §6. |
+| 2026-09-01 | Review pass: the two settings examples carry `rss_interval_s: 1800`, matching the corrected default. |
+| 2026-09-01 | Closed both open questions: `requested_destination` became a `tasks` column, and saved searches are specified as a `search` member of the `/prefs` document (§11.4, task T064) — no `/search/saved` surface. The feed object gains `priority` (the rule engine's per-run tie-break) and `POST /feeds` gains `auto_download`, which creates the `auto:<feed_id>` rule behind the dialog's Download-Station checkbox. `DELETE /users/{id}` for a user who still owns tasks is `409`, matching `ON DELETE RESTRICT`. |
+| 2026-09-01 | Review pass: the users-group `409` enumeration now names the owned-rows case; the saved-search 50-entry cap is stated as client-enforced (the server's bound is the 64 KiB document cap) and `/prefs` is excluded from the settings export; `PATCH /feeds/{id}` accepts `auto_download` so the checkbox is reversible without deleting the feed. |
+| 2026-09-01 | Review pass 2: both feed verbs list `auto_download` explicitly — the earlier "plus" wording read as if `POST /feeds` rejected the field the add dialog sends. |
+| 2026-09-01 | Scoped live task deltas, removals and aggregates to the authenticated caller. |
+| 2026-09-01 | Replaced destructive task-row deletion with retained tombstones and confined filesystem removal. |
+| 2026-09-01 | Aligned the backup API filename with the canonical recovery format. |
+| 2026-09-01 | Security review: specified the environment-only configuration lock and its stable error slug. |
 | 2026-09-01 | Security review: replaced client-visible search acquisition URLs with opaque result ids. |

@@ -187,7 +187,8 @@ Filter", is the cautionary tale for getting the default wrong.
 |---|---|
 | Connect timeout · total request timeout | 10 s · 120 s |
 | Redirect hops | 5 |
-| Body, metadata fetch (`.torrent`, feed, indexer page) | 8 MiB, enforced while streaming |
+| Body, metadata fetch (`.torrent`, indexer page) | 8 MiB, enforced while streaming |
+| Body, feed poll | 16 MiB, enforced while streaming — owned by [`08-rss-automation.md`](08-rss-automation.md) §2.1 |
 | Response headers | 100 headers, 64 KiB total |
 
 Every block logs one `warn` record carrying `url_redacted`, `resolved_ip`, `matched_prefix` and `hop`
@@ -445,7 +446,7 @@ Imported engines start disabled and record their provenance.
 
 | Attribute | Value |
 |---|---|
-| Name | `dltool_session` |
+| Name | `__Host-dltool_session` when the listener itself terminates TLS at the root, `__Secure-dltool_session` when the listener itself terminates TLS under a base path, plain `dltool_session` otherwise — browsers reject a prefixed cookie without `Secure`, and the name is fixed at boot, so the prefix can only follow the listener's static TLS state. This is deliberately a **stronger** condition than the `Secure` row's per-request `X-Forwarded-Proto` judgement: behind a TLS-terminating proxy the cookie is therefore `Secure` yet unprefixed (valid, one notch less hardened). Chosen at boot from `DLTOOL_BASE_PATH` and the listener's TLS state ([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §7.3) |
 | Flags | `HttpOnly`, `SameSite=Lax`, `Path=<base path>/` |
 | `Secure` | set whenever the request arrived over TLS, judged from the listener or from `X-Forwarded-Proto` sent by a `DLTOOL_TRUSTED_PROXIES` peer; otherwise omitted and a startup warning is logged |
 | Value | ≥ 128 bits from `crypto/rand`, opaque, stored server-side in `sessions` |
@@ -483,7 +484,8 @@ adopt Transmission's token approach instead. Three layers, because proxies break
 Brute-force controls in `internal/secure/session.go`: per-account exponential backoff starting at 1 s,
 doubling, capped at 15 minutes; a per-source-IP token bucket of 10 attempts per 5 minutes keyed on the
 peer address (or the `X-Forwarded-For` entry from a trusted proxy, never a forged one); `429` with
-`Retry-After` on exhaustion. **Never a permanent lockout** — it strands a single-admin home server and
+`Retry-After` on exhaustion. The same bucket covers `POST /auth/setup` while it is callable (§6.4).
+**Never a permanent lockout** — it strands a single-admin home server and
 is itself a denial-of-service primitive. Every failed login writes one record with a stable event code
 and the source IP for fail2ban or CrowdSec; the repository ships the matching filter regex.
 
@@ -492,11 +494,18 @@ and the source IP for fail2ban or CrowdSec; the repository ships the matching fi
 Authentication is mandatory ([ADR-0013](decisions/0013-mandatory-built-in-authentication.md)): no
 built-in account, no default password, no anonymous mode, no "disabled for local addresses" escape.
 
-1. On first start with an empty `users` table, dl-tool generates a one-time setup token, prints it to
-   stdout and writes `<config>/setup-token` mode `0600`.
+1. On first start with an empty `users` table, dl-tool generates a one-time setup token — 32 bytes from
+   `crypto/rand`, base64url-encoded (256 bits, no predictable prefix) — prints it to stdout and writes
+   `<config>/setup-token` mode `0600`. The token is regenerated on every boot while the `users` table is
+   still empty, so a token leaked in an old log is worthless after the next restart.
 2. Every endpoint except `POST /auth/setup` returns `401` `/problems/setup-required`.
 3. `POST /auth/setup` requires that token and creates the first admin with a password of at least 12
-   characters; on success the token file is deleted and the endpoint returns `409` thereafter.
+   characters; on success the token file is deleted and the endpoint returns `409` thereafter. While it
+   is callable it sits behind the same per-source-IP token bucket as login (§6.3), with the identical
+   `429` + `Retry-After`, because a guessed setup token creates the admin account outright and there is
+   no account to lock out afterwards. A failed attempt writes its own stable event code,
+   `auth.setup_failed`, so log-based alerting can tell a fresh-install takeover attempt from routine
+   password spraying; the shipped fail2ban filter matches both codes.
 4. No admin password is ever accepted from an environment variable in the shipped compose file — it
    would land in `docker inspect`, `docker compose config` and shell history.
 
@@ -518,8 +527,12 @@ protection"; its `settings.json` keys are `rpc-host-whitelist-enabled` (default 
 |---|---|
 | Enabled | always; no switch turns it off |
 | Implicitly allowed | `localhost`, `localhost.`, and any literal IPv4 or IPv6 address, port stripped |
-| Additionally allowed | the names the operator configures |
+| Additionally allowed | the names the operator configures through `DLTOOL_ALLOWED_HOSTS` ([`11-config-reference.md`](11-config-reference.md) §2) — a reverse proxy's public hostname belongs here |
+| Additionally allowed | exact names in `DLTOOL_ALLOWED_HOSTS`, after lowercasing and removing one trailing root dot |
 | Mismatch | `421 Misdirected Request`, logged with the offending `Host` value |
+
+The allowlist contains DNS names only: no scheme, path, port or wildcard. Validation strips a valid port
+from the received `Host` and never substitutes `X-Forwarded-Host`, including for trusted proxies.
 
 ### 6.6 Response headers
 
@@ -527,7 +540,7 @@ Sent on every HTML response by `internal/api/server.go`:
 
 ```
 Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;
-  connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self';
+  connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';
   frame-ancestors 'none'
 X-Content-Type-Options: nosniff
 Referrer-Policy: same-origin
@@ -543,14 +556,21 @@ over HTTPS — unconditionally it bricks plain-HTTP LAN access. dl-tool never se
 through the app; were that to change, such a route must set `Content-Disposition: attachment`,
 `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`.
 
+`base-uri 'self'` permits the server-injected `<base>` required for sub-path deployment while preventing an
+off-origin base. `DLTOOL_BASE_PATH` is path-only, boot-validated and HTML-escaped before insertion. The
+document contains no inline script; bundled code derives relative API and SSE URLs from `document.baseURI`.
+The sub-path browser test fails on any CSP console violation and asserts that `index.html` has no inline
+script element.
+
 ### 6.7 Open redirects, configuration lock, exposure
 
 - A login redirect parameter is honoured only when it is a relative path beginning with a single `/`;
   `//evil.example` and `https://evil.example` are ignored and the user lands on the application root.
   Sonarr shipped CVE-2024-45247 (CWE-601) in exactly this place.
-- `internal/config` exposes a `config_lock` switch, settable from the environment only, that makes
-  every settings-mutating endpoint return `403`. SABnzbd names precisely this control as the mitigation
-  for both of its RCE advisories, and it costs almost nothing.
+- `DLTOOL_CONFIG_LOCK=true`, settable from the environment only, makes mutations of settings, engines,
+  indexers, feeds, rules, categories, tags, watch folders and notification channels return `403`
+  `/problems/config-locked`. Task, user, authentication, token and backup operations remain available.
+  SABnzbd names precisely this control as the mitigation for both of its RCE advisories.
 - Do not expose dl-tool directly to the internet. Put it behind a reverse proxy that terminates TLS and
   preferably behind an identity layer or a private network overlay; the proxy profiles are in
   [`10-deployment-and-compose.md`](10-deployment-and-compose.md). Every incident in §7 that was
@@ -676,7 +696,7 @@ Chosen policy
 | qBittorrent credentials | `DLTOOL_QBITTORRENT_USERNAME` and `DLTOOL_QBITTORRENT_PASSWORD` (or its `_FILE` form); never the WebUI defaults, never a bypass-by-subnet rule |
 | Container flags | `security_opt: [no-new-privileges:true]` on every service |
 | Secret storage | `<CONFIG_DIR>/secrets.env`, mode `0600`, owned by the app user; never in `environment:`, where `docker inspect` and `docker compose config` expose it |
-| Rotation | a UI action regenerates each secret; rotating the session key invalidates every session |
+| Rotation | a UI action regenerates each secret. Rotating `DLTOOL_SECRET_KEY` makes every stored `*_enc` value undecryptable, so the action re-encrypts what it can from the operator's re-entered values and otherwise clears them loudly: a `secret_key_regenerated` boot log, row-level `secret_lost` `last_error` on indexers, channels and engines, the `extract_passwords` setting rendering as `"__lost__"` (distinct from `"__redacted__"`), and one `task_events` row per nulled per-task password — none of it a `tasks.error_code`; rotating `ARIA2_RPC_SECRET` marks aria2 unhealthy until the container restarts. Sessions survive both — session ids are opaque rows, not signed tokens |
 
 If a Transmission adapter is ever added it keeps `rpc-host-whitelist-enabled: true` and binds
 `rpc-bind-address` to the container address.
@@ -715,4 +735,14 @@ the repository owner decides.
 |---|---|
 | 2026-09-01 | Initial version |
 | 2026-09-01 | Compatibility façades and the migration subsystem cut: boundary B1 is now the browser or an API-token client against `/api/v1`, and no boundary, asset or control covers credentials for a remote Download Station or a remote qBittorrent, because no such credentials are ever collected. Corrected the ADR-0011/0012/0016/0018 filenames to the canonical slugs. The per-user destination jail (§3), the `delete_data` rules and the yt-dlp supply-chain rule (§8.1) are unchanged. The Gitea advisory title in §7 keeps the word "Migration" verbatim. |
+| 2026-09-01 | The rotation row no longer names a session key (sessions are opaque rows, not signed tokens); it names `DLTOOL_SECRET_KEY` and its re-entry consequence. |
+| 2026-09-01 | Contradiction fix: §2.4 splits the body cap — feed polls 16 MiB (owned by `08-rss-automation.md` §2.1) from the 8 MiB metadata-fetch cap. |
+| 2026-09-01 | Review pass: §6.1 names the cookie with its prefix (`__Host-dltool_session` at the root, `__Secure-dltool_session` under a base path, chosen at boot), and §2.4 splits the feed body cap from the metadata-fetch cap. |
+| 2026-09-01 | Review pass 2: the cookie prefix is conditional on TLS — `__Host-`/`__Secure-` only when the cookie is `Secure`, plain `dltool_session` on plain HTTP, because browsers reject a prefixed cookie without `Secure` and plain-HTTP LAN access is supported. |
+| 2026-09-01 | Review pass 3: the prefix condition is the listener's static TLS state, not the `Secure` row's per-request `X-Forwarded-Proto` judgement — behind a TLS-terminating proxy the cookie is `Secure` yet unprefixed, which is valid and stated. |
+| 2026-09-01 | §6.5 now names the configuration knob (`DLTOOL_ALLOWED_HOSTS`) behind "the names the operator configures". |
+| 2026-09-01 | Setup-token hardening: §6.4 pins the token at 256 bits from `crypto/rand` (base64url), regenerates it on every boot while unused, and puts `POST /auth/setup` behind the §6.3 throttle — a guessed token mints the admin account and there is no account to lock out afterwards. |
+| 2026-09-01 | Review pass: failed setup attempts carry their own `auth.setup_failed` event code (a fresh-install takeover attempt is a different signal from password spraying) while the shipped filter still matches both. |
+| 2026-09-01 | Aligned the sub-path base element with CSP without permitting inline scripts. |
+| 2026-09-01 | Security review: bound Host validation and configuration locking to documented environment variables and exact resource scopes. |
 | 2026-09-01 | Security review: contained provider acquisition credentials behind opaque result ids. |

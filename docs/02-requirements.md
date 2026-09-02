@@ -272,9 +272,15 @@ If a submission's `infohash_v1` or `infohash_v2` equals that of an existing task
 | T100 | must |
 
 ### FR-024 Delete downloaded data safely and only on request
-When a client deletes a task with `delete_data=true`, dl-tool shall stop the task at its engine first, unlink only the paths recorded in `task_files`, refuse any path that resolves outside the configured roots, and record the removal as a `task_events` row.
+When a client deletes a task with `delete_data=true`, dl-tool shall first enumerate and validate every path
+recorded in `task_files`, remove the engine handle while requiring the engine to retain all data, unlink the
+validated paths through the jailed filesystem layer, mark the task `removed`, and retain its removal event.
+No engine adapter shall delete payload data.
 
-**Verify:** T111 deletes a seeding task with `delete_data=true` and asserts the engine was stopped before any unlink, that only `task_files` paths are gone, that a recorded path outside the roots is refused with `path_rejected`, and that a hardlinked copy elsewhere still opens with its original contents — removing dl-tool's link leaves the library copy intact.
+**Verify:** T111 deletes a seeding task with `delete_data=true` and asserts path validation precedes every
+side effect, the engine retains data and is stopped before any unlink, only `task_files` paths are gone, an
+outside-root path is refused with `path_rejected`, the removal event remains readable, and a hardlinked copy
+elsewhere still opens with its original contents.
 
 | Covered by | Priority |
 |---|---|
@@ -712,10 +718,10 @@ Where a notification channel is configured, dl-tool shall deliver an event to it
 |---|---|
 | T077 | must |
 
-### FR-105 Run a completion hook only when explicitly enabled
-Where a completion hook is enabled in the configuration file, dl-tool shall execute it as an argument vector with a fixed environment and a timeout, and shall not expose the hook command for editing through the HTTP API.
+### FR-105 Run a completion hook installed by the operator
+Where the operator has installed an executable at `<DLTOOL_CONFIG_DIR>/hooks/on-complete`, dl-tool shall run it once per finished task as an argument vector with a fixed environment and a timeout; the hook shall be off while the file is absent or not executable by the dropped user, the check shall be made per finished task rather than cached at boot, a present-but-not-executable file shall emit a warning naming the path on the same per-task evaluation, no environment variable, settings key or API field shall exist that names or edits the command, and no HTTP endpoint shall write any file into `<DLTOOL_CONFIG_DIR>`.
 
-**Verify:** T078 asserts the hook is off by default, that a PATCH attempting to set the hook command returns 422 with the same body shape as any other unknown settings key — the response must not reveal that a hook key is special — and that the executed process receives argv entries rather than a shell string.
+**Verify:** T078 asserts the hook is off by default, that a present-but-non-executable file is also off with a warning naming the path, that a hook installed while dl-tool runs takes effect on the next completion without a restart, that a PATCH attempting to set a hook command returns `422` with the same body shape as any other unknown settings key — the response must not reveal that a hook key is special — and that the executed process receives argv entries rather than a shell string.
 
 | Covered by | Priority |
 |---|---|
@@ -744,9 +750,9 @@ The dl-tool notification API shall create, update, delete and list channels of k
 ## Users, authentication and quotas (FR-115 – FR-129)
 
 ### FR-115 Complete a first-run setup using a one-time token
-While no user exists, dl-tool shall refuse every API call except the setup endpoint, shall accept a one-time setup token printed to stdout and written to `<config>/setup-token` with mode `0600`, shall require the first admin password to be at least 12 characters, and shall delete the token on success.
+While no user exists, dl-tool shall refuse every API call except the setup endpoint, shall accept a one-time setup token of 256 bits (32 bytes) from a cryptographic random source, printed to stdout and written to `<config>/setup-token` with mode `0600`, shall regenerate the unused token on every boot, shall require the first admin password to be at least 12 characters, shall rate-limit setup attempts with the per-source-IP login throttle, and shall delete the token on success.
 
-**Verify:** T009 boots an empty config, asserts every other endpoint returns 401, completes setup with the token, asserts the token file is deleted and a second setup attempt returns 409.
+**Verify:** T009 boots an empty config, asserts every other endpoint returns 401, asserts the token file holds a different value after a restart while unused, drives nine failed setup attempts from one source and asserts the tenth returns `429` with `Retry-After`, advances past the bucket window, then completes setup with the token, asserts the token file is deleted and a second setup attempt returns 409.
 
 | Covered by | Priority |
 |---|---|
@@ -782,7 +788,12 @@ If a non-admin calls a user-management, engine-configuration, indexer-management
 ### FR-119 Filter tasks by owner for non-admins
 While a non-admin session is active, dl-tool shall return only the tasks owned by that user from every task read endpoint and shall reject actions on tasks owned by anyone else with HTTP 404.
 
-**Verify:** T085 creates tasks for two users and asserts each non-admin sees only their own, an admin sees both, and a cross-owner pause returns 404 rather than 403.
+This includes `GET /events` and `GET /sync`: task deltas, removal identifiers, rates, counts and category or
+tag counts shall reveal only the caller's tasks. Admins receive the system-wide view.
+
+**Verify:** T085 creates tasks for two users and asserts each non-admin sees only their own through the
+task list, SSE and polling fallback, including aggregate fields; an admin sees both; and a cross-owner
+pause returns 404 rather than 403.
 
 | Covered by | Priority |
 |---|---|
@@ -892,9 +903,15 @@ The dl-tool settings API shall export a versioned document containing settings, 
 | T108 | must |
 
 ### FR-146 Restore a backup from the command line
-When an operator runs `dl-tool restore --from <file>`, dl-tool shall refuse to proceed while a server process holds the database, shall refuse a backup whose schema version does not match the binary, and shall otherwise replace the database in place.
+When an operator runs `dl-tool restore --from <file>`, dl-tool shall acquire the same process-lifetime file
+lock as the server, refuse a backup whose schema is newer than the binary, verify its integrity, stage it on
+the database filesystem, and atomically replace the database without first deleting the live file. An older
+schema is accepted and migrates forward at the next boot.
 
-**Verify:** T108 runs the command against a running instance and asserts a named refusal, stamps a backup with a foreign schema version and asserts a second named refusal, then restores against a stopped instance and asserts the task count matches the source.
+**Verify:** T108 runs the command against a running instance and asserts a named lock refusal, rejects a
+future schema, restores an older schema and observes its forward migration, injects a failure before the
+atomic rename and proves the original remains intact, then restores successfully and matches the source task
+count.
 
 | Covered by | Priority |
 |---|---|
@@ -1071,9 +1088,9 @@ The dl-tool API shall enforce CSRF using a per-session synchroniser token suppli
 | T008 | must |
 
 ### NFR-013 Reject unexpected Host headers
-If an incoming request carries a `Host` header outside the configured allowlist, then dl-tool shall reject it with HTTP 421, with loopback names and literal IP addresses implicitly allowed.
+If an incoming request carries a `Host` header outside `DLTOOL_ALLOWED_HOSTS`, then dl-tool shall reject it with HTTP 421, with loopback names and literal IP addresses implicitly allowed.
 
-**Verify:** T095 sends `Host: evil.example` and asserts 421, and sends `Host: localhost:8080` and asserts success — the lesson of CVE-2018-5702.
+**Verify:** T095 configures `DLTOOL_ALLOWED_HOSTS=dl.example.com`, asserts that host and `localhost:8080` succeed, and asserts `Host: evil.example` returns 421 — the lesson of CVE-2018-5702.
 
 | Covered by | Priority |
 |---|---|
@@ -1161,7 +1178,7 @@ The dl-tool web UI shall load every script, stylesheet, font and icon from the d
 | T039 | must |
 
 ### NFR-023 Generate secrets on first run and support file-based secrets
-When dl-tool starts with no generated secrets, it shall create the session key, the CSRF key and the setup token from a cryptographic random source, write them with mode `0600`, and shall additionally accept any secret through a `_FILE`-suffixed variable pointing at a mounted file.
+When dl-tool starts with no generated secrets, it shall create, each from a cryptographic random source: the at-rest secret-encryption key `DLTOOL_SECRET_KEY` and the shared engine secret `ARIA2_RPC_SECRET` (both written to `<CONFIG_DIR>/secrets.env` with mode `0600`), and, while no user exists, the one-time setup token (written to `<CONFIG_DIR>/setup-token` with mode `0600`, per FR-115); and it shall additionally accept any secret through a `_FILE`-suffixed variable pointing at a mounted file.
 
 **Verify:** T005 asserts a fresh config directory yields distinct secrets on two separate instances and that a `_FILE` variable is honoured in preference to its inline form.
 
@@ -1223,6 +1240,19 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 |---|---|
 | T103 | must |
 
+### NFR-030 Lock configuration from the environment
+When `DLTOOL_CONFIG_LOCK=true`, dl-tool shall reject every API mutation of settings, engines, indexers,
+feeds, rules, categories, tags, watch folders and notification channels with HTTP 403
+`/problems/config-locked`. Task, user, authentication, token and backup operations shall remain available,
+and no API shall change the lock itself.
+
+**Verify:** T095 enables the lock, asserts a settings mutation and an indexer mutation return 403 without
+side effects, then asserts task pause and token revocation still work.
+
+| Covered by | Priority |
+|---|---|
+| T095 | must |
+
 ---
 
 ## Decisions referenced
@@ -1250,9 +1280,8 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
   mechanism must be settled in [`06-download-engines.md`](06-download-engines.md).
 - FR-050 and FR-055: the Torznab category tree used by the search category filter is **INFERRED** from
   convention; confirm the concrete category IDs in [`07-search-and-indexers.md`](07-search-and-indexers.md).
-- [`05-api-contract.md`](05-api-contract.md) links FR-121 by its former anchor
-  `#fr-121-enforce-a-per-user-task-quota`; FR-121 is now the storage quota and FR-123 is the concurrency
-  limit, so that link and the open question beside it must be updated there.
+- (resolved 2026-09-01: the stale FR-121 anchor in [`05-api-contract.md`](05-api-contract.md) is gone; FR-121
+  is the storage quota and FR-123 the concurrency limit, as written above.)
 - This document exceeds the 700-line budget suggested for it because the mandated coverage list does not fit
   in fewer requirements at the required block format.
 
@@ -1265,4 +1294,17 @@ The dl-tool web UI shall ship a web app manifest with maskable icons, `display: 
 | 2026-09-01 | Migration subsystem cut: FR-025, FR-079 and FR-149 deleted and their identifiers retired; added the permanently-unused identifier table. FR-148 rewritten as ignore-only — `engines.foreign_task_policy`, the adopt mode and the tasks T112/T114 are gone. Corrected the ADR-0017 filename. |
 | 2026-09-01 | M2 task allocation: FR-148 is verified by T026 (aria2) and T030 (qBittorrent); task identifier T102 retired with the foreign-task policy. |
 | 2026-09-01 | Consistency review: corrected the ADR-0001, ADR-0005, ADR-0006, ADR-0008, ADR-0009 and ADR-0011 links to the canonical filenames; narrowed "no import path from another product" so it no longer contradicts FR-053's static `.dlm`/nova3 definition conversion. FR-005 is now covered by T033 (the multipart upload path) with T029 as the engine half. |
+| 2026-09-01 | FR-105 corrected: the hook is enabled by installing an executable at `<DLTOOL_CONFIG_DIR>/hooks/on-complete` (T078's mechanism), not "in the configuration file" — no configuration file exists in the design. |
+| 2026-09-01 | Review pass: FR-105 renamed to match its mechanism ("installed by the operator"), defines the third state (present but not executable = off, with a boot warning), evaluates the switch per finished task rather than at boot, and requires that no HTTP surface can write into the hooks directory — closing the gap between "no dedicated knob" and "no write path". |
+| 2026-09-01 | Review pass 2: the non-executable warning is emitted by the same per-task evaluation (not only at boot — the runtime install is the common path), and the write-path clause is stated over its real invariant: no HTTP endpoint writes into the config directory at all. T078's goal summary matches the three-state switch. |
+| 2026-09-01 | NFR-023 names the real first-run secrets: the at-rest encryption key and the setup token. Session/CSRF keys never existed in the design (opaque sessions, per-session CSRF tokens). |
+| 2026-09-01 | Review pass 3: NFR-023 lists all three first-run secrets — `DLTOOL_SECRET_KEY`, `ARIA2_RPC_SECRET` and the setup token — each with its file, matching 11 §6's regeneration rule. |
+| 2026-09-01 | FR-115 hardened: the setup token is at least 128 bits from a CSPRNG and setup attempts are rate-limited with the login throttles; the Verify line asserts the `429`. |
+| 2026-09-01 | Review pass: FR-115 pins the token at 256 bits (matching §6.4 of the threat model), names the per-source-IP throttle specifically, and its Verify is passable in one run — nine failures, the tenth 429s, the window advances, setup then completes — plus the regenerate-on-restart assertion. |
+| 2026-09-01 | Review pass 2: FR-115 gains the regenerate-on-every-boot shall-clause its Verify already asserted, closing the traceability gap. |
+| 2026-09-01 | Dropped the resolved FR-121-anchor open question; `05-api-contract.md` no longer carries the stale anchor. |
+| 2026-09-01 | Required owner filtering for live task deltas, removals and aggregates. |
+| 2026-09-01 | Required soft deletion and confined payload removal outside engine adapters. |
+| 2026-09-01 | Required a process lock and staged atomic database restore. |
+| 2026-09-01 | Security review: made the Host allowlist configurable and specified the environment-only configuration lock. |
 | 2026-09-01 | Security review: made search-result acquisition handles server-only. |
