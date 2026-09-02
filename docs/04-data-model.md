@@ -250,6 +250,8 @@ CREATE TABLE tasks (
     'ssrf_blocked','path_rejected','quota_exceeded','engine_unavailable','unsupported_scheme',
     'concurrency_limit','js_runtime_missing')),
   error_message TEXT, destination TEXT NOT NULL,
+  requested_destination TEXT,             -- what the client asked for, when the server resolved a
+                                         -- different effective destination (FR-044); NULL when identical
   content_path TEXT,                    -- absolute path to the finished file or directory
   category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
   total_bytes INTEGER,                  -- NULL while metadata is unknown
@@ -263,7 +265,8 @@ CREATE TABLE tasks (
   sequential INTEGER NOT NULL DEFAULT 0 CHECK (sequential IN (0,1)),
   queue_position INTEGER,
   unzip_progress INTEGER,               -- 0-100, only while state = 'extracting'
-  extract_password TEXT,                -- secret: never returned by an API, never logged
+  extract_password TEXT,                -- secret: never returned by an API, never logged; encrypted
+                                         -- at rest with DLTOOL_SECRET_KEY (11-config-reference.md §6)
   added_at INTEGER NOT NULL, started_at INTEGER, completed_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX idx_tasks_engine_ref ON tasks(engine, engine_ref) WHERE engine_ref IS NOT NULL AND state <> 'removed';
@@ -350,6 +353,7 @@ CREATE TABLE indexers (
   provenance TEXT,                      -- shown in the UI, e.g. 'imported from jackett.dlm'
   legal_tier TEXT NOT NULL DEFAULT 'user-supplied' CHECK (legal_tier IN ('legitimate','user-supplied')),
   priority INTEGER NOT NULL DEFAULT 50,
+  allow_private_network INTEGER NOT NULL DEFAULT 0 CHECK (allow_private_network IN (0,1)),
   seeders_unknown INTEGER NOT NULL DEFAULT 0 CHECK (seeders_unknown IN (0,1)),
   settings_json TEXT, categories_json TEXT, last_test_at INTEGER, last_error TEXT,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
@@ -392,6 +396,7 @@ CREATE TABLE feeds (
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
   refresh_interval_s INTEGER NOT NULL DEFAULT 0,   -- 0 = use the global RSS interval setting
   item_cap INTEGER NOT NULL DEFAULT 50,            -- retained feed_items per feed
+  priority INTEGER NOT NULL DEFAULT 0,             -- per-run tie-break in 08 §5 step 13; lower wins
   etag TEXT,
   last_modified TEXT,                   -- verbatim HTTP-date string, replayed as If-Modified-Since
   ttl_minutes INTEGER, last_fetch_at INTEGER, last_success_at INTEGER,
@@ -411,20 +416,28 @@ CREATE TABLE feed_items (
   download_url TEXT,                    -- .torrent URL or magnet:
   info_hash TEXT,                       -- lowercase hex: 40 chars (v1) or 64 chars (v2); NULL when unknown
   size_bytes INTEGER, published_at INTEGER, first_seen_at INTEGER NOT NULL,
+  read INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0,1)),  -- 1 once the user marks the item read
   raw_json TEXT,                        -- full parsed item; feeds the dry-run panel
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX idx_feed_items_identity ON feed_items(feed_id, identity);
+CREATE INDEX idx_feed_items_read ON feed_items(feed_id, read, published_at DESC);
 CREATE INDEX idx_feed_items_hash ON feed_items(info_hash);
 CREATE INDEX idx_feed_items_norm ON feed_items(title_norm);
 CREATE INDEX idx_feed_items_pub ON feed_items(feed_id, published_at DESC);
 
 CREATE TABLE rules (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+                                         -- tasks a rule creates are owned by this user and
+                                         -- count against their quota and jail (05 §10.2); RESTRICT, not
+                                         -- CASCADE: deleting a user must not silently destroy shared
+                                         -- automation and match history (05 §12 returns 409 instead)
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
   priority INTEGER NOT NULL DEFAULT 0,  -- lower is evaluated first; ties broken by name
   definition_json TEXT NOT NULL,        -- the rule document; schema in 08-rss-automation.md
   last_match_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX idx_rules_owner ON rules(owner_id);
 
 CREATE TABLE rule_matches (
   id TEXT PRIMARY KEY,
@@ -778,4 +791,8 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-01 | Initial version |
 | 2026-09-01 | File priority corrected to `IN (0,1,6,7)` with the qBittorrent names `skip/normal/high/maximum`; added `tasks.infohash_v1`/`infohash_v2` with partial unique indices and the ingest normalisation table; widened `feed_items.info_hash` and `rule_matches.info_hash` to 64 hex; added `notification_channels`; added `engines.foreign_task_policy` and the boot-probe meaning of `engines.version`; added the concurrency and `min_free_space` settings rows; separated the storage quota from the concurrency limit and added `concurrency_limit` and `js_runtime_missing` to `error_code`; added the table-reachability list; corrected the ADR-0005/0008/0009 filenames. |
 | 2026-09-01 | Migration subsystem cut: deleted the `engines.foreign_task_policy` column, its `CHECK` constraint and enum section §4.9, replacing them with the single exclusive-control rule; removed every link to the withdrawn migration document and the "imported task" framing of the inherited `error_code` values; §5 retitled "Schema migration policy" to keep goose migrations unambiguous. `notification_channels`, `infohash_v1`/`infohash_v2` and `priority IN (0,1,6,7)` are unchanged. |
+| 2026-09-01 | `tasks.extract_password` noted as encrypted at rest with `DLTOOL_SECRET_KEY`, closing the "encrypted at rest — with what key?" gap on the `*_enc` columns. |
+| 2026-09-01 | Added `rules.owner_id`: a rule creates tasks on someone's behalf (the watch-folder privilege rule), so rule-grabbed tasks are owned, quota-accounted and jailed to that user. |
+| 2026-09-01 | Review pass: `rules.owner_id` is `ON DELETE RESTRICT`, not CASCADE — deleting a user must not silently destroy shared automation and match history; `DELETE /users/{id}` answers `409` instead. |
+| 2026-09-01 | Added `tasks.requested_destination` (the column behind FR-044 and the Task object's field of the same name in `05-api-contract.md` §3) and `feeds.priority` (the per-run tie-break `08-rss-automation.md` §5 step 13 sorts on). |
 | 2026-09-01 | Made task removal durable and released unique identities held by removed rows. |
