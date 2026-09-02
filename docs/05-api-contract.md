@@ -1153,13 +1153,24 @@ defaults and environment counterparts live in [`11-config-reference.md`](11-conf
 {"download_rate_limit":0,"upload_rate_limit":0,
  "alt_download_rate_limit":5242880,"alt_upload_rate_limit":1048576,
  "schedule_enabled":true,"default_destination":"/data",
+ "min_free_space":{},
+ "max_active_total":5,"max_active_per_engine":3,
  "rss_enabled":true,"rss_interval_s":1800,
  "auto_extract":true,"extract_passwords":"__redacted__",
  "process_order":"by_date_created","confirm_on_delete":true}
 ```
 
-`200` · `422` for an unknown key or an out-of-range
-value.
+`min_free_space` is a sparse map. A missing root uses the default owned by
+[`11-config-reference.md` §5](11-config-reference.md#5-database-backed-settings) when reservations are
+built; `GET /settings` does not materialise host paths into the stored map. When a `PATCH /settings` body
+contains `min_free_space`, its object replaces the whole stored map: roots omitted from that object return to
+the default rather than merging with old entries. A body without that member leaves the map untouched. `422`
+rejects a non-object map, a non-absolute or non-canonical key, or a value that is not a non-negative integer.
+Canonical keys equal their lexical `filepath.Clean` form and have no trailing separator except `/`. An
+absolute root need not be currently configured; it remains stored but inactive as specified by doc 11 §5.
+
+`200` for `GET /settings`; `200` · `422` for `PATCH /settings` — unknown key, malformed shape or
+out-of-range value.
 
 ### 11.2 `GET /settings/schedule` and `PUT /settings/schedule`
 
@@ -1546,3 +1557,4 @@ Statuses across this group: `200`/`201`/`204` · `403`
 | 2026-09-02 | Multi-user model dropped: `/users` CRUD replaced by `GET`/`PATCH /account`; `owner_id`/`owner_username` removed from the Task, rule and watch-folder objects and the `owner` list filter; §7.2 recast as root containment only; §5.11 recast as concurrency versus disk space with `/problems/quota-exceeded` retired; every admin-only distinction collapsed, with the indexer-key and feed-credential rules restated as redaction rather than visibility ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Single-account cleanup: the §1.2 ownership and `admin` rules deleted, the §2 `admin` Auth column collapsed to `session\|token`, `/auth/setup` and `/auth/me` restated without `role`, the `not-found`, search-result, task, search-job and `/prefs` texts stripped of "another user", the jail clause dropped from `delete_data`, `/settings/import` and `/watch-folders`, the watch-folder export `owner` member removed, the §10.2 admission sentence repaired, and the now-unreachable `403 /problems/forbidden` dropped from the import, notification-test and watch-folder status lists ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Review pass: the SSE keep-alive is a named `hb` event, not only a comment line — `EventSource` never surfaces a comment, so the comment alone could not carry the liveness rule doc 09 §10.8 builds on. |
+| 2026-09-02 | Completed the `GET /settings` example with the three concurrency and disk-reservation keys omitted during the single-account cleanup, kept `min_free_space` sparse and host-independent, and scoped validation failures to `PATCH`. |

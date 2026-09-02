@@ -145,6 +145,7 @@ CREATE TABLE users (
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
   locale TEXT NOT NULL DEFAULT 'en', last_login_at INTEGER,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+```
 
 **File modes are enforced, not inherited.** `UMASK` is an operator setting for downloaded data
 ([`10-deployment-and-compose.md`](10-deployment-and-compose.md) §4); a credential-bearing database must not
@@ -159,6 +160,7 @@ enforce a mode is fatal at boot, not a warning.
 into a settings row so that adding accounts later is a migration, not a redesign. No other table references
 it: there is no `owner_id` anywhere in the schema.
 
+```sql
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -226,13 +228,24 @@ There is no column, and no setting, describing what to do with a transfer dl-too
 assumes exclusive control of every configured engine: such a transfer is never inserted into `tasks` and
 never listed → [ADR-0017](decisions/0017-exclusive-control-of-engines.md).
 
-Four `settings` rows carry the concurrency and disk-reservation limits. `00001_init.sql` seeds all four:
+Three `settings` rows carry the concurrency and disk-reservation limits. `00001_init.sql` seeds all three:
 
 | `settings.key` | `value_json` shape | Seeded value |
 |---|---|---|
 | `max_active_total` | integer, `0` = unlimited | `5` |
 | `max_active_per_engine` | integer, `0` = unlimited | `3` |
-| `min_free_space` | object, data-root path → bytes | `2147483648` (2 GiB) for every configured root |
+| `min_free_space` | object, data-root path → bytes | `{}` |
+
+The empty `min_free_space` object keeps the SQL migration independent of host paths. A missing root entry
+uses the default owned by [`11-config-reference.md` §5](11-config-reference.md#5-database-backed-settings).
+The reserved zero-time ULIDs make these migration-owned rows stable while preserving the ID format:
+
+```sql
+INSERT INTO settings (id, key, value_json, created_at, updated_at) VALUES
+  ('set_00000000000000000000000001', 'max_active_total', '5', 0, 0),
+  ('set_00000000000000000000000002', 'max_active_per_engine', '3', 0, 0),
+  ('set_00000000000000000000000003', 'min_free_space', '{}', 0, 0);
+```
 
 Tasks in state `seeding` count toward no `max_active_*` limit. The complete settings key list and its
 defaults live in [`11-config-reference.md`](11-config-reference.md#5-database-backed-settings).
@@ -517,7 +530,20 @@ CREATE TABLE watch_folders (
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 ```
 
-`bandwidth_schedule` holds exactly 168 rows, seeded by `00001_init.sql` with `mode = 'default'`.
+`bandwidth_schedule` holds exactly 168 rows, seeded by `00001_init.sql` with `mode = 'default'`. Its reserved
+zero-time ULIDs encode `day * 24 + hour` in the last three digits:
+
+```sql
+WITH RECURSIVE
+  days(day) AS (VALUES (0) UNION ALL SELECT day + 1 FROM days WHERE day < 6),
+  hours(hour) AS (VALUES (0) UNION ALL SELECT hour + 1 FROM hours WHERE hour < 23)
+INSERT INTO bandwidth_schedule (id, day, hour, mode, created_at, updated_at)
+-- Prefix + 23 zeros + 3 digits is one 30-character prefixed ULID.
+SELECT printf('bws_00000000000000000000000%03d', day * 24 + hour),
+       day, hour, 'default', 0, 0
+FROM days CROSS JOIN hours;
+```
+
 `PUT /settings/schedule` replaces all 168 in one transaction.
 
 Job worker rules — see [ADR-0015](decisions/0015-db-backed-in-process-job-queue.md):
@@ -685,17 +711,25 @@ goose.Up(db, "migrations")
 - When both versions match, skip both backup and migration. On a new database at version `0`, migrate without
   creating an empty rollback backup.
 - Only when `0 < applied < embedded` take a `VACUUM INTO` backup before migration. Name it
-  `/config/backups/dl-tool.db.pre-migration-<from>-to-<to>.<UTC>.bak`, write to a unique temporary path in
-  that directory, then atomically rename it. Abort before goose if any backup step fails.
+  `/config/backups/dl-tool.db.pre-migration-<from>-to-<to>.<UTC>.bak`, where `<UTC>` is the backup start time
+  converted to UTC and formatted with `20060102T150405.000000000Z`. Write to a unique temporary path in that
+  directory, then atomically rename it. Abort before goose if any backup step fails. After the rename and
+  directory fsync succeed, log the final path used for rollback.
 
 ```sql
-SELECT MAX(version_id) FROM goose_db_version;
+SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1;
 ```
 
-<!-- UNVERIFIED: the goose version-table name `goose_db_version` is not quoted in the research corpus. Confirm
-     it against goose v3.27.3 before relying on this query. -->
+A missing version table or a `NULL` applied maximum is schema version `0` only when `sqlite_schema` contains
+no object — table, view, trigger or index — except `goose_db_version` and SQLite-owned names beginning
+`sqlite_`. Refuse any other database without applied goose history as an unrecognised schema; never migrate
+into a foreign database. No other query error is suppressed. The table name is verified
+against goose v3.27.3: `version.go` initializes its package-level table name to
+`goose_db_version`, and the SQLite dialect creates `version_id` as an integer.
 
-- Run `PRAGMA integrity_check;` after migrations and surface the result on `GET /system/info`.
+- Run `PRAGMA integrity_check;` once per `store.Open` invocation at boot, not per pooled connection,
+  including when goose had nothing to apply. Read every result row and fail `Open` unless the result is
+  exactly one row equal to `ok`.
 
 ---
 
@@ -792,8 +826,6 @@ new table added by a later migration must be added to this list in the same chan
 | [ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | Pin yt-dlp by version and hash; never self-update at runtime |
 
 ## Open questions
-- [NEEDS CLARIFICATION: goose's version-table name is unverified in the research corpus — confirm
-  `goose_db_version` before implementing the "schema newer than binary" refusal.]
 - [NEEDS CLARIFICATION: `rule_seen_episodes` has a documented per-row "forget" action but no endpoint in
   [`05-api-contract.md`](05-api-contract.md); it is currently read-only through `POST /rules/test`.]
 
@@ -813,3 +845,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-02 | Multi-user model dropped: removed `owner_id` from `tasks`, `rules`, `search_jobs` and `sessions`, their indexes, `users.role`, `users.default_destination`, `users.quota_bytes`, the `max_active_per_user` setting and the `quota_exceeded` error code. `users` now holds exactly one operator row. §4.7 recast as concurrency versus disk space ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | The store now enforces `0700` on the configuration directory and `0600` on the database, its sidecars and every backup, independent of `UMASK`; `VACUUM INTO` creates its target with `O_CREATE\|O_EXCL` at `0600`. |
 | 2026-09-02 | Review pass: added `notification_channels.last_send_at` and `.last_error`, which four consumers already read; removed the orphaned `rules.owner_id` comment block left inside `CREATE TABLE rules` by the multi-user cut, which T006 would otherwise have transcribed into `00001_init.sql`; corrected §4.2's count of the dl-tool `error_code` additions from seven to six. |
+| 2026-09-02 | Made the initial migration executable: corrected the post-account-removal settings count, defined host-independent seed values and stable IDs, supplied the 168-cell insert, kept explanatory prose outside the SQL fence, defined version zero without accepting foreign databases, filtered the version probe to applied rows, pinned integrity-check cadence and success, pinned and logged the backup path, and verified goose's version-table name against v3.27.3. |

@@ -806,13 +806,17 @@ The dl-tool configuration loader shall take infrastructure settings (paths, list
 | T005 | must |
 
 ### FR-142 Produce consistent backups
-When an operator requests a backup, dl-tool shall produce a consistent copy of the database using `VACUUM INTO`, and shall additionally write such a copy automatically before applying any schema migration.
+When an operator requests a backup, dl-tool shall produce a consistent copy of the database using
+`VACUUM INTO`. Automatic pre-migration backups shall follow
+[`04-data-model.md` §5](04-data-model.md#5-schema-migration-policy).
 
-**Verify:** T091 takes a backup while writes are in flight, opens the copy and asserts `PRAGMA integrity_check` returns `ok`; T006 asserts a pre-migration copy exists after an upgrade.
+**Verify:** T091 takes a backup while writes are in flight, opens the copy and asserts
+`PRAGMA integrity_check` returns `ok`. T006 verifies version-0 skipping and a synthetic version 1-to-2
+backup; later migrations follow [`14-conventions.md` §8.4](14-conventions.md#84-add-a-migration).
 
 | Covered by | Priority |
 |---|---|
-| T091 | must |
+| T006, T091 | must |
 
 ### FR-143 List engines and test connectivity
 The dl-tool engines endpoint shall list each configured engine with its declared capabilities and last known health, and shall run a connectivity test on request returning the engine's reported version or the transport error.
@@ -1252,3 +1256,4 @@ side effects, then asserts task pause and token revocation still work.
 | 2026-09-02 | NFR-023 extended: configuration directories are `0700` and sensitive files `0600` regardless of `UMASK`, which now governs only the data roots. |
 | 2026-09-02 | Single-account cleanup: NFR-030 no longer exempts user operations — there is no user API; FR-151 serves logs to any authenticated caller and NFR-011 says account password rather than admin password ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Review pass: the `error_code` vocabulary is no longer restated here (it was five additions out of date); FR-002's open question records the measured result that its assumed matching mechanism does not exist. |
+| 2026-09-02 | Aligned FR-142 with the conditional migration-backup policy and its T006/later-migration coverage. |
