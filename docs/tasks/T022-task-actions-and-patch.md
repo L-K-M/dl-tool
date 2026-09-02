@@ -90,7 +90,7 @@ Action to engine call and state transition:
 | Action | Engine call | Transition |
 |---|---|---|
 | `pause` | `Engine.Pause` | any → `paused` |
-| `resume` | `Engine.Resume` | `paused` → `queued`, released by T098's admission pass |
+| `resume` | none — T098's admission pass calls `Engine.Resume` | `paused` → `queued` |
 | `remove` | `Engine.Remove` | any → `removed` |
 | `recheck` | `engine.ErrNotSupported` for aria2 | `downloading` → `checking` when supported |
 | `force_complete` | `Engine.Remove` with `deleteData` false | any → `completed` |

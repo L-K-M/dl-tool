@@ -30,7 +30,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/settings.go` | create | The `GET /engines` and `POST /engines/{id}/test` handlers. |
 | `internal/api/settings_test.go` | create | Cases for a healthy engine and a stopped engine. |
 | `internal/store/settings.go` | create | New file. `ListEngines` and `TouchEngine` over the `engines` table; every later task that adds a settings-table query extends this file. |
-| `internal/api/server.go` | modify | Register `list-engines` and `test-engine`. |
+| `internal/api/server.go` | modify | Build the engine registry, construct and register the aria2 client, register `list-engines` and `test-engine`. |
 
 No other file may be modified.
 
@@ -102,12 +102,19 @@ func (s *Store) TouchEngine(ctx context.Context, id string, version, lastErr *st
 6. Call `TouchEngine` after every probe so `last_seen_at`, `version` and `last_error` stay current.
 7. Restrict both operations to `role = "admin"`, returning `403` `/problems/forbidden` otherwise, and
    `404` `/problems/not-found` for an unknown engine id.
-8. Register both operations in `internal/api/server.go` as `list-engines` and `test-engine`.
+8. In `internal/api/server.go`, build the one process-wide registry with `engine.NewRegistry()`; when
+   `cfg.Aria2URL` is non-empty construct `aria2.New(aria2.Config{URL: cfg.Aria2URL,
+   Secret: cfg.Aria2Secret.Reveal(), Timeout: 10 * time.Second}, hc)`, call `Connect` — on failure log
+   `engine_unreachable` at `warn` and continue, never failing `NewServer` — and `Register` it. Pass that
+   registry to `NewTaskHandlers` and `NewSettingsHandlers`, then register both operations as
+   `list-engines` and `test-engine`. This is the composition-root call site required by
+   [`14-conventions.md` §8.3](../14-conventions.md#83-wire-a-long-lived-component).
 9. Create `internal/api/settings_test.go`: a stub aria2 returning `1.37.0` yields `connected:true` and that
    version; a stopped engine yields `ok:false` with the transport error and still `200`.
    receives `403`; and no response body contains the configured secret.
 
 ## Acceptance criteria
+- [ ] `Registry.Get("aria2")` returns the client after `NewServer` with `DLTOOL_ARIA2_URL` set.
 - [ ] `GET /engines` lists the aria2 entry with the capabilities its adapter declares.
 - [ ] A healthy probe returns `{"ok":true}` with the version and a non-zero `elapsed_ms`.
 - [ ] A stopped engine returns `200` with `ok:false` and the transport error in `error`.

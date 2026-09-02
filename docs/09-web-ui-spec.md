@@ -876,7 +876,7 @@ Every truncated element gets a native `title` and a tooltip that opens after 400
 The live transport is `GET /api/v1/events` (SSE), with `GET /api/v1/sync?rid=` as the identical-payload
 polling fallback — see [`05-api-contract.md`](05-api-contract.md) §6.
 
-1. When nothing has arrived for two heartbeat intervals — no `sync` event, no heartbeat comment and no
+1. When nothing has arrived for two heartbeat intervals — no `sync` event, no `hb` event and no
    successful polling response (the server emits a heartbeat every 15 s while idle, so about 30 s of
    silence) — the connection dot turns amber and the grid dims to 70 % opacity.
 2. After 5 s of the transport being known down — an SSE `error` event or a closed connection — or once

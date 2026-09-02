@@ -197,10 +197,18 @@ services:
     # Name the VPN variables explicitly and mount the two credentials as secrets.
     environment:
       TZ: "${TZ:-Etc/UTC}"
-      VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:?required for the vpn profile}"
+      # No `:?` here: Compose interpolates every service before it filters by profile, so a
+      # required variable in an inactive profile still fails a core-only `up` from a fresh `.env`
+      # — the same trap §2 avoids for the aria2 secret. gluetun refuses to start without a
+      # provider anyway, and only under the `vpn` profile.
+      VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:-}"
       VPN_TYPE: "${VPN_TYPE:-wireguard}"
       SERVER_COUNTRIES: "${SERVER_COUNTRIES:-}"
+      OPENVPN_USER: "${OPENVPN_USER:-}"
+      OPENVPN_PASSWORD: "${OPENVPN_PASSWORD:-}"
+      FIREWALL_OUTBOUND_SUBNETS: "${FIREWALL_OUTBOUND_SUBNETS:-}"
       FIREWALL_VPN_INPUT_PORTS: "${FIREWALL_VPN_INPUT_PORTS:-}"
+      VPN_PORT_FORWARDING: "${VPN_PORT_FORWARDING:-off}"
       WIREGUARD_PRIVATE_KEY_SECRETFILE: "/run/secrets/wireguard_private_key"
       WIREGUARD_ADDRESSES_SECRETFILE: "/run/secrets/wireguard_addresses"
     secrets:
@@ -583,6 +591,7 @@ VPN_SERVICE_PROVIDER=
 VPN_TYPE=wireguard
 WIREGUARD_PRIVATE_KEY=
 WIREGUARD_ADDRESSES=
+SERVER_COUNTRIES=
 OPENVPN_USER=
 OPENVPN_PASSWORD=
 FIREWALL_OUTBOUND_SUBNETS=

@@ -23,7 +23,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 1. [`docs/05-api-contract.md` §13.1 Process endpoints outside `/api/v1`](../05-api-contract.md#131-process-endpoints-outside-apiv1)
    — the three paths, their listeners and their bodies.
 2. [`docs/11-config-reference.md` §2 `DLTOOL_` variables](../11-config-reference.md#2-dltool_-variables-application)
-   — `DLTOOL_METRICS_ADDR`, and that an empty value disables metrics entirely.
+   — `DLTOOL_METRICS_ADDR`, and that the exact lowercase value `off` disables metrics entirely, while an
+   empty value means unset and falls back to the default.
 3. [`docs/14-conventions.md` §3 Logging](../14-conventions.md#3-logging) — the standard attribute keys.
 
 ## Files
@@ -109,7 +110,8 @@ GET /readyz   -> 503 {"type":"/problems/not-ready","title":"Not ready","status":
 7. Write `internal/obs/health_test.go` covering: `/healthz` returns 200 with the exact body while the
    database handle is nil; `/readyz` returns 503 `/problems/not-ready` before `MarkReady` and 200 after;
    `/metrics` on the main listener returns 404; the metrics listener returns a body containing
-   `dltool_tasks_total` and `process_start_time_seconds`; an empty `DLTOOL_METRICS_ADDR` starts no listener.
+   `dltool_tasks_total` and `process_start_time_seconds`; `DLTOOL_METRICS_ADDR=off` starts no listener while
+   an empty value still listens on the default address.
 8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria

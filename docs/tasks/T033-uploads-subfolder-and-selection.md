@@ -145,7 +145,8 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, plus `api/openapi.json` if `make gen` changed it.
+Expected: exactly the paths in the Files table, plus `api/openapi.json` and `web/src/api/schema.d.ts` if
+`make gen` changed them.
 Use `git status`, not `git diff`: a file this task creates is untracked, and `git diff --name-only`
 never lists an untracked file.
 

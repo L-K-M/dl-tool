@@ -195,7 +195,8 @@ Operation ids added inside `RegisterSearchRoutes`: `start-search` (`202`), `get-
 8. Add `DeleteSearch`: delete the row, rely on the `ON DELETE CASCADE` for results, call `Forget`, and answer
    `204`; a job owned by another user answers `404`, never `403`.
 9. Register the three operations inside `RegisterSearchRoutes`, and edit `cmd/dl-tool/main.go` to call
-   `worker.Register("search", jobs.NewSearchHandler(...))` in `OnStart`.
+   `worker.Register("search", jobs.NewSearchHandler(db, log, deps.Defs, deps.Runner, deps.Indexers,
+   deps.HTTP))` in `OnStart`, reusing the single `api.Deps` value T055 step 9 built.
 10. Extend `internal/api/search_test.go` with `TestStartSearchReturns202AndID`,
     `TestPollShowsPartialThenFinished` against two stub indexers with 50 ms and 400 ms latencies,
     `TestDeleteRemovesJobAndResults`, `TestOtherUsersJobIs404`, `TestEmptyQueryIs422` and

@@ -97,7 +97,8 @@ The matrix entry added to `.github/workflows/release.yml`, alongside the existin
 
 ## Steps
 1. Edit `deploy/aria2/Dockerfile` — T028 created its two lines — so that it matches doc 10 §5.1 exactly. `curl` is present only so the compose
-   healthcheck can post `aria2.getVersion`; it fetches nothing at build time.
+   healthcheck can post `system.listMethods`, the token-less method doc 10 §3 uses; it fetches nothing at
+   build time.
 2. Create `deploy/aria2/entrypoint.sh` as above and `chmod 0755` it. The final line must be an `exec`, so
    `SIGTERM` reaches `aria2c` and the session file is written on stop.
 3. Refuse to start when `ARIA2_RPC_SECRET` is empty. The aria2 manual is explicit that the secret token is
@@ -111,8 +112,9 @@ The matrix entry added to `.github/workflows/release.yml`, alongside the existin
    the `aria2` service; the published image is pulled and `docker compose build aria2` rebuilds it locally
    under the same tag.
 8. Build the image locally for both platforms and confirm `aria2c --version` runs.
-9. Start the container with a secret set and confirm an unauthenticated `aria2.getVersion` post is answered
-   at the transport level while an unauthorised method call is refused.
+9. Start the container with a secret set and confirm the healthcheck's unauthenticated
+   `system.listMethods` post succeeds, while an unauthenticated `aria2.getVersion` — like every other
+   `aria2.*` method — is refused by the daemon.
 
 ## Acceptance criteria
 - [ ] `docker build ./deploy/aria2` succeeds on `linux/amd64` and `linux/arm64`.

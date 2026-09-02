@@ -36,10 +36,9 @@ specify HTTP shapes, DDL, env vars or UI layout — those live in their own docu
 only by recording the deferral in [`docs/tasks/00-task-index.md`](tasks/00-task-index.md).
 
 Vocabulary used below and owned by the brief: task states are
-`queued downloading seeding paused checking extracting moving completed error removed`; error codes are
-Download Station's 26 `error_detail` values plus `ssrf_blocked`, `path_rejected`,
-`engine_unavailable`, `unsupported_scheme` and `concurrency_limit`; all rates and sizes are bytes or
-bytes/second.
+`queued downloading seeding paused checking extracting moving completed error removed`; the `error_code`
+enum is owned by [`04-data-model.md` §4.2](04-data-model.md#42-taskserror_code); all rates and sizes are
+bytes or bytes/second.
 
 ### Permanently unused requirement identifiers
 

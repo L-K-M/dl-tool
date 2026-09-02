@@ -24,7 +24,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 2. [`docs/05-api-contract.md` §1.2 Authentication and authorisation](../05-api-contract.md#12-authentication-and-authorisation)
    — the cookie, the `X-DLTOOL-CSRF` header and which methods need it.
 3. [`docs/10-deployment-and-compose.md` §7.3 Base-path requirements](../10-deployment-and-compose.md#73-base-path-requirements)
-   — rule 5, API and SSE URLs derived from `window.__DLTOOL_BASE__`.
+   — rules 4 and 5: no inline bootstrap script and no global; every URL is relative and resolved against
+   `document.baseURI`.
 4. [`docs/13-testing-and-verification.md` §7.1 gate 1](../13-testing-and-verification.md#7-ci) — `gen.sh` is
    the only producer of both generated files.
 
@@ -46,23 +47,24 @@ No other file may be modified.
 import createClient from 'openapi-fetch';
 import type { paths } from './schema';
 
-declare global {
-  interface Window { __DLTOOL_BASE__?: string }
-}
-
-/** The base path the server injected into index.html; "" at the web root. */
+/** The base path the server injected as <base href>, without its trailing slash; "" at the web
+ *  root. Derived from document.baseURI, never from location.pathname and never from a window
+ *  global: doc 10 section 7.3 rule 4 forbids the inline script that would have set one. */
 export function basePath(): string {
-  return window.__DLTOOL_BASE__ ?? '';
+  return new URL(document.baseURI).pathname.replace(/\/$/, '');
 }
 
-/** Absolute URL for a path relative to the API root, resolved against document.baseURI. */
+/** Absolute URL for a path relative to the API root, resolved against document.baseURI.
+ *  path has no leading slash: a leading slash would escape the injected <base href> and break
+ *  sub-path deployment (doc 10 section 7.3 rule 5). There is no window global to read: the CSP
+ *  of doc 12 section 6.6 forbids the inline script that would have set one. */
 export function apiUrl(path: string): string {
-  return new URL(basePath() + '/api/v1' + path, document.baseURI).toString();
+  return new URL('api/v1/' + path, document.baseURI).toString();
 }
 
 /** URL of the SSE stream, built the same way. */
 export function eventsUrl(): string {
-  return new URL(basePath() + '/api/v1/events', document.baseURI).toString();
+  return new URL('api/v1/events', document.baseURI).toString();
 }
 
 /** The CSRF token from the last /auth/setup, /auth/login or /auth/me response. */
@@ -71,7 +73,7 @@ export function csrfToken(): string | null;
 
 /** The one typed client. No component, hook or store may call fetch directly. */
 export const api = createClient<paths>({
-  baseUrl: new URL(basePath() + '/api/v1/', document.baseURI).toString(),
+  baseUrl: new URL('api/v1/', document.baseURI).toString(),
   credentials: 'same-origin',
 });
 ```

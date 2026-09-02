@@ -72,9 +72,7 @@ type Task struct {
 	UpdatedAt      int64   `db:"updated_at"      json:"updated_at"`
 }
 
-// ErrNotFound is returned when no task with the given id exists.
-var ErrNotFound = errors.New("store: task not found")
-
+// ErrNotFound is deliberately absent here: db.go already declares it for the whole package (T006).
 // ErrIllegalTransition is returned when a state change is not in the transition table.
 var ErrIllegalTransition = errors.New("store: illegal state transition")
 
@@ -108,25 +106,33 @@ func (s *TaskStore) AppendEvent(ctx context.Context, taskID, level, code, messag
 
 Legal transitions — the table `Transition` consults, plus the three universal rules of
 [`03-architecture.md` §8.1](../03-architecture.md#81-task-state-machine): every state may move to `paused`,
-to `error` and to `removed`. The schedule's `No Download` cell pauses tasks in `checking` as well as in
+to `error` and to `removed` — except `removed` itself, which is terminal. The schedule's `No Download` cell pauses tasks in `checking` as well as in
 `downloading` and `queued` (T081), so `checking` → `paused` must be legal.
 
 | From | To |
 |---|---|
-| `queued` | `downloading` |
-| `downloading` | `checking`, `seeding`, `extracting`, `moving` |
-| `checking` | `downloading` |
-| `paused` | `downloading`, `queued` |
-| `seeding` | `completed` |
-| `extracting` | `moving` |
+| `queued` | `downloading`, `checking`, `seeding`, `completed` |
+| `downloading` | `queued`, `checking`, `seeding`, `completed` |
+| `checking` | `queued`, `downloading`, `seeding`, `completed` |
+| `paused` | `queued`, `downloading`, `checking`, `seeding`, `completed` |
+| `seeding` | `queued`, `downloading`, `checking`, `completed`, `extracting`, `moving` |
+| `completed` | `checking`, `seeding`, `extracting`, `moving` |
+| `extracting` | `moving`, `completed` |
 | `moving` | `completed`, `seeding` |
-| `error` | `queued` |
+| `error` | `queued`, `completed` |
+
+The first five rows exist because the reconciler adopts whatever the engine reports: every target state of
+the normalisation tables in [`06-download-engines.md`](../06-download-engines.md) §4.6 and §5.6 must be
+reachable from every state those tables can follow. `extracting` and `moving` are never engine-reported —
+the post-processing chain (T074, T076) enters them from `completed` or `seeding` and leaves back to
+`completed`. `error` → `completed` exists for T022's `force_complete`. `removed` is terminal: it is the
+only state with no outgoing edge.
 
 ## Steps
 1. Add `Task` and `TaskEvent` to `internal/store/models.go` with both `db` and `json` tags, exactly the
    columns of [§3.3](../04-data-model.md#33-tasks).
-2. Create `internal/store/tasks.go` with `ErrNotFound`, `ErrIllegalTransition`, `TaskStore` and
-   `NewTaskStore`.
+2. Create `internal/store/tasks.go` with `ErrIllegalTransition`, `TaskStore` and `NewTaskStore`. Reuse the
+   package-level `ErrNotFound` that T006 declares in `internal/store/db.go`; never declare a second one.
 3. Write `Create` as one `INSERT` with an explicit column list and `?` placeholders; set `created_at`,
    `updated_at` and `added_at` to the same Unix millisecond value.
 4. Write `Get` with an explicit column list and map `sql.ErrNoRows` to `ErrNotFound` with `%w`.
@@ -137,16 +143,19 @@ to `error` and to `removed`. The schedule's `No Download` cell pauses tasks in `
    `at DESC`, marshalling `detail` into `detail_json`.
 8. Create `internal/store/tasks_test.go`: build a temporary database from the migrations, insert one task
    and assert every column round-trips.
-9. Add a table test asserting each legal pair above succeeds, that `completed` to `downloading` returns
-   `ErrIllegalTransition`, and that a rejected transition leaves `tasks.state` and the `task_events` count
-   unchanged.
+9. Add a table test asserting each legal pair above succeeds, that every transition out of `removed`
+   returns `ErrIllegalTransition`, and that a rejected transition leaves `tasks.state` and the
+   `task_events` count unchanged. Include one case per target state of
+   [`06-download-engines.md`](../06-download-engines.md) §4.6 and §5.6 reached from `downloading`,
+   `seeding`, `paused` and `completed`.
 10. Assert that one accepted `Transition` writes exactly one `task_events` row carrying the supplied code.
 
 ## Acceptance criteria
 - [ ] No statement in `internal/store/tasks.go` or `events.go` uses `SELECT *`.
 - [ ] `Create` then `Get` returns every column unchanged, including the nullable ones as `nil`.
 - [ ] Every pair in the transition table succeeds and every other pair returns `ErrIllegalTransition`.
-- [ ] Any state may move to `paused`, to `error` and to `removed`.
+- [ ] Any state except `removed` may move to `paused`, to `error` and to `removed`; `removed` has no
+      outgoing edge.
 - [ ] A rejected transition writes no `task_events` row.
 
 ## Verification

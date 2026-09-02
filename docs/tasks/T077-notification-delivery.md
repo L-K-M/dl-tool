@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T054, T074 |
 | **Blocks** | T106 |
-| **Parallel-safe** | no — it also edits the shared files `internal/jobs/postprocess.go`, `internal/store/settings.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/jobs/postprocess.go`, `internal/store/settings.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-104](../02-requirements.md#fr-104-send-notifications-and-offer-a-per-channel-test) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
 | **Est. size** | 2 new files, ~330 LOC |
@@ -32,6 +32,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/jobs/handlers_notify_test.go` | create | Mask, per-kind shape, redaction and stub-server cases. |
 | `internal/store/settings.go` | modify | Add `ListNotificationChannels`, `GetNotificationChannel`, `TouchNotificationChannel`. |
 | `internal/jobs/postprocess.go` | modify | Enqueue one `webhook` job per matching channel. |
+| `cmd/dl-tool/main.go` | edit | Construct the `Notifier` with the guarded client and register the `webhook` handler. |
 
 No other file may be modified.
 
@@ -114,8 +115,10 @@ unknown key is a validation error, never a silently ignored field.
 5. Capture the upstream status line verbatim and the first `BodyCap` bytes of the body verbatim; truncate,
    never summarise, and never parse.
 6. Redact credentials and query secrets from `Request.URL`, and never echo the stored secret anywhere.
-7. Register the `webhook` job handler with the T012 worker pool and make it idempotent on
-   `(kind, task_id)`; a delivery that already succeeded is not repeated on retry.
+7. Edit `cmd/dl-tool/main.go` in `OnStart` to build `jobs.NewNotifier(st, deps.HTTP)` from the single
+   guarded client and call `worker.Register("webhook", n.Handle)` beside T074's and T076's registrations;
+   make the handler idempotent on `(kind, task_id)`, so a delivery that already succeeded is not repeated
+   on retry.
 8. Edit `internal/jobs/postprocess.go` to call `Fanout` with the chain's terminal event.
 9. Create `internal/jobs/handlers_notify_test.go` against `httptest` stubs: assert a channel whose mask is
    `["task.completed"]` receives a `task.completed` event and not a `task.error` one; assert one request

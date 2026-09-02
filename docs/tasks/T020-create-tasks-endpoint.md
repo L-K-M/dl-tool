@@ -120,7 +120,8 @@ Status codes, exactly these: `201` with at least one created task · `403` `/pro
    `rejected[]` entry of type `/problems/unsupported-scheme`, with the message
    `ed2k is not supported in v1` for the ed2k scheme.
 8. Per accepted URI: insert the `tasks` row through `store.Create` in state `queued` (or `paused` when
-   `paused` is true), then call `Engine.Add` and store the returned handle with `SetEngineRef`.
+   `paused` is true) and with `engine_ref` NULL. Never call `Engine.Add` here: T098's admission pass is the
+   only caller of `Engine.Add` and `Engine.Resume`, and it stores the handle with `SetEngineRef`.
 9. Pass `ftp_credentials` to the adapter through `engine.AddRequest.Extra` for `ftp`, `ftps` and `sftp`
    URIs only, and strip userinfo from `tasks.source_uri` so no password is persisted or logged.
 10. Return `422` `/problems/unsupported-scheme` when every URI was rejected; otherwise `201`.
@@ -139,6 +140,7 @@ Status codes, exactly these: `201` with at least one created task · `403` `/pro
 - [ ] A 51-URI submission returns `422` `/problems/validation-failed`.
 - [ ] No response body and no log line contains an FTP password.
 - [ ] Every created task carries a `tsk_` ULID and state `queued`, or `paused` when requested.
+- [ ] No created task has an `engine_ref`; `CreateTasks` calls no engine method.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

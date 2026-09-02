@@ -216,6 +216,8 @@ CREATE TABLE notification_channels (
   config_json TEXT NOT NULL,            -- non-secret channel configuration; shape per kind, see §4.8
   secret_enc TEXT,                      -- encrypted at rest; never returned by an API, never logged
   event_mask TEXT NOT NULL DEFAULT '["*"]',  -- JSON array of task_events.code values; ["*"] = every code
+  last_send_at INTEGER,                 -- unix ms of the last delivery attempt; written by T077
+  last_error TEXT,                      -- failure text of the last attempt, NULL after a success
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE INDEX idx_notification_channels_enabled ON notification_channels(enabled);
 ```
@@ -436,10 +438,6 @@ CREATE INDEX idx_feed_items_pub ON feed_items(feed_id, published_at DESC);
 
 CREATE TABLE rules (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
-                                         -- tasks a rule creates are owned by this user and
-                                         -- count against their quota and jail (05 §10.2); RESTRICT, not
-                                         -- CASCADE: deleting a user must not silently destroy shared
-                                         -- automation and match history (05 §12 returns 409 instead)
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
   priority INTEGER NOT NULL DEFAULT 0,  -- lower is evaluated first; ties broken by name
   definition_json TEXT NOT NULL,        -- the rule document; schema in 08-rss-automation.md
@@ -578,7 +576,7 @@ extract_failed                 extract_failed_wrong_password  extract_failed_inv
 extract_failed_quota_reached   extract_failed_disk_full       unknown
 ```
 
-Plus seven dl-tool additions:
+Plus six dl-tool additions:
 
 | Value | Raised when |
 |---|---|

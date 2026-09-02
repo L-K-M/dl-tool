@@ -47,7 +47,13 @@ package api
 // Server owns the chi router, the Huma API and the HTTP listener.
 type Server struct {
 	Router chi.Router
-	API    huma.API
+	// Base is the sub-router mounted at cfg.BasePath. /healthz, /readyz and the SPA go here.
+	Base chi.Router
+	// V1 is the /api/v1 sub-router the Huma API is built on. Every Huma operation path is
+	// relative to it, so an operation registered as "/tasks" is served at <base>/api/v1/tasks
+	// and appears in the document as "/tasks" beneath servers[0].url.
+	V1  chi.Router
+	API huma.API
 }
 
 // NewServer builds the router and the Huma API. Every route lives under
@@ -65,9 +71,11 @@ root := chi.NewMux()
 root.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, requestLogger(log))
 base := chi.NewMux()
 root.Mount(cmp.Or(cfg.BasePath, "/"), base)
+v1 := chi.NewMux()
+base.Mount("/api/v1", v1)
 cfg2 := huma.DefaultConfig("dl-tool", version)
 cfg2.Servers = []*huma.Server{{URL: cfg.BasePath + "/api/v1"}}
-api := humachi.New(base, cfg2)
+api := humachi.New(v1, cfg2)
 ```
 
 ```go
@@ -109,7 +117,8 @@ const (
    registry, and confirm the concrete member names Huma v2.39.1 emits — doc 05 §1.3 records them as
    unverified and names this task as the place to settle it.
 3. Create `internal/api/server.go` with `NewServer` in the shape above. Register one placeholder operation,
-   `GET /api/v1/system/info`, returning `{"version":…}` so the generated document is non-empty.
+   `GET /system/info` — every Huma operation path is relative to `V1`, because the `/api/v1` prefix is
+   already carried by `cfg2.Servers[0].URL` — returning `{"version":…}` so the document is non-empty.
 4. Add `requestLogger`: put a `*slog.Logger` carrying `request_id` on the request context, and redact
    `Authorization`, `Cookie`, `X-Api-Key` and the `apikey`, `token` and `passkey` parameters before logging.
 5. Normalise `cfg.BasePath`: empty means the web root; otherwise a leading `/` and no trailing `/`, already

@@ -366,13 +366,14 @@ stateDiagram-v2
     downloading --> paused
     paused --> downloading
     seeding --> paused
-    downloading --> extracting
-    downloading --> moving
+    downloading --> completed
     downloading --> seeding
-    extracting --> moving
-    moving --> completed
-    moving --> seeding
     seeding --> completed
+    completed --> extracting
+    completed --> moving
+    extracting --> moving
+    extracting --> completed
+    moving --> completed
     downloading --> error
     moving --> error
     error --> queued
@@ -388,8 +389,11 @@ stateDiagram-v2
 |---|---|---|
 | `queued` | `downloading` | The engine accepted the task and reports an active transfer. |
 | `downloading` | `checking` | The engine reports hash checking or integrity verification. |
-| `downloading` | `extracting` / `moving` / `seeding` | Payload complete: extract if enabled, else move if the destination differs, else seed. |
-| `moving` / `seeding` | `completed` | The move finished and was verified, or the share limit was reached. |
+| `downloading` | `completed` / `seeding` | Payload complete: a torrent that keeps sharing goes to `seeding`, everything else straight to `completed`. |
+| `seeding` | `completed` | The share limit was reached. |
+| `completed` / `seeding` | `extracting` / `moving` | Post-processing, owned by the `jobs` table: extract when enabled, then move when the destination differs. |
+| `extracting` / `moving` | `completed` | Post-processing finished; `content_path` points at the final location. |
+| any non-terminal | the state the engine reports | The reconciler adopts whatever the normalisation tables of [`06-download-engines.md`](06-download-engines.md) produce. `removed` is the only terminal state. |
 | any | `paused` | User pause, or the bandwidth schedule paused the task. |
 | any | `error` | Engine error, post-processing failure or guard rejection; `tasks.error_code` is set. |
 | `error` | `queued` | User retry, or automatic retry while `attempts < max_attempts`. |

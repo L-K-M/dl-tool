@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T074, T099 |
 | **Blocks** | T111 |
-| **Parallel-safe** | no — it also edits the shared file `internal/jobs/postprocess.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/jobs/postprocess.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-103](../02-requirements.md#fr-103-move-completed-data-across-filesystems), [FR-045](../02-requirements.md#fr-045-pre-check-free-space-and-pause-on-exhaustion) |
 | **Decisions** | [ADR-0012](../decisions/0012-single-data-mount.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
 | **Est. size** | 3 new files, ~340 LOC |
@@ -32,6 +32,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/fsx/move_test.go` | create | Same-filesystem rename, `EXDEV` fallback, verify and abort cases. |
 | `internal/jobs/handlers_move.go` | create | The `move` job handler: state, progress and error mapping. |
 | `internal/jobs/postprocess.go` | modify | Enqueue `move` after `extract` when the destination differs. |
+| `cmd/dl-tool/main.go` | edit | `worker.Register("move", jobs.NewMoveHandler(st).Handle)` beside T074's registration. |
 
 No other file may be modified.
 
@@ -103,7 +104,9 @@ enqueues nothing; a mid-copy `ENOSPC` does the same and deletes no partial data.
    zero times; simulate `EXDEV` and assert the copy path runs, the destination bytes equal the source bytes
    and the source is gone; assert a truncated destination file yields `ErrVerifyFailed` with the source
    intact; assert a cancelled context leaves the source intact and removes the staging directory.
-10. Run the verification command and paste its output under `## Evidence`.
+10. Edit `cmd/dl-tool/main.go` to call `worker.Register("move", jobs.NewMoveHandler(st).Handle)` in
+    `OnStart`, beside the `extract` registration T074 added.
+11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] A move within one filesystem is a single `os.Rename` and no bytes are copied.

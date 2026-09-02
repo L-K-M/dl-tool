@@ -713,8 +713,9 @@ Server rules:
   unparseable or older than the ring, send one message with `full_update: true`, `seq_gap: true` and the
   entire task list.
 - Emit `retry: 3000` on the first message of every connection.
-- Emit a comment line every 15 seconds while idle (`send.Comment("hb")` → the wire bytes `: hb`) so proxies
-  do not time the stream out.
+- Emit a client-observable keep-alive every 15 seconds while idle: the named event `hb` with `data: {}`,
+  preceded by a comment line (`send.Comment("hb")` → the wire bytes `: hb`) so proxies do not time the
+  stream out either. `EventSource` never surfaces a comment, so the comment alone cannot carry liveness.
 - `rid` is monotonic per process and resets to `0` on restart, so the first message after a restart carries
   `full_update: true` and `seq_gap: true`.
 

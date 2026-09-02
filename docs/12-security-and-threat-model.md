@@ -424,13 +424,13 @@ reached RCE through `python/object/new`.
 A `.dlm` is a gzip-compressed tar archive. `internal/search/dlm_import.go` reads it with `compress/gzip`
 plus `archive/tar` and applies these checks before touching any member.
 
-| Check | Limit |
+The numeric caps and the member-validation rules are owned by
+[`07-search-and-indexers.md`](07-search-and-indexers.md) §4.1 and are not restated here. What this document
+adds is why each exists and the two rules that are security properties rather than format rules:
+
+| Check | Rule |
 |---|---|
-| Uploaded file size | ≤ 2 MiB |
-| Decompressed total | ≤ 8 MiB, enforced with an `io.LimitReader` over the gzip stream |
-| Member count | ≤ 64 |
-| Member types accepted | `tar.TypeReg` and `tar.TypeDir` only; any `TypeSymlink`, `TypeLink`, `TypeChar`, `TypeBlock` or `TypeFifo` rejects the upload |
-| Member names | every element through `sanitiseSegment`; absolute names and any `..` element reject the upload |
+| Decompressed total | enforced with an `io.LimitReader` over the gzip stream, so a zip bomb is stopped while streaming rather than after inflation |
 | Files read | exactly two — `INFO`, then the member named by `INFO.module`; every other member is ignored |
 | Written to disk | nothing; both members are read into memory and analysed, the archive is never extracted |
 | Mode bits | ignored entirely |

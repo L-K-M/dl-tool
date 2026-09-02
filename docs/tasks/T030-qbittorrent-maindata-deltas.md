@@ -31,6 +31,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/qbittorrent/sync_test.go` | create | Merge, removal, rid-reset and ownership cases. |
 | `internal/engine/qbittorrent/testdata/qb_maindata_full_5.2.3.json` | create | One captured `full_update` response. |
 | `internal/engine/qbittorrent/client.go` | modify | Start and stop the poll goroutine from `Connect`/`Close`. |
+| `internal/engine/reconcile.go` | modify | Add `Reconciler.OwnedRefs` and install it on every engine that accepts an ownership filter. |
 
 No other file may be modified.
 
@@ -95,7 +96,11 @@ Poll loop rules, exactly these:
 3. Apply the ownership filter inside `merge`, before storing: a hash the predicate rejects is dropped from
    `fields`, is never returned in `changed`, and is not counted anywhere.
 4. Implement `SetOwnershipFilter` and default the predicate to one that accepts nothing, so a caller that
-   forgets to install it sees an empty queue rather than foreign transfers.
+   forgets to install it sees an empty queue rather than foreign transfers. Then edit
+   `internal/engine/reconcile.go` to add `OwnedRefs(engineName string) func(string) bool`, backed by
+   `ListNonTerminalByEngine`, and have `NewReconciler` call
+   `SetOwnershipFilter(r.OwnedRefs("qbittorrent"))` on every registered engine that exposes the method, so
+   production runs the installed predicate and not the default-deny one.
 5. Implement `List` and `Get` by re-marshalling one `fields` entry into `torrentJSON` and calling
    `toTaskInfo` from T029; `Get` splits the `"qbittorrent:"` prefix and returns `engine.ErrNotFound` for a
    hash the cache does not hold.
@@ -116,6 +121,7 @@ Poll loop rules, exactly these:
 - [ ] A partial delta merges into the cache without clearing any field the delta omitted.
 - [ ] `full_update: true` replaces the cache and re-applies the ownership filter.
 - [ ] A hash the ownership predicate rejects appears in no `List`, no `Get` and no `TaskEvent`.
+- [ ] `TestForeignHashIsInvisible` exercises a predicate installed by `NewReconciler`, not the default.
 - [ ] The engine `rid` is never sent to any dl-tool client and never stored in the database.
 - [ ] A failed poll leaves the previous cache and the previous `rid` unchanged.
 - [ ] `Close` returns only after the poll goroutine has exited; `go test -race` is clean.

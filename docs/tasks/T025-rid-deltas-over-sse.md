@@ -108,7 +108,10 @@ Server rules, all of them:
 7. Send an SSE comment `hb` every 15 seconds while idle.
 8. Add `GET /sync` in the same file over `Hub.Snapshot`: default `rid` to `0` and reject a negative value
    with `422` `/problems/validation-failed`.
-9. Register both operations in `internal/api/server.go` as `stream-events` and `get-sync`.
+9. Register both operations in `internal/api/server.go` as `stream-events` and `get-sync`; in the same
+   file construct the hub with `sync.NewHub()`, build `snap` from `TaskStore.ListTasks` (every state except
+   `removed`) through `Project`, start `hub.Loop(ctx, time.Second, snap)` in a goroutine under the server
+   context, and connect `hub.Clients` to the `dltool_sse_clients` gauge T010 registered.
 10. Create `internal/sync/delta_test.go`: mutate one task and assert the delta contains that id and no
     other; assert a removed task appears only in `tasks_removed`; assert an idle tick publishes nothing;
     assert `Project` renders bytes as integers and timestamps as RFC 3339.
@@ -145,7 +148,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   the reconnect behaviour.
 - Do NOT add feed, rule or search deltas to the envelope.
 - Do NOT redeclare `Delta`, `Stats`, `Ring` or `Hub`; T011 owns them and this task only adds `Loop`.
-- Do NOT poll an engine here; T026 owns the engine poll that feeds the snapshot.
+- Do NOT poll an engine here; T026 owns the engine poll that writes the rows `snap` reads.
 
 ## Forbidden shortcuts
 - Do NOT skip/xfail a test, weaken an assertion, or delete a test to make a check pass.

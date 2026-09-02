@@ -8,7 +8,7 @@
 | **Depends on** | T017, T019, T020, T024, T026 |
 | **Blocks** | T099 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/tasks_actions.go`, `internal/store/tasks.go` |
-| **Implements** | [FR-020](../02-requirements.md#fr-020-cap-the-number-of-concurrently-active-tasks), [FR-021](../02-requirements.md#fr-021-exclude-seeding-tasks-from-every-concurrency-limit) |
+| **Implements** | [FR-020](../02-requirements.md#fr-020-cap-the-number-of-concurrently-active-tasks), [FR-021](../02-requirements.md#fr-021-exclude-seeding-tasks-from-every-concurrency-limit), [FR-095](../02-requirements.md#fr-095-order-the-queue-by-creation-date) |
 | **Decisions** | [ADR-0017](../decisions/0017-exclusive-control-of-engines.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
 | **Est. size** | 2 new files, ~330 LOC |
 
@@ -40,7 +40,8 @@ No other file may be modified.
 ```go
 package engine
 
-// Limits are the three settings keys of docs/11-config-reference.md §5. 0 means unlimited.
+// Limits are the two max_active_* settings keys of docs/11-config-reference.md §5. 0 means unlimited.
+// The bandwidth pair is engine.RateLimits (T079); these two types are distinct on purpose.
 type Limits struct {
 	MaxActiveTotal     int
 	MaxActivePerEngine int

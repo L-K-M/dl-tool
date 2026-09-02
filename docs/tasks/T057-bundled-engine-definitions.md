@@ -135,7 +135,8 @@ response:
 6. Implement `SeedIndexers` over `store.IndexerStore.Create`, treating the duplicate-`definition_id` sentinel
    as "already seeded" rather than an error, and returning the number of rows actually created.
 7. Edit `cmd/dl-tool/main.go` to build the registry with `filepath.Join(cfg.ConfigDir, "engines")` and call
-   `SeedIndexers` once in `OnStart`, after the store is open.
+   `SeedIndexers` once in `OnStart`, after the store is open, in the slot T055 step 9 reserves for it, and
+   put that same registry into the `api.Deps` value handed to `NewServer`. Build no second registry.
 8. Create `internal/search/bundled_test.go` with `TestBundledSetIsExactlyFour` reading `definitions.FS`,
    `TestEveryBundledDefinitionValidates`, `TestNoBundledDefinitionUsesKindHTML`,
    `TestUserDefinitionCollidingIDRejected`, `TestInvalidUserDefinitionDoesNotBlockOthers` and

@@ -316,6 +316,14 @@ Because Huma derives the spec from the handler structs, a handler change that wa
 See [`ADR-0003`](decisions/0003-chi-huma-code-first-openapi.md). A Go test also boots the server, fetches
 `/openapi.json` and compares it with the committed file, so `make test` catches the same drift locally.
 
+**Who regenerates them.** `api/openapi.json` and `web/src/api/schema.d.ts` are part of the `Files` table of
+every task that registers, removes or changes a Huma operation or one of its request/response structs,
+whether or not that table lists them by name. Such a task runs `make gen` and commits both files in its own
+commit. This is the single standing exception to hard rule 1 of
+[`14-conventions.md` §7](14-conventions.md#7-repository-wide-hard-rules), and it never licenses hand-editing
+either file, nor touching any other file the table omits. Rule 8 of the Definition of Done is read with the
+same exception.
+
 ### 7.2 Gate 2 — the plan cannot rot
 
 `make doclint` runs `scripts/doclint.sh` (§8) on every push and pull request. It fails on a clarification left

@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T028, T029, T030, T031, T032, T036, T037 |
 | **Blocks** | — |
-| **Parallel-safe** | no — closes the `engine.Engine` assertion on `qbittorrent.Client` |
+| **Parallel-safe** | no — closes the `engine.Engine` assertion on `qbittorrent.Client` and edits the shared file `internal/api/server.go` |
 | **Implements** | the magnet half of [FR-006](../02-requirements.md#fr-006-inspect-a-submission-before-committing-it); infrastructure for [FR-011](../02-requirements.md#fr-011-maintain-the-canonical-task-state-machine) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |
 | **Est. size** | 2 new files, ~320 LOC |
@@ -31,6 +31,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/qbittorrent/inspect.go` | create | `InspectMagnet` and the temporary-handle cleanup. |
 | `internal/engine/qbittorrent/contract_test.go` | create | The qBittorrent call site of `enginetest.RunContract`. |
 | `internal/engine/qbittorrent/client.go` | modify | Add the `var _ engine.Engine = (*Client)(nil)` assertion. |
+| `internal/api/server.go` | modify | Construct the qBittorrent client from config and register it in the engine registry. |
 
 No other file may be modified.
 
@@ -88,7 +89,10 @@ Manifest field sources, exactly these:
    task: it is added, read and removed inside one call and is never written to `tasks`.
 7. Add `var _ engine.Engine = (*Client)(nil)` to `internal/engine/qbittorrent/client.go`; fix any method
    the compiler now reports as missing by pointing at the task that owns it under `## Blocked` rather
-   than writing a stub.
+   than writing a stub. Only once that assertion compiles, edit `internal/api/server.go` to build the
+   client from `cfg.QBittorrentURL`, `cfg.QBittorrentUser` and `cfg.QBittorrentPass`, call `Connect`, and
+   `Register` it beside aria2 in the registry T027 step 8 created; skip registration when the URL is
+   empty.
 8. Create `internal/engine/qbittorrent/contract_test.go` with `//go:build integration`, starting
    `lscr.io/linuxserver/qbittorrent:5.2.3` through testcontainers with
    `wait.ForHTTP("/api/v2/app/version").WithPort("8080/tcp")`, seeding the admin credentials the adapter
@@ -102,6 +106,7 @@ Manifest field sources, exactly these:
 - [ ] `InspectMagnet` leaves no torrent behind, on success, on timeout and on a cancelled context.
 - [ ] The manifest's infohashes come from `infohash_v1`/`infohash_v2`, never from `hash`.
 - [ ] `var _ engine.Engine = (*Client)(nil)` compiles, with no stub method added to satisfy it.
+- [ ] `Registry.Get("qbittorrent")` returns the client after `NewServer` with a configured URL.
 - [ ] `enginetest.RunContract` passes against a real qBittorrent 5.2.3 container.
 - [ ] `UnsupportedCapabilityReturnsErrNotSupported` passes for every capability the adapter does not
       declare.

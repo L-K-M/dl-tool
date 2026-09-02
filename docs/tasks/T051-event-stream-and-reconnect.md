@@ -50,9 +50,11 @@ export const BACKOFF_SECONDS = [1, 2, 4, 8, 15, 30] as const;
 /** Consecutive stream failures after which the client polls instead, doc 05 section 6.1. */
 export const POLL_AFTER_FAILURES = 3;
 
-/** Polling period in milliseconds. Doc 05 section 6.1 owns transport behaviour and says 2 s;
- *  doc 09 section 10.8 rule 4 says 3 s. Implement 2000 and note the discrepancy in Evidence. */
+/** Polling period in milliseconds. Doc 05 section 6.1 and doc 09 section 10.8 rule 4 both say 2 s. */
 export const POLL_INTERVAL_MS = 2000;
+
+/** Silence after which the connection reads offline: two 15 s heartbeats, doc 09 section 10.8 rule 1. */
+export const OFFLINE_AFTER_MS = 30_000;
 
 export interface Transport {
   /** Opens the stream and keeps it open until stop(). Safe to call once per session. */
@@ -79,7 +81,7 @@ Behaviour, from doc 05 §6.1 and doc 09 §10.8:
 | Trigger | Effect |
 |---|---|
 | `sync` event | `applySync(payload)`; on any `state` change, insert or removal also call `invalidateTaskList` (T042). |
-| no message for more than 2 s | `connection = 'offline'`, dot amber, grid dimmed to 70 %. |
+| no `sync` event, no `hb` event and no poll response for `OFFLINE_AFTER_MS` | `connection = 'offline'`, dot amber, grid dimmed to 70 %. |
 | 5 s disconnected | Render the banner, `role="alert"`, with the countdown and `Retry now`. |
 | reconnect attempt *n* | Wait `BACKOFF_SECONDS[min(n-1, 5)]` seconds. |
 | 3 consecutive failures | `connection = 'polling'`; `GET /sync?rid=<last>` every `POLL_INTERVAL_MS`, while still retrying SSE in the background. |
@@ -91,9 +93,11 @@ client keeps no separate stream bookkeeping; it stores the last rid only for the
 
 ## Steps
 1. Create `web/src/api/events.ts` with the constants, `createTransport` and `useEventStream`.
-2. Open `new EventSource(eventsUrl(), { withCredentials: true })` and listen for the named event `sync`;
+2. Open `new EventSource(eventsUrl(), { withCredentials: true })` and listen for the named events `sync` and `hb`;
    parse `event.data` and hand it to `onSync`. Never listen for `message`.
-3. Track liveness from the payloads and the heartbeat comment: more than 2 s without either means offline.
+3. Track liveness only from what the browser can observe — a `sync` payload, the named `hb` event of doc 05
+   §6.1, or a successful poll response. `EventSource` discards comment lines, so `: hb` is invisible to the
+   client. More than `OFFLINE_AFTER_MS` without any of the three means offline.
 4. Implement the ladder exactly as `BACKOFF_SECONDS` gives it, resetting the attempt counter on the first
    successful message, and expose the remaining seconds so the banner can count down.
 5. After `POLL_AFTER_FAILURES` failures start the poller on `GET /sync?rid=<last rid>` through the T014

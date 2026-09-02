@@ -28,7 +28,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 4. [`docs/04-data-model.md` §5 Schema migration policy](../04-data-model.md#5-schema-migration-policy) and
    [§6 Backup and restore](../04-data-model.md#6-backup-and-restore).
 5. [`docs/14-conventions.md` §2.4 SQL and sqlx](../14-conventions.md#24-sql-and-sqlx) and
-   [§8.3 Add a migration](../14-conventions.md#83-add-a-migration).
+   [§8.4 Add a migration](../14-conventions.md#84-add-a-migration).
 
 ## Files
 | Path | Action | Purpose |

@@ -64,8 +64,7 @@ column names the package that consumes the parsed field.
 |---|---|---|---|---|---|---|
 | `DLTOOL_HTTP_ADDR` | listen addr | `:8080` | no | infrastructure | Address of the main HTTP listener serving the SPA, `/api/v1`, `/healthz` and `/readyz`. | `internal/api/server.go` |
 | `DLTOOL_BASE_PATH` | url path | *(empty)* | no | infrastructure | Sub-path prefix when reverse-proxied, e.g. `/dl-tool`. Must start with `/` and must not end with `/`. Empty means the app is served at the root. | `internal/api/server.go`, `internal/api/static.go` |
-| `DLTOOL_ALLOWED_HOSTS` | `,`-separated DNS names | *(empty)* | no | infrastructure | Exact additional `Host` names accepted by DNS-rebinding protection. `localhost` and literal IP addresses are always accepted. | `internal/api/server.go` |
-| `DLTOOL_CONFIG_LOCK` | bool | `false` | no | infrastructure | When `true`, rejects API mutations of operator configuration. It cannot be changed through the API. | `internal/api/middleware.go` |
+| `DLTOOL_CONFIG_LOCK` | bool | `false` | no | infrastructure | When `true`, rejects API mutations of operator configuration. It cannot be changed through the API. | `internal/api/security.go` |
 | `DLTOOL_CONFIG_DIR` | dir path | `/config` | no | infrastructure | Directory holding the database, `secrets.env`, `backups/`, `logs/` and `torrents/`. Must exist and be writable by the dropped user. | `internal/config`, `internal/store/db.go` |
 | `DLTOOL_DATA_ROOTS` | `:`-separated dir paths | `/data` | no | infrastructure | The only directories any destination, browse, mkdir, move or delete-data operation may touch. Order matters: the first root is the fallback default destination. | `internal/fsx/safepath.go` |
 | `DLTOOL_DB_PATH` | file path | `/config/dl-tool.db` | no | infrastructure | SQLite database file. Its directory must be on a local filesystem. | `internal/store/db.go` |
@@ -306,8 +305,10 @@ DLTOOL_WATCH_DIR=/data/watch
 DLTOOL_NOTIFY_URL=
 ```
 
-`.env.example` in the repository root is this second file with every secret replaced by a placeholder. `.env`,
-`config/`, `secrets.env`, `*.key` and `*.pem` are in `.gitignore`.
+The block above is a **fully configured** `.env`, shown for reference. It is *not* `.env.example`: that file
+is owned by [`10-deployment-and-compose.md`](10-deployment-and-compose.md) §6 and ships both engine URLs
+unset, so a fresh `cp .env.example .env && docker compose up -d` boots with both engine lanes disabled.
+`.env`, `config/`, `secrets.env`, `*.key` and `*.pem` are in `.gitignore`.
 
 ---
 
