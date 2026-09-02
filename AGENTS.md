@@ -5,6 +5,8 @@ It is a **control plane**: it owns the unified queue, users, destinations, searc
 the web UI, and delegates the actual transferring to aria2, qBittorrent and yt-dlp.
 
 **This repository currently contains the plan, not the implementation.** Your job is to build it.
+[`IMPLEMENTING.md`](IMPLEMENTING.md) is the standing brief for doing that: the task loop, the
+one-task-one-PR rule, when to stop, and what is still undecided.
 
 ## Where the plan lives
 
