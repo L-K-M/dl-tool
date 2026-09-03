@@ -30,8 +30,11 @@ const (
 	backupsDirName     = "backups"
 
 	// readHeaderTimeout bounds slow-header exposure on the main listener;
-	// shutdownTimeout bounds the graceful drain on stop.
+	// readTimeout bounds the whole request read (body included); idleTimeout
+	// bounds keep-alive idling; shutdownTimeout bounds the graceful drain.
 	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 60 * time.Second
+	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 10 * time.Second
 )
 
@@ -83,6 +86,8 @@ func main() {
 				Addr:              cfg.HTTPAddr,
 				Handler:           server.Router,
 				ReadHeaderTimeout: readHeaderTimeout,
+				ReadTimeout:       readTimeout,
+				IdleTimeout:       idleTimeout,
 			}
 
 			go func() {

@@ -7,9 +7,11 @@ trap 'rm -f "$openapi_tmp"' EXIT
 go run ./cmd/dl-tool openapi > "$openapi_tmp"
 mv "$openapi_tmp" api/openapi.json
 cd web
-if [ ! -x ./node_modules/.bin/openapi-typescript ]; then
-	echo "error: web/node_modules is missing; run 'npm ci' in web/ (or 'make setup') before generating" >&2
-	exit 1
-fi
+for tool in openapi-typescript prettier; do
+	if [ ! -x "./node_modules/.bin/$tool" ]; then
+		echo "error: web/node_modules/.bin/$tool is missing; run 'npm ci' in web/ (or 'make setup') before generating" >&2
+		exit 1
+	fi
+done
 ./node_modules/.bin/openapi-typescript ../api/openapi.json -o src/api/schema.d.ts
 ./node_modules/.bin/prettier --write src/api/schema.d.ts
