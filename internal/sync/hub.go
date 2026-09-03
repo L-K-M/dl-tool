@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync"
@@ -167,8 +168,18 @@ func (h *Hub) Snapshot(rid int64, full func() Delta) Delta {
 		return d
 	}
 
+	// Read the cursor before the snapshot: a delta published after this load
+	// can appear in both the snapshot and a later diff (a benign duplicate),
+	// but a newer cursor over stale contents would lose it.
+	cur := h.rid.Load()
 	d := full()
-	d.RID = h.rid.Load()
+	if d.Tasks == nil {
+		d.Tasks = map[string]json.RawMessage{}
+	}
+	if d.TasksRemoved == nil {
+		d.TasksRemoved = []string{}
+	}
+	d.RID = cur
 	d.FullUpdate = true
 	d.SeqGap = true
 	return d

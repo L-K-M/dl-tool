@@ -77,6 +77,34 @@ func TestSinceRemovalBeatsUpdate(t *testing.T) {
 	}
 }
 
+func TestSinceReaddBeatsRemoval(t *testing.T) {
+	r := NewRing()
+	r.Append(Delta{RID: 1})
+	r.Append(Delta{RID: 2, TasksRemoved: []string{"tsk_a"}, CategoriesRemoved: []string{"linux"}})
+	r.Append(Delta{RID: 3, Tasks: map[string]json.RawMessage{
+		"tsk_a": json.RawMessage(`{"state":"downloading"}`),
+	}, Categories: map[string]json.RawMessage{
+		"linux": json.RawMessage(`{"save_path":"/data/iso"}`),
+	}})
+
+	d, ok := r.Since(1)
+	if !ok {
+		t.Fatal("rid 1 is inside the ring, want a hit")
+	}
+	if _, ok := d.Tasks["tsk_a"]; !ok {
+		t.Fatal("tsk_a was re-added after its removal and must survive coalescing")
+	}
+	if len(d.TasksRemoved) != 0 {
+		t.Fatalf("tasks_removed = %v, want the re-add to cancel the tombstone", d.TasksRemoved)
+	}
+	if _, ok := d.Categories["linux"]; !ok {
+		t.Fatal("category linux was re-created after its removal and must survive coalescing")
+	}
+	if len(d.CategoriesRemoved) != 0 {
+		t.Fatalf("categories_removed = %v, want the re-add to cancel the tombstone", d.CategoriesRemoved)
+	}
+}
+
 func TestEvictedRIDForcesFullUpdate(t *testing.T) {
 	h := NewHub()
 	for i := 0; i <= RingDepth; i++ {
