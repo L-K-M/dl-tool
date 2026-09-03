@@ -264,7 +264,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T003 | Scaffold the Vite SPA build and its toolchain | T001 | yes | done | [T003](T003-web-build-scaffold.md) |
 | T004 | Bootstrap the Go module, pin every dependency and build the entrypoint | T001 | no | done | [T004](T004-go-module-and-entrypoint.md) |
 | T005 | Load the DLTOOL_ environment and generate the boot secrets | T004 | no | done | [T005](T005-config-loader-and-secrets.md) |
-| T006 | Open the SQLite store, generate ULIDs and apply the initial migration | T004, T005 | yes | todo | [T006](T006-sqlite-store-and-initial-migration.md) |
+| T006 | Open the SQLite store, generate ULIDs and apply the initial migration | T004, T005 | yes | done | [T006](T006-sqlite-store-and-initial-migration.md) |
 | T007 | Serve chi and Huma under the base path and commit the OpenAPI document | T005, T006 | no | todo | [T007](T007-http-server-and-openapi.md) |
 | T008 | Authenticate every request with a session cookie or a bearer token | T006, T007 | no | todo | [T008](T008-session-and-csrf-authentication.md) |
 | T009 | Complete the first run with a one-time setup token | T008 | no | todo | [T009](T009-first-run-setup-and-login.md) |
