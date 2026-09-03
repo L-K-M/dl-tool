@@ -69,8 +69,9 @@ func installErrorFactory() {
 }
 
 // slugForStatus maps an HTTP status to its registry slug. Statuses the
-// registry has no entry for (400, 406) collapse onto the nearest registered
-// shape instead of inventing a slug.
+// registry has no entry for collapse onto the nearest registered shape of
+// their class (4xx → validation-failed, 5xx → internal) instead of
+// inventing a slug.
 func slugForStatus(status int) string {
 	switch status {
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
@@ -92,6 +93,10 @@ func slugForStatus(status int) string {
 	case http.StatusServiceUnavailable:
 		return SlugEngineUnavailable
 	default:
+		if status < http.StatusInternalServerError {
+			return SlugValidationFailed
+		}
+
 		return SlugInternal
 	}
 }

@@ -359,6 +359,35 @@ func TestPanicIsLoggedAndConforming(t *testing.T) {
 	t.Error("no request log record with status 500 for the panicked request")
 }
 
+func TestSlugForStatusFallsBackByClass(t *testing.T) {
+	if got := slugForStatus(http.StatusNotAcceptable); got == SlugInternal {
+		t.Errorf("slugForStatus(406) = %q, must not be the server-fault slug", got)
+	}
+	if got := slugForStatus(http.StatusInternalServerError); got != SlugInternal {
+		t.Errorf("slugForStatus(500) = %q, want %q", got, SlugInternal)
+	}
+}
+
+// TestRecovererRepanicsAbortHandler proves the connection-abort sentinel
+// passes through instead of becoming a spurious 500.
+func TestRecovererRepanicsAbortHandler(t *testing.T) {
+	server := newTestServer(t, "")
+
+	server.V1.Get("/abort-probe", func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	})
+
+	defer func() {
+		recovered := recover()
+		err, ok := recovered.(error)
+		if !ok || !errors.Is(err, http.ErrAbortHandler) {
+			t.Errorf("recovered %v, want http.ErrAbortHandler", recovered)
+		}
+	}()
+
+	do(t, server.Router, http.MethodGet, "/api/v1/abort-probe")
+}
+
 func TestErrorFactorySkipsNilDetails(t *testing.T) {
 	installErrorFactory()
 

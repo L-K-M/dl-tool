@@ -157,6 +157,11 @@ func recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				if err, ok := recovered.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+					// A control-flow signal, not a fault: re-panic so net/http
+					// aborts the connection quietly, as chi's Recoverer does.
+					panic(err)
+				}
 				logFromContext(r.Context()).Error("panic recovered",
 					slog.Any("err", recovered),
 					slog.String("stack", string(debug.Stack())),
