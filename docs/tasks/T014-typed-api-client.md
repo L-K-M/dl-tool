@@ -85,15 +85,16 @@ T007 installs the pinned generator and completes this generation pipeline in `sc
 ```bash
 go run ./cmd/dl-tool openapi > api/openapi.json
 cd web
-npx --no-install openapi-typescript ../api/openapi.json -o src/api/schema.d.ts
-npx --no-install prettier --write src/api/schema.d.ts
+./node_modules/.bin/openapi-typescript ../api/openapi.json -o src/api/schema.d.ts
+./node_modules/.bin/prettier --write src/api/schema.d.ts
 ```
 
 ## Steps
 1. Edit `web/package.json` to add `openapi-fetch` at the pin in doc 09 as a runtime dependency, then run
    `npm install` inside `web/` to update `web/package-lock.json`.
 2. Run `make gen` and confirm `api/openapi.json` and `web/src/api/schema.d.ts` are unchanged; T007 commits
-   both. If either drifts, stop and report it without committing the change. Never hand-edit either one.
+   both. If either drifts, leave the diff as evidence, do not commit it, and stop and report it. Never
+   hand-edit either one.
 3. Create `web/src/api/client.ts` exactly as above.
 4. Add an `openapi-fetch` middleware that attaches `X-DLTOOL-CSRF` from `csrfToken()` to every `POST`, `PUT`,
    `PATCH` and `DELETE`, and to nothing else. A request with no stored token sends no header, and the server

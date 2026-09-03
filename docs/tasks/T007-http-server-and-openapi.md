@@ -133,9 +133,9 @@ const (
 7. Edit `cmd/dl-tool/main.go` so `OnStart` opens the store, builds the server and serves on `cfg.HTTPAddr`,
    and `OnStop` calls `http.Server.Shutdown` with a bounded context.
 8. Add `openapi-typescript` at the pin in doc 09 to `web/package.json` as a dev dependency, then run
-   `npm install` inside `web/` to update the lockfile. In `scripts/gen.sh`, enter `web/`, run the generator,
-   then format `src/api/schema.d.ts`; both invocations must use `npx --no-install`. Run `make gen` and commit
-   both generated files. Never hand-edit either one.
+   `npm install` inside `web/` to update the lockfile. In `scripts/gen.sh`, enter `web/`, run
+   `./node_modules/.bin/openapi-typescript`, then format `src/api/schema.d.ts` with
+   `./node_modules/.bin/prettier`. Run `make gen` and commit both generated files. Never hand-edit either one.
 9. Write `internal/api/server_test.go` with `humatest` covering: a request to `<base>/api/v1/system/info`
    returns 200; the same path without the base returns 404 when `BasePath` is set; an unknown route returns
    `application/problem+json` with `type` `/problems/not-found`; and `Spec()` equals the bytes of the
@@ -155,7 +155,7 @@ const (
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-make gen && (cd web && npx --no-install prettier --check src/api/schema.d.ts) && make test PKG=./internal/api/... && echo API_OK
+make gen && (cd web && ./node_modules/.bin/prettier --check src/api/schema.d.ts) && make test PKG=./internal/api/... && echo API_OK
 ```
 Expected: `make gen` leaves both generated files unchanged, Prettier reports that all matched files use its
 style, `ok  	github.com/L-K-M/dl-tool/internal/api` appears on its own line with no `FAIL`, and the final

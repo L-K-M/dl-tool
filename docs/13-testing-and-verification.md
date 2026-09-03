@@ -301,14 +301,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 go run ./cmd/dl-tool openapi > api/openapi.json
 cd web
-npx --no-install openapi-typescript ../api/openapi.json -o src/api/schema.d.ts
-npx --no-install prettier --write src/api/schema.d.ts
+./node_modules/.bin/openapi-typescript ../api/openapi.json -o src/api/schema.d.ts
+./node_modules/.bin/prettier --write src/api/schema.d.ts
 ```
 
-Both `npx` calls resolve versions pinned in `web/package-lock.json` and refuse a registry fallback. Run
-`make setup` before generation to install them. The final formatting step makes the generated schema satisfy
-the blocking formatting check without hand-editing it, while the drift gate still compares pipeline output
-byte for byte.
+Both commands use binaries installed from the exact pins in `web/package-lock.json`; they never fall back to
+the registry or the npx cache. Run `make setup` before generation to install them. The final formatting step
+makes the generated schema satisfy the blocking formatting check without hand-editing it, while the drift
+gate still compares pipeline output byte for byte.
 
 The gate regenerates and fails on any difference:
 
