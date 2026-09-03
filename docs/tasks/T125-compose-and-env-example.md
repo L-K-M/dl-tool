@@ -137,8 +137,22 @@ not appear. Use `git status`, not `git diff`: `git diff --name-only` never lists
 ## Evidence
 
 The sandbox ships no Docker CLI, so a client-only toolchain was placed on `PATH` for the run — the
-static `docker` CLI 27.5.1 and the compose plugin v5.5.1, both downloaded from the official release
-URLs. `docker compose config` resolves and validates entirely client-side; no daemon was involved.
+static `docker` CLI from `https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz`
+and the compose plugin from
+`https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64`.
+`docker compose config` resolves and validates entirely client-side; no daemon was involved.
+Toolchain versions, verbatim:
+
+```
+$ docker --version
+Docker version 27.5.1, build 9f9e405
+$ docker compose version
+Docker Compose version v5.5.1
+```
+
+Both strings are copied from observed command output, not reconstructed; v5.5.1 is what the official
+`releases/latest` artifact served on 2026-09-03 and satisfies the `secrets.<name>.environment`
+requirement (Compose >= 2.24).
 The sandbox also exports `TZ=UTC`, which Compose correctly gives precedence over `.env`; the
 rendered-config checks below were re-run with `env -u TZ` so they show the fresh-`.env` defaults.
 
