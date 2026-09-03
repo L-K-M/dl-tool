@@ -147,7 +147,51 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```
+$ make gen && make typecheck && make test-web && echo CLIENT_OK
+./scripts/gen.sh
+✨ openapi-typescript 7.13.0
+🚀 ../api/openapi.json → src/api/schema.d.ts [41ms]
+src/api/schema.d.ts 84ms
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t014-4-1788469715/web
+
+
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+   Start at  21:33:46
+   Duration  537ms (transform 58ms, setup 0ms, import 224ms, tests 31ms, environment 440ms)
+
+CLIENT_OK
+```
+
+`make gen` left both generated files unchanged (`git diff --exit-code --
+api/openapi.json web/src/api/schema.d.ts` exits 0), `tsc` printed nothing,
+Vitest reported `Test Files  2 passed (2)` and the final line was `CLIENT_OK`.
+`make lint` (eslint and prettier over `web/`) is green as well.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+web/package-lock.json
+web/package.json
+web/src/api/client.test.ts
+web/src/api/client.ts
+```
+
+Exactly the paths of the Files table, and nothing else.
+
+Note on the interface contract: the contract documents `apiUrl(path)` as taking
+no leading slash, while step 6 exercises `apiUrl('/tasks')`. `apiUrl` therefore
+strips leading slashes before resolving, so both forms land on the same URL
+under the injected `<base href>`; the exported surface is otherwise exactly the
+contract. The PATCH and DELETE rows of `TestCsrfHeaderOnMutationsOnly` drive the
+generic `request()` method because the M0 schema exposes only GET and POST
+paths; the middleware observes the same `Request` either way.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
