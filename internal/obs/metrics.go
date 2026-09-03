@@ -139,12 +139,12 @@ func (m *Metrics) ListenAndServe(ctx context.Context, addr string) error {
 	}
 
 	// The endpoint carries no authentication; make a non-loopback bind
-	// visible in the log instead of silently exposing the series.
-	if host, _, splitErr := net.SplitHostPort(listenAddr); splitErr == nil {
-		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-			slog.Warn("metrics endpoint is unauthenticated and bound to a non-loopback address",
-				"addr", listenAddr)
-		}
+	// visible in the log instead of silently exposing the series. The bound
+	// address is authoritative: it resolves hostnames and an empty host means
+	// all interfaces, neither of which the string parse sees.
+	if tcpAddr, ok := listener.Addr().(*net.TCPAddr); ok && !tcpAddr.IP.IsLoopback() {
+		slog.Warn("metrics endpoint is unauthenticated and bound to a non-loopback address",
+			"addr", listenAddr)
 	}
 
 	serveErr := make(chan error, 1)
@@ -234,9 +234,10 @@ func (c *tasksTotalCollector) Describe(ch chan<- *prometheus.Desc) {
 
 func (c *tasksTotalCollector) Collect(ch chan<- prometheus.Metric) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	rows := c.rows
+	c.mu.Unlock()
 
-	for _, row := range c.rows {
+	for _, row := range rows {
 		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, float64(row.Count), row.State, row.Engine)
 	}
 }

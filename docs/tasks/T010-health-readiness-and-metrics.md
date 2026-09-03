@@ -215,5 +215,11 @@ database seeded with two queued aria2 tasks confirmed the boot sample publishes
 migration already ships the `tasks` table, so the sampler works from the first boot — no gap until
 T017 after all (its rows, not its table, arrive then).
 
+**Review round 3** (same commands, both packages `ok`, `gofmt`/`go vet`/`golangci-lint` clean):
+`Collect` copies the snapshot and releases the lock before sending on the channel, and the
+non-loopback warning reads the *bound* address (`listener.Addr()`) instead of parsing the requested
+string — verified live: `localhost:19094` binds loopback and does not warn, `:19094` (all
+interfaces) does.
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
