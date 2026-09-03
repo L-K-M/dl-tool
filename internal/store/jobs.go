@@ -145,7 +145,8 @@ func FailJob(ctx context.Context, db *sqlx.DB, id string, attempts, maxAttempts 
 }
 
 // RecoverRunningJobs returns rows stranded in 'running' by a crash to
-// 'pending' and reports how many.
+// 'pending' and reports how many. Single-process only (ADR-0015): a second
+// live worker would have its in-flight rows reset and re-run.
 func RecoverRunningJobs(ctx context.Context, db *sqlx.DB) (int64, error) {
 	result, err := db.ExecContext(ctx, queryRecoverRunningJobs)
 	if err != nil {

@@ -97,6 +97,8 @@ func main() {
 
 			// The job worker pool shares runCtx, so OnStop cancels it and
 			// runDone.Wait blocks until every in-flight handler has finished.
+			// Handlers arrive with T061/T066/T074/T091; until then the pool is
+			// intentionally empty and any enqueued kind is dead-lettered.
 			worker := jobs.NewWorker(db, logger, workerPoolSize)
 			runDone.Add(1)
 			go func() {

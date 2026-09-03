@@ -228,6 +228,65 @@ func TestUnknownKindFailsImmediately(t *testing.T) {
 	require.Contains(t, *job.LastError, "ghost")
 }
 
+func TestShutdownRecordsInFlightOutcome(t *testing.T) {
+	db := newTestDB(t)
+	worker := newTestWorker(db)
+
+	started := make(chan struct{})
+	worker.Register("blocks", func(ctx context.Context, _ store.Job) error {
+		close(started)
+		<-ctx.Done()
+
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.Run(ctx)
+	}()
+
+	id := enqueue(t, db, "blocks")
+	<-started
+	cancelTime := time.Now().UnixMilli()
+	cancel()
+
+	// Run drains: it returns even though a handler was in flight at cancel.
+	require.NoError(t, <-done)
+
+	// The bookkeeping writes are detached from the pool context, so the
+	// cancelled handler's failure was recorded instead of stranding the row
+	// in 'running' until the next boot.
+	job := jobRow(t, db, id)
+	require.Equal(t, statePending, job.State)
+	require.Equal(t, 1, job.Attempts)
+	require.NotNil(t, job.LastError)
+	require.Contains(t, *job.LastError, "context canceled")
+	require.Greater(t, job.RunAfter, cancelTime)
+}
+
+func TestRecoveryFailureDoesNotStopPool(t *testing.T) {
+	db := newTestDB(t)
+	worker := newTestWorker(db)
+	worker.recoverJobs = func(context.Context, *sqlx.DB) (int64, error) {
+		return 0, errors.New("injected recovery failure")
+	}
+
+	var runs atomic.Int32
+	worker.Register("alive", func(context.Context, store.Job) error {
+		runs.Add(1)
+
+		return nil
+	})
+	startWorker(t, worker)
+
+	id := enqueue(t, db, "alive")
+	waitFor(t, "job done despite failed recovery", func() bool {
+		return jobRow(t, db, id).State == stateDone
+	})
+	require.Equal(t, int32(1), runs.Load())
+}
+
 func TestPanicInHandlerIsContained(t *testing.T) {
 	db := newTestDB(t)
 	worker := newTestWorker(db)

@@ -28,6 +28,9 @@ type Worker struct {
 	handlers map[string]Handler
 	size     int
 	poll     time.Duration
+	// recoverJobs is the boot-recovery seam; tests replace it to inject a
+	// failure.
+	recoverJobs func(ctx context.Context, db *sqlx.DB) (int64, error)
 }
 
 // defaultPollInterval is how long an idle worker sleeps between claims.
@@ -35,11 +38,12 @@ const defaultPollInterval = time.Second
 
 func NewWorker(db *sqlx.DB, log *slog.Logger, size int) *Worker {
 	return &Worker{
-		db:       db,
-		log:      log,
-		handlers: make(map[string]Handler),
-		size:     size,
-		poll:     defaultPollInterval,
+		db:          db,
+		log:         log,
+		handlers:    make(map[string]Handler),
+		size:        size,
+		poll:        defaultPollInterval,
+		recoverJobs: store.RecoverRunningJobs,
 	}
 }
 
@@ -57,11 +61,15 @@ func (w *Worker) Register(kind string, h Handler) {
 // is cancelled; it returns only once every in-flight handler has finished, so
 // OnStop drains cleanly.
 func (w *Worker) Run(ctx context.Context) error {
-	recovered, err := store.RecoverRunningJobs(ctx, w.db)
+	recovered, err := w.recoverJobs(ctx, w.db)
 	if err != nil {
-		return fmt.Errorf("jobs: recover running jobs: %w", err)
+		// Keep the pool alive: a failed recovery strands old 'running' rows
+		// until the next boot, and claimLoop already tolerates DB errors —
+		// returning here would leave a dead pool behind a healthy server.
+		w.log.ErrorContext(ctx, "recover running jobs failed", "err", err)
+	} else {
+		w.log.InfoContext(ctx, "recovered stranded jobs", "count", recovered)
 	}
-	w.log.InfoContext(ctx, "recovered stranded jobs", "count", recovered)
 
 	var wg sync.WaitGroup
 	wg.Add(w.size)
@@ -129,7 +137,9 @@ func (w *Worker) execute(ctx context.Context, job store.Job) {
 		return
 	}
 
-	if err := store.CompleteJob(ctx, w.db, job.ID, time.Now().UnixMilli()); err != nil {
+	// Detached from the pool context: when OnStop cancels mid-handler, the
+	// outcome must still reach the database.
+	if err := store.CompleteJob(context.WithoutCancel(ctx), w.db, job.ID, time.Now().UnixMilli()); err != nil {
 		// The row stays 'running' and is recovered — and re-run, harmlessly —
 		// at the next boot.
 		w.log.ErrorContext(ctx, "job completion update failed", append(jobLogAttrs(job), "err", err)...)
@@ -151,7 +161,8 @@ func (w *Worker) fail(ctx context.Context, job store.Job, attempts int, cause er
 		w.log.WarnContext(ctx, "job failed, rescheduled", attrs...)
 	}
 
-	if err := store.FailJob(ctx, w.db, job.ID, attempts, job.MaxAttempts, cause.Error(), time.Now().UnixMilli()); err != nil {
+	// Detached from the pool context, for the same reason as CompleteJob.
+	if err := store.FailJob(context.WithoutCancel(ctx), w.db, job.ID, attempts, job.MaxAttempts, cause.Error(), time.Now().UnixMilli()); err != nil {
 		w.log.ErrorContext(ctx, "job failure update failed", append(attrs, "err", err)...)
 	}
 }

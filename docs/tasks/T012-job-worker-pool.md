@@ -175,10 +175,16 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ```
 go test -race -count=1 ./internal/jobs/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	3.712s
-ok  	github.com/L-K-M/dl-tool/internal/store	6.820s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.328s
+ok  	github.com/L-K-M/dl-tool/internal/store	6.680s
 JOBS_OK
 ```
+
+(Latest run, after the PR-review fixes: `context.WithoutCancel` for the
+CompleteJob/FailJob bookkeeping writes so an OnStop cancel mid-handler no
+longer strands the row in 'running', a failed boot recovery now logs and
+leaves the pool alive instead of silently killing it, plus
+`TestShutdownRecordsInFlightOutcome` and `TestRecoveryFailureDoesNotStopPool`.)
 
 `make lint` (gofmt, golangci-lint, eslint, prettier) and `make vet` reported 0
 issues; `make doclint` reported 0 errors.
