@@ -59,7 +59,7 @@ register.
 | [T004](T004-go-module-and-entrypoint.md) | Bootstrap the Go module, pin every dependency and build the entrypoint | T001 | done |
 | [T005](T005-config-loader-and-secrets.md) | Load the DLTOOL_ environment and generate the boot secrets | T004 | done |
 | [T006](T006-sqlite-store-and-initial-migration.md) | Open the SQLite store, generate ULIDs and apply the initial migration | T004, T005 | done |
-| [T007](T007-http-server-and-openapi.md) | Serve chi and Huma under the base path and commit the OpenAPI document | T005, T006 | todo |
+| [T007](T007-http-server-and-openapi.md) | Serve chi and Huma under the base path and commit the OpenAPI document | T005, T006 | done |
 | [T008](T008-session-and-csrf-authentication.md) | Authenticate every request with a session cookie or a bearer token | T006, T007 | todo |
 | [T009](T009-first-run-setup-and-login.md) | Complete the first run with a one-time setup token | T008 | todo |
 | [T010](T010-health-readiness-and-metrics.md) | Serve health, readiness and Prometheus metrics | T006, T007 | todo |
@@ -265,7 +265,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T004 | Bootstrap the Go module, pin every dependency and build the entrypoint | T001 | no | done | [T004](T004-go-module-and-entrypoint.md) |
 | T005 | Load the DLTOOL_ environment and generate the boot secrets | T004 | no | done | [T005](T005-config-loader-and-secrets.md) |
 | T006 | Open the SQLite store, generate ULIDs and apply the initial migration | T004, T005 | yes | done | [T006](T006-sqlite-store-and-initial-migration.md) |
-| T007 | Serve chi and Huma under the base path and commit the OpenAPI document | T005, T006 | no | todo | [T007](T007-http-server-and-openapi.md) |
+| T007 | Serve chi and Huma under the base path and commit the OpenAPI document | T005, T006 | no | done | [T007](T007-http-server-and-openapi.md) |
 | T008 | Authenticate every request with a session cookie or a bearer token | T006, T007 | no | todo | [T008](T008-session-and-csrf-authentication.md) |
 | T009 | Complete the first run with a one-time setup token | T008 | no | todo | [T009](T009-first-run-setup-and-login.md) |
 | T010 | Serve health, readiness and Prometheus metrics | T006, T007 | no | todo | [T010](T010-health-readiness-and-metrics.md) |

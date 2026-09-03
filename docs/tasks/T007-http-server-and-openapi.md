@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T007 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T005, T006 |
 | **Blocks** | T008, T010, T013, T014, T020, T046, T055, T065, T068, T095 |
 | **Parallel-safe** | no — it edits `cmd/dl-tool/main.go`, `scripts/gen.sh` and the web package files |
@@ -143,14 +143,14 @@ const (
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestOpenAPIMatchesCommittedDocument` compares `Spec()` with `api/openapi.json` and passes.
-- [ ] `TestBasePathMountsEverything` passes for `BasePath` empty and for `/dl-tool`.
-- [ ] `TestOutsideBaseIs404` asserts `GET /api/v1/system/info` returns 404 while `BasePath=/dl-tool`.
-- [ ] Every error response carries `type`, `title`, `status` and `detail`, and its `type` is in the registry.
-- [ ] `go run ./cmd/dl-tool openapi` prints the same bytes as `api/openapi.json`.
-- [ ] `make gen` uses the pinned local generator and formatter without downloading either one.
-- [ ] `make gen` leaves `web/src/api/schema.d.ts` accepted by the pinned Prettier version.
-- [ ] No route is registered outside the base sub-router.
+- [x] `TestOpenAPIMatchesCommittedDocument` compares `Spec()` with `api/openapi.json` and passes.
+- [x] `TestBasePathMountsEverything` passes for `BasePath` empty and for `/dl-tool`.
+- [x] `TestOutsideBaseIs404` asserts `GET /api/v1/system/info` returns 404 while `BasePath=/dl-tool`.
+- [x] Every error response carries `type`, `title`, `status` and `detail`, and its `type` is in the registry.
+- [x] `go run ./cmd/dl-tool openapi` prints the same bytes as `api/openapi.json`.
+- [x] `make gen` uses the pinned local generator and formatter without downloading either one.
+- [x] `make gen` leaves `web/src/api/schema.d.ts` accepted by the pinned Prettier version.
+- [x] No route is registered outside the base sub-router.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -183,7 +183,45 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+```text
+$ make gen && (cd web && ./node_modules/.bin/prettier --check src/api/schema.d.ts) && make test PKG=./internal/api/... && echo API_OK
+./scripts/gen.sh
+✨ openapi-typescript 7.13.0
+🚀 ../api/openapi.json → src/api/schema.d.ts [28.2ms]
+src/api/schema.d.ts 73ms
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/api	1.047s
+API_OK
+```
+
+```text
+$ go run ./cmd/dl-tool openapi > /tmp/openapi.out && cmp api/openapi.json /tmp/openapi.out && echo OPENAPI_BYTES_MATCH
+OPENAPI_BYTES_MATCH
+```
+
+Scope, run after the work commit; the working tree holds no non-doc change, and the
+committed diff against origin/main carries exactly the nine Files-table paths:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+$ git diff --name-only origin/main...HEAD | sort
+api/openapi.json
+cmd/dl-tool/main.go
+internal/api/errors.go
+internal/api/server.go
+internal/api/server_test.go
+scripts/gen.sh
+web/package-lock.json
+web/package.json
+web/src/api/schema.d.ts
+```
+
+Boot smoke test with `DLTOOL_BASE_PATH=/dl-tool`: `GET /dl-tool/api/v1/system/info` → 200
+`{"version":"dev"}`; `GET /api/v1/system/info` → 404 `application/problem+json` with
+`"type":"/problems/not-found"`; `GET /dl-tool/api/v1/nope` → the same 404 problem;
+`GET /dl-tool/api/v1/openapi.json` → 200. Request logs carry `request_id` and the redacted path.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
