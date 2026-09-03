@@ -300,8 +300,16 @@ pinned at implementation time. <!-- pin at implementation time --> Release-image
 set -euo pipefail
 cd "$(dirname "$0")/.."
 go run ./cmd/dl-tool openapi > api/openapi.json
-cd web && npx openapi-typescript ../api/openapi.json -o src/api/schema.d.ts
+cd web
+./node_modules/.bin/openapi-typescript ../api/openapi.json -o src/api/schema.d.ts
+./node_modules/.bin/prettier --write src/api/schema.d.ts
 ```
+
+Both commands use binaries installed from the exact pins in `web/package-lock.json` and assume a POSIX shell
+(Linux, macOS, Git Bash, or WSL); they never fall back to the registry or the npx cache. Run `make setup`
+before generation to install them. The final formatting step
+makes the generated schema satisfy the blocking formatting check without hand-editing it, while the drift
+gate still compares pipeline output byte for byte.
 
 The gate regenerates and fails on any difference:
 
