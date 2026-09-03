@@ -164,14 +164,15 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ```
 go test -race -count=1 ./internal/sync/...
-ok  	github.com/L-K-M/dl-tool/internal/sync	2.038s
+ok  	github.com/L-K-M/dl-tool/internal/sync	2.039s
 SYNC_OK
 ```
 
 (Re-run after the PR-review fixes: cursor-before-snapshot in `Hub.Snapshot`,
 re-add-cancels-tombstone and removal-drops-stale-patch in `coalesceInto`,
-nil-collection normalisation, `TestSinceReaddBeatsRemoval`, and the category
-side of `TestSinceRemovalBeatsUpdate`.)
+full-update-replaces-coalesced-state, nil-collection normalisation,
+`TestSinceReaddBeatsRemoval`, `TestFullUpdateReplacesCoalescedState`, and the
+category side of `TestSinceRemovalBeatsUpdate`.)
 
 `gofmt -l internal/sync` printed nothing; `go vet ./internal/sync/...` and
 `golangci-lint run ./internal/sync/...` reported 0 issues.

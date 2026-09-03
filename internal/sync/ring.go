@@ -105,11 +105,17 @@ func newDelta() Delta {
 
 // coalesceInto merges next into dst, walking oldest first: Tasks and
 // Categories entries win newest-last — a re-add after a removal cancels the
-// tombstone — removals union, Stats always come from the newest entry.
-// FullUpdate is sticky — a full snapshot inside a range keeps the coalesced
-// result a complete set, so no client deep-merges a full listing over a
-// stale store.
+// tombstone — removals union, Stats always come from the newest entry, and
+// a full snapshot replaces everything merged before it. FullUpdate is
+// sticky — a full snapshot inside a range keeps the coalesced result a
+// complete set, so no client deep-merges a full listing over a stale store.
 func coalesceInto(dst *Delta, next Delta) {
+	if next.FullUpdate {
+		// A full snapshot is authoritative: its collections are the complete
+		// post-state, so they replace anything merged before them rather than
+		// unioning with it. The sticky assignment below keeps the flag set.
+		*dst = newDelta()
+	}
 	for id, patch := range next.Tasks {
 		dst.Tasks[id] = patch
 		// Newest wins: an add after a removal cancels the tombstone.

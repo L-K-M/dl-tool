@@ -143,7 +143,7 @@ func (h *Hub) Subscribe(ctx context.Context, lastEventID string, snapshot func()
 	cancel := func() {
 		once.Do(func() {
 			close(done)
-			h.remove(id, ch)
+			h.remove(id)
 		})
 	}
 
@@ -197,7 +197,7 @@ func (h *Hub) Clients() int {
 // remove deletes one subscriber and closes its channel so its read loop
 // ends. A subscriber already evicted by deliverLocked is absent, which makes
 // this a no-op.
-func (h *Hub) remove(id int64, ch chan Delta) {
+func (h *Hub) remove(id int64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 

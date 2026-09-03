@@ -113,6 +113,34 @@ func TestSinceReaddBeatsRemoval(t *testing.T) {
 	}
 }
 
+func TestFullUpdateReplacesCoalescedState(t *testing.T) {
+	r := NewRing()
+	r.Append(Delta{RID: 1})
+	r.Append(Delta{RID: 2, Tasks: map[string]json.RawMessage{
+		"tsk_phantom": json.RawMessage(`{"state":"downloading"}`),
+	}})
+	r.Append(Delta{RID: 3, FullUpdate: true, Tasks: map[string]json.RawMessage{
+		"tsk_real": json.RawMessage(`{"state":"completed"}`),
+	}, Stats: Stats{Active: 1}})
+
+	d, ok := r.Since(1)
+	if !ok {
+		t.Fatal("rid 1 is inside the ring, want a hit")
+	}
+	if !d.FullUpdate {
+		t.Fatal("a full snapshot inside the range must keep the coalesced result a full update")
+	}
+	if _, ok := d.Tasks["tsk_phantom"]; ok {
+		t.Fatal("a full snapshot's listing is the complete post-state; tsk_phantom must not survive it")
+	}
+	if _, ok := d.Tasks["tsk_real"]; !ok {
+		t.Fatal("the full snapshot's own task must be present")
+	}
+	if len(d.TasksRemoved) != 0 {
+		t.Fatalf("tasks_removed = %v, want none from a full snapshot", d.TasksRemoved)
+	}
+}
+
 func TestEvictedRIDForcesFullUpdate(t *testing.T) {
 	h := NewHub()
 	for i := 0; i <= RingDepth; i++ {
