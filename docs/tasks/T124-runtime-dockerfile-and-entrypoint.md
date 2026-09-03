@@ -39,10 +39,12 @@ No other file may be modified.
 ## Interface contract
 
 [`docs/10-deployment-and-compose.md` §5](../10-deployment-and-compose.md#5-dockerfile) **owns the
-`Dockerfile` verbatim**. Copy it from there, not from this file, with two deletions that T093 restores:
-the `LABEL` block and the cross-compilation arguments (`TARGETARCH`, `TARGETVARIANT` and the `GOARCH`
-plumbing). Keep every stage otherwise unchanged, including the `ytdlp` stage that downloads the pinned
-`yt-dlp_musllinux` binary and verifies its SHA-256.
+`Dockerfile` verbatim** — as its post-T093 end state. Copy it from there, not from this file, with three
+omissions that T093 restores: the `LABEL` block, the cross-compilation arguments (`TARGETARCH`,
+`TARGETVARIANT` and the `GOARCH` plumbing), and the `ytdlp` stage together with its
+`COPY --from=ytdlp /yt-dlp /usr/local/bin/yt-dlp` line. This image therefore ships three stages and no
+yt-dlp binary; T093 adds the pinned, SHA-256-verified fetch. Keep the `DLTOOL_YTDLP_PATH` ENV pointing at
+`/usr/local/bin/yt-dlp` so T093 only drops the binary in.
 
 
 `deploy/entrypoint.sh`, mode `0755`:
