@@ -8,7 +8,7 @@ COPY web/ ./
 RUN npm run build                     # -> /web/dist, asset URLs relative (vite base: './')
 
 FROM golang:1.26-alpine AS build
-ARG VERSION REVISION
+ARG VERSION=dev REVISION=unknown
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -24,7 +24,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM alpine:3.22
 RUN apk add --no-cache su-exec ca-certificates tzdata 7zip nodejs
 COPY --from=build /out/dl-tool /usr/local/bin/dl-tool
-COPY deploy/entrypoint.sh     /entrypoint.sh
+COPY --chmod=755 deploy/entrypoint.sh /entrypoint.sh
+# NOTE: yt-dlp is NOT installed in this image yet; T093 adds the pinned,
+# SHA-256-verified fetch. This ENV only pre-declares where T093 will place it,
+# so yt-dlp jobs fail until that task lands.
 ENV PUID=1000 PGID=1000 UMASK=002 TZ=Etc/UTC \
     DLTOOL_HTTP_ADDR=:8080 \
     DLTOOL_CONFIG_DIR=/config \

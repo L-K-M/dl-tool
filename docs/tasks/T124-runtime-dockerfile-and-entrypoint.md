@@ -278,17 +278,24 @@ exit=1
 ```
 
 **Entrypoint static and non-root-branch checks** (shellcheck 0.10.0, real run through a copy with
-only the binary path shimmed to /tmp — the root branch needs a real container):
+only the binary path shimmed to /tmp — the root branch needs a real container). Output below is
+post-review: the first review round caught that the TZ block ran before the non-root check and
+aborted `--user` containers under `set -eu`, and that the `tr`-based root loop split paths on
+spaces; both were fixed (root-guarded TZ write, `IFS=:` split) and re-run.
 
 ```
 $ shellcheck -s sh deploy/entrypoint.sh && echo SHELLCHECK_CLEAN
 SHELLCHECK_CLEAN
-$ TZ=Bogus/Zone /tmp/t124ep/entrypoint.sh serve
+$ /tmp/t124ep/entrypoint.sh serve            # non-root, default TZ=Etc/UTC
 entrypoint: already running as 1000:1000; skipping user creation and chown
 fake-dl-tool: args=[serve] uid=1000 gid=1000 umask=0002
 $ TZ=Bogus/Zone UMASK=077 /tmp/t124ep/entrypoint.sh serve extra-arg
 entrypoint: already running as 1000:1000; skipping user creation and chown
 fake-dl-tool: args=[serve extra-arg] uid=1000 gid=1000 umask=0077
+$ # data-root split, loop extracted verbatim:
+$ DLTOOL_DATA_ROOTS="/tmp/t124ep/Media Library:/tmp/t124ep/nas" test_split
+check: [/tmp/t124ep/Media Library]
+check: [/tmp/t124ep/nas]
 ```
 
 **Dockerfile static check** (hadolint 2.14.0): only `DL3018` (apk packages unpinned) — the task
@@ -297,8 +304,10 @@ pins the `apk add` line verbatim and T093 owns hardening, so it stays.
 **Alpine 3.22 ground truth** (from `dl-cdn.alpinelinux.org` APKINDEX and the actual `.apk`
 contents, x86_64): `su-exec-0.2-r3` ships `sbin/su-exec`, `7zip-24.09-r0` ships `usr/bin/7zz`,
 `nodejs-22.23.2-r0` ships `usr/bin/node`; the dependency closures of all five `apk add` packages
-contain no `python` and no `curl`. Base image tags all resolve on Docker Hub:
-`node:24-alpine`, `golang:1.26-alpine`, `alpine:3.22` → HTTP 200.
+contain no `python` and no `curl`. A boot with `DLTOOL_YTDLP_PATH=/usr/local/bin/yt-dlp` absent
+(the image's current state until T093 lands) was run locally: `/healthz` answers `{"status":"ok"}`
+and the config loader logs a `binary_missing` warning instead of failing. Base image tags all
+resolve on Docker Hub: `node:24-alpine`, `golang:1.26-alpine`, `alpine:3.22` → HTTP 200.
 
 **Web build stage replicated locally:** `npm ci` (188 packages) then `npm run build` →
 `dist/index.html` + `dist/assets/`, matching the stage's commands.

@@ -6,7 +6,9 @@ set -eu
 PUID="${PUID:-1000}"; PGID="${PGID:-1000}"
 UMASK="${UMASK:-002}"; TZ="${TZ:-Etc/UTC}"
 
-if [ -f "/usr/share/zoneinfo/$TZ" ]; then
+# /etc is only writable as root; under compose `user:` the zone reaches the
+# Go process through the TZ environment variable instead (doc 11 section 3).
+if [ "$(id -u)" -eq 0 ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
   ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime
   printf '%s\n' "$TZ" > /etc/timezone
 fi
@@ -31,9 +33,11 @@ mkdir -p "${DLTOOL_CONFIG_DIR:-/config}"
 chown -R "$PUID:$PGID" "${DLTOOL_CONFIG_DIR:-/config}"
 # NEVER chown /data recursively: it can hold terabytes and the operator owns its permissions.
 
-for root in $(printf '%s' "${DLTOOL_DATA_ROOTS:-/data}" | tr ':' ' '); do
+oldIFS=$IFS; IFS=:
+for root in ${DLTOOL_DATA_ROOTS:-/data}; do
   su-exec "$PUID:$PGID" test -w "$root" || \
     echo "entrypoint: data_root_not_writable $root as $PUID:$PGID" >&2
 done
+IFS=$oldIFS
 
 exec su-exec "$PUID:$PGID" /usr/local/bin/dl-tool "$@"
