@@ -66,7 +66,7 @@ register.
 | [T011](T011-sse-hub-and-rid-ring.md) | Build the SSE hub and the rid ring buffer | T004 | done |
 | [T012](T012-job-worker-pool.md) | Run the database-backed job worker pool | T006 | done |
 | [T013](T013-embed-spa-and-base-path.md) | Embed the built SPA and serve it under the base path | T003, T007 | done |
-| [T014](T014-typed-api-client.md) | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | todo |
+| [T014](T014-typed-api-client.md) | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | done |
 | [T124](T124-runtime-dockerfile-and-entrypoint.md) | Write the runtime Dockerfile and the entrypoint | T003, T004, T010, T013 | todo |
 | [T125](T125-compose-and-env-example.md) | Write `compose.yaml` and `.env.example` | T124 | todo |
 
@@ -272,7 +272,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T011 | Build the SSE hub and the rid ring buffer | T004 | yes | done | [T011](T011-sse-hub-and-rid-ring.md) |
 | T012 | Run the database-backed job worker pool | T006 | no | done | [T012](T012-job-worker-pool.md) |
 | T013 | Embed the built SPA and serve it under the base path | T003, T007 | no | done | [T013](T013-embed-spa-and-base-path.md) |
-| T014 | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | yes | todo | [T014](T014-typed-api-client.md) |
+| T014 | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | yes | done | [T014](T014-typed-api-client.md) |
 | T124 | Write the runtime Dockerfile and the entrypoint | T003, T004, T010, T013 | no | todo | [T124](T124-runtime-dockerfile-and-entrypoint.md) |
 | T125 | Write `compose.yaml` and `.env.example` | T124 | yes | todo | [T125](T125-compose-and-env-example.md) |
 
