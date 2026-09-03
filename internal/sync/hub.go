@@ -51,6 +51,9 @@ func NewHub() *Hub {
 // publishInterval. It drops nothing silently: a subscriber whose buffer is
 // full is closed and removed, and that client reconnects through the
 // seq_gap path.
+//
+// Publish retains d's maps and slices: the ring and the pending coalesced
+// state alias them, so callers must not mutate or reuse them after the call.
 func (h *Hub) Publish(d Delta) int64 {
 	// rid assignment and Append share the lock so ring entries stay
 	// contiguous and ordered even under concurrent publishers.
@@ -131,12 +134,12 @@ func (h *Hub) Subscribe(ctx context.Context, lastEventID string, snapshot func()
 	ch := make(chan Delta, subscriberBuffer)
 
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	seed := h.Snapshot(parseRID(lastEventID), snapshot)
 	ch <- seed // a fresh buffer always takes the seed
 	h.nextSub++
 	id := h.nextSub
 	h.subs[id] = ch
-	h.mu.Unlock()
 
 	done := make(chan struct{})
 	var once sync.Once
@@ -178,6 +181,12 @@ func (h *Hub) Snapshot(rid int64, full func() Delta) Delta {
 	}
 	if d.TasksRemoved == nil {
 		d.TasksRemoved = []string{}
+	}
+	if d.Categories == nil {
+		d.Categories = map[string]json.RawMessage{}
+	}
+	if d.CategoriesRemoved == nil {
+		d.CategoriesRemoved = []string{}
 	}
 	d.RID = cur
 	d.FullUpdate = true

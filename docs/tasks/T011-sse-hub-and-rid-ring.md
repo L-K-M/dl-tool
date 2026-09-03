@@ -164,7 +164,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ```
 go test -race -count=1 ./internal/sync/...
-ok  	github.com/L-K-M/dl-tool/internal/sync	2.038s
+ok  	github.com/L-K-M/dl-tool/internal/sync	2.037s
 SYNC_OK
 ```
 

@@ -92,8 +92,10 @@ func (r *Ring) Since(rid int64) (d Delta, ok bool) {
 	return d, true
 }
 
-// newDelta returns a Delta whose collections are non-nil, so they marshal as
-// {} and [] rather than null (docs/05-api-contract.md section 6.1).
+// newDelta returns a Delta whose collections are non-nil: the two
+// always-present ones then marshal as {} and [] rather than null, while the
+// two omitempty category fields are omitted from the wire when empty
+// (docs/05-api-contract.md section 6.1 marks them optional).
 func newDelta() Delta {
 	return Delta{
 		Tasks:             make(map[string]json.RawMessage),
