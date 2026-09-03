@@ -209,7 +209,123 @@ this task creates is untracked, and `git diff --name-only` never lists an untrac
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+**Sandbox limitation (stated, not worked around):** this session runs as a non-root user in a
+container with no Docker CLI, no daemon socket, no `sudo`, and user namespaces disabled, so the
+verbatim Verification block could not execute:
+
+```
+$ make docker-build VERSION=t124
+docker build -t ghcr.io/l-k-m/dl-tool:t124 .
+/bin/bash: line 1: docker: command not found
+make: *** [Makefile:57: docker-build] Error 127
+$ unshare -U -r true
+unshare: unshare failed: Operation not permitted
+```
+
+The image build and every `docker run` acceptance criterion therefore remain unverified here and
+need one run on a Docker-capable machine. Everything that does not need a daemon was run for real;
+output below is observed, not expected.
+
+**Interface-contract note:** the contract paragraph said to keep doc 10 §5's `ytdlp` stage while
+also deleting the `TARGETARCH` plumbing that stage selects on, and while `ARG YTDLP_VERSION=""`
+stays an empty pin — a guaranteed build failure. The same task file's Goal, Steps ("three stages"),
+Out-of-scope ("Do NOT add the `ytdlp` stage ... T093 owns the pinned, SHA-256-verified fetch") and
+acceptance criteria all say the opposite, so the Dockerfile ships three stages and keeps the
+`DLTOOL_YTDLP_PATH` ENV default only. Flagged in the PR description.
+
+**Build, lint, vet, test (the Go edit):**
+
+```
+$ gofmt -l cmd internal          # (no output)
+$ go vet ./... && CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X main.version=t124' \
+    -o bin/dl-tool ./cmd/dl-tool && echo BUILD_OK
+BUILD_OK
+$ golangci-lint run ./...
+0 issues.
+$ go test -race -count=1 ./...
+ok  github.com/L-K-M/dl-tool/internal/api      19.694s
+ok  github.com/L-K-M/dl-tool/internal/config   1.201s
+ok  github.com/L-K-M/dl-tool/internal/jobs     4.688s
+ok  github.com/L-K-M/dl-tool/internal/obs      1.212s
+ok  github.com/L-K-M/dl-tool/internal/secure   4.211s
+ok  github.com/L-K-M/dl-tool/internal/store    7.538s
+ok  github.com/L-K-M/dl-tool/internal/sync     2.039s
+```
+
+**`serve` and `healthcheck` verbs, run for real against a live local server:**
+
+```
+$ DLTOOL_CONFIG_DIR=/tmp/t124cfg DLTOOL_DATA_ROOTS=/tmp DLTOOL_DB_PATH=/tmp/t124cfg/dl-tool.db \
+    DLTOOL_HTTP_ADDR=127.0.0.1:18091 bin/dl-tool serve &   # booted; proves `serve` is consumed
+$ curl -s http://127.0.0.1:18091/healthz
+{"status":"ok"}
+$ DLTOOL_HTTP_ADDR=127.0.0.1:18091 bin/dl-tool healthcheck; echo exit=$?
+exit=0
+$ kill -TERM $SRV; wait $SRV                     # NFR-004
+sigterm: exit=0 elapsed_ms=26
+$ DLTOOL_HTTP_ADDR=127.0.0.1:18091 bin/dl-tool healthcheck; echo exit=$?
+healthcheck: Get "http://127.0.0.1:18091/healthz": dial tcp 127.0.0.1:18091: connect: connection refused
+exit=1
+# second server on :18092 with DLTOOL_BASE_PATH=/dl:
+$ DLTOOL_HTTP_ADDR=:18092 DLTOOL_BASE_PATH=/dl  bin/dl-tool healthcheck; echo exit=$?   # bare ":port" normalised
+exit=0
+$ DLTOOL_HTTP_ADDR=:18092 DLTOOL_BASE_PATH=/dl/ bin/dl-tool healthcheck; echo exit=$?   # trailing slash trimmed
+exit=0
+$ DLTOOL_HTTP_ADDR=:18092 bin/dl-tool healthcheck; echo exit=$?                        # wrong base path
+healthcheck: status 404
+exit=1
+```
+
+**Entrypoint static and non-root-branch checks** (shellcheck 0.10.0, real run through a copy with
+only the binary path shimmed to /tmp — the root branch needs a real container). Output below is
+post-review: the first review round caught that the TZ block ran before the non-root check and
+aborted `--user` containers under `set -eu`, and that the `tr`-based root loop split paths on
+spaces; both were fixed (root-guarded TZ write, `IFS=:` split) and re-run.
+
+```
+$ shellcheck -s sh deploy/entrypoint.sh && echo SHELLCHECK_CLEAN
+SHELLCHECK_CLEAN
+$ /tmp/t124ep/entrypoint.sh serve            # non-root, default TZ=Etc/UTC
+entrypoint: already running as 1000:1000; skipping user creation and chown
+fake-dl-tool: args=[serve] uid=1000 gid=1000 umask=0002
+$ TZ=Bogus/Zone UMASK=077 /tmp/t124ep/entrypoint.sh serve extra-arg
+entrypoint: already running as 1000:1000; skipping user creation and chown
+fake-dl-tool: args=[serve extra-arg] uid=1000 gid=1000 umask=0077
+$ # data-root split, loop extracted verbatim (post round-2: IFS=: and set -f):
+$ DLTOOL_DATA_ROOTS="/tmp/t124ep/Media Library:/tmp/t124ep/nas" test_split
+check: [/tmp/t124ep/Media Library]
+check: [/tmp/t124ep/nas]
+$ DLTOOL_DATA_ROOTS='/tmp/t124ep/a*:/tmp/plain' test_split   # glob chars stay literal
+check: [/tmp/t124ep/a*]
+check: [/tmp/t124ep/plain]
+```
+
+**Dockerfile static check** (hadolint 2.14.0): only `DL3018` (apk packages unpinned) — the task
+pins the `apk add` line verbatim and T093 owns hardening, so it stays.
+
+**Alpine 3.22 ground truth** (from `dl-cdn.alpinelinux.org` APKINDEX and the actual `.apk`
+contents, x86_64): `su-exec-0.2-r3` ships `sbin/su-exec`, `7zip-24.09-r0` ships `usr/bin/7zz`,
+`nodejs-22.23.2-r0` ships `usr/bin/node`; the dependency closures of all five `apk add` packages
+contain no `python` and no `curl`. A boot with `DLTOOL_YTDLP_PATH=/usr/local/bin/yt-dlp` absent
+(the image's current state until T093 lands) was run locally: `/healthz` answers `{"status":"ok"}`
+and the config loader logs a `binary_missing` warning instead of failing. Base image tags all
+resolve on Docker Hub: `node:24-alpine`, `golang:1.26-alpine`, `alpine:3.22` → HTTP 200.
+
+**Web build stage replicated locally:** `npm ci` (188 packages) then `npm run build` →
+`dist/index.html` + `dist/assets/`, matching the stage's commands.
+
+**Scope:**
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+.dockerignore
+Dockerfile
+cmd/dl-tool/main.go
+deploy/entrypoint.sh
+```
+
+Exactly the Files table.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

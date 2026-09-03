@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,12 @@ const (
 	readTimeout       = 60 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 10 * time.Second
+
+	// healthcheckTimeout stays under the image HEALTHCHECK's --timeout=5s so
+	// the probe process always answers before Docker kills it.
+	healthcheckTimeout = 4 * time.Second
+	loopbackHost       = "127.0.0.1"
+	healthzPath        = "/healthz"
 )
 
 // Options are the humacli-bound flags.
@@ -49,6 +56,15 @@ type Options struct {
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "serve": // the image CMD; the root command is already the server
+			os.Args = append(os.Args[:1], os.Args[2:]...)
+		case "healthcheck": // the image HEALTHCHECK
+			os.Exit(healthcheck())
+		}
+	}
+
 	slog.SetDefault(obs.NewLogger(os.Stdout, bootstrapLogLevel, bootstrapLogFormat))
 	stopped := make(chan struct{})
 	drained := make(chan struct{})
@@ -172,6 +188,42 @@ func main() {
 	cli.Root().AddCommand(versionCmd())
 	cli.Root().AddCommand(openapiCmd())
 	cli.Run()
+}
+
+// healthcheck GETs {DLTOOL_BASE_PATH}/healthz on DLTOOL_HTTP_ADDR and returns the
+// process exit code: 0 on 200, 1 otherwise. It shells out to nothing, so the image
+// needs neither curl nor a shell in the health command.
+func healthcheck() int {
+	addr := os.Getenv("DLTOOL_HTTP_ADDR")
+	if addr == "" {
+		addr = ":8080"
+	}
+	if strings.HasPrefix(addr, ":") {
+		addr = loopbackHost + addr
+	}
+	url := "http://" + addr + strings.TrimSuffix(os.Getenv("DLTOOL_BASE_PATH"), "/") + healthzPath
+	ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		return exitFailure
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		return exitFailure
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		}
+	}()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "healthcheck: status", resp.StatusCode)
+		return exitFailure
+	}
+	return 0
 }
 
 func logConfigError(err error) {
