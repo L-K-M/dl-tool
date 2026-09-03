@@ -99,6 +99,12 @@ const (
 	schemeBearer  = "bearerToken"
 )
 
+// credentialRequired names both credentials of doc 05 section 1.2, for the
+// operations the middleware protects; the two body-authenticated
+// operations declare an explicit empty list instead, so the document shows
+// them as anonymous.
+var credentialRequired = []map[string][]string{{schemeSession: {}}, {schemeBearer: {}}}
+
 // Identity is what the middleware puts on the request context.
 type Identity struct {
 	User   store.User
@@ -700,11 +706,6 @@ type authEnvelope struct {
 // registerOperations registers the four /auth operations of doc 05 section 4
 // on the Huma API; Server.registerOperations is the call site.
 func (a *authService) registerOperations(hapi huma.API) {
-	// credentialRequired names both credentials of doc 05 section 1.2; the
-	// two body-authenticated operations declare an explicit empty list so
-	// the document shows them as anonymous.
-	credentialRequired := []map[string][]string{{schemeSession: {}}, {schemeBearer: {}}}
-
 	huma.Register(hapi, huma.Operation{
 		OperationID: "post-auth-setup",
 		Method:      http.MethodPost,

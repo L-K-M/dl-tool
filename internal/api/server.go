@@ -157,6 +157,8 @@ func (s *Server) registerOperations() {
 		Method:      http.MethodGet,
 		Path:        "/system/info",
 		Summary:     "Read system information",
+		// Behind the same middleware as every /api/v1 route.
+		Security: credentialRequired,
 	}, func(_ context.Context, _ *systemInfoInput) (*systemInfoOutput, error) {
 		output := &systemInfoOutput{}
 		output.Body.Version = Version

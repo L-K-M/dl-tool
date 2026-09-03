@@ -163,9 +163,9 @@ Expected: exactly the paths in the Files table, and nothing else (the sorted lis
 ```text
 $ make test PKG="./internal/api/... ./internal/secure/... ./internal/store/..." && echo SETUP_OK
 go test -race -count=1 ./internal/api/... ./internal/secure/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	18.657s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.409s
-ok  	github.com/L-K-M/dl-tool/internal/store	6.934s
+ok  	github.com/L-K-M/dl-tool/internal/api	19.331s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.229s
+ok  	github.com/L-K-M/dl-tool/internal/store	7.516s
 SETUP_OK
 ```
 
