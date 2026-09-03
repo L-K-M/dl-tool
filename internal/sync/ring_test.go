@@ -338,7 +338,19 @@ func TestDeltaJSONFieldNames(t *testing.T) {
 		t.Fatalf("marshalled delta\n got %s\nwant %s", encoded, want)
 	}
 
-	// The optional category fields appear only when set.
+	// The optional category fields appear only when set: nil and empty
+	// collections are both omitted, so nil-normalising them anywhere would
+	// be unobservable on the wire.
+	d.Categories = map[string]json.RawMessage{}
+	d.CategoriesRemoved = []string{}
+	encoded, err = json.Marshal(d)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(encoded) != want {
+		t.Fatalf("empty collections must serialise identically to nil ones\n got %s\nwant %s", encoded, want)
+	}
+
 	d.Categories = map[string]json.RawMessage{"linux": json.RawMessage(`{"save_path":"/data"}`)}
 	d.CategoriesRemoved = []string{"iso"}
 	encoded, err = json.Marshal(d)
