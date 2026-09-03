@@ -270,7 +270,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T009 | Complete the first run with a one-time setup token | T008 | no | done | [T009](T009-first-run-setup-and-login.md) |
 | T010 | Serve health, readiness and Prometheus metrics | T006, T007 | no | done | [T010](T010-health-readiness-and-metrics.md) |
 | T011 | Build the SSE hub and the rid ring buffer | T004 | yes | done | [T011](T011-sse-hub-and-rid-ring.md) |
-| T012 | Run the database-backed job worker pool | T006 | no | todo | [T012](T012-job-worker-pool.md) |
+| T012 | Run the database-backed job worker pool | T006 | no | done | [T012](T012-job-worker-pool.md) |
 | T013 | Embed the built SPA and serve it under the base path | T003, T007 | no | todo | [T013](T013-embed-spa-and-base-path.md) |
 | T014 | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | yes | todo | [T014](T014-typed-api-client.md) |
 | T124 | Write the runtime Dockerfile and the entrypoint | T003, T004, T010, T013 | no | todo | [T124](T124-runtime-dockerfile-and-entrypoint.md) |
