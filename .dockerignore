@@ -6,6 +6,7 @@ config
 node_modules
 web/node_modules
 web/dist
+internal/api/dist
 .env
 **/*.db
 **/*.db-wal
