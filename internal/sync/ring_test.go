@@ -118,7 +118,9 @@ func TestFullUpdateReplacesCoalescedState(t *testing.T) {
 	r.Append(Delta{RID: 1})
 	r.Append(Delta{RID: 2, Tasks: map[string]json.RawMessage{
 		"tsk_phantom": json.RawMessage(`{"state":"downloading"}`),
-	}, TasksRemoved: []string{"tsk_ghost"}, CategoriesRemoved: []string{"cat_ghost"}})
+	}, TasksRemoved: []string{"tsk_ghost"}, Categories: map[string]json.RawMessage{
+		"cat_phantom": json.RawMessage(`{"name":"phantom"}`),
+	}, CategoriesRemoved: []string{"cat_ghost"}})
 	r.Append(Delta{RID: 3, FullUpdate: true, Tasks: map[string]json.RawMessage{
 		"tsk_real": json.RawMessage(`{"state":"completed"}`),
 	}, Stats: Stats{Active: 1}})
@@ -141,6 +143,9 @@ func TestFullUpdateReplacesCoalescedState(t *testing.T) {
 	}
 	if len(d.CategoriesRemoved) != 0 {
 		t.Fatalf("categories_removed = %v, want none: a full snapshot clears earlier tombstones", d.CategoriesRemoved)
+	}
+	if len(d.Categories) != 0 {
+		t.Fatalf("categories = %v, want none: a full snapshot replaces earlier category patches", d.Categories)
 	}
 }
 
