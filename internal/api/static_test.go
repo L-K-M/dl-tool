@@ -161,8 +161,29 @@ func TestSPAMethodNotAllowed(t *testing.T) {
 	server := newTestServer(t, "/dl-tool")
 
 	response := do(t, server.Router, http.MethodPost, "/dl-tool/")
-	if response.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST /dl-tool/ = %d, want %d", response.Code, http.StatusMethodNotAllowed)
+	assertProblem(t, response, http.StatusMethodNotAllowed, SlugNotFound)
+	if allow := response.Header().Get("Allow"); allow != "GET, HEAD" {
+		t.Errorf("Allow = %q, want %q", allow, "GET, HEAD")
+	}
+}
+
+// TestReservedNamespacesStay404 asserts the server-owned namespaces never
+// fall through to the SPA shell: an unknown API route, a health subpath and
+// /metrics on the main listener must fail loudly as problem+json (doc 05
+// section 1.1, doc 10 section 7.3 rule 8).
+func TestReservedNamespacesStay404(t *testing.T) {
+	server := newTestServer(t, "/dl-tool")
+
+	for _, target := range []string{
+		"/dl-tool/api/typo",
+		"/dl-tool/api/v1/no-such-route",
+		"/dl-tool/metrics",
+		"/dl-tool/metrics/extra",
+		"/dl-tool/healthz/extra",
+		"/dl-tool/readyz/extra",
+	} {
+		response := do(t, server.Router, http.MethodGet, target)
+		assertProblem(t, response, http.StatusNotFound, SlugNotFound)
 	}
 }
 
@@ -174,5 +195,21 @@ func TestSPAHandlerRequiresHead(t *testing.T) {
 
 	if _, err := newSPAHandler(files, ""); err == nil {
 		t.Fatal("newSPAHandler accepted an index.html without <head>")
+	}
+}
+
+// TestInjectBaseHrefSkipsLookalikes pins the tag-boundary check: a
+// "<header" lookalike earlier in the page must not attract the injection.
+func TestInjectBaseHrefSkipsLookalikes(t *testing.T) {
+	page := []byte("<!doctype html><!-- <header> --><html><head><title>t</title></head><body/></html>")
+
+	rewritten, err := injectBaseHref(page, "/dl-tool")
+	if err != nil {
+		t.Fatalf("injectBaseHref: %v", err)
+	}
+
+	const want = "<head><base href=\"/dl-tool/\"><title>"
+	if !strings.Contains(string(rewritten), want) {
+		t.Errorf("base href not injected after the real <head>: %q", rewritten)
 	}
 }

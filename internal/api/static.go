@@ -86,7 +86,7 @@ func newSPAHandler(files fs.FS, basePath string) (*spaHandler, error) {
 // forbidden by the same rule and by the CSP. base is HTML-escaped before
 // insertion; "" renders as the web root, <base href="/">.
 func injectBaseHref(page []byte, basePath string) ([]byte, error) {
-	head := bytes.Index(page, []byte("<head"))
+	head := findHeadTag(page)
 	if head < 0 {
 		return nil, fmt.Errorf("embedded %s carries no <head> element", indexPage)
 	}
@@ -107,12 +107,43 @@ func injectBaseHref(page []byte, basePath string) ([]byte, error) {
 	return rewritten, nil
 }
 
+// findHeadTag locates the opening <head> tag, skipping lookalikes such as
+// <header>: the byte after "<head" must close or punctuate a tag.
+func findHeadTag(page []byte) int {
+	const tag = "<head"
+
+	at := 0
+	for {
+		found := bytes.Index(page[at:], []byte(tag))
+		if found < 0 {
+			return -1
+		}
+
+		candidate := at + found
+		if after := page[candidate+len(tag):]; len(after) > 0 && isTagBoundary(after[0]) {
+			return candidate
+		}
+		at = candidate + len(tag)
+	}
+}
+
+// isTagBoundary reports whether b can end a tag name.
+func isTagBoundary(b byte) bool {
+	switch b {
+	case '>', ' ', '\t', '\n', '\r', '/':
+		return true
+	}
+
+	return false
+}
+
 // ServeHTTP maps the request path — already confined to the base by the
 // router — onto the embedded tree. A matching file is served with the cache
 // policy of its tree; anything else answers the rewritten index.html so the
 // SPA router resolves it. Only GET and HEAD are served.
 func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
 		writeProblem(w, Problem(SlugNotFound, http.StatusMethodNotAllowed, "the SPA only serves GET and HEAD"))
 		return
 	}

@@ -148,12 +148,13 @@ $ make build && make test PKG=./internal/api/... && echo SPA_OK
 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X main.version=dev' \
 	-o bin/dl-tool ./cmd/dl-tool
 go test -race -count=1 ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/api	18.713s
+ok  	github.com/L-K-M/dl-tool/internal/api	18.045s
 SPA_OK
 ```
 
 `bin/dl-tool` was written, the package reported `ok` with no `FAIL`, and the
-final line was `SPA_OK`. The checkout had no `web/dist`.
+final line was `SPA_OK`. The checkout had no `web/dist`. `make test` (full
+suite), `make lint`, `make vet` and `make doclint` are green.
 
 Scope check:
 

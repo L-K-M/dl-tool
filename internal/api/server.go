@@ -148,6 +148,14 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	}
 	server.registerOperations()
 
+	// The namespaces the server owns are reserved before the SPA catch-all,
+	// so a typo under them fails loudly as problem+json instead of serving
+	// the SPA shell: an unknown API route, a health subpath, and /metrics,
+	// which belongs to the metrics listener alone (doc 05 section 1.1).
+	for _, reserved := range []string{"/api", "/api/*", "/metrics", "/metrics/*", "/healthz/*", "/readyz/*"} {
+		base.Handle(reserved, http.HandlerFunc(notFound))
+	}
+
 	// The SPA mounts last, on the base catch-all, so /api/v1, /healthz and
 	// /readyz keep every route they claim (doc 10 section 7.3 rules 2 and 8).
 	// Nothing is registered outside the base: with BasePath=/dl-tool a request
