@@ -164,7 +164,43 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make test PKG="./internal/obs/... ./internal/api/..." && echo OBS_OK`:
+
+```
+go test -race -count=1 ./internal/obs/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.141s
+ok  	github.com/L-K-M/dl-tool/internal/api	18.043s
+OBS_OK
+```
+
+`gofmt -l cmd internal` printed nothing; `go vet ./...` and `golangci-lint run ./...` reported
+0 issues.
+
+Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+cmd/dl-tool/main.go
+go.mod
+go.sum
+internal/api/server.go
+internal/obs/health.go
+internal/obs/health_test.go
+internal/obs/metrics.go
+```
+
+The Files-table paths, plus `go.mod`/`go.sum`: importing the already-pinned
+`prometheus/client_golang v1.24.1` for the first time required materializing its transitive
+requirements (`beorn7/perks`, `client_model`, `prometheus/common`, `prometheus/procfs`,
+`goautoneg`, `protobuf`) with `go get <packages>@v1.24.1` — the mechanism T004 step 3
+prescribes instead of `go mod tidy`, which is forbidden while pinned modules are still
+unimported. The additions are purely additive: no pinned version changed, nothing dropped.
+
+A boot smoke test (temporary `DLTOOL_CONFIG_DIR`, `HTTP_ADDR=127.0.0.1:18091`,
+`METRICS_ADDR=127.0.0.1:19091`) confirmed `GET /healthz` → 200 `{"status":"ok"}` with
+`application/json`, `GET /readyz` → 200 `{"status":"ready"}` once migrations were applied,
+`GET /metrics` serving `process_start_time_seconds`/`go_goroutines` on the second listener,
+`GET /metrics` → 404 on the main listener, and a clean SIGTERM drain (`"stopped"`).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

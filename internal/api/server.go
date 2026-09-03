@@ -24,6 +24,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/L-K-M/dl-tool/internal/config"
+	"github.com/L-K-M/dl-tool/internal/obs"
 )
 
 const (
@@ -50,6 +51,10 @@ type Server struct {
 
 	db *sqlx.DB
 
+	// Health owns the /healthz and /readyz handlers on the base router;
+	// cmd/dl-tool calls its MarkReady once store.Open has returned.
+	Health *obs.Health
+
 	// auth owns the first-run gate, the /auth operations and the login
 	// throttles.
 	auth *authService
@@ -75,6 +80,15 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 
 	v1 := chi.NewMux()
 	base.Mount(apiV1Path, v1)
+
+	// The process endpoints of docs/05-api-contract.md section 13.1 sit on
+	// the base router — under DLTOOL_BASE_PATH, outside /api/v1 and therefore
+	// outside the Authenticate middleware. With a nil db they stay up but
+	// never report ready. /metrics is deliberately absent: it belongs to the
+	// metrics listener alone.
+	health := obs.NewHealth(db)
+	base.Get("/healthz", health.Live)
+	base.Get("/readyz", health.Ready)
 
 	// The auth service owns the first-run gate, the /auth operations and
 	// the brute-force controls. With a nil db it registers its operations
@@ -111,6 +125,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		V1:     v1,
 		API:    humachi.New(v1, humaConfig),
 		db:     db,
+		Health: health,
 		auth:   auth,
 	}
 	// The two credentials of docs/05-api-contract.md section 1.2, so the
