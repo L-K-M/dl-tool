@@ -51,6 +51,9 @@ func main() {
 
 	cli := humacli.New(func(hooks humacli.Hooks, _ *Options) {
 		hooks.OnStart(func() {
+			// Every exit path — including a boot failure — must release OnStop.
+			defer close(drained)
+
 			ctx := context.Background()
 
 			cfg, err := config.Load(ctx)
@@ -106,8 +109,6 @@ func main() {
 			if err := db.Close(); err != nil {
 				slog.Error("database close failed", "err", err)
 			}
-
-			close(drained)
 		})
 		hooks.OnStop(func() {
 			slog.Info("stopped")
