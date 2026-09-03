@@ -8,9 +8,13 @@ UMASK="${UMASK:-002}"; TZ="${TZ:-Etc/UTC}"
 
 # /etc is only writable as root; under compose `user:` the zone reaches the
 # Go process through the TZ environment variable instead (doc 11 section 3).
-if [ "$(id -u)" -eq 0 ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
-  ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime
-  printf '%s\n' "$TZ" > /etc/timezone
+if [ "$(id -u)" -eq 0 ]; then
+  if [ -f "/usr/share/zoneinfo/$TZ" ]; then
+    ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime
+    printf '%s\n' "$TZ" > /etc/timezone
+  else
+    echo "entrypoint: unknown TZ $TZ (staying on UTC)" >&2
+  fi
 fi
 
 umask "$UMASK"
@@ -35,6 +39,7 @@ chown -R "$PUID:$PGID" "${DLTOOL_CONFIG_DIR:-/config}"
 
 oldIFS=$IFS; IFS=:; set -f
 for root in ${DLTOOL_DATA_ROOTS:-/data}; do
+  [ -n "$root" ] || continue
   su-exec "$PUID:$PGID" test -w "$root" || \
     echo "entrypoint: data_root_not_writable $root as $PUID:$PGID" >&2
 done
