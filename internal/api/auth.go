@@ -84,6 +84,19 @@ const (
 	// 1s<<10 already exceeds the 15-minute cap; larger shift counts are
 	// clamped here, so an ever-growing failure count cannot overflow.
 	throttleBackoffMaxShift = 10
+
+	// Sweep floor: once a throttle map grows past it, recording sweeps the
+	// expired entries, so address or username spray cannot grow memory
+	// without bound.
+	throttleSweepFloor = 1024
+
+	// cacheControlNoStore keeps responses carrying the CSRF token out of
+	// every cache on the way back.
+	cacheControlNoStore = "no-store"
+
+	// OpenAPI security scheme names of docs/05-api-contract.md section 1.2.
+	schemeSession = "sessionCookie"
+	schemeBearer  = "bearerToken"
 )
 
 // Identity is what the middleware puts on the request context.
@@ -143,6 +156,11 @@ type authService struct {
 	cfg *config.Config
 	db  *sqlx.DB
 
+	// setupMu serializes setup: the gate check, the account insert and the
+	// token teardown are one critical section, so two concurrent calls can
+	// never both create the operator account.
+	setupMu sync.Mutex
+
 	// setupDone caches "the users table is not empty". Seeded at boot,
 	// flipped by a successful setup, and re-checked from the row count
 	// while false so out-of-band inserts are picked up.
@@ -159,6 +177,14 @@ type authService struct {
 // mints the one-time setup token: written to <config>/setup-token mode
 // 0600 and logged on its own line so docker compose logs shows it.
 func newAuthService(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*authService, error) {
+	// A non-positive TTL would mint sessions that are born expired and fail
+	// every request after login; refuse it loudly at construction instead.
+	// (A nil db — the openapi subcommand — skips serving entirely, so the
+	// check only matters there for schema shape, not values.)
+	if db != nil && cfg.SessionTTL <= 0 {
+		return nil, fmt.Errorf("session ttl must be positive, got %s", cfg.SessionTTL)
+	}
+
 	service := &authService{cfg: cfg, db: db, throttle: newLoginThrottle()}
 	if db == nil {
 		return service, nil
@@ -302,6 +328,12 @@ func newRequestInfo(cfg *config.Config, r *http.Request) requestInfo {
 		transport = TransportTLS
 	}
 
+	// The root router's realIP middleware has already rewritten RemoteAddr
+	// to the original client for trusted proxies — walking X-Forwarded-For
+	// right to left past every trusted hop, so spoofed leftmost entries
+	// cannot choose the address. The host split below therefore already sees
+	// the client, not the proxy; bare addresses carry no port, which the
+	// fallback handles.
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -507,6 +539,13 @@ func (t *loginThrottle) checkSource(ip string, now time.Time) (time.Duration, bo
 		}
 	}
 	t.sources[ip] = attempts
+	if len(attempts) == 0 {
+		// Peer addresses are unbounded; drop empty buckets so the map cannot
+		// grow forever.
+		delete(t.sources, ip)
+
+		return 0, false
+	}
 	if len(attempts) < throttleSourceCapacity {
 		return 0, false
 	}
@@ -534,6 +573,7 @@ func (t *loginThrottle) recordFailure(username, ip string, now time.Time) {
 	t.accounts[username] = now.Add(delay)
 
 	t.recordSourceAttemptLocked(ip, now)
+	t.sweepLocked(now)
 }
 
 // recordAttempt consumes one attempt of the peer's budget; the budget of
@@ -562,6 +602,35 @@ func (t *loginThrottle) recordSourceAttemptLocked(ip string, now time.Time) {
 		attempts = attempts[len(attempts)-throttleSourceCapacity:]
 	}
 	t.sources[ip] = attempts
+
+	if len(t.sources) > throttleSweepFloor {
+		t.sweepLocked(now)
+	}
+}
+
+// sweepLocked drops every entry whose wait or window has fully elapsed, so
+// sprayed usernames and rotating addresses cannot pin memory forever. It
+// runs opportunistically once a map outgrows the sweep floor.
+func (t *loginThrottle) sweepLocked(now time.Time) {
+	for username, eligible := range t.accounts {
+		if !now.Before(eligible) {
+			delete(t.accounts, username)
+			delete(t.failures, username)
+		}
+	}
+	for ip, attempts := range t.sources {
+		kept := attempts[:0:0]
+		for _, attempt := range attempts {
+			if now.Sub(attempt) < throttleSourceWindow {
+				kept = append(kept, attempt)
+			}
+		}
+		if len(kept) == 0 {
+			delete(t.sources, ip)
+		} else {
+			t.sources[ip] = kept
+		}
+	}
 }
 
 // rateLimited answers 429 /problems/rate-limited with the Retry-After
@@ -597,8 +666,8 @@ type userBody struct {
 	Username    string  `json:"username" doc:"Account username"`
 	Enabled     bool    `json:"enabled" doc:"Whether the account may log in"`
 	Locale      string  `json:"locale" doc:"Preferred UI locale"`
-	LastLoginAt *string `json:"last_login_at" doc:"RFC 3339 timestamp of the last successful login"`
-	CreatedAt   string  `json:"created_at" doc:"RFC 3339 timestamp of account creation"`
+	LastLoginAt *string `json:"last_login_at" format:"date-time" doc:"RFC 3339 timestamp of the last successful login"`
+	CreatedAt   string  `json:"created_at" format:"date-time" doc:"RFC 3339 timestamp of account creation"`
 }
 
 func newUserBody(u store.User) userBody {
@@ -627,6 +696,11 @@ type authEnvelope struct {
 // registerOperations registers the four /auth operations of doc 05 section 4
 // on the Huma API; Server.registerOperations is the call site.
 func (a *authService) registerOperations(hapi huma.API) {
+	// credentialRequired names both credentials of doc 05 section 1.2; the
+	// two body-authenticated operations declare an explicit empty list so
+	// the document shows them as anonymous.
+	credentialRequired := []map[string][]string{{schemeSession: {}}, {schemeBearer: {}}}
+
 	huma.Register(hapi, huma.Operation{
 		OperationID: "post-auth-setup",
 		Method:      http.MethodPost,
@@ -634,6 +708,7 @@ func (a *authService) registerOperations(hapi huma.API) {
 		Summary:     "Create the operator account with the one-time setup token",
 		Description: "Callable only while the operator account does not exist. Every other endpoint answers 401 /problems/setup-required until it succeeds.",
 		Tags:        []string{"auth"},
+		Security:    []map[string][]string{},
 	}, a.handleSetup)
 
 	huma.Register(hapi, huma.Operation{
@@ -643,6 +718,7 @@ func (a *authService) registerOperations(hapi huma.API) {
 		Summary:     "Start a session with username and password",
 		Description: "Returns the session cookie and the per-session CSRF token.",
 		Tags:        []string{"auth"},
+		Security:    []map[string][]string{},
 	}, a.handleLogin)
 
 	huma.Register(hapi, huma.Operation{
@@ -650,8 +726,9 @@ func (a *authService) registerOperations(hapi huma.API) {
 		Method:      http.MethodPost,
 		Path:        "/auth/logout",
 		Summary:     "End the session",
-		Description: "Deletes the server-side session row and expires the cookie. Cookie-authenticated calls must send X-DLTOOL-CSRF.",
+		Description: "Deletes the server-side session row and expires the cookie; a bearer call has no session to delete and does not revoke the token. Cookie-authenticated calls must send X-DLTOOL-CSRF.",
 		Tags:        []string{"auth"},
+		Security:    credentialRequired,
 	}, a.handleLogout)
 
 	huma.Register(hapi, huma.Operation{
@@ -659,8 +736,9 @@ func (a *authService) registerOperations(hapi huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/auth/me",
 		Summary:     "Read the caller's account and CSRF token",
-		Description: "What the SPA calls on boot to choose between the setup wizard, the login screen and the app shell.",
+		Description: "What the SPA calls on boot to choose between the setup wizard, the login screen and the app shell. With bearer authentication the csrf_token is empty.",
 		Tags:        []string{"auth"},
+		Security:    credentialRequired,
 	}, a.handleMe)
 }
 
@@ -674,9 +752,10 @@ type setupInput struct {
 }
 
 type setupOutput struct {
-	Status    int    `enum:"201" doc:"Created"`
-	SetCookie string `header:"Set-Cookie" doc:"The new session cookie"`
-	Body      authEnvelope
+	Status       int    `enum:"201" doc:"Created"`
+	SetCookie    string `header:"Set-Cookie" doc:"The new session cookie"`
+	CacheControl string `header:"Cache-Control" doc:"no-store; the body carries the CSRF token"`
+	Body         authEnvelope
 }
 
 // handleSetup creates the single operator account. The endpoint sits behind
@@ -684,6 +763,12 @@ type setupOutput struct {
 // guessed setup token mints the operator account outright (doc 12 section
 // 6.4).
 func (a *authService) handleSetup(ctx context.Context, input *setupInput) (*setupOutput, error) {
+	// Serialize the whole critical section — gate check, insert, token
+	// teardown — so two concurrent calls can never both create the account
+	// or race the file removal.
+	a.setupMu.Lock()
+	defer a.setupMu.Unlock()
+
 	complete, err := a.setupComplete(ctx)
 	if err != nil {
 		return nil, internalFailure(ctx, "count users", err)
@@ -698,7 +783,10 @@ func (a *authService) handleSetup(ctx context.Context, input *setupInput) (*setu
 		return nil, rateLimited(wait)
 	}
 	if !secure.EqualToken(input.Body.SetupToken, a.setupToken) {
-		a.throttle.recordFailure(input.Body.Username, info.PeerIP, now)
+		// The source budget covers token guessing; the per-account ladder is
+		// for login only — an attacker must not pre-load it for a username
+		// they pick freely during the setup window.
+		a.throttle.recordAttempt(info.PeerIP, now)
 		logFromContext(ctx).Warn(eventSetupFailed, slog.String("source_ip", info.PeerIP))
 
 		return nil, unauthenticated(setupTokenDetail)
@@ -737,9 +825,10 @@ func (a *authService) handleSetup(ctx context.Context, input *setupInput) (*setu
 	}
 
 	return &setupOutput{
-		Status:    http.StatusCreated,
-		SetCookie: NewSessionCookie(a.cfg, cookieValue, info.Transport).String(),
-		Body:      *envelope,
+		Status:       http.StatusCreated,
+		SetCookie:    NewSessionCookie(a.cfg, cookieValue, info.Transport).String(),
+		CacheControl: cacheControlNoStore,
+		Body:         *envelope,
 	}, nil
 }
 
@@ -751,8 +840,9 @@ type loginInput struct {
 }
 
 type loginOutput struct {
-	SetCookie string `header:"Set-Cookie" doc:"The new session cookie"`
-	Body      authEnvelope
+	SetCookie    string `header:"Set-Cookie" doc:"The new session cookie"`
+	CacheControl string `header:"Cache-Control" doc:"no-store; the body carries the CSRF token"`
+	Body         authEnvelope
 }
 
 // handleLogin verifies the body credentials. Every failure — wrong
@@ -807,8 +897,9 @@ func (a *authService) handleLogin(ctx context.Context, input *loginInput) (*logi
 	}
 
 	return &loginOutput{
-		SetCookie: NewSessionCookie(a.cfg, cookieValue, info.Transport).String(),
-		Body:      *envelope,
+		SetCookie:    NewSessionCookie(a.cfg, cookieValue, info.Transport).String(),
+		CacheControl: cacheControlNoStore,
+		Body:         *envelope,
 	}, nil
 }
 
@@ -834,8 +925,11 @@ func (a *authService) issueSession(ctx context.Context, user store.User, now tim
 	}
 
 	session := store.Session{
-		ID:         store.NewID(store.PrefixSession),
-		UserID:     user.ID,
+		ID:     store.NewID(store.PrefixSession),
+		UserID: user.ID,
+		// Deliberately not hashed, unlike TokenHash: /auth/me must re-serve
+		// the CSRF token to the SPA after a reload, and the token is useless
+		// without the cookie it accompanies.
 		TokenHash:  secure.HashToken(cookieValue),
 		CSRFToken:  csrfToken,
 		ExpiresAt:  now.Add(a.cfg.SessionTTL).UnixMilli(),
@@ -880,6 +974,8 @@ func (a *authService) handleLogout(ctx context.Context, _ *logoutInput) (*logout
 type meInput struct{}
 
 type meOutput struct {
+	CacheControl string `header:"Cache-Control" doc:"no-store; the body carries the CSRF token"`
+
 	Body authEnvelope
 }
 
@@ -892,5 +988,8 @@ func (a *authService) handleMe(ctx context.Context, _ *meInput) (*meOutput, erro
 		return nil, unauthenticated(noCredentialDetail)
 	}
 
-	return &meOutput{Body: authEnvelope{User: newUserBody(identity.User), CSRFToken: identity.CSRF}}, nil
+	return &meOutput{
+		CacheControl: cacheControlNoStore,
+		Body:         authEnvelope{User: newUserBody(identity.User), CSRFToken: identity.CSRF},
+	}, nil
 }

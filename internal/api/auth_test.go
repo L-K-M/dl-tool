@@ -977,6 +977,9 @@ func TestLoginAfterSetupIssuesUsableSession(t *testing.T) {
 	if me.Code != http.StatusOK {
 		t.Fatalf("GET /auth/me with the login cookie = %d, want %d", me.Code, http.StatusOK)
 	}
+	if cacheControl := me.Header().Get("Cache-Control"); cacheControl != cacheControlNoStore {
+		t.Errorf("/auth/me Cache-Control = %q, want %q", cacheControl, cacheControlNoStore)
+	}
 	meEnvelope := decodeAuthEnvelope(t, me)
 	if meEnvelope.User.Username != "alice" {
 		t.Errorf("me user.username = %q, want %q", meEnvelope.User.Username, "alice")
@@ -984,6 +987,12 @@ func TestLoginAfterSetupIssuesUsableSession(t *testing.T) {
 	if meEnvelope.CSRFToken != envelope.CSRFToken {
 		t.Error("me csrf_token differs from the login csrf_token")
 	}
+}
+
+// elapsedBackoff steps past the account ladder's first wait without
+// hard-coding it: the constant lives beside the throttle implementation.
+func elapsedBackoff() time.Duration {
+	return throttleBackoffStart + 100*time.Millisecond
 }
 
 // TestLoginFailureIsIndistinguishable pins doc 12 section 6.3: a wrong
@@ -1006,9 +1015,9 @@ func TestLoginFailureIsIndistinguishable(t *testing.T) {
 	wrongPassword := login("alice", "wrong horse battery")
 
 	// The disabled attempt below must fail for the same account, and the
-	// account ladder throttles a second failure within its 1-second wait —
-	// so let the wait elapse between the two.
-	time.Sleep(1100 * time.Millisecond)
+	// account ladder throttles a second failure within its wait — so let the
+	// wait elapse between the two.
+	time.Sleep(elapsedBackoff())
 	if _, err := fixture.DB.ExecContext(t.Context(), `UPDATE users SET enabled = 0`); err != nil {
 		t.Fatalf("disable user: %v", err)
 	}
@@ -1052,7 +1061,7 @@ func TestLoginBackoffIsNotPermanent(t *testing.T) {
 	})
 	assertProblem(t, response, http.StatusUnauthorized, SlugUnauthenticated)
 
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(elapsedBackoff())
 
 	response = fixture.API.Post("/auth/login", map[string]any{
 		"username": "alice", "password": "correct horse battery",
@@ -1134,5 +1143,96 @@ func TestBearerLogoutIs204(t *testing.T) {
 	}
 	if values := response.Header().Values("Set-Cookie"); len(values) != 0 {
 		t.Errorf("bearer logout set %v, want no Set-Cookie", values)
+	}
+}
+
+// TestConcurrentSetupYieldsOne201AndOne409 pins the serialization of the
+// setup critical section: two racing valid calls create exactly one account.
+func TestConcurrentSetupYieldsOne201AndOne409(t *testing.T) {
+	fixture := newAuthOpsFixture(t)
+
+	body := map[string]any{
+		"setup_token": fixture.Token,
+		"username":    "alice",
+		"password":    "correct horse battery",
+	}
+
+	codes := make(chan int, 2)
+	for range 2 {
+		go func() {
+			response := fixture.API.Post("/auth/setup", body)
+			codes <- response.Code
+		}()
+	}
+
+	first, second := <-codes, <-codes
+	for _, code := range []int{first, second} {
+		if code != http.StatusCreated && code != http.StatusConflict {
+			t.Fatalf("concurrent setup answered %d, want %d or %d", code, http.StatusCreated, http.StatusConflict)
+		}
+	}
+	if first == http.StatusCreated && second == http.StatusCreated {
+		t.Error("both concurrent setups returned 201, want exactly one")
+	}
+
+	var users int
+	if err := fixture.DB.GetContext(t.Context(), &users, `SELECT COUNT(*) FROM users`); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if users != 1 {
+		t.Errorf("%d user rows after concurrent setup, want 1", users)
+	}
+}
+
+// TestSetupFailureDoesNotPoisonTheLoginLadder pins the review fix: a failed
+// setup attempt consumes only the source budget, so the username it carried
+// starts its login life without a pre-loaded backoff.
+func TestSetupFailureDoesNotPoisonTheLoginLadder(t *testing.T) {
+	fixture := newAuthOpsFixture(t)
+
+	for range 2 {
+		response := fixture.API.Post("/auth/setup", map[string]any{
+			"setup_token": "bm90LXRoZS10b2tlbg",
+			"username":    "alice",
+			"password":    "correct horse battery",
+		})
+		assertProblem(t, response, http.StatusUnauthorized, SlugUnauthenticated)
+	}
+
+	completeSetup(t, fixture)
+
+	response := fixture.API.Post("/auth/login", map[string]any{
+		"username": "alice",
+		"password": "correct horse battery",
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("first login for alice = %d, want %d", response.Code, http.StatusOK)
+	}
+}
+
+// TestZeroSessionTTLFailsConstruction pins the loud failure: a non-positive
+// TTL would mint sessions that are born expired, so NewServer refuses it.
+func TestZeroSessionTTLFailsConstruction(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(
+		t.Context(),
+		filepath.Join(root, "config", "dl-tool.db"),
+		filepath.Join(root, "backups"),
+	)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	if _, err := NewServer(
+		&config.Config{ConfigDir: filepath.Join(root, "config")},
+		db,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	); err == nil {
+		t.Fatal("NewServer accepted a zero session TTL, want an error")
 	}
 }

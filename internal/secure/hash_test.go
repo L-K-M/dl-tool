@@ -123,6 +123,19 @@ func TestVerifyPasswordWeakerParametersNeedRehash(t *testing.T) {
 	if !needsRehash {
 		t.Error("needsRehash = false for weaker parameters, want true")
 	}
+
+	// A wrong password never asks for a rehash, so a caller cannot store a
+	// hash of the attacker's password.
+	ok, needsRehash, err = VerifyPassword(weak, "wrong horse battery")
+	if err != nil {
+		t.Fatalf("VerifyPassword: %v", err)
+	}
+	if ok {
+		t.Error("ok = true for a wrong password under weaker parameters, want false")
+	}
+	if needsRehash {
+		t.Error("needsRehash = true for a wrong password, want false")
+	}
 }
 
 // TestVerifyPasswordMalformedStringsRejectsEveryVariant asserts that no
@@ -137,6 +150,11 @@ func TestVerifyPasswordMalformedStringsRejectsEveryVariant(t *testing.T) {
 		"zero parameter":    "$argon2id$v=19$m=0,t=2,p=1$c2FsdA$aGFzaA",
 		"bad base64":        "$argon2id$v=19$m=19456,t=2,p=1$!!!$???",
 		"empty salt":        "$argon2id$v=19$m=19456,t=2,p=1$$aGFzaA",
+		"threads overflow":  "$argon2id$v=19$m=19456,t=2,p=256$c2FsdA$aGFzaA",
+		"huge memory":       "$argon2id$v=19$m=2147483648,t=2,p=1$c2FsdA$aGFzaA",
+		"huge time":         "$argon2id$v=19$m=19456,t=1000000,p=1$c2FsdA$aGFzaA",
+		"memory below 8p":   "$argon2id$v=19$m=16,t=2,p=4$c2FsdA$aGFzaA",
+		"oversized hash":    "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$" + strings.Repeat("a", 200),
 	} {
 		t.Run(name, func(t *testing.T) {
 			ok, _, err := VerifyPassword(hash, "correct horse battery")

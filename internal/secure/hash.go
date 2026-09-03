@@ -28,6 +28,13 @@ const (
 	// Splitting a well-formed PHC string on "$" yields six fields:
 	// ["", "argon2id", "v=19", "m=..,t=..,p=..", "<salt>", "<hash>"].
 	phcFieldCount = 6
+
+	// Verification ceilings for the parameters a stored PHC string may carry
+	// (doc 12 section 6.3 sits far below all of them).
+	maxVerifyMemoryKiB = 1 << 21 // 2 GiB
+	maxVerifyTime      = 32
+	maxVerifyThreads   = 32
+	maxVerifyKeyLen    = 128
 )
 
 // HashPassword returns the full PHC string
@@ -46,8 +53,9 @@ func HashPassword(password string) (string, error) {
 
 // VerifyPassword parses the PHC string, re-derives the key with the
 // parameters it carries and compares in constant time. It returns
-// needsRehash when the stored parameters are weaker than the constants
-// above, so a login can upgrade the hash after the policy is raised.
+// needsRehash — and only after a successful verification — when the stored
+// parameters are weaker than the constants above, so a login can upgrade
+// the hash after the policy is raised.
 func VerifyPassword(phc, password string) (ok bool, needsRehash bool, err error) {
 	fields := strings.Split(phc, "$")
 	if len(fields) != phcFieldCount {
@@ -91,13 +99,26 @@ func VerifyPassword(phc, password string) (ok bool, needsRehash bool, err error)
 		return false, false, fmt.Errorf("secure: empty PHC salt or hash")
 	}
 
+	// A tampered or corrupted row must not turn a login into a crash or a
+	// CPU/memory hog: bound the parameters before deriving. The ceilings sit
+	// far above any sane policy; argon2id also requires m >= 8*p.
+	if memoryKiB > maxVerifyMemoryKiB || timeParam > maxVerifyTime || threads > maxVerifyThreads ||
+		memoryKiB < 8*threads || len(hash) > maxVerifyKeyLen {
+		return false, false, fmt.Errorf(
+			"secure: PHC parameters out of supported range (m=%d, t=%d, p=%d, keyLen=%d)",
+			memoryKiB, timeParam, threads, len(hash),
+		)
+	}
+
 	derived := argon2.IDKey([]byte(password), salt, uint32(timeParam), uint32(memoryKiB), uint8(threads), uint32(len(hash)))
 	ok = subtle.ConstantTimeCompare(derived, hash) == 1
-	needsRehash = memoryKiB < argonMemoryKiB ||
+	// Only a verified password may ask for a rehash: a caller rehashing on a
+	// failed attempt would store a hash of the attacker's wrong password.
+	needsRehash = ok && (memoryKiB < argonMemoryKiB ||
 		timeParam < argonTime ||
 		threads < argonThreads ||
 		len(salt) < argonSaltLen ||
-		len(hash) < argonKeyLen
+		len(hash) < argonKeyLen)
 
 	return ok, needsRehash, nil
 }

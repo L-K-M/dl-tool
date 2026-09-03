@@ -35,7 +35,7 @@ export interface paths {
     put?: never;
     /**
      * End the session
-     * @description Deletes the server-side session row and expires the cookie. Cookie-authenticated calls must send X-DLTOOL-CSRF.
+     * @description Deletes the server-side session row and expires the cookie; a bearer call has no session to delete and does not revoke the token. Cookie-authenticated calls must send X-DLTOOL-CSRF.
      */
     post: operations["post-auth-logout"];
     delete?: never;
@@ -53,7 +53,7 @@ export interface paths {
     };
     /**
      * Read the caller's account and CSRF token
-     * @description What the SPA calls on boot to choose between the setup wizard, the login screen and the app shell.
+     * @description What the SPA calls on boot to choose between the setup wizard, the login screen and the app shell. With bearer authentication the csrf_token is empty.
      */
     get: operations["get-auth-me"];
     put?: never;
@@ -176,13 +176,19 @@ export interface components {
       version: string;
     };
     UserBody: {
-      /** @description RFC 3339 timestamp of account creation */
+      /**
+       * Format: date-time
+       * @description RFC 3339 timestamp of account creation
+       */
       created_at: string;
       /** @description Whether the account may log in */
       enabled: boolean;
       /** @description User id */
       id: string;
-      /** @description RFC 3339 timestamp of the last successful login */
+      /**
+       * Format: date-time
+       * @description RFC 3339 timestamp of the last successful login
+       */
       last_login_at: string | null;
       /** @description Preferred UI locale */
       locale: string;
@@ -214,6 +220,7 @@ export interface operations {
       /** @description OK */
       200: {
         headers: {
+          "Cache-Control"?: string;
           "Set-Cookie"?: string;
           [name: string]: unknown;
         };
@@ -272,6 +279,7 @@ export interface operations {
       /** @description OK */
       200: {
         headers: {
+          "Cache-Control"?: string;
           [name: string]: unknown;
         };
         content: {
@@ -305,6 +313,7 @@ export interface operations {
       /** @description OK */
       200: {
         headers: {
+          "Cache-Control"?: string;
           "Set-Cookie"?: string;
           [name: string]: unknown;
         };

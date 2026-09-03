@@ -113,6 +113,24 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		db:     db,
 		auth:   auth,
 	}
+	// The two credentials of docs/05-api-contract.md section 1.2, so the
+	// generated document tells clients how the API is protected. Individual
+	// operations declare their own requirements (or an explicit empty one
+	// for the two that authenticate by body).
+	server.API.OpenAPI().Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+		schemeSession: {
+			Type:        "apiKey",
+			Description: "The dltool_session cookie issued by POST /auth/setup and POST /auth/login; mutations also need the X-DLTOOL-CSRF header.",
+			Name:        sessionCookieName,
+			In:          "cookie",
+		},
+		schemeBearer: {
+			Type:         "http",
+			Scheme:       "bearer",
+			BearerFormat: apiTokenPrefix,
+			Description:  "An API token issued by the account settings; bearer requests are exempt from CSRF.",
+		},
+	}
 	server.registerOperations()
 
 	return server, nil
