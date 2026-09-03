@@ -19,11 +19,13 @@ It lives at the repository root, alongside [`PLAN-REVIEW.md`](PLAN-REVIEW.md), s
    `## Context you need` section names, and nothing else. The reading budget is
    deliberate — do not explore the repo to "get oriented".
 3. Implement it on a branch named `task/T0NN-slug`. Touch only the files in its
-   `## Files` table. The single exception is `api/openapi.json` and
-   `web/src/api/schema.d.ts`, which
+   `## Files` table. Two standing exceptions are defined in
    [`docs/13-testing-and-verification.md`](docs/13-testing-and-verification.md)
-   §7.1 makes implicitly part of the `Files` table of any task that changes a
-   Huma operation — run `make gen` and commit both.
+   §7.1: `api/openapi.json` and `web/src/api/schema.d.ts` are implicitly part of the `Files` table of any
+   task that registers, removes or changes a Huma operation or one of its request/response structs (run
+   `make gen` and commit both), and `go.mod`/`go.sum` are implicitly
+   part of the `Files` table of any task that first imports an already-pinned dependency (commit exactly
+   what `go mod tidy` produces).
 4. Run the task's `## Verification` block. Paste the real output into its
    `## Evidence` section. Never write Evidence you did not observe.
 5. Flip the task's row to `done` in the index, in the same commit as the work.

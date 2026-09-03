@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T010 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T006, T007 |
 | **Blocks** | T096, T124 |
 | **Parallel-safe** | no — it edits `internal/api/server.go` and `cmd/dl-tool/main.go` |
