@@ -152,7 +152,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 $ make gen && make typecheck && make test-web && echo CLIENT_OK
 ./scripts/gen.sh
 ✨ openapi-typescript 7.13.0
-🚀 ../api/openapi.json → src/api/schema.d.ts [37.5ms]
+🚀 ../api/openapi.json → src/api/schema.d.ts [41ms]
 src/api/schema.d.ts 84ms
 cd web && npx tsc --noEmit -p tsconfig.json
 cd web && npx vitest run
@@ -161,9 +161,9 @@ cd web && npx vitest run
 
 
  Test Files  2 passed (2)
-      Tests  11 passed (11)
-   Start at  21:20:17
-   Duration  556ms (transform 64ms, setup 0ms, import 244ms, tests 30ms, environment 437ms)
+      Tests  13 passed (13)
+   Start at  21:33:46
+   Duration  537ms (transform 58ms, setup 0ms, import 224ms, tests 31ms, environment 440ms)
 
 CLIENT_OK
 ```

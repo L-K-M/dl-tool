@@ -30,7 +30,8 @@ export function eventsUrl(): string {
 // leak across tabs, into history or onto the wire outside the header.
 let storedCsrfToken: string | null = null;
 
-/** The CSRF token from the last /auth/setup, /auth/login or /auth/me response. */
+/** The CSRF token from the last /auth/setup, /auth/login or /auth/me response.
+ *  Every auth flow must call this after its response, or the next mutation 403s. */
 export function setCsrfToken(token: string | null): void {
   storedCsrfToken = token;
 }
@@ -52,7 +53,7 @@ const CSRF_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 api.use({
   onRequest({ request }) {
     const token = csrfToken();
-    if (token === null || !CSRF_METHODS.has(request.method.toUpperCase())) {
+    if (!token || !CSRF_METHODS.has(request.method.toUpperCase())) {
       return request;
     }
 

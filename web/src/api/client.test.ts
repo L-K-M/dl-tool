@@ -96,6 +96,30 @@ describe("TestCsrfHeaderOnMutationsOnly", () => {
 
     expect(lastRequest(stub).headers.get("X-DLTOOL-CSRF")).toBeNull();
   });
+
+  test("an empty token is treated as absent", async () => {
+    setCsrfToken("");
+    const stub = stubFetch();
+
+    await api.POST("/auth/logout", { fetch: stub });
+
+    expect(lastRequest(stub).headers.get("X-DLTOOL-CSRF")).toBeNull();
+  });
+});
+
+test("TestApiClientResolvesUnderInjectedBase", async () => {
+  injectBaseHref("/dl-tool/");
+  // The client captures document.baseURI at import time, so re-import with the base present —
+  // mirroring production, where the server-injected <base> precedes the module scripts.
+  vi.resetModules();
+  const { api: apiUnderBase } = await import("./client");
+  const stub = stubFetch();
+
+  await apiUnderBase.GET("/auth/me", { fetch: stub });
+
+  expect(lastRequest(stub).url).toBe(
+    "http://localhost:3000/dl-tool/api/v1/auth/me",
+  );
 });
 
 test("TestCredentialsSameOrigin", async () => {
