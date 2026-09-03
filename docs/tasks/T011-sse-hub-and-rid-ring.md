@@ -168,11 +168,12 @@ ok  	github.com/L-K-M/dl-tool/internal/sync	2.039s
 SYNC_OK
 ```
 
-(Re-run after the PR-review fixes: cursor-before-snapshot in `Hub.Snapshot`,
-re-add-cancels-tombstone and removal-drops-stale-patch in `coalesceInto`,
-full-update-replaces-coalesced-state, nil-collection normalisation,
-`TestSinceReaddBeatsRemoval`, `TestFullUpdateReplacesCoalescedState`, and the
-category side of `TestSinceRemovalBeatsUpdate`.)
+(Latest run, after all PR-review fixes: cursor-before-snapshot in
+`Hub.Snapshot`, re-add-cancels-tombstone and removal-drops-stale-patch in
+`coalesceInto`, full-update-replaces-coalesced-state, nil-collection
+normalisation, and the new `TestSinceReaddBeatsRemoval`,
+`TestFullUpdateReplacesCoalescedState` — including its pre-snapshot tombstone
+seeding — and the category side of `TestSinceRemovalBeatsUpdate`.)
 
 `gofmt -l internal/sync` printed nothing; `go vet ./internal/sync/...` and
 `golangci-lint run ./internal/sync/...` reported 0 issues.
