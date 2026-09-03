@@ -142,7 +142,36 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```
+$ make build && make test PKG=./internal/api/... && echo SPA_OK
+CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X main.version=dev' \
+	-o bin/dl-tool ./cmd/dl-tool
+go test -race -count=1 ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/api	18.713s
+SPA_OK
+```
+
+`bin/dl-tool` was written, the package reported `ok` with no `FAIL`, and the
+final line was `SPA_OK`. The checkout had no `web/dist`.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+.gitignore
+internal/api/dist/index.html
+internal/api/server.go
+internal/api/static.go
+internal/api/static_test.go
+```
+
+Exactly the paths of the Files table, and nothing else.
+
+Note on the acceptance criteria: `TestOutsideBaseIs404` already existed in
+`internal/api/server_test.go` (not in this task's Files table, so not moved);
+it still passes with the SPA mounted. The same contract for `GET /tasks` is
+covered in `static_test.go` as `TestSPAOutsideBaseIs404`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

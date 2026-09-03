@@ -148,6 +148,16 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	}
 	server.registerOperations()
 
+	// The SPA mounts last, on the base catch-all, so /api/v1, /healthz and
+	// /readyz keep every route they claim (doc 10 section 7.3 rules 2 and 8).
+	// Nothing is registered outside the base: with BasePath=/dl-tool a request
+	// to /anything stays a 404.
+	spa, err := SPAHandler(cfg.BasePath)
+	if err != nil {
+		return nil, fmt.Errorf("build SPA handler: %w", err)
+	}
+	base.Handle("/*", spa)
+
 	return server, nil
 }
 
