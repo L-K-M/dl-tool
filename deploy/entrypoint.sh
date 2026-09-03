@@ -33,11 +33,11 @@ mkdir -p "${DLTOOL_CONFIG_DIR:-/config}"
 chown -R "$PUID:$PGID" "${DLTOOL_CONFIG_DIR:-/config}"
 # NEVER chown /data recursively: it can hold terabytes and the operator owns its permissions.
 
-oldIFS=$IFS; IFS=:
+oldIFS=$IFS; IFS=:; set -f
 for root in ${DLTOOL_DATA_ROOTS:-/data}; do
   su-exec "$PUID:$PGID" test -w "$root" || \
     echo "entrypoint: data_root_not_writable $root as $PUID:$PGID" >&2
 done
-IFS=$oldIFS
+IFS=$oldIFS; set +f
 
 exec su-exec "$PUID:$PGID" /usr/local/bin/dl-tool "$@"

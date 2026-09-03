@@ -292,10 +292,13 @@ fake-dl-tool: args=[serve] uid=1000 gid=1000 umask=0002
 $ TZ=Bogus/Zone UMASK=077 /tmp/t124ep/entrypoint.sh serve extra-arg
 entrypoint: already running as 1000:1000; skipping user creation and chown
 fake-dl-tool: args=[serve extra-arg] uid=1000 gid=1000 umask=0077
-$ # data-root split, loop extracted verbatim:
+$ # data-root split, loop extracted verbatim (post round-2: IFS=: and set -f):
 $ DLTOOL_DATA_ROOTS="/tmp/t124ep/Media Library:/tmp/t124ep/nas" test_split
 check: [/tmp/t124ep/Media Library]
 check: [/tmp/t124ep/nas]
+$ DLTOOL_DATA_ROOTS='/tmp/t124ep/a*:/tmp/plain' test_split   # glob chars stay literal
+check: [/tmp/t124ep/a*]
+check: [/tmp/t124ep/plain]
 ```
 
 **Dockerfile static check** (hadolint 2.14.0): only `DL3018` (apk packages unpinned) — the task
