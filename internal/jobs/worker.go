@@ -137,9 +137,9 @@ func (w *Worker) execute(ctx context.Context, job store.Job) {
 		return
 	}
 
-	// Detached from the pool context: when OnStop cancels mid-handler, the
-	// outcome must still reach the database.
-	if err := store.CompleteJob(context.WithoutCancel(ctx), w.db, job.ID, time.Now().UnixMilli()); err != nil {
+	writeCtx, cancelWrite := detachedWrite(ctx)
+	defer cancelWrite()
+	if err := store.CompleteJob(writeCtx, w.db, job.ID, time.Now().UnixMilli()); err != nil {
 		// The row stays 'running' and is recovered — and re-run, harmlessly —
 		// at the next boot.
 		w.log.ErrorContext(ctx, "job completion update failed", append(jobLogAttrs(job), "err", err)...)
@@ -161,10 +161,24 @@ func (w *Worker) fail(ctx context.Context, job store.Job, attempts int, cause er
 		w.log.WarnContext(ctx, "job failed, rescheduled", attrs...)
 	}
 
-	// Detached from the pool context, for the same reason as CompleteJob.
-	if err := store.FailJob(context.WithoutCancel(ctx), w.db, job.ID, attempts, job.MaxAttempts, cause.Error(), time.Now().UnixMilli()); err != nil {
+	writeCtx, cancelWrite := detachedWrite(ctx)
+	defer cancelWrite()
+	if err := store.FailJob(writeCtx, w.db, job.ID, attempts, job.MaxAttempts, cause.Error(), time.Now().UnixMilli()); err != nil {
 		w.log.ErrorContext(ctx, "job failure update failed", append(attrs, "err", err)...)
 	}
+}
+
+// bookkeepingWriteTimeout bounds the detached outcome writes; a real SQLite
+// write on the single writer connection takes microseconds, so 30 s means
+// wedged, not slow.
+const bookkeepingWriteTimeout = 30 * time.Second
+
+// detachedWrite returns the context for the terminal bookkeeping writes:
+// immune to the pool's cancellation — an OnStop cancel mid-handler must not
+// strand the row in 'running' — but time-bounded, so a wedged write cannot
+// stall the drain forever.
+func detachedWrite(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), bookkeepingWriteTimeout)
 }
 
 // runSafely converts a handler panic into an error, so one bad handler cannot
