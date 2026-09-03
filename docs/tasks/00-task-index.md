@@ -63,7 +63,7 @@ register.
 | [T008](T008-session-and-csrf-authentication.md) | Authenticate every request with a session cookie or a bearer token | T006, T007 | done |
 | [T009](T009-first-run-setup-and-login.md) | Complete the first run with a one-time setup token | T008 | done |
 | [T010](T010-health-readiness-and-metrics.md) | Serve health, readiness and Prometheus metrics | T006, T007 | done |
-| [T011](T011-sse-hub-and-rid-ring.md) | Build the SSE hub and the rid ring buffer | T004 | todo |
+| [T011](T011-sse-hub-and-rid-ring.md) | Build the SSE hub and the rid ring buffer | T004 | done |
 | [T012](T012-job-worker-pool.md) | Run the database-backed job worker pool | T006 | todo |
 | [T013](T013-embed-spa-and-base-path.md) | Embed the built SPA and serve it under the base path | T003, T007 | todo |
 | [T014](T014-typed-api-client.md) | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | todo |
@@ -269,7 +269,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T008 | Authenticate every request with a session cookie or a bearer token | T006, T007 | no | done | [T008](T008-session-and-csrf-authentication.md) |
 | T009 | Complete the first run with a one-time setup token | T008 | no | done | [T009](T009-first-run-setup-and-login.md) |
 | T010 | Serve health, readiness and Prometheus metrics | T006, T007 | no | done | [T010](T010-health-readiness-and-metrics.md) |
-| T011 | Build the SSE hub and the rid ring buffer | T004 | yes | todo | [T011](T011-sse-hub-and-rid-ring.md) |
+| T011 | Build the SSE hub and the rid ring buffer | T004 | yes | done | [T011](T011-sse-hub-and-rid-ring.md) |
 | T012 | Run the database-backed job worker pool | T006 | no | todo | [T012](T012-job-worker-pool.md) |
 | T013 | Embed the built SPA and serve it under the base path | T003, T007 | no | todo | [T013](T013-embed-spa-and-base-path.md) |
 | T014 | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | yes | todo | [T014](T014-typed-api-client.md) |

@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T011 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T004 |
 | **Blocks** | T025, T051 |
 | **Parallel-safe** | yes — touches only `internal/sync/` |
@@ -159,7 +159,32 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make test PKG=./internal/sync/... && echo SYNC_OK`:
+
+```
+go test -race -count=1 ./internal/sync/...
+ok  	github.com/L-K-M/dl-tool/internal/sync	2.037s
+SYNC_OK
+```
+
+(Latest run, after all PR-review fixes: cursor-before-snapshot in
+`Hub.Snapshot`, re-add-cancels-tombstone and removal-drops-stale-patch in
+`coalesceInto`, full-update-replaces-coalesced-state, nil-collection
+normalisation, and the new `TestSinceReaddBeatsRemoval`,
+`TestFullUpdateReplacesCoalescedState` — including its pre-snapshot tombstone
+seeding — and the category side of `TestSinceRemovalBeatsUpdate`.)
+
+`gofmt -l internal/sync` printed nothing; `go vet ./internal/sync/...` and
+`golangci-lint run ./internal/sync/...` reported 0 issues.
+
+Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+internal/sync/hub.go
+internal/sync/ring.go
+internal/sync/ring_test.go
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
