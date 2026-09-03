@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T011 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T004 |
 | **Blocks** | T025, T051 |
 | **Parallel-safe** | yes — touches only `internal/sync/` |
@@ -159,7 +159,25 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make test PKG=./internal/sync/... && echo SYNC_OK`:
+
+```
+go test -race -count=1 ./internal/sync/...
+ok  	github.com/L-K-M/dl-tool/internal/sync	2.035s
+SYNC_OK
+```
+
+`gofmt -l internal/sync` printed nothing; `go vet ./internal/sync/...` and
+`golangci-lint run ./internal/sync/...` reported 0 issues.
+
+Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+internal/sync/hub.go
+internal/sync/ring.go
+internal/sync/ring_test.go
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
