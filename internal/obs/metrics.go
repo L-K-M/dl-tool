@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -234,7 +235,7 @@ func (c *tasksTotalCollector) Describe(ch chan<- *prometheus.Desc) {
 
 func (c *tasksTotalCollector) Collect(ch chan<- prometheus.Metric) {
 	c.mu.Lock()
-	rows := c.rows
+	rows := slices.Clone(c.rows)
 	c.mu.Unlock()
 
 	for _, row := range rows {
