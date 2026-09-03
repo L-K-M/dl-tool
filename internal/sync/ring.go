@@ -116,6 +116,10 @@ func coalesceInto(dst *Delta, next Delta) {
 		dst.TasksRemoved = slices.DeleteFunc(dst.TasksRemoved, func(v string) bool { return v == id })
 	}
 	dst.TasksRemoved = union(dst.TasksRemoved, next.TasksRemoved)
+	for _, id := range next.TasksRemoved {
+		// Newest wins here too: a removal after an add drops the stale patch.
+		delete(dst.Tasks, id)
+	}
 
 	for name, cat := range next.Categories {
 		dst.Categories[name] = cat
@@ -123,6 +127,9 @@ func coalesceInto(dst *Delta, next Delta) {
 		dst.CategoriesRemoved = slices.DeleteFunc(dst.CategoriesRemoved, func(v string) bool { return v == name })
 	}
 	dst.CategoriesRemoved = union(dst.CategoriesRemoved, next.CategoriesRemoved)
+	for _, name := range next.CategoriesRemoved {
+		delete(dst.Categories, name)
+	}
 
 	if next.FullUpdate {
 		dst.FullUpdate = true
@@ -130,8 +137,9 @@ func coalesceInto(dst *Delta, next Delta) {
 	dst.Stats = next.Stats
 }
 
-// finalizeRemovals resolves an id present in both the updates and the
-// removals to removed: the id is dropped from the update side.
+// finalizeRemovals guarantees the invariant the coalescing already keeps:
+// no id sits in both the updates and the removals of an exposed payload, so
+// the result is self-consistent whatever order a client applies it in.
 func finalizeRemovals(d *Delta) {
 	for _, id := range d.TasksRemoved {
 		delete(d.Tasks, id)

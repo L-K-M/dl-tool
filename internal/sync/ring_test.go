@@ -62,8 +62,10 @@ func TestSinceRemovalBeatsUpdate(t *testing.T) {
 	r.Append(Delta{RID: 1})
 	r.Append(Delta{RID: 2, Tasks: map[string]json.RawMessage{
 		"tsk_a": json.RawMessage(`{"progress":0.5}`),
+	}, Categories: map[string]json.RawMessage{
+		"linux": json.RawMessage(`{"save_path":"/data/iso"}`),
 	}})
-	r.Append(Delta{RID: 3, TasksRemoved: []string{"tsk_a"}})
+	r.Append(Delta{RID: 3, TasksRemoved: []string{"tsk_a"}, CategoriesRemoved: []string{"linux"}})
 
 	d, ok := r.Since(1)
 	if !ok {
@@ -74,6 +76,12 @@ func TestSinceRemovalBeatsUpdate(t *testing.T) {
 	}
 	if len(d.TasksRemoved) != 1 || d.TasksRemoved[0] != "tsk_a" {
 		t.Fatalf("tasks_removed = %v, want [tsk_a]", d.TasksRemoved)
+	}
+	if _, ok := d.Categories["linux"]; ok {
+		t.Fatal("category linux is present in both Categories and CategoriesRemoved, and must resolve to removed")
+	}
+	if len(d.CategoriesRemoved) != 1 || d.CategoriesRemoved[0] != "linux" {
+		t.Fatalf("categories_removed = %v, want [linux]", d.CategoriesRemoved)
 	}
 }
 
