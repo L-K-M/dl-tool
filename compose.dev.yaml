@@ -1,0 +1,12 @@
+# compose.dev.yaml — development overlay on top of compose.yaml:
+# builds dl-tool from the working tree instead of pulling the release image,
+# and switches dl-tool's logs to the human-readable text format.
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+
+services:
+  dl-tool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DLTOOL_LOG_FORMAT: "text"

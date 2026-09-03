@@ -1,0 +1,131 @@
+# compose.yaml — dl-tool reference stack
+#   docker compose up -d                          core: dl-tool + qbittorrent
+#   COMPOSE_PROFILES=aria2 docker compose up -d   + the HTTP/FTP engine
+
+x-common-env: &common-env
+  PUID: "${PUID:-1000}"
+  PGID: "${PGID:-1000}"
+  TZ: "${TZ:-Etc/UTC}"
+  UMASK: "${UMASK:-002}"
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+
+services:
+
+  dl-tool:
+    <<: *service-defaults
+    image: ghcr.io/l-k-m/dl-tool:1
+    container_name: dl-tool
+    environment:
+      <<: *common-env
+      DLTOOL_HTTP_ADDR: ":8080"
+      DLTOOL_CONFIG_DIR: "/config"
+      DLTOOL_DATA_ROOTS: "/data"
+      DLTOOL_DB_PATH: "/config/dl-tool.db"
+      DLTOOL_BASE_PATH: "${DLTOOL_BASE_PATH:-}"
+      DLTOOL_ALLOWED_HOSTS: "${DLTOOL_ALLOWED_HOSTS:-}"
+      DLTOOL_CONFIG_LOCK: "${DLTOOL_CONFIG_LOCK:-false}"
+      DLTOOL_TRUSTED_PROXIES: "${DLTOOL_TRUSTED_PROXIES:-}"
+      DLTOOL_LOG_LEVEL: "${DLTOOL_LOG_LEVEL:-info}"
+      DLTOOL_LOG_FORMAT: "${DLTOOL_LOG_FORMAT:-json}"
+      # An engine lane is enabled by setting its URL; leave the URL empty to disable
+      # the lane (11-config-reference.md §8: a set URL with missing credentials is fatal).
+      DLTOOL_QBITTORRENT_URL: "${DLTOOL_QBITTORRENT_URL:-}"
+      DLTOOL_QBITTORRENT_USERNAME: "${QBT_USERNAME:-}"
+      # Credentials arrive as mounted files, never as environment: `docker inspect`
+      # and `docker compose config` then show a path, not a value (§6.1).
+      DLTOOL_QBITTORRENT_PASSWORD_FILE: "/run/secrets/qbt_password"
+      DLTOOL_ARIA2_URL: "${DLTOOL_ARIA2_URL:-}"
+      DLTOOL_ARIA2_SECRET_FILE: "/run/secrets/aria2_rpc_secret"
+    secrets:
+      - source: aria2_rpc_secret
+        target: aria2_rpc_secret
+        uid: "${PUID:-1000}"
+        gid: "${PGID:-1000}"
+        mode: 0400
+      - source: qbt_password
+        target: qbt_password
+        uid: "${PUID:-1000}"
+        gid: "${PGID:-1000}"
+        mode: 0400
+    volumes:
+      - ${CONFIG_DIR:-./config}/dl-tool:/config
+      - ${DATA_DIR:-/srv/data}:/data          # ONE mount — see §3
+    ports:
+      - "${DLTOOL_PORT:-8091}:8080"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dl-tool", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 60s
+    depends_on:
+      qbittorrent:
+        condition: service_started
+
+  qbittorrent:
+    <<: *service-defaults
+    image: lscr.io/linuxserver/qbittorrent:latest   # pin at implementation time
+    container_name: qbittorrent
+    environment:
+      <<: *common-env
+      WEBUI_PORT: "${QBT_WEBUI_PORT:-8080}"
+      TORRENTING_PORT: "6881"
+    volumes:
+      - ${CONFIG_DIR:-./config}/qbittorrent:/config
+      - ${DATA_DIR:-/srv/data}:/data          # same host path, same container path
+    ports:
+      - "6881:6881"
+      - "6881:6881/udp"
+      # WebUI is deliberately NOT published: only dl-tool talks to it.
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    stop_grace_period: 120s
+
+  aria2:
+    <<: *service-defaults
+    profiles: ["aria2"]
+    image: ghcr.io/l-k-m/dl-tool-aria2:1
+    build:
+      context: ./deploy/aria2
+      dockerfile: Dockerfile
+    container_name: aria2
+    environment:
+      <<: *common-env
+      ARIA2_RPC_SECRET_FILE: "/run/secrets/aria2_rpc_secret"
+    secrets:
+      - source: aria2_rpc_secret
+        target: aria2_rpc_secret
+        uid: "${PUID:-1000}"
+        gid: "${PGID:-1000}"
+        mode: 0400
+    volumes:
+      - ${CONFIG_DIR:-./config}/aria2:/config
+      - ${DATA_DIR:-/srv/data}:/data
+    healthcheck:
+      # Liveness only: proves the JSON-RPC listener answers HTTP. It calls one of the two
+      # documented methods that take no token (06-download-engines.md section 4.2: every
+      # aria2.* method requires token:<secret>, so getVersion without one would fail the
+      # check forever). Credentials and RPC-level health are checked by POST /engines/{id}/test.
+      test: ["CMD-SHELL", "curl -fsS -X POST -d '{\"jsonrpc\":\"2.0\",\"id\":\"hc\",\"method\":\"system.listMethods\",\"params\":[]}' http://127.0.0.1:6800/jsonrpc >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 30s
+
+# Environment-sourced secrets. Compose reads each value from `.env` once and exposes it to the
+# named services only, as a file under /run/secrets. It never becomes a service environment
+# variable, so it does not appear in `docker inspect`, `docker compose config`, `/proc/<pid>/environ`
+# or a crash dump's environment block. A service that does not list a secret cannot read it.
+secrets:
+  aria2_rpc_secret:
+    environment: "ARIA2_RPC_SECRET"
+  qbt_password:
+    environment: "QBT_PASSWORD"
