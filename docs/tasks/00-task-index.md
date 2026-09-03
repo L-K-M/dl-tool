@@ -58,7 +58,7 @@ register.
 | [T003](T003-web-build-scaffold.md) | Scaffold the Vite SPA build and its toolchain | T001 | done |
 | [T004](T004-go-module-and-entrypoint.md) | Bootstrap the Go module, pin every dependency and build the entrypoint | T001 | done |
 | [T005](T005-config-loader-and-secrets.md) | Load the DLTOOL_ environment and generate the boot secrets | T004 | done |
-| [T006](T006-sqlite-store-and-initial-migration.md) | Open the SQLite store, generate ULIDs and apply the initial migration | T004, T005 | todo |
+| [T006](T006-sqlite-store-and-initial-migration.md) | Open the SQLite store, generate ULIDs and apply the initial migration | T004, T005 | done |
 | [T007](T007-http-server-and-openapi.md) | Serve chi and Huma under the base path and commit the OpenAPI document | T005, T006 | todo |
 | [T008](T008-session-and-csrf-authentication.md) | Authenticate every request with a session cookie or a bearer token | T006, T007 | todo |
 | [T009](T009-first-run-setup-and-login.md) | Complete the first run with a one-time setup token | T008 | todo |

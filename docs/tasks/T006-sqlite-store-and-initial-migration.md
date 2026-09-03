@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T006 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T004, T005 |
 | **Blocks** | T007, T008, T010, T012, T017, T055, T065, T091 |
 | **Parallel-safe** | yes — touches only `internal/store/` |
@@ -143,31 +143,31 @@ func NewID(prefix string) string
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] Every table, index, `CHECK` and seed row of doc 04 §3 is present in `00001_init.sql`, none renamed.
-- [ ] `TestPragmas` asserts `journal_mode=wal`, `busy_timeout=5000`, `synchronous=1` and `foreign_keys=1`.
-- [ ] `TestSchemaNewerThanBinaryRefuses` asserts `Open` returns an error naming the applied and the embedded
+- [x] Every table, index, `CHECK` and seed row of doc 04 §3 is present in `00001_init.sql`, none renamed.
+- [x] `TestPragmas` asserts `journal_mode=wal`, `busy_timeout=5000`, `synchronous=1` and `foreign_keys=1`.
+- [x] `TestSchemaNewerThanBinaryRefuses` asserts `Open` returns an error naming the applied and the embedded
       version.
-- [ ] `TestNetworkFilesystemRefused` asserts the refusal path is reached for a `nfs` mount entry.
-- [ ] `TestUnrecognisedDatabaseRefused` asserts databases containing an unrelated table or a standalone
+- [x] `TestNetworkFilesystemRefused` asserts the refusal path is reached for a `nfs` mount entry.
+- [x] `TestUnrecognisedDatabaseRefused` asserts databases containing an unrelated table or a standalone
       view and no goose history are refused without changing that object, and each error names it.
-- [ ] `TestZeroVersionSkipsBackup` asserts a nonexistent database, an empty file and a database containing
+- [x] `TestZeroVersionSkipsBackup` asserts a nonexistent database, an empty file and a database containing
       only goose's initial applied version-0 row each leave no backup artifact.
-- [ ] `TestIntegrityCheckResult` asserts the private validator accepts one `ok` row and rejects zero rows,
+- [x] `TestIntegrityCheckResult` asserts the private validator accepts one `ok` row and rejects zero rows,
       multiple rows or any non-`ok` row with an `integrity_check_failed` error naming the database path.
-- [ ] `TestPreMigrationBackup` exercises the private backup operation with from-version 1, to-version 2 and
+- [x] `TestPreMigrationBackup` exercises the private backup operation with from-version 1, to-version 2 and
       injected time `2026-09-01T12:00:00.123456789Z`; it asserts
       `dl-tool.db.pre-migration-1-to-2.20260901T120000.123456789Z.bak` exists and no temporary file remains.
       It repeats with `2026-09-01T12:00:00Z` and expects
       `dl-tool.db.pre-migration-1-to-2.20260901T120000.000000000Z.bak`, proving fixed-width padding. It must
       not add an artificial embedded migration. Captured logs name the exact final path after success.
-- [ ] `TestInitialSeedIDs` asserts every seeded ID has its documented prefix, a 26-character ULID body and
+- [x] `TestInitialSeedIDs` asserts every seeded ID has its documented prefix, a 26-character ULID body and
       no duplicate within its table; the seeded settings rows are exactly the keys and values documented in
       doc 04 §3.2.
-- [ ] `TestNewID` asserts the 26-character ULID body and 10 000 collision-free identifiers.
-- [ ] No `SELECT *` appears anywhere in `internal/store`.
-- [ ] The configuration directory is `0700` and `dl-tool.db` is `0600` after `Open`, with `UMASK=002` set.
-- [ ] The `-wal` and `-shm` sidecars are `0600` after a write transaction, inheriting the database's mode.
-- [ ] A symlink or non-regular file at `DLTOOL_DB_PATH` is a fatal boot error, not a silent follow.
+- [x] `TestNewID` asserts the 26-character ULID body and 10 000 collision-free identifiers.
+- [x] No `SELECT *` appears anywhere in `internal/store`.
+- [x] The configuration directory is `0700` and `dl-tool.db` is `0600` after `Open`, with `UMASK=002` set.
+- [x] The `-wal` and `-shm` sidecars are `0600` after a write transaction, inheriting the database's mode.
+- [x] A symlink or non-regular file at `DLTOOL_DB_PATH` is a fatal boot error, not a silent follow.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -200,7 +200,18 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+```text
+go test -race -count=1 ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/store	7.057s
+STORE_OK
+```
+
+```text
+internal/store/db.go
+internal/store/db_test.go
+internal/store/migrations/00001_init.sql
+internal/store/models.go
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
