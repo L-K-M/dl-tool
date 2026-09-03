@@ -22,7 +22,8 @@ It lives at the repository root, alongside [`PLAN-REVIEW.md`](PLAN-REVIEW.md), s
    `## Files` table. Two standing exceptions are defined in
    [`docs/13-testing-and-verification.md`](docs/13-testing-and-verification.md)
    §7.1: `api/openapi.json` and `web/src/api/schema.d.ts` are implicitly part of the `Files` table of any
-   task that changes a Huma operation (run `make gen` and commit both), and `go.mod`/`go.sum` are implicitly
+   task that registers, removes or changes a Huma operation or one of its request/response structs (run
+   `make gen` and commit both), and `go.mod`/`go.sum` are implicitly
    part of the `Files` table of any task that first imports an already-pinned dependency (commit exactly
    what `go mod tidy` produces).
 4. Run the task's `## Verification` block. Paste the real output into its
