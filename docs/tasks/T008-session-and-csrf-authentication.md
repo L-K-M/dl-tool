@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T008 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T006, T007 |
 | **Blocks** | T009, T020, T046, T055, T065, T068, T084 |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
@@ -137,13 +137,13 @@ Set-Cookie: dltool_session=<opaque>; Path=<base>/; HttpOnly; SameSite=Lax[; Secu
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestCookieMutationWithoutCSRFIs403` asserts the status and the `type` slug.
-- [ ] `TestBearerMutationWithoutCSRFIs2xx` passes.
-- [ ] `TestExpiredSessionIs401` and `TestRevokedTokenIs401` pass.
-- [ ] `TestForgedRefererAloneIsRejected` passes; no code path treats `Referer` as sufficient.
-- [ ] The session cookie is set with `HttpOnly`, `SameSite=Lax` and `Path` equal to the base path plus `/`.
-- [ ] No session cookie value and no bearer token appears in any log record or error string.
-- [ ] `/healthz` and the SPA routes are not behind `Authenticate`.
+- [x] `TestCookieMutationWithoutCSRFIs403` asserts the status and the `type` slug.
+- [x] `TestBearerMutationWithoutCSRFIs2xx` passes.
+- [x] `TestExpiredSessionIs401` and `TestRevokedTokenIs401` pass.
+- [x] `TestForgedRefererAloneIsRejected` passes; no code path treats `Referer` as sufficient.
+- [x] The session cookie is set with `HttpOnly`, `SameSite=Lax` and `Path` equal to the base path plus `/`.
+- [x] No session cookie value and no bearer token appears in any log record or error string.
+- [x] `/healthz` and the SPA routes are not behind `Authenticate`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -176,7 +176,30 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+```text
+$ make test PKG="./internal/api/... ./internal/secure/... ./internal/store/..." && echo AUTH_OK
+go test -race -count=1 ./internal/api/... ./internal/secure/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	6.456s
+?   	github.com/L-K-M/dl-tool/internal/secure	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/store	6.775s
+AUTH_OK
+```
+
+Deviation from the predicted output: the Verification block predicts three `ok` lines, but the Files
+table allows exactly one test file (`internal/api/auth_test.go`), so `internal/secure` has no tests and
+`go test` reports `?   	github.com/L-K-M/dl-tool/internal/secure	[no test files]` for it. Observed: two
+`ok` lines, no `FAIL`, and a final line of exactly `AUTH_OK`.
+
+Scope confirmation (run with every change staged for the single task commit):
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/api/auth.go
+internal/api/auth_test.go
+internal/api/server.go
+internal/secure/session.go
+internal/store/users.go
+```
+Exactly the paths in the Files table, and nothing else.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
