@@ -1232,7 +1232,7 @@ func TestZeroSessionTTLFailsConstruction(t *testing.T) {
 		&config.Config{ConfigDir: filepath.Join(root, "config")},
 		db,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	); err == nil {
-		t.Fatal("NewServer accepted a zero session TTL, want an error")
+	); err == nil || !strings.Contains(err.Error(), "session ttl") {
+		t.Fatalf("NewServer error = %v, want a session ttl rejection", err)
 	}
 }

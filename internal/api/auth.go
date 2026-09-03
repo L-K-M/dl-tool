@@ -573,7 +573,11 @@ func (t *loginThrottle) recordFailure(username, ip string, now time.Time) {
 	t.accounts[username] = now.Add(delay)
 
 	t.recordSourceAttemptLocked(ip, now)
-	t.sweepLocked(now)
+	// Username spray grows accounts without growing sources; sweep this map
+	// on its own floor.
+	if len(t.accounts) > throttleSweepFloor {
+		t.sweepLocked(now)
+	}
 }
 
 // recordAttempt consumes one attempt of the peer's budget; the budget of

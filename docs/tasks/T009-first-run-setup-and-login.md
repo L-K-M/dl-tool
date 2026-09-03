@@ -143,7 +143,8 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the paths in the Files table, and nothing else (the sorted list starts with
+`api/openapi.json`). Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -162,14 +163,14 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ```text
 $ make test PKG="./internal/api/... ./internal/secure/... ./internal/store/..." && echo SETUP_OK
 go test -race -count=1 ./internal/api/... ./internal/secure/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	18.159s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.102s
-ok  	github.com/L-K-M/dl-tool/internal/store	7.018s
+ok  	github.com/L-K-M/dl-tool/internal/api	18.657s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.409s
+ok  	github.com/L-K-M/dl-tool/internal/store	6.934s
 SETUP_OK
 ```
 
-(Re-run after the review fixes below; the first run at the work commit read 16.900s / 4.297s /
-6.879s with the same three `ok` lines and `SETUP_OK`.)
+(Re-run after the two review rounds below; earlier runs at the work commit and after the first
+round printed the same three `ok` lines and `SETUP_OK`.)
 
 Scope confirmation (run with every change staged for the single task commit):
 ```text
