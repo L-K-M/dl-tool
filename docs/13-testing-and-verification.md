@@ -305,8 +305,9 @@ cd web
 ./node_modules/.bin/prettier --write src/api/schema.d.ts
 ```
 
-Both commands use binaries installed from the exact pins in `web/package-lock.json`; they never fall back to
-the registry or the npx cache. Run `make setup` before generation to install them. The final formatting step
+Both commands use binaries installed from the exact pins in `web/package-lock.json` and assume a POSIX shell
+(Linux, macOS, Git Bash, or WSL); they never fall back to the registry or the npx cache. Run `make setup`
+before generation to install them. The final formatting step
 makes the generated schema satisfy the blocking formatting check without hand-editing it, while the drift
 gate still compares pipeline output byte for byte.
 
