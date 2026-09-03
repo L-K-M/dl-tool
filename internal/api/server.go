@@ -75,13 +75,13 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// Every route under /api/v1 requires a session cookie or a bearer token
 	// (docs/05-api-contract.md section 1.2); /healthz, /readyz and the SPA
 	// live on the base router and stay anonymous. Use must run before
-	// humachi.New registers the first route on v1. A nil db — a router-only
-	// unit test — skips the middleware: there is no store to resolve
-	// credentials against.
+	// humachi.New registers the first route on v1. A nil db — the openapi
+	// subcommand and router-only unit tests — skips the middleware: there is
+	// no store to resolve credentials against. Deliberately silent: the
+	// openapi subcommand's stdout is the committed api/openapi.json, so a
+	// construction-time log line would corrupt the gen drift gate.
 	if db != nil {
 		v1.Use(Authenticate(db, cfg))
-	} else {
-		log.Warn("server: nil store; /api/v1 is serving without authentication (router-only test mode)")
 	}
 
 	humaConfig := huma.DefaultConfig(apiTitle, Version)
