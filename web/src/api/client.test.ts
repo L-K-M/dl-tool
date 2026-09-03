@@ -112,14 +112,21 @@ test("TestApiClientResolvesUnderInjectedBase", async () => {
   // The client captures document.baseURI at import time, so re-import with the base present —
   // mirroring production, where the server-injected <base> precedes the module scripts.
   vi.resetModules();
-  const { api: apiUnderBase } = await import("./client");
-  const stub = stubFetch();
+  try {
+    const { api: apiUnderBase } = await import("./client");
+    const stub = stubFetch();
 
-  await apiUnderBase.GET("/auth/me", { fetch: stub });
+    await apiUnderBase.GET("/auth/me", { fetch: stub });
 
-  expect(lastRequest(stub).url).toBe(
-    "http://localhost:3000/dl-tool/api/v1/auth/me",
-  );
+    expect(lastRequest(stub).url).toBe(
+      "http://localhost:3000/dl-tool/api/v1/auth/me",
+    );
+  } finally {
+    // Drop the injected <base> and the base-captured client instance so later
+    // tests resolve against the default origin.
+    document.querySelector("base")?.remove();
+    vi.resetModules();
+  }
 });
 
 test("TestCredentialsSameOrigin", async () => {
