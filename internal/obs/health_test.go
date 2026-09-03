@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -194,7 +195,7 @@ func TestMetricsListenerExposesMetricSet(t *testing.T) {
 	// Prometheus omits a registered collector whose label space is empty, so
 	// every series gets one observation here; only registration can put the
 	// names on the endpoint.
-	metrics.TasksTotal.WithLabelValues("queued", "aria2").Set(1)
+	metrics.SampleTasksTotal(context.Background(), newTasksDB(t))
 	metrics.TaskTransitionsTotal.WithLabelValues("queued", "downloading", "aria2").Inc()
 	metrics.BytesTransferredTotal.WithLabelValues("down").Add(1)
 	metrics.EnginePollDuration.WithLabelValues("aria2").Observe(0.1)
@@ -205,8 +206,31 @@ func TestMetricsListenerExposesMetricSet(t *testing.T) {
 	body := serveMetricsUntilCancelled(t, metrics, freeLoopbackAddr(t))
 
 	for _, name := range metricNames {
+		// The process collector is /proc-backed and Linux-only.
+		if name == "process_start_time_seconds" && runtime.GOOS != "linux" {
+			continue
+		}
 		if !strings.Contains(body, name) {
 			t.Errorf("metrics body is missing %q", name)
+		}
+	}
+}
+
+// TestTasksTotalSamplerSnapshot proves the sampler query and the snapshot
+// swap: one sample publishes one series per (state, engine) with its count.
+func TestTasksTotalSamplerSnapshot(t *testing.T) {
+	metrics := obs.NewMetrics()
+
+	metrics.SampleTasksTotal(context.Background(), newTasksDB(t))
+
+	body := serveMetricsUntilCancelled(t, metrics, freeLoopbackAddr(t))
+
+	for _, series := range []string{
+		"dltool_tasks_total{engine=\"aria2\",state=\"queued\"} 2",
+		"dltool_tasks_total{engine=\"qbittorrent\",state=\"downloading\"} 1",
+	} {
+		if !strings.Contains(body, series) {
+			t.Errorf("metrics body is missing series %q", series)
 		}
 	}
 }
@@ -237,6 +261,14 @@ func TestEmptyMetricsAddrDisablesMetrics(t *testing.T) {
 }
 
 func TestEmptyMetricsAddrFallsBackToDefault(t *testing.T) {
+	// The default address must actually be bindable for this test; another
+	// local Prometheus on 9090 would turn it into a false failure.
+	if probe, err := net.Listen("tcp", defaultAddr); err != nil {
+		t.Skipf("default metrics address %s is already in use; skipping default-fallback test", defaultAddr)
+	} else if err := probe.Close(); err != nil {
+		t.Fatalf("release default address probe: %v", err)
+	}
+
 	metrics := obs.NewMetrics()
 	// Marks the answer as this registry's, not any other process that
 	// happens to hold the default port.
@@ -276,7 +308,7 @@ func serveMetricsUntilCancelled(t *testing.T, metrics *obs.Metrics, addr string)
 		done <- metrics.ListenAndServe(ctx, addr)
 	}()
 
-	body := waitForMetricsBody(t, "http://"+listenAddr+metricsPath)
+	body := waitForMetricsBody(t, "http://"+listenAddr+metricsPath, done)
 
 	cancel()
 	select {
@@ -291,14 +323,21 @@ func serveMetricsUntilCancelled(t *testing.T, metrics *obs.Metrics, addr string)
 	return body
 }
 
-// waitForMetricsBody polls until the listener answers, so the test does not
-// race the goroutine that is still binding.
-func waitForMetricsBody(t *testing.T, url string) string {
+// waitForMetricsBody polls until the listener answers, so the test does
+// not race the goroutine that is still binding; a listener that died first
+// fails the test with its error instead of polling until the deadline.
+func waitForMetricsBody(t *testing.T, url string, done <-chan error) string {
 	t.Helper()
 
 	client := &http.Client{Timeout: listenerDeadline}
 	deadline := time.Now().Add(listenerDeadline)
 	for {
+		select {
+		case err := <-done:
+			t.Fatalf("metrics listener stopped before answering: %v", err)
+		case <-time.After(pollInterval):
+		}
+
 		response, err := client.Get(url)
 		if err == nil {
 			body, readErr := io.ReadAll(response.Body)
@@ -365,6 +404,25 @@ func doMainRouterRequest(t *testing.T, handler http.Handler, target string) *htt
 	}
 
 	return response
+}
+
+// newTasksDB opens a private in-memory SQLite database with the minimal
+// tasks columns the sampler query reads; the real table arrives with T017.
+func newTasksDB(t *testing.T) *sqlx.DB {
+	t.Helper()
+
+	db := newMemoryDB(t)
+	_, err := db.Exec(`CREATE TABLE tasks (state TEXT NOT NULL, engine TEXT NOT NULL)`)
+	if err != nil {
+		t.Fatalf("create tasks table: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO tasks (state, engine) VALUES
+		('queued', 'aria2'), ('queued', 'aria2'), ('downloading', 'qbittorrent')`)
+	if err != nil {
+		t.Fatalf("seed tasks table: %v", err)
+	}
+
+	return db
 }
 
 // newMemoryDB opens a private in-memory SQLite database for the readiness

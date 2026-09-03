@@ -202,5 +202,18 @@ A boot smoke test (temporary `DLTOOL_CONFIG_DIR`, `HTTP_ADDR=127.0.0.1:18091`,
 `GET /metrics` serving `process_start_time_seconds`/`go_goroutines` on the second listener,
 `GET /metrics` → 404 on the main listener, and a clean SIGTERM drain (`"stopped"`).
 
+**Review round 2** (same commands, same results — both packages `ok`, `OBS_OK`, `gofmt`/`go vet`/
+`golangci-lint` clean): `dltool_tasks_total` moved from a `GaugeVec` to a mutex-guarded snapshot
+collector so a concurrent scrape can never observe the Reset→Set window; `OnStop` now cancels and
+*joins* the metrics goroutines (a `sync.WaitGroup`) before signalling the main shutdown path; the
+sampler samples once immediately; `go.mod` drops the stale `// indirect` on the now-direct
+`client_golang`; the tests gained a non-Linux guard for `process_start_time_seconds`, a port
+preflight skip for the default-address test, a fast-fail on a dead listener, and
+`TestTasksTotalSamplerSnapshot` seeding a real `tasks` table. A live smoke test against a real
+database seeded with two queued aria2 tasks confirmed the boot sample publishes
+`dltool_tasks_total{engine="aria2",state="queued"} 2` on the metrics listener. The initial
+migration already ships the `tasks` table, so the sampler works from the first boot — no gap until
+T017 after all (its rows, not its table, arrive then).
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

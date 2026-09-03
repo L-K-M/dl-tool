@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -43,7 +44,10 @@ const queryTaskCounts = `SELECT state, engine, count(*) AS count FROM tasks GROU
 type Metrics struct {
 	Registry *prometheus.Registry
 
-	TasksTotal            *prometheus.GaugeVec     // labels: state, engine
+	// tasks publishes the sampler's snapshot atomically; a GaugeVec's
+	// Reset-then-Set sequence would let a concurrent scrape observe a
+	// half-empty label set.
+	tasks                 *tasksTotalCollector
 	TaskTransitionsTotal  *prometheus.CounterVec   // labels: from, to, engine
 	BytesTransferredTotal *prometheus.CounterVec   // labels: direction
 	EnginePollDuration    *prometheus.HistogramVec // labels: engine
@@ -56,10 +60,14 @@ type Metrics struct {
 func NewMetrics() *Metrics {
 	m := &Metrics{
 		Registry: prometheus.NewRegistry(),
-		TasksTotal: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "dltool_tasks_total",
-			Help: "Current number of tasks by canonical state and engine.",
-		}, []string{"state", "engine"}),
+		tasks: &tasksTotalCollector{
+			desc: prometheus.NewDesc(
+				"dltool_tasks_total",
+				"Current number of tasks by canonical state and engine.",
+				[]string{"state", "engine"},
+				nil,
+			),
+		},
 		TaskTransitionsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "dltool_task_transitions_total",
 			Help: "Task state transitions by source state, target state and engine.",
@@ -89,7 +97,7 @@ func NewMetrics() *Metrics {
 	// Static, uniquely named collectors: a registration failure is a
 	// programmer error and belongs at boot, not on an error path.
 	m.Registry.MustRegister(
-		m.TasksTotal,
+		m.tasks,
 		m.TaskTransitionsTotal,
 		m.BytesTransferredTotal,
 		m.EnginePollDuration,
@@ -130,6 +138,15 @@ func (m *Metrics) ListenAndServe(ctx context.Context, addr string) error {
 		return fmt.Errorf("obs: metrics listener %q: %w", listenAddr, err)
 	}
 
+	// The endpoint carries no authentication; make a non-loopback bind
+	// visible in the log instead of silently exposing the series.
+	if host, _, splitErr := net.SplitHostPort(listenAddr); splitErr == nil {
+		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+			slog.Warn("metrics endpoint is unauthenticated and bound to a non-loopback address",
+				"addr", listenAddr)
+		}
+	}
+
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- server.Serve(listener)
@@ -156,12 +173,17 @@ func (m *Metrics) ListenAndServe(ctx context.Context, addr string) error {
 
 // RunTasksTotalSampler refreshes dltool_tasks_total every 15 seconds from
 // SELECT state, engine, count(*) FROM tasks GROUP BY 1, 2, until ctx is
-// cancelled. The tasks table arrives with T017; until then every sample
-// fails and is logged at debug level, leaving the gauge empty.
+// cancelled. It samples once immediately so a fresh process publishes task
+// counts without waiting out the first tick; a failed sample keeps the last
+// snapshot and is logged at debug.
 func (m *Metrics) RunTasksTotalSampler(ctx context.Context, db *sqlx.DB) {
 	if db == nil {
 		return
 	}
+
+	// SampleTasksTotal logs a failure at debug and leaves the last snapshot
+	// standing; the next tick retries.
+	m.SampleTasksTotal(ctx, db)
 
 	ticker := time.NewTicker(tasksSampleInterval)
 	defer ticker.Stop()
@@ -171,9 +193,24 @@ func (m *Metrics) RunTasksTotalSampler(ctx context.Context, db *sqlx.DB) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.sampleTasksTotal(ctx, db)
+			m.SampleTasksTotal(ctx, db)
 		}
 	}
+}
+
+// SampleTasksTotal runs the sampler query once and publishes the rows as
+// the new dltool_tasks_total snapshot. A row set that no longer contains a
+// state drops that series from the exposition on the next scrape. A failed
+// query is logged at debug and leaves the previous snapshot in place.
+func (m *Metrics) SampleTasksTotal(ctx context.Context, db *sqlx.DB) {
+	var rows []taskCountRow
+	if err := db.SelectContext(ctx, &rows, queryTaskCounts); err != nil {
+		slog.DebugContext(ctx, "tasks_total sample failed", "err", err)
+
+		return
+	}
+
+	m.tasks.update(rows)
 }
 
 // taskCountRow is one row of the sampler query.
@@ -183,17 +220,30 @@ type taskCountRow struct {
 	Count  int64  `db:"count"`
 }
 
-func (m *Metrics) sampleTasksTotal(ctx context.Context, db *sqlx.DB) {
-	var rows []taskCountRow
-	if err := db.SelectContext(ctx, &rows, queryTaskCounts); err != nil {
-		slog.DebugContext(ctx, "tasks_total sample failed", "err", err)
-		return
-	}
+// tasksTotalCollector emits the sampler's last snapshot as gauge series;
+// swapping the whole snapshot under one lock keeps every scrape consistent.
+type tasksTotalCollector struct {
+	mu   sync.Mutex
+	rows []taskCountRow
+	desc *prometheus.Desc
+}
 
-	// Reset first, so a state that no longer has tasks is absent from the
-	// exposition instead of keeping its last value.
-	m.TasksTotal.Reset()
-	for _, row := range rows {
-		m.TasksTotal.WithLabelValues(row.State, row.Engine).Set(float64(row.Count))
+func (c *tasksTotalCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- c.desc
+}
+
+func (c *tasksTotalCollector) Collect(ch chan<- prometheus.Metric) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, row := range c.rows {
+		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, float64(row.Count), row.State, row.Engine)
 	}
+}
+
+func (c *tasksTotalCollector) update(rows []taskCountRow) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.rows = rows
 }
