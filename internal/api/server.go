@@ -80,6 +80,8 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// credentials against.
 	if db != nil {
 		v1.Use(Authenticate(db, cfg))
+	} else {
+		log.Warn("server: nil store; /api/v1 is serving without authentication (router-only test mode)")
 	}
 
 	humaConfig := huma.DefaultConfig(apiTitle, Version)

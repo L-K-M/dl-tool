@@ -24,7 +24,9 @@ const (
 	sessionCookieName = "dltool_session"
 	csrfHeaderName    = "X-DLTOOL-CSRF"
 
-	authSchemeBearer = "Bearer "
+	// The auth-scheme is matched case-insensitively (RFC 9110 section 11.1);
+	// the token itself is case-sensitive.
+	authSchemeBearer = "Bearer"
 	apiTokenPrefix   = "dlt_"
 
 	// Identity.Method values.
@@ -129,11 +131,12 @@ func resolveIdentity(r *http.Request, db *sqlx.DB) (Identity, error) {
 	return resolveSession(r, db, cookie.Value)
 }
 
-// resolveBearer authenticates an Authorization header. A value without the
-// Bearer scheme or without the dlt_ prefix is not a dl-tool token.
+// resolveBearer authenticates an Authorization header. The Bearer scheme
+// is case-insensitive per RFC 9110 section 11.1; a value without it or
+// without the dlt_ prefix is not a dl-tool token.
 func resolveBearer(r *http.Request, db *sqlx.DB, header string) (Identity, error) {
-	token, ok := strings.CutPrefix(header, authSchemeBearer)
-	if !ok || !strings.HasPrefix(token, apiTokenPrefix) {
+	scheme, token, _ := strings.Cut(header, " ")
+	if !strings.EqualFold(scheme, authSchemeBearer) || !strings.HasPrefix(token, apiTokenPrefix) {
 		return Identity{}, unauthenticated("the Authorization header is not a dl-tool bearer token")
 	}
 
@@ -186,7 +189,9 @@ func csrfProblem(r *http.Request, identity Identity) error {
 	if identity.Method != authMethodSession || !isMutatingMethod(r.Method) {
 		return nil
 	}
-	if !secure.EqualToken(r.Header.Get(csrfHeaderName), identity.CSRF) {
+	if identity.CSRF == "" || !secure.EqualToken(r.Header.Get(csrfHeaderName), identity.CSRF) {
+		// An empty stored csrf_token would make EqualToken("", "") pass and
+		// leave the synchroniser layer vacuous; fail closed instead.
 		return Problem(
 			SlugCSRFTokenMissing,
 			http.StatusForbidden,

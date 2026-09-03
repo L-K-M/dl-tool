@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,10 +69,15 @@ func newAuthTestAPI(t *testing.T) (humatest.TestAPI, *sqlx.DB) {
 	server, db := newAuthTestServer(t)
 	api := humatest.Wrap(t, server.API)
 
-	operation := huma.Operation{Method: http.MethodGet, Path: "/auth-probe"}
-	huma.Register(api, operationWithID(operation, "auth-probe-read"), authProbeHandler)
-	operation.Method = http.MethodPost
-	huma.Register(api, operationWithID(operation, "auth-probe-write"), authProbeHandler)
+	// The probe must answer every method the CSRF rules treat as mutating,
+	// or a method chi would 404 never exercises the middleware path.
+	operation := huma.Operation{Path: "/auth-probe"}
+	for _, method := range []string{
+		http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete,
+	} {
+		operation.Method = method
+		huma.Register(api, operationWithID(operation, "auth-probe-"+strings.ToLower(method)), authProbeHandler)
+	}
 
 	return api, db
 }
@@ -269,6 +275,23 @@ func TestCookieMutationWithoutCSRFIs403(t *testing.T) {
 	}
 }
 
+// TestEmptyCSRFTokenSessionIs403 pins the fail-closed guard: a session row
+// with a blank csrf_token must not make the synchroniser check vacuous.
+func TestEmptyCSRFTokenSessionIs403(t *testing.T) {
+	api, db := newAuthTestAPI(t)
+	user := seedUser(t, db)
+	cookieValue, _, sessionID := seedLiveSession(t, db, user.ID)
+
+	if _, err := db.ExecContext(t.Context(),
+		`UPDATE sessions SET csrf_token = '' WHERE id = ?`, sessionID,
+	); err != nil {
+		t.Fatalf("blank csrf token: %v", err)
+	}
+
+	response := api.Post("/auth-probe", cookieHeader(cookieValue))
+	assertProblem(t, response, http.StatusForbidden, SlugCSRFTokenMissing)
+}
+
 func TestCookieMutationWithWrongCSRFIs403(t *testing.T) {
 	api, db := newAuthTestAPI(t)
 	user := seedUser(t, db)
@@ -290,7 +313,7 @@ func TestCookieMutationWithCSRFIs2xx(t *testing.T) {
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		response := api.Do(method, "/auth-probe", cookieHeader(cookieValue), csrfHeaderName+": "+csrfToken)
-		if response.Code == http.StatusForbidden || response.Code == http.StatusUnauthorized {
+		if response.Code < 200 || response.Code > 299 {
 			t.Errorf("%s with cookie and CSRF = %d, want 2xx", method, response.Code)
 		}
 	}
@@ -329,6 +352,21 @@ func TestBearerMutationWithoutCSRFIs2xx(t *testing.T) {
 	}
 }
 
+// TestBearerSchemeIsCaseInsensitive pins RFC 9110 section 11.1: the
+// auth-scheme is case-insensitive, the token itself is not.
+func TestBearerSchemeIsCaseInsensitive(t *testing.T) {
+	api, db := newAuthTestAPI(t)
+	user := seedUser(t, db)
+	token := seedLiveAPIToken(t, db, user.ID)
+
+	for _, scheme := range []string{"bearer", "BEARER", "BeArEr"} {
+		response := api.Get("/auth-probe", "Authorization: "+scheme+" "+token)
+		if response.Code != http.StatusOK {
+			t.Errorf("GET with %q scheme = %d, want %d", scheme, response.Code, http.StatusOK)
+		}
+	}
+}
+
 func TestMalformedAuthorizationIs401(t *testing.T) {
 	api, db := newAuthTestAPI(t)
 	user := seedUser(t, db)
@@ -343,6 +381,23 @@ func TestMalformedAuthorizationIs401(t *testing.T) {
 		response := api.Get("/auth-probe", header)
 		assertProblem(t, response, http.StatusUnauthorized, SlugUnauthenticated)
 	}
+}
+
+// TestDisabledUserSessionIs401 pins the account kill switch: flipping
+// users.enabled to 0 invalidates an otherwise live session.
+func TestDisabledUserSessionIs401(t *testing.T) {
+	api, db := newAuthTestAPI(t)
+	user := seedUser(t, db)
+	cookieValue, _, _ := seedLiveSession(t, db, user.ID)
+
+	if _, err := db.ExecContext(t.Context(),
+		`UPDATE users SET enabled = 0 WHERE id = ?`, user.ID,
+	); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+
+	response := api.Get("/auth-probe", cookieHeader(cookieValue))
+	assertProblem(t, response, http.StatusUnauthorized, SlugUnauthenticated)
 }
 
 func TestExpiredSessionIs401(t *testing.T) {
@@ -514,6 +569,60 @@ func TestSessionTouchIsThrottled(t *testing.T) {
 	}
 	if got := readLastSeen(freshSession); got != fresh {
 		t.Errorf("last_seen_at = %d, want it untouched at %d", got, fresh)
+	}
+}
+
+// TestAPITokenStampIsThrottled pins the one-write-per-interval bound on
+// api_tokens.last_used_at: a token seen moments ago is not re-stamped.
+func TestAPITokenStampIsThrottled(t *testing.T) {
+	api, db := newAuthTestAPI(t)
+	user := seedUser(t, db)
+	token := seedLiveAPIToken(t, db, user.ID)
+
+	readLastUsed := func() int64 {
+		t.Helper()
+
+		var lastUsedAt *int64
+		if err := db.GetContext(t.Context(), &lastUsedAt,
+			`SELECT last_used_at FROM api_tokens WHERE user_id = ?`, user.ID,
+		); err != nil {
+			t.Fatalf("read last_used_at: %v", err)
+		}
+		if lastUsedAt == nil {
+			t.Fatal("last_used_at is NULL, want a stamped value")
+		}
+
+		return *lastUsedAt
+	}
+
+	if response := api.Get("/auth-probe", "Authorization: Bearer "+token); response.Code != http.StatusOK {
+		t.Fatalf("first GET = %d, want %d", response.Code, http.StatusOK)
+	}
+	first := readLastUsed()
+
+	if response := api.Get("/auth-probe", "Authorization: Bearer "+token); response.Code != http.StatusOK {
+		t.Fatalf("second GET = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := readLastUsed(); got != first {
+		t.Errorf("last_used_at = %d, want it untouched at %d", got, first)
+	}
+}
+
+// TestSessionJSONHidesSecrets pins the json tags on store.Session: the token
+// hash and the CSRF token must never serialize.
+func TestSessionJSONHidesSecrets(t *testing.T) {
+	encoded, err := json.Marshal(store.Session{
+		ID: "session", UserID: "user", TokenHash: "tokenhash", CSRFToken: "csrftoken",
+		ExpiresAt: 1, LastSeenAt: 2,
+	})
+	if err != nil {
+		t.Fatalf("marshal session: %v", err)
+	}
+
+	for _, secret := range []string{"tokenhash", "csrftoken", "token_hash", "csrf_token"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Errorf("session JSON %q leaks %q", encoded, secret)
+		}
 	}
 }
 

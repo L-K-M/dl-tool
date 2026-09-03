@@ -23,14 +23,15 @@ type User struct {
 }
 
 // Session is a cookie-authenticated login. The cookie value itself is never
-// stored, only its SHA-256 hex in TokenHash.
+// stored, only its SHA-256 hex in TokenHash. last_seen_at is throttled
+// bookkeeping, not an idle timeout; only expires_at bounds a session.
 type Session struct {
-	ID         string `db:"id"`
-	UserID     string `db:"user_id"`
-	TokenHash  string `db:"token_hash"`
-	CSRFToken  string `db:"csrf_token"`
-	ExpiresAt  int64  `db:"expires_at"`
-	LastSeenAt int64  `db:"last_seen_at"`
+	ID         string `db:"id" json:"id"`
+	UserID     string `db:"user_id" json:"user_id"`
+	TokenHash  string `db:"token_hash" json:"-"`
+	CSRFToken  string `db:"csrf_token" json:"-"`
+	ExpiresAt  int64  `db:"expires_at" json:"expires_at"`
+	LastSeenAt int64  `db:"last_seen_at" json:"last_seen_at"`
 }
 
 const (
@@ -73,9 +74,13 @@ AND t.revoked_at IS NULL
 AND (t.expires_at IS NULL OR t.expires_at > ?)
 AND u.enabled = 1`
 
+	// The stamp is rate-bounded and rechecks revoked_at, so a token revoked
+	// after the lookup above is still never stamped.
 	queryTouchAPIToken = `UPDATE api_tokens
 SET last_used_at = ?, updated_at = ?
-WHERE id = ?`
+WHERE id = ?
+AND revoked_at IS NULL
+AND (last_used_at IS NULL OR last_used_at < ?)`
 )
 
 // CountUsers returns the number of rows in users — 0 before first-run setup, 1 after.
@@ -169,7 +174,8 @@ func DeleteExpiredSessions(ctx context.Context, db *sqlx.DB, now int64) (int64, 
 }
 
 // UserByAPITokenHash resolves a bearer token hash to its user and stamps
-// last_used_at. A revoked or expired token is ErrNotFound, like an unknown hash.
+// last_used_at, at most once per apiTokenTouchIntervalMS. A revoked or
+// expired token is ErrNotFound, like an unknown hash.
 func UserByAPITokenHash(ctx context.Context, db *sqlx.DB, hash string) (User, error) {
 	now := time.Now().UnixMilli()
 
@@ -182,12 +188,16 @@ func UserByAPITokenHash(ctx context.Context, db *sqlx.DB, hash string) (User, er
 		return User{}, fmt.Errorf("store: user by api token hash: %w", err)
 	}
 
-	if _, err := db.ExecContext(ctx, queryTouchAPIToken, now, now, row.TokenID); err != nil {
+	if _, err := db.ExecContext(ctx, queryTouchAPIToken, now, now, row.TokenID, now-apiTokenTouchIntervalMS); err != nil {
 		return User{}, fmt.Errorf("store: stamp api token use: %w", err)
 	}
 
 	return row.user(), nil
 }
+
+// apiTokenTouchIntervalMS bounds the last_used_at write rate, mirroring the
+// session touch in internal/api.
+const apiTokenTouchIntervalMS = int64(time.Minute / time.Millisecond)
 
 // sessionUserRow is the flat scan target of the sessions⋈users join.
 type sessionUserRow struct {

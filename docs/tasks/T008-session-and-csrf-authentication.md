@@ -179,9 +179,9 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ```text
 $ make test PKG="./internal/api/... ./internal/secure/... ./internal/store/..." && echo AUTH_OK
 go test -race -count=1 ./internal/api/... ./internal/secure/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	6.456s
+ok  	github.com/L-K-M/dl-tool/internal/api	8.472s
 ?   	github.com/L-K-M/dl-tool/internal/secure	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/store	6.775s
+ok  	github.com/L-K-M/dl-tool/internal/store	7.444s
 AUTH_OK
 ```
 
