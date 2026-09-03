@@ -49,6 +49,10 @@ type Server struct {
 	API huma.API
 
 	db *sqlx.DB
+
+	// auth owns the first-run gate, the /auth operations and the login
+	// throttles.
+	auth *authService
 }
 
 // NewServer builds the router and the Huma API. Every route lives under
@@ -72,16 +76,26 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	v1 := chi.NewMux()
 	base.Mount(apiV1Path, v1)
 
+	// The auth service owns the first-run gate, the /auth operations and
+	// the brute-force controls. With a nil db it registers its operations
+	// for the generated document but stays inert — and silent, for the same
+	// stdout reason as the middleware below.
+	auth, err := newAuthService(cfg, db, log)
+	if err != nil {
+		return nil, fmt.Errorf("build auth service: %w", err)
+	}
+
 	// Every route under /api/v1 requires a session cookie or a bearer token
-	// (docs/05-api-contract.md section 1.2); /healthz, /readyz and the SPA
-	// live on the base router and stay anonymous. Use must run before
-	// humachi.New registers the first route on v1. A nil db — the openapi
-	// subcommand and router-only unit tests — skips the middleware: there is
-	// no store to resolve credentials against. Deliberately silent: the
-	// openapi subcommand's stdout is the committed api/openapi.json, so a
+	// (docs/05-api-contract.md section 1.2), except the two /auth operations
+	// that authenticate by body; /healthz, /readyz and the SPA live on the
+	// base router and stay anonymous. Use must run before humachi.New
+	// registers the first route on v1. A nil db — the openapi subcommand and
+	// router-only unit tests — skips the middleware: there is no store to
+	// resolve credentials against. Deliberately silent: the openapi
+	// subcommand's stdout is the committed api/openapi.json, so a
 	// construction-time log line would corrupt the gen drift gate.
 	if db != nil {
-		v1.Use(Authenticate(db, cfg))
+		v1.Use(auth.middleware())
 	}
 
 	humaConfig := huma.DefaultConfig(apiTitle, Version)
@@ -97,6 +111,25 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		V1:     v1,
 		API:    humachi.New(v1, humaConfig),
 		db:     db,
+		auth:   auth,
+	}
+	// The two credentials of docs/05-api-contract.md section 1.2, so the
+	// generated document tells clients how the API is protected. Individual
+	// operations declare their own requirements (or an explicit empty one
+	// for the two that authenticate by body).
+	server.API.OpenAPI().Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+		schemeSession: {
+			Type:        "apiKey",
+			Description: "The dltool_session cookie issued by POST /auth/setup and POST /auth/login; mutations also need the X-DLTOOL-CSRF header.",
+			Name:        sessionCookieName,
+			In:          "cookie",
+		},
+		schemeBearer: {
+			Type:         "http",
+			Scheme:       "bearer",
+			BearerFormat: apiTokenPrefix,
+			Description:  "An API token issued by the account settings; bearer requests are exempt from CSRF.",
+		},
 	}
 	server.registerOperations()
 
@@ -117,11 +150,15 @@ func (s *Server) Spec() ([]byte, error) {
 // registerOperations mounts the placeholder operation that keeps the document
 // non-empty until the real resources land; their tasks own them.
 func (s *Server) registerOperations() {
+	s.auth.registerOperations(s.API)
+
 	huma.Register(s.API, huma.Operation{
 		OperationID: "get-system-info",
 		Method:      http.MethodGet,
 		Path:        "/system/info",
 		Summary:     "Read system information",
+		// Behind the same middleware as every /api/v1 route.
+		Security: credentialRequired,
 	}, func(_ context.Context, _ *systemInfoInput) (*systemInfoOutput, error) {
 		output := &systemInfoOutput{}
 		output.Body.Version = Version

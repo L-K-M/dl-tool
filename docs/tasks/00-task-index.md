@@ -61,7 +61,7 @@ register.
 | [T006](T006-sqlite-store-and-initial-migration.md) | Open the SQLite store, generate ULIDs and apply the initial migration | T004, T005 | done |
 | [T007](T007-http-server-and-openapi.md) | Serve chi and Huma under the base path and commit the OpenAPI document | T005, T006 | done |
 | [T008](T008-session-and-csrf-authentication.md) | Authenticate every request with a session cookie or a bearer token | T006, T007 | done |
-| [T009](T009-first-run-setup-and-login.md) | Complete the first run with a one-time setup token | T008 | todo |
+| [T009](T009-first-run-setup-and-login.md) | Complete the first run with a one-time setup token | T008 | done |
 | [T010](T010-health-readiness-and-metrics.md) | Serve health, readiness and Prometheus metrics | T006, T007 | todo |
 | [T011](T011-sse-hub-and-rid-ring.md) | Build the SSE hub and the rid ring buffer | T004 | todo |
 | [T012](T012-job-worker-pool.md) | Run the database-backed job worker pool | T006 | todo |
@@ -267,7 +267,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T006 | Open the SQLite store, generate ULIDs and apply the initial migration | T004, T005 | yes | done | [T006](T006-sqlite-store-and-initial-migration.md) |
 | T007 | Serve chi and Huma under the base path and commit the OpenAPI document | T005, T006 | no | done | [T007](T007-http-server-and-openapi.md) |
 | T008 | Authenticate every request with a session cookie or a bearer token | T006, T007 | no | done | [T008](T008-session-and-csrf-authentication.md) |
-| T009 | Complete the first run with a one-time setup token | T008 | no | todo | [T009](T009-first-run-setup-and-login.md) |
+| T009 | Complete the first run with a one-time setup token | T008 | no | done | [T009](T009-first-run-setup-and-login.md) |
 | T010 | Serve health, readiness and Prometheus metrics | T006, T007 | no | todo | [T010](T010-health-readiness-and-metrics.md) |
 | T011 | Build the SSE hub and the rid ring buffer | T004 | yes | todo | [T011](T011-sse-hub-and-rid-ring.md) |
 | T012 | Run the database-backed job worker pool | T006 | no | todo | [T012](T012-job-worker-pool.md) |

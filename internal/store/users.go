@@ -41,6 +41,18 @@ const (
 FROM users
 WHERE id = ?`
 
+	queryCreateUser = `INSERT INTO users
+(id, username, password_hash, enabled, locale, last_login_at, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+
+	queryUserByUsername = `SELECT id, username, password_hash, enabled, locale, last_login_at, created_at, updated_at
+FROM users
+WHERE username = ?`
+
+	queryTouchLastLogin = `UPDATE users
+SET last_login_at = ?, updated_at = ?
+WHERE id = ?`
+
 	queryCreateSession = `INSERT INTO sessions
 (id, user_id, token_hash, csrf_token, expires_at, last_seen_at, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -105,6 +117,46 @@ func UserByID(ctx context.Context, db *sqlx.DB, id string) (User, error) {
 	}
 
 	return user, nil
+}
+
+// CreateUser inserts the operator account; created_at and updated_at are
+// set to now. last_login_at comes from the struct, NULL for first-run setup.
+func CreateUser(ctx context.Context, db *sqlx.DB, u User) error {
+	now := time.Now().UnixMilli()
+	_, err := db.ExecContext(
+		ctx,
+		queryCreateUser,
+		u.ID, u.Username, u.PasswordHash, u.Enabled, u.Locale, u.LastLoginAt, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("store: create user %q: %w", u.Username, err)
+	}
+
+	return nil
+}
+
+// UserByUsername returns the user with the given username, or ErrNotFound.
+// A failed lookup must be answered like a wrong password by the caller.
+func UserByUsername(ctx context.Context, db *sqlx.DB, username string) (User, error) {
+	var user User
+	err := db.GetContext(ctx, &user, queryUserByUsername, username)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, fmt.Errorf("store: user %q: %w", username, ErrNotFound)
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("store: user %q: %w", username, err)
+	}
+
+	return user, nil
+}
+
+// TouchLastLogin stamps the user's last successful login.
+func TouchLastLogin(ctx context.Context, db *sqlx.DB, id string, now int64) error {
+	if _, err := db.ExecContext(ctx, queryTouchLastLogin, now, now, id); err != nil {
+		return fmt.Errorf("store: touch last login %q: %w", id, err)
+	}
+
+	return nil
 }
 
 // CreateSession inserts a session; created_at and updated_at are set to now.
