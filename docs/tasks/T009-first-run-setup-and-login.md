@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T009 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T008 |
 | **Blocks** | T040, T084 |
 | **Parallel-safe** | no — it edits `internal/api/auth.go` |
@@ -156,7 +156,49 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```text
+$ make test PKG="./internal/api/... ./internal/secure/... ./internal/store/..." && echo SETUP_OK
+go test -race -count=1 ./internal/api/... ./internal/secure/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	16.900s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.297s
+ok  	github.com/L-K-M/dl-tool/internal/store	6.879s
+SETUP_OK
+```
+
+Scope confirmation (run with every change staged for the single task commit):
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/auth.go
+internal/api/auth_test.go
+internal/api/server.go
+internal/secure/hash.go
+internal/secure/hash_test.go
+internal/store/users.go
+web/src/api/schema.d.ts
+```
+
+The eight paths are the Files table plus `api/openapi.json` and `web/src/api/schema.d.ts`, which
+docs/13-testing-and-verification.md §7.1 makes part of this task's table because it adds Huma
+operations (`make gen` regenerated both).
+
+Acceptance grep:
+```text
+$ grep -ri 'adminadmin\|admin:admin\|DLTOOL_ADMIN_PASSWORD' cmd internal web
+(no output, exit 1)
+```
+
+Notes:
+- `make vet`, `golangci-lint run ./...`, `make doclint` and the web lint (`npm run lint`,
+  `prettier --check`) all pass on this tree.
+- Two pre-T009 tests needed adjusting: on a fresh empty store the middleware now answers
+  `401 /problems/setup-required` (this task's rule), so `TestNoCredentialIs401` and
+  `TestForgedRefererAloneIsRejected` seed a user first — exactly what
+  `TestEveryEndpointBeforeSetupIs401` now covers from the other side.
+- Doc 12 §6.3 locates the brute-force controls in `internal/secure/session.go`; the Files table
+  scopes them to `internal/api/auth.go`, and the task file is authoritative, so they live beside
+  the handlers that use them.
 
 ## Blocked
 
