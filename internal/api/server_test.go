@@ -360,11 +360,17 @@ func TestPanicIsLoggedAndConforming(t *testing.T) {
 }
 
 func TestSlugForStatusFallsBackByClass(t *testing.T) {
-	if got := slugForStatus(http.StatusNotAcceptable); got == SlugInternal {
-		t.Errorf("slugForStatus(406) = %q, must not be the server-fault slug", got)
-	}
-	if got := slugForStatus(http.StatusInternalServerError); got != SlugInternal {
-		t.Errorf("slugForStatus(500) = %q, want %q", got, SlugInternal)
+	for _, test := range []struct {
+		status int
+		want   string
+	}{
+		{http.StatusNotAcceptable, SlugValidationFailed},
+		{http.StatusFound, SlugInternal},
+		{http.StatusInternalServerError, SlugInternal},
+	} {
+		if got := slugForStatus(test.status); got != test.want {
+			t.Errorf("slugForStatus(%d) = %q, want %q", test.status, got, test.want)
+		}
 	}
 }
 

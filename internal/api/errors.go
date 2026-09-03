@@ -93,7 +93,7 @@ func slugForStatus(status int) string {
 	case http.StatusServiceUnavailable:
 		return SlugEngineUnavailable
 	default:
-		if status < http.StatusInternalServerError {
+		if status >= http.StatusBadRequest && status < http.StatusInternalServerError {
 			return SlugValidationFailed
 		}
 
