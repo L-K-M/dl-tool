@@ -5,6 +5,9 @@
 
 services:
   dl-tool:
+    # A dev-only tag: `up --build` must never overwrite a locally pulled
+    # ghcr.io/l-k-m/dl-tool:1 release image with working-tree code.
+    image: "dl-tool:dev"
     build:
       context: .
       dockerfile: Dockerfile
