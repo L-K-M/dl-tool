@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2/humacli"
@@ -51,6 +52,8 @@ func main() {
 	drained := make(chan struct{})
 
 	var httpServer *http.Server
+	var cancelRun context.CancelFunc
+	var runDone sync.WaitGroup
 
 	cli := humacli.New(func(hooks humacli.Hooks, _ *Options) {
 		hooks.OnStart(func() {
@@ -58,6 +61,10 @@ func main() {
 			defer close(drained)
 
 			ctx := context.Background()
+			// runCtx spans the metrics listener and the tasks_total sampler;
+			// OnStop cancels it so both drain with the main listener.
+			runCtx, cancel := context.WithCancel(ctx)
+			cancelRun = cancel
 
 			cfg, err := config.Load(ctx)
 			if err != nil {
@@ -81,6 +88,25 @@ func main() {
 				logger.Error("server build failed", "err", err)
 				os.Exit(exitFailure)
 			}
+
+			// store.Open has returned: migrations are applied and the database
+			// answers, so /readyz may report ready (doc 05 section 13.1).
+			server.Health.MarkReady()
+
+			metrics := obs.NewMetrics()
+			runDone.Add(2)
+			go func() {
+				defer runDone.Done()
+				// A failed metrics listener is degraded, not fatal: /metrics is
+				// a loopback-only side channel (doc 05 section 13.1).
+				if err := metrics.ListenAndServe(runCtx, cfg.MetricsAddr); err != nil {
+					logger.Error("metrics listener failed", "err", err)
+				}
+			}()
+			go func() {
+				defer runDone.Done()
+				metrics.RunTasksTotalSampler(runCtx, db)
+			}()
 
 			httpServer = &http.Server{
 				Addr:              cfg.HTTPAddr,
@@ -117,6 +143,13 @@ func main() {
 		})
 		hooks.OnStop(func() {
 			slog.Info("stopped")
+			// Ask the metrics listener and the tasks_total sampler to stop and
+			// join them before signalling the main shutdown path, so both drain
+			// before the store closes.
+			if cancelRun != nil {
+				cancelRun()
+			}
+			runDone.Wait()
 			close(stopped)
 			<-drained
 		})
