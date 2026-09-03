@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -222,6 +224,8 @@ func TestRealIPHonoursTrustedProxies(t *testing.T) {
 		want      string
 	}{
 		{"trusted peer rewrites", "192.0.2.0/24", "203.0.113.7, 192.0.2.1", "203.0.113.7"},
+		{"spoofed leftmost entry ignored", "192.0.2.0/24", "1.2.3.4, 9.9.9.9", "9.9.9.9"},
+		{"chain walks past multiple trusted hops", "192.0.2.0/24", "198.51.100.9, 192.0.2.5, 192.0.2.1", "198.51.100.9"},
 		{"untrusted peer ignored", "10.0.0.0/8", "203.0.113.7", "192.0.2.1:43210"},
 		{"no header keeps peer", "192.0.2.0/24", "", "192.0.2.1:43210"},
 	} {
@@ -269,6 +273,9 @@ func TestRedactedRequestURI(t *testing.T) {
 		want   string
 	}{
 		{"secret parameters redacted", "/api/v1/feeds?apikey=s3cret&token=t&passkey=p", "/api/v1/feeds?apikey=" + redactedValue + "&passkey=" + redactedValue + "&token=" + redactedValue},
+		{"keys match case-insensitively", "/api/v1/feeds?Token=abc", "/api/v1/feeds?Token=" + redactedValue},
+		{"malformed secret value fails closed", "/api/v1/feeds?token=abc%zz", "/api/v1/feeds?" + redactedValue},
+		{"malformed harmless pair fails closed", "/api/v1/feeds?limit=%zz", "/api/v1/feeds?" + redactedValue},
 		{"other parameters kept", "/api/v1/tasks?limit=10", "/api/v1/tasks?limit=10"},
 		{"no query unchanged", "/api/v1/tasks", "/api/v1/tasks"},
 	} {
@@ -286,4 +293,84 @@ func TestRedactedRequestURI(t *testing.T) {
 
 type validationProbeInput struct {
 	Name string `query:"name" required:"true"`
+}
+
+// captureHandler records every slog record for assertion.
+type captureHandler struct {
+	mu      *sync.Mutex
+	records *[]slog.Record
+}
+
+func (h captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h captureHandler) Handle(_ context.Context, record slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	*h.records = append(*h.records, record.Clone())
+
+	return nil
+}
+
+func (h captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h captureHandler) WithGroup(string) slog.Handler      { return h }
+
+// TestPanicIsLoggedAndConforming drives a panicking handler through the whole
+// middleware chain: the response must be the internal problem and the request
+// log must record the 500.
+func TestPanicIsLoggedAndConforming(t *testing.T) {
+	var mu sync.Mutex
+	var records []slog.Record
+
+	server, err := NewServer(
+		&config.Config{},
+		nil,
+		slog.New(captureHandler{mu: &mu, records: &records}),
+	)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	server.V1.Get("/panic-probe", func(http.ResponseWriter, *http.Request) {
+		panic("probe panic")
+	})
+
+	response := do(t, server.Router, http.MethodGet, "/api/v1/panic-probe")
+	assertProblem(t, response, http.StatusInternalServerError, SlugInternal)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, record := range records {
+		if record.Message != "request" {
+			continue
+		}
+		status := -1
+		record.Attrs(func(attr slog.Attr) bool {
+			if attr.Key == "status" {
+				status = int(attr.Value.Int64())
+			}
+
+			return true
+		})
+		if status == http.StatusInternalServerError {
+			return
+		}
+	}
+
+	t.Error("no request log record with status 500 for the panicked request")
+}
+
+func TestErrorFactorySkipsNilDetails(t *testing.T) {
+	installErrorFactory()
+
+	problem := huma.NewError(http.StatusUnprocessableEntity, "validation failed", errors.New("bad field"), nil)
+	body, err := json.Marshal(problem)
+	if err != nil {
+		t.Fatalf("marshal problem: %v", err)
+	}
+	if strings.Contains(string(body), "null") {
+		t.Errorf("marshaled problem contains null: %s", body)
+	}
+	if !strings.Contains(string(body), SlugValidationFailed) {
+		t.Errorf("marshaled problem lacks the validation slug: %s", body)
+	}
 }

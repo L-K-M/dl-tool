@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -59,7 +60,9 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// Set the problem handlers before Mount so chi copies them into every child.
 	root.NotFound(notFound)
 	root.MethodNotAllowed(notFound)
-	root.Use(middleware.RequestID, realIP(cfg.TrustedProxies), middleware.Recoverer, requestLogger(log))
+	// requestLogger wraps recoverer so a panicked request is still logged,
+	// with the status the recoverer wrote.
+	root.Use(middleware.RequestID, realIP(cfg.TrustedProxies), requestLogger(log), recoverer)
 
 	// One sub-router carries everything; nothing is registered outside it
 	// (docs/10-deployment-and-compose.md section 7.3 rule 2).
@@ -148,10 +151,27 @@ func requestLogger(log *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// realIP rewrites RemoteAddr from X-Forwarded-For, but only when the direct
-// peer is a configured trusted proxy (docs/10-deployment-and-compose.md
-// section 7.3). chi's middleware.RealIP is deprecated for trusting the header
-// from any peer.
+// recoverer turns a handler panic into the registry's internal problem and
+// logs the stack; chi's Recoverer would write a bare non-conforming 500.
+func recoverer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logFromContext(r.Context()).Error("panic recovered",
+					slog.Any("err", recovered),
+					slog.String("stack", string(debug.Stack())),
+				)
+				writeProblem(w, Problem(SlugInternal, http.StatusInternalServerError, "an internal error occurred"))
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// realIP rewrites RemoteAddr to the original client address from
+// X-Forwarded-For, but only when the direct peer is a configured trusted
+// proxy (docs/10-deployment-and-compose.md section 7.3). chi's
+// middleware.RealIP is deprecated for trusting the header from any peer.
 func realIP(trusted []netip.Prefix) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -162,22 +182,43 @@ func realIP(trusted []netip.Prefix) func(http.Handler) http.Handler {
 				return
 			}
 
-			// The leftmost entry is the original client.
-			client, _, _ := strings.Cut(forwardedFor, ",")
-			r.RemoteAddr = strings.TrimSpace(client)
+			r.RemoteAddr = clientFromForwardedFor(forwardedFor, trusted)
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
+// clientFromForwardedFor walks the chain right to left past every trusted
+// hop and returns the first untrusted entry. The leftmost entries are
+// client-supplied and spoofable; the rightmost is what the nearest trusted
+// proxy observed.
+func clientFromForwardedFor(forwardedFor string, trusted []netip.Prefix) string {
+	entries := strings.Split(forwardedFor, ",")
+	for i := len(entries) - 1; i > 0; i-- {
+		entry := strings.TrimSpace(entries[i])
+		if !isTrustedIP(entry, trusted) {
+			return entry
+		}
+	}
+
+	return strings.TrimSpace(entries[0])
+}
+
 // isTrustedProxy reports whether the direct peer address falls inside a
-// trusted-proxy prefix.
+// trusted-proxy prefix. A rewritten RemoteAddr may carry no port, so the
+// port split is best-effort.
 func isTrustedProxy(remoteAddr string, trusted []netip.Prefix) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		host = remoteAddr
 	}
 
+	return isTrustedIP(host, trusted)
+}
+
+// isTrustedIP reports whether the bare address falls inside a trusted-proxy
+// prefix.
+func isTrustedIP(host string, trusted []netip.Prefix) bool {
 	addr, err := netip.ParseAddr(host)
 	if err != nil {
 		return false
@@ -192,6 +233,16 @@ func isTrustedProxy(remoteAddr string, trusted []netip.Prefix) bool {
 	return false
 }
 
+// logFromContext returns the request-scoped logger, or the process default
+// when called outside a request.
+func logFromContext(ctx context.Context) *slog.Logger {
+	if log, ok := ctx.Value(loggerContextKey{}).(*slog.Logger); ok && log != nil {
+		return log
+	}
+
+	return slog.Default()
+}
+
 // secretQueryParameters names the query keys whose values never reach logs.
 var secretQueryParameters = []string{"apikey", "token", "passkey"}
 
@@ -204,19 +255,36 @@ func redactedRequestURI(u *url.URL) string {
 		return uri
 	}
 
-	query := u.Query()
+	query, parseErr := url.ParseQuery(u.RawQuery)
 	redacted := false
-	for _, name := range secretQueryParameters {
-		if _, ok := query[name]; ok {
-			query.Set(name, redactedValue)
+	for key := range query {
+		if isSecretQueryParameter(key) {
+			query.Set(key, redactedValue)
 			redacted = true
 		}
 	}
-	if !redacted {
-		return uri
+
+	if redacted {
+		return u.EscapedPath() + "?" + query.Encode()
+	}
+	if parseErr != nil {
+		// A malformed pair may hide a secret the parser dropped; fail closed.
+		return u.EscapedPath() + "?" + redactedValue
 	}
 
-	return u.EscapedPath() + "?" + query.Encode()
+	return uri
+}
+
+// isSecretQueryParameter matches keys case-insensitively: Token= must redact
+// as surely as token=.
+func isSecretQueryParameter(key string) bool {
+	for _, name := range secretQueryParameters {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // notFound answers every unmatched route — and every unmatched method on a

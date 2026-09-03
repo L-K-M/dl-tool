@@ -45,6 +45,7 @@ var version = "dev"
 func main() {
 	slog.SetDefault(obs.NewLogger(os.Stdout, bootstrapLogLevel, bootstrapLogFormat))
 	stopped := make(chan struct{})
+	drained := make(chan struct{})
 
 	var httpServer *http.Server
 
@@ -91,22 +92,27 @@ func main() {
 			slog.Info("started")
 			<-stopped
 
-			if err := db.Close(); err != nil {
-				slog.Error("database close failed", "err", err)
-			}
-		})
-		hooks.OnStop(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			// Drain in the goroutine that owns the values; stopped and drained
+			// are the happens-before edges, so there is no racy cross-goroutine
+			// read and humacli cannot return before the close completes.
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 			defer cancel()
 
 			if httpServer != nil {
-				if err := httpServer.Shutdown(ctx); err != nil {
+				if err := httpServer.Shutdown(shutdownCtx); err != nil {
 					slog.Error("http shutdown failed", "err", err)
 				}
 			}
+			if err := db.Close(); err != nil {
+				slog.Error("database close failed", "err", err)
+			}
 
+			close(drained)
+		})
+		hooks.OnStop(func() {
 			slog.Info("stopped")
 			close(stopped)
+			<-drained
 		})
 	})
 	cli.Root().AddCommand(versionCmd())
