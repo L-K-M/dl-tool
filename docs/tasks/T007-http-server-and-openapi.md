@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T005, T006 |
 | **Blocks** | T008, T010, T013, T014, T020, T046, T055, T065, T068, T095 |
-| **Parallel-safe** | no — it edits `cmd/dl-tool/main.go` |
+| **Parallel-safe** | no — it edits `cmd/dl-tool/main.go` and `scripts/gen.sh` |
 | **Implements** | — (the surface [FR-152](../02-requirements.md#fr-152-expose-health-and-readiness-endpoints) and [FR-116](../02-requirements.md#fr-116-authenticate-with-a-session-cookie-or-a-bearer-token) mount on; the drift gate is [NFR-027](../02-requirements.md#nfr-027-keep-the-generated-api-contract-in-step-with-the-code)) |
 | **Decisions** | [ADR-0003](../decisions/0003-chi-huma-code-first-openapi.md) |
 | **Est. size** | 2 new source files, 1 test file, 2 generated files, 1 script edit, ~300 LOC |
@@ -128,7 +128,7 @@ const (
    `cmd/dl-tool/main.go` that prints it to stdout and exits 0.
 7. Edit `cmd/dl-tool/main.go` so `OnStart` opens the store, builds the server and serves on `cfg.HTTPAddr`,
    and `OnStop` calls `http.Server.Shutdown` with a bounded context.
-8. Edit `scripts/gen.sh` to run the pinned frontend Prettier over `web/src/api/schema.d.ts` after
+8. Edit `scripts/gen.sh` to run `npx --no-install prettier` over `web/src/api/schema.d.ts` after
    `openapi-typescript`, then run `make gen` and commit both generated files. Never hand-edit either one.
 9. Write `internal/api/server_test.go` with `humatest` covering: a request to `<base>/api/v1/system/info`
    returns 200; the same path without the base returns 404 when `BasePath` is set; an unknown route returns
@@ -148,7 +148,7 @@ const (
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-make gen && (cd web && npx prettier --check src/api/schema.d.ts) && make test PKG=./internal/api/... && echo API_OK
+make gen && (cd web && npx --no-install prettier --check src/api/schema.d.ts) && make test PKG=./internal/api/... && echo API_OK
 ```
 Expected: `make gen` leaves both generated files unchanged, Prettier reports that all matched files use its
 style, `ok  	github.com/L-K-M/dl-tool/internal/api` appears on its own line with no `FAIL`, and the final

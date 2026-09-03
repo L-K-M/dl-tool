@@ -302,11 +302,11 @@ cd "$(dirname "$0")/.."
 go run ./cmd/dl-tool openapi > api/openapi.json
 cd web
 npx openapi-typescript ../api/openapi.json -o src/api/schema.d.ts
-npx prettier --write src/api/schema.d.ts
+npx --no-install prettier --write src/api/schema.d.ts
 ```
 
 The final formatting step uses the pinned frontend Prettier version. It makes the generated schema satisfy
-the blocking formatting check without hand-editing it, while the drift gate still compares generator output
+the blocking formatting check without hand-editing it, while the drift gate still compares pipeline output
 byte for byte.
 
 The gate regenerates and fails on any difference:
