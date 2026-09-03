@@ -64,7 +64,7 @@ register.
 | [T009](T009-first-run-setup-and-login.md) | Complete the first run with a one-time setup token | T008 | done |
 | [T010](T010-health-readiness-and-metrics.md) | Serve health, readiness and Prometheus metrics | T006, T007 | done |
 | [T011](T011-sse-hub-and-rid-ring.md) | Build the SSE hub and the rid ring buffer | T004 | done |
-| [T012](T012-job-worker-pool.md) | Run the database-backed job worker pool | T006 | todo |
+| [T012](T012-job-worker-pool.md) | Run the database-backed job worker pool | T006 | done |
 | [T013](T013-embed-spa-and-base-path.md) | Embed the built SPA and serve it under the base path | T003, T007 | todo |
 | [T014](T014-typed-api-client.md) | Generate the typed API client from the committed OpenAPI document | T002, T007, T013 | todo |
 | [T124](T124-runtime-dockerfile-and-entrypoint.md) | Write the runtime Dockerfile and the entrypoint | T003, T004, T010, T013 | todo |

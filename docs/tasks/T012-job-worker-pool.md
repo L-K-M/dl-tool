@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T012 |
 | **Milestone** | M0 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T006 |
 | **Blocks** | T061, T066, T074, T091 |
 | **Parallel-safe** | no — it edits `cmd/dl-tool/main.go` |
@@ -170,7 +170,33 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make test PKG="./internal/jobs/... ./internal/store/..." && echo JOBS_OK`:
+
+```
+go test -race -count=1 ./internal/jobs/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.328s
+ok  	github.com/L-K-M/dl-tool/internal/store	6.680s
+JOBS_OK
+```
+
+(Latest run, after the PR-review fixes: `context.WithoutCancel` for the
+CompleteJob/FailJob bookkeeping writes so an OnStop cancel mid-handler no
+longer strands the row in 'running', a failed boot recovery now logs and
+leaves the pool alive instead of silently killing it, plus
+`TestShutdownRecordsInFlightOutcome` and `TestRecoveryFailureDoesNotStopPool`.)
+
+`make lint` (gofmt, golangci-lint, eslint, prettier) and `make vet` reported 0
+issues; `make doclint` reported 0 errors.
+
+Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+cmd/dl-tool/main.go
+internal/jobs/worker.go
+internal/jobs/worker_test.go
+internal/store/jobs.go
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

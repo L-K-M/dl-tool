@@ -18,6 +18,7 @@ import (
 
 	"github.com/L-K-M/dl-tool/internal/api"
 	"github.com/L-K-M/dl-tool/internal/config"
+	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/obs"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
@@ -29,6 +30,7 @@ const (
 	fallbackErrorCode  = "config_malformed"
 	exitFailure        = 1
 	backupsDirName     = "backups"
+	workerPoolSize     = 2
 
 	// readHeaderTimeout bounds slow-header exposure on the main listener;
 	// readTimeout bounds the whole request read (body included); idleTimeout
@@ -92,6 +94,19 @@ func main() {
 			// store.Open has returned: migrations are applied and the database
 			// answers, so /readyz may report ready (doc 05 section 13.1).
 			server.Health.MarkReady()
+
+			// The job worker pool shares runCtx, so OnStop cancels it and
+			// runDone.Wait blocks until every in-flight handler has finished.
+			// Handlers arrive with T061/T066/T074/T091; until then the pool is
+			// intentionally empty and any enqueued kind is dead-lettered.
+			worker := jobs.NewWorker(db, logger, workerPoolSize)
+			runDone.Add(1)
+			go func() {
+				defer runDone.Done()
+				if err := worker.Run(runCtx); err != nil {
+					logger.Error("job worker failed", "err", err)
+				}
+			}()
 
 			metrics := obs.NewMetrics()
 			runDone.Add(2)
