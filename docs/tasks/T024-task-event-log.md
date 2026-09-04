@@ -157,4 +157,31 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+**Step 7's emission points and the `ListEvents` envelope cannot be built from the Files table: T017
+and T020 already shipped the pieces this task was written to add, against different shapes.**
+
+1. **`ListEvents` already exists with a different signature.** T017 shipped
+   `ListEvents(ctx, taskID, cursor EventCursor, limit int) ([]TaskEvent, error)` plus tests in
+   `internal/store/tasks_test.go` that pin it at five call sites (`TestTransitionWritesEvent`,
+   `TestListEventsPagination`). This task's interface contract requires the cursor-envelope shape
+   `ListEvents(ctx, taskID, limit, cursor string) (items, nextCursor, total, err)`; migrating breaks
+   the compilation of `internal/store/tasks_test.go`, which no Files-table row covers.
+2. **`task.created` has no emission point in the table.** Step 7 and acceptance criterion 1 require
+   one row at insert. The insert runs in `TaskStore.Create` (`internal/store/tasks.go`) called by
+   `insertPlanned` (`internal/api/tasks.go`); neither file is in the table, and no in-table file sits
+   on the create path.
+3. **`engine.accepted` has no emission point either.** The store's handle-recording moment is
+   `SetEngineRef` (`internal/store/tasks.go`, outside the table). `engine.unavailable`/`engine.rejected`
+   have **no call site at all in M1**: POST /tasks deliberately contacts no engine (the admission pass
+   T098 owns `Engine.Add`), so there is no engine refusal moment to hook. Those two codes ship as
+   constants now and their emission points arrive with T098.
+
+**Minimal amendment:** add to the Files table —
+`internal/api/tasks.go | edit | Emit task.created (store.CodeTaskCreated) in insertPlanned after the
+insert of each accepted URI.`, `internal/store/tasks.go | edit | Emit engine.accepted
+(store.CodeEngineAccepted) inside SetEngineRef, transactionally with the handle write.` and
+`internal/store/tasks_test.go | edit | Migrate the ListEvents call sites to the envelope signature;
+cover the SetEngineRef emission.` Nothing else changes: the API-level `task.created` home matches the
+conventions table ("`task.` — Task lifecycle in `internal/api` and `internal/store`") and keeps the
+emission out of the store-level fixtures the actions and delete tests seed through `store.Create`.
