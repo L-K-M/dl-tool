@@ -136,6 +136,8 @@ WHERE id = ?`
 
 	queryTaskState = `SELECT state FROM tasks WHERE id = ?`
 
+	queryTaskEngineRef = `SELECT engine_ref FROM tasks WHERE id = ?`
+
 	// The state guard makes the update a compare-and-swap: a concurrent
 	// transition that committed after the read above turns this into a
 	// no-op instead of a lost update.
@@ -317,8 +319,10 @@ func (s *TaskStore) UpdateProgress(ctx context.Context, id string, p Progress) e
 
 // SetEngineRef records the engine-side identity (aria2 GID, qBittorrent
 // infohash, yt-dlp job id) once the engine accepted the task, writing the
-// engine.accepted event in the same transaction, and bumps updated_at. A
-// missing id is ErrNotFound.
+// engine.accepted event in the same transaction — but only when the handle
+// actually changes: a no-op re-set or a reconciliation loop re-learning the
+// same handle must not log another acceptance. A missing id is
+// ErrNotFound.
 func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) error {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -331,6 +335,17 @@ func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) erro
 			slog.WarnContext(ctx, "store: rollback of engine ref failed", "task_id", id, "error", err)
 		}
 	}()
+
+	// The current handle, read inside the transaction, decides whether this
+	// is an acceptance (NULL or a different ref landing) or a no-op re-set.
+	var current *string
+	err = tx.GetContext(ctx, &current, queryTaskEngineRef, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: set engine ref of task %q: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("store: set engine ref of task %q: read handle: %w", id, err)
+	}
 
 	now := time.Now().UnixMilli()
 	result, err := tx.ExecContext(ctx, querySetTaskEngineRef, engineRef, now, id)
@@ -345,11 +360,14 @@ func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) erro
 		return fmt.Errorf("store: set engine ref of task %q: %w", id, ErrNotFound)
 	}
 
-	// The handle landing is the moment the engine took ownership of the
-	// transfer (docs/14-conventions.md section 4); the event rides the same
-	// transaction so a task row and its acceptance never disagree.
-	if err := insertTaskEvent(ctx, tx, id, "info", CodeEngineAccepted, "engine accepted the task", nil, now); err != nil {
-		return err
+	// The first handle — or a changed one, an engine that took the task
+	// again — is the moment of acceptance (docs/14-conventions.md section 4);
+	// the event rides the same transaction so a task row and its acceptance
+	// never disagree.
+	if current == nil || *current != engineRef {
+		if err := insertTaskEvent(ctx, tx, id, "info", CodeEngineAccepted, "engine accepted the task", nil, now); err != nil {
+			return fmt.Errorf("store: set engine ref of task %q: %w", id, err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

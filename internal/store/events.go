@@ -35,7 +35,9 @@ const (
 	CodeTaskDataDeleted = "task.data_deleted"
 	// CodeEngineAccepted is emitted when an engine returned a handle and
 	// SetEngineRef recorded it — the moment the engine took ownership of
-	// the transfer.
+	// the transfer. It is emitted only when the handle changes: SetEngineRef
+	// is its single writer, and a no-op re-set re-learns nothing. No caller
+	// may also pass it as a Transition code, or one acceptance logs twice.
 	CodeEngineAccepted = "engine.accepted"
 	// CodeEngineRejected is emitted when an engine refused a task. No M1
 	// code path reaches an engine refusal — POST /tasks contacts no engine

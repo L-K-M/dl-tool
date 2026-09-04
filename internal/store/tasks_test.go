@@ -283,7 +283,12 @@ func TestTransitionWritesEvent(t *testing.T) {
 	tasks := NewTaskStore(db)
 
 	task := createTaskInState(t, tasks, "queued")
-	require.NoError(t, tasks.Transition(t.Context(), task.ID, "downloading", "engine.accepted", "accepted by aria2"))
+	// The code is an arbitrary fixture string, deliberately not a
+	// vocabulary constant: Transition writes whatever code its caller
+	// passes, and engine.accepted has exactly one writer — SetEngineRef
+	// (TestSetEngineRefWritesEvent) — so a transition must not look like a
+	// second one.
+	require.NoError(t, tasks.Transition(t.Context(), task.ID, "downloading", "e.moved", "moved by the poller"))
 
 	events, _, total, err := tasks.ListEvents(t.Context(), task.ID, 10, "")
 	require.NoError(t, err)
@@ -294,8 +299,8 @@ func TestTransitionWritesEvent(t *testing.T) {
 	require.True(t, strings.HasPrefix(event.ID, PrefixTaskEvent))
 	require.Equal(t, task.ID, event.TaskID)
 	require.Equal(t, "info", event.Level)
-	require.Equal(t, "engine.accepted", event.Code)
-	require.Equal(t, "accepted by aria2", event.Message)
+	require.Equal(t, "e.moved", event.Code)
+	require.Equal(t, "moved by the poller", event.Message)
 	require.Nil(t, event.DetailJSON)
 	require.Equal(t, event.At, event.CreatedAt)
 	require.Equal(t, event.At, event.UpdatedAt)
@@ -316,7 +321,7 @@ func TestTransitionWritesEvent(t *testing.T) {
 	for _, event := range events {
 		levels[event.Code] = event.Level
 	}
-	require.Equal(t, "info", levels["engine.accepted"])
+	require.Equal(t, "info", levels["e.moved"])
 	require.Equal(t, "error", levels["engine.failed"])
 }
 
@@ -398,6 +403,28 @@ func TestSetEngineRefWritesEvent(t *testing.T) {
 	require.Equal(t, "info", events[0].Level)
 	require.Nil(t, events[0].DetailJSON)
 	require.Equal(t, events[0].At, events[0].CreatedAt)
+
+	// A no-op re-set — a reconciliation loop re-learning the same handle
+	// — logs nothing: one acceptance, one row.
+	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "2089b05ecca3d829"))
+	events, _, total, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, events, 1)
+
+	// A changed handle is a new acceptance: the engine took the task
+	// again, and the log says so exactly once more.
+	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "a1b2c3d4e5f60718"))
+	events, _, total, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+	count := 0
+	for _, event := range events {
+		if event.Code == CodeEngineAccepted {
+			count++
+		}
+	}
+	require.Equal(t, 2, count)
 
 	// A handle aimed at a missing task writes neither the handle nor the
 	// event.
