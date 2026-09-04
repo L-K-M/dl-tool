@@ -186,8 +186,9 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-`make lint && make test PKG=./internal/store/...`, re-run after the review fix (the
-compare-and-swap guard in `Transition`) on the working tree of the HEAD commit:
+`make lint && make test PKG=./internal/store/...`, re-run after each review fix on the working tree
+of the HEAD commit — the compare-and-swap guard in `Transition`, the `ErrTransitionConflict` sentinel,
+the `ErrNotFound` mutators, the queued create-time default and the typed-nil detail guard. Final paste:
 
 ```
 $ make lint
@@ -205,7 +206,7 @@ All matched files use Prettier code style!
 
 $ make test PKG=./internal/store/...
 go test -race -count=1 ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/store	9.292s
+ok  	github.com/L-K-M/dl-tool/internal/store	8.986s
 ```
 
 `make lint` printed no findings (`0 issues.`, eslint and prettier silent). One `ok` line, no `FAIL`.
