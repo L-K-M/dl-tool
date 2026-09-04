@@ -335,7 +335,7 @@ func newRequestInfo(cfg *config.Config, r *http.Request) requestInfo {
 	}
 
 	transport := TransportPlain
-	if r.TLS != nil || (r.Header.Get("X-Forwarded-Proto") == "https" &&
+	if r.TLS != nil || (strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") &&
 		isTrustedProxy(peer, cfg.TrustedProxies)) {
 		transport = TransportTLS
 	}

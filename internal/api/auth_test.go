@@ -711,9 +711,7 @@ func TestSessionCookieAttributes(t *testing.T) {
 	}
 }
 
-// TestBaseRoutesStayAnonymous pins the middleware scope: only /api/v1 is
-// behind Authenticate; routes on the base router — /healthz, /readyz and the
-// SPA — answer without a credential.
+// TestSessionCookiesThroughRoot checks cookie policy after proxy rewriting.
 func TestSessionCookiesThroughRoot(t *testing.T) {
 	for _, base := range []string{"", "/dl-tool"} {
 		for _, test := range []struct {
@@ -724,6 +722,7 @@ func TestSessionCookiesThroughRoot(t *testing.T) {
 			{"plain", "203.0.113.23:1234", "", "", TransportPlain, false},
 			{"direct TLS", "203.0.113.23:1234", "", "", TransportTLS, true},
 			{"trusted TLS proxy", "192.0.2.10:1234", "203.0.113.23", "https", TransportPlain, true},
+			{"normalized TLS scheme", "192.0.2.10:1234", "203.0.113.23", " HTTPS ", TransportPlain, true},
 			{"forged TLS proxy", "203.0.113.23:1234", "192.0.2.10", "https", TransportPlain, false},
 		} {
 			t.Run(base+"/"+test.name, func(t *testing.T) {
@@ -774,6 +773,9 @@ func TestSessionCookiesThroughRoot(t *testing.T) {
 	}
 }
 
+// TestBaseRoutesStayAnonymous pins the middleware scope: only /api/v1 is
+// behind Authenticate; routes on the base router — /healthz, /readyz and the
+// SPA — answer without a credential.
 func TestBaseRoutesStayAnonymous(t *testing.T) {
 	server, _ := newAuthTestServer(t)
 
