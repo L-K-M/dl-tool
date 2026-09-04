@@ -135,7 +135,70 @@ not appear. Use `git status`, not `git diff`: `git diff --name-only` never lists
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+The sandbox ships no Docker CLI, so a client-only toolchain was placed on `PATH` for the run — the
+static `docker` CLI from `https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz`
+and the compose plugin from
+`https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64`.
+`docker compose config` resolves and validates entirely client-side; no daemon was involved.
+Toolchain versions, verbatim:
+
+```
+$ docker --version
+Docker version 27.5.1, build 9f9e405
+$ docker compose version
+Docker Compose version v5.5.1
+```
+
+Both strings are copied from observed command output, not reconstructed; v5.5.1 is what the official
+`releases/latest` artifact served on 2026-09-03 and satisfies the `secrets.<name>.environment`
+requirement (Compose >= 2.24).
+The sandbox also exports `TZ=UTC`, which Compose correctly gives precedence over `.env`; the
+rendered-config checks below were re-run with `env -u TZ` so they show the fresh-`.env` defaults.
+
+**Verification block (verbatim):**
+
+```
+$ cp .env.example .env && make compose-check && echo COMPOSE_OK
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+COMPOSE_OK
+```
+
+Both `config -q` invocations printed nothing: no `version` obsolete warning, no `variable is not set`
+message, no `:?` failure, from a fresh `.env`.
+
+**Acceptance-criterion spot checks against `docker compose config` (fresh `.env`, `env -u TZ`):**
+
+- No profile warning; `docker compose config --profiles` prints exactly `aria2`, and only the `aria2`
+  service carries `profiles: [aria2]`. `dl-tool` and `qbittorrent` are profile-less; `depends_on`
+  names only `qbittorrent`.
+- Exactly three published host ports across all services: `8091->8080/tcp` (dl-tool), `6881->6881/tcp`
+  and `6881->6881/udp` (qbittorrent). aria2 publishes nothing.
+- `dl-tool`, `qbittorrent` and `aria2` each bind `/srv/data` to `/data` (plus their per-service
+  `/config`); no service binds a second data path.
+- `stop_grace_period` renders `1m0s` (dl-tool), `2m0s` (qbittorrent), `30s` (aria2); all three carry
+  `no-new-privileges:true` via the anchor.
+- `DLTOOL_QBITTORRENT_URL: ""` and `DLTOOL_ARIA2_URL: ""` render as empty strings from the fresh
+  `.env`; `TZ` renders `Etc/UTC` once the sandbox's `TZ=UTC` is unset.
+- No service `environment` block contains the aria2 secret or the qBittorrent password — only the
+  `_FILE` paths `/run/secrets/aria2_rpc_secret` and `/run/secrets/qbt_password`. The values appear
+  nowhere but the top-level `secrets:` definitions, which reference the `.env` names.
+- `grep -icE "gluetun|caddy|postgres" compose.yaml` prints `0`; no top-level `version:` key;
+  `.env.example` ships `ARIA2_RPC_SECRET=` and `QBT_PASSWORD=` empty.
+- Dev overlay render: `dl-tool` gains `build: {context: ., dockerfile: Dockerfile}` and
+  `DLTOOL_LOG_FORMAT: text`; `config -q` on the pair succeeds.
+
+**Scope check:**
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+.env.example
+compose.dev.yaml
+compose.yaml
+```
+
+Exactly the Files table; `.env` is gitignored and does not appear.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
