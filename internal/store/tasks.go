@@ -130,7 +130,7 @@ func (s *TaskStore) Create(ctx context.Context, t Task) (Task, error) {
 	if t.State == "" {
 		t.State = "queued"
 	} else if !slices.Contains(taskStates, t.State) {
-		return Task{}, fmt.Errorf("store: create task %q: unknown state %q", t.Name, t.State)
+		return Task{}, fmt.Errorf("store: create task %q: unknown state %q, want one of %q", t.Name, t.State, taskStates)
 	}
 
 	now := time.Now().UnixMilli()

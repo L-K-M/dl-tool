@@ -49,7 +49,7 @@ LIMIT ?`
 // detail_json; a nil detail stores NULL.
 func (s *TaskStore) AppendEvent(ctx context.Context, taskID, level, code, message string, detail any) error {
 	if !slices.Contains(eventLevels, level) {
-		return fmt.Errorf("store: append event to task %q: unknown level %q", taskID, level)
+		return fmt.Errorf("store: append event to task %q: unknown level %q, want one of %q", taskID, level, eventLevels)
 	}
 
 	return insertTaskEvent(ctx, s.db, taskID, level, code, message, detail, time.Now().UnixMilli())

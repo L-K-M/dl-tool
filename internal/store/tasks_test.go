@@ -349,9 +349,11 @@ func TestListEventsPagination(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Nil(t, events[0].DetailJSON)
 
-	// A typo'd level is a legible error, not a CHECK constraint dump.
+	// A typo'd level is a legible error naming the accepted vocabulary,
+	// not a CHECK constraint dump.
 	err = tasks.AppendEvent(t.Context(), task.ID, "warning", "e.badlevel", "bad level", nil)
 	require.ErrorContains(t, err, "unknown level")
+	require.ErrorContains(t, err, "info")
 }
 
 func TestTaskStatesMatchTransitionTable(t *testing.T) {
@@ -366,6 +368,14 @@ func TestTaskStatesMatchTransitionTable(t *testing.T) {
 		require.Contains(t, taskTransitions, state)
 	}
 	require.Len(t, taskTransitions, len(taskStates)-1)
+
+	// Targets must be states too: a typo'd edge target would never match
+	// in transitionLegal and surface as ErrIllegalTransition at runtime.
+	for _, targets := range taskTransitions {
+		for _, target := range targets {
+			require.Contains(t, taskStates, target)
+		}
+	}
 }
 
 func createTaskInState(t *testing.T, tasks *TaskStore, state string) Task {
