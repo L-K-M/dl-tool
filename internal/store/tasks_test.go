@@ -348,6 +348,24 @@ func TestListEventsPagination(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Nil(t, events[0].DetailJSON)
+
+	// A typo'd level is a legible error, not a CHECK constraint dump.
+	err = tasks.AppendEvent(t.Context(), task.ID, "warning", "e.badlevel", "bad level", nil)
+	require.ErrorContains(t, err, "unknown level")
+}
+
+func TestTaskStatesMatchTransitionTable(t *testing.T) {
+	// Every state keys the transition table except terminal removed;
+	// nothing pins the two vocabularies but this test, so drift fails CI.
+	for _, state := range taskStates {
+		if state == "removed" {
+			require.NotContains(t, taskTransitions, state)
+
+			continue
+		}
+		require.Contains(t, taskTransitions, state)
+	}
+	require.Len(t, taskTransitions, len(taskStates)-1)
 }
 
 func createTaskInState(t *testing.T, tasks *TaskStore, state string) Task {

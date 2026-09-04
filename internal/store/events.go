@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -15,6 +16,11 @@ type EventCursor struct {
 	At int64
 	ID string
 }
+
+// eventLevels is the level vocabulary of the task_events DDL CHECK.
+// AppendEvent consults it to answer a typo with a legible error instead of
+// a constraint dump.
+var eventLevels = []string{"info", "warn", "error"}
 
 const (
 	queryInsertTaskEvent = `INSERT INTO task_events
@@ -42,6 +48,10 @@ LIMIT ?`
 // section 4, never a formatted value. detail is marshalled into
 // detail_json; a nil detail stores NULL.
 func (s *TaskStore) AppendEvent(ctx context.Context, taskID, level, code, message string, detail any) error {
+	if !slices.Contains(eventLevels, level) {
+		return fmt.Errorf("store: append event to task %q: unknown level %q", taskID, level)
+	}
+
 	return insertTaskEvent(ctx, s.db, taskID, level, code, message, detail, time.Now().UnixMilli())
 }
 

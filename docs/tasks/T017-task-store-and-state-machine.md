@@ -213,7 +213,7 @@ ok  	github.com/L-K-M/dl-tool/internal/store	8.986s
 With `-v`, `TestTaskRoundTrip`, `TestTransitionTable`, `TestTransitionWritesEvent`, `TestTaskMutators`
 and `TestListEventsPagination` all run and pass (108 subtests: 5 round-trip cases, the exhaustive
 100-pair transition matrix, the missing-task case, the stale-state guard case and the conflict-error
-sentinel case):
+sentinel case), plus the top-level `TestTaskStatesMatchTransitionTable` drift guard:
 
 ```
 $ go test -race -count=1 -v ./internal/store/... 2>&1 | grep -Ec '^=== RUN[[:space:]]+Test(TaskRoundTrip|TransitionTable|TransitionWritesEvent|TaskMutators|ListEventsPagination)/'
