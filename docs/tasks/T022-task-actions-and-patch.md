@@ -205,8 +205,24 @@ web/src/api/schema.d.ts
 ```
 
 Exactly the Files table plus the two standing `make gen` outputs
-(docs/13-testing-and-verification.md §7.1). `make doclint` reports 0 errors.
-The full `go test ./...` is green across every package.
+(docs/13-testing-and-verification.md §7.1). `make doclint` and the full suite:
+
+```
+$ make doclint
+🔍 2325 Total (in 199ms) 🔗 542 Unique ✅ 2319 OK 🚫 0 Errors 👻 6 Excluded
+
+$ go test ./...
+ok  	github.com/L-K-M/dl-tool/internal/api	5.515s
+ok  	github.com/L-K-M/dl-tool/internal/config	(cached)
+ok  	github.com/L-K-M/dl-tool/internal/engine	(cached)
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	(cached)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	(cached)
+ok  	github.com/L-K-M/dl-tool/internal/obs	0.072s
+ok  	github.com/L-K-M/dl-tool/internal/secure	(cached)
+ok  	github.com/L-K-M/dl-tool/internal/store	(cached)
+ok  	github.com/L-K-M/dl-tool/internal/sync	(cached)
+ok  	github.com/L-K-M/dl-tool/internal/uri	(cached)
+```
 
 ## Blocked
 
