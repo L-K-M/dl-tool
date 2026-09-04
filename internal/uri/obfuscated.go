@@ -68,13 +68,11 @@ func DecodeObfuscated(raw string) (plain string, ok bool) {
 	}
 	plain = strings.TrimSpace(plain)
 
-	// Raw control bytes never occur in a real URL — they must be
-	// percent-encoded — and CRLF/NUL in attacker-controlled text can poison
-	// logs. Bytes >= 0x80 (multi-byte UTF-8) are fine.
-	for i := 0; i < len(plain); i++ {
-		if plain[i] < 0x20 || plain[i] == 0x7f {
-			return "", false
-		}
+	// Raw control characters never occur in a real URL — they must be
+	// percent-encoded — and CRLF/NEL in attacker-controlled text can poison
+	// logs. Multi-byte UTF-8 above the C1 range is fine.
+	if hasControlChar(plain) {
+		return "", false
 	}
 
 	lower := strings.ToLower(plain)

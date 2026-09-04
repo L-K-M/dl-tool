@@ -94,9 +94,10 @@ func ParseMagnet(raw string) (Normalized, error) {
 	return n, nil
 }
 
-// hasControlChar reports whether s holds a raw control character.
+// hasControlChar reports whether s holds a raw control character: C0, DEL or
+// the C1 range (U+0080–U+009F — NEL renders as a line break in some log viewers).
 func hasControlChar(s string) bool {
-	return strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
+	return strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || (r >= 0x7f && r <= 0x9f) }) >= 0
 }
 
 // parseBTIH normalises a btih value to 40 lowercase hex characters, accepting the

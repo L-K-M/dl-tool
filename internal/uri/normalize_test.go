@@ -293,6 +293,7 @@ func TestParseMagnet(t *testing.T) {
 	t.Run("control characters in dn, tr and x.pe are rejected", func(t *testing.T) {
 		for _, raw := range []string{
 			"magnet:?xt=urn:btih:" + btihV1Hex + "&dn=%0D%0Aforged-line",
+			"magnet:?xt=urn:btih:" + btihV1Hex + "&dn=%C2%85nel-line-break",
 			"magnet:?xt=urn:btih:" + btihV1Hex + "&tr=http://x/%0A",
 			"magnet:?xt=urn:btih:" + btihV1Hex + "&x.pe=1.2.3.4:6881%00",
 		} {
@@ -359,6 +360,7 @@ func TestParseED2K(t *testing.T) {
 		{"hash is not hex", "ed2k://|file|x.avi|12|zz5c013e991ee246d63d45ea71954c4d|/"},
 		{"too few segments", "ed2k://|file|x.avi|12"},
 		{"missing hash segment", "ed2k://|file|x.avi|12|/"},
+		{"control character in filename", "ed2k://|file|forged\r\nline.avi|14997504|965c013e991ee246d63d45ea71954c4d|/"},
 	}
 	for _, tt := range rejects {
 		t.Run(tt.name, func(t *testing.T) {

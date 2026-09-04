@@ -114,6 +114,11 @@ func ParseED2K(raw string) (ED2K, error) {
 		return ED2K{}, fmt.Errorf("ed2k: hash is not hex: %w", err)
 	}
 
+	// The filename is display text; it must not carry control characters.
+	if hasControlChar(parts[2]) {
+		return ED2K{}, errors.New("ed2k: control character in filename")
+	}
+
 	return ED2K{Filename: parts[2], SizeBytes: size, Hash: hash}, nil
 }
 
