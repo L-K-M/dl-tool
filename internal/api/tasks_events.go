@@ -46,9 +46,9 @@ type ListTaskEventsOutput struct {
 type TaskEventDTO struct {
 	ID string `json:"id"      doc:"The evt_ id of the event"`
 	// At carries second granularity, the house style of every TaskDTO
-	// timestamp (doc 05 section 1.6). The sub-second order of same-second
-	// events is the (at, id) tiebreak the server applies when paging; the
-	// id travels with each row, so a client can reproduce it.
+	// timestamp (doc 05 section 1.6). Sub-second order is lost on the
+	// wire: same-second rows cannot be re-sorted client-side, so the
+	// page's order — the server's (at, id) tiebreak — is authoritative.
 	At      string `json:"at"      doc:"When the event was logged" format:"date-time"`
 	Level   string `json:"level"   enum:"info,warn,error" doc:"info, warn or error"`
 	Code    string `json:"code"    doc:"A stable i18n key; the UI translates it and falls back to message"`
