@@ -27,6 +27,14 @@ const (
 func ParseMagnet(raw string) (Normalized, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
+		// url.Error quotes the whole magnet with %q, and tracker URLs inside
+		// it can carry credentials — same redaction rule as classifyTransport.
+		if ue, ok := err.(*url.Error); ok {
+			if strings.Contains(raw, "@") {
+				return Normalized{}, errors.New("parse magnet: invalid uri (credentials redacted)")
+			}
+			err = ue.Err
+		}
 		return Normalized{}, fmt.Errorf("parse magnet: %w", err)
 	}
 	if u.Scheme != "magnet" {
@@ -35,17 +43,31 @@ func ParseMagnet(raw string) (Normalized, error) {
 
 	n := Normalized{Kind: KindMagnet, URI: strings.TrimSpace(raw)}
 	q := u.Query()
-	n.DisplayName = q.Get("dn")
+	// Percent-decoded values are attacker-controlled text: raw CRLF/NUL must
+	// never reach a log line or the UI (same guard as DecodeObfuscated).
+	dn := q.Get("dn")
+	if hasControlChar(dn) {
+		return Normalized{}, errors.New("magnet: control character in dn")
+	}
+	n.DisplayName = dn
 	// Drop empty values: a "tr=" or "x.pe=" pair must not become a junk row.
 	for _, tr := range q["tr"] {
-		if tr != "" {
-			n.Trackers = append(n.Trackers, tr)
+		if tr == "" {
+			continue
 		}
+		if hasControlChar(tr) {
+			return Normalized{}, errors.New("magnet: control character in tr")
+		}
+		n.Trackers = append(n.Trackers, tr)
 	}
 	for _, pe := range q["x.pe"] {
-		if pe != "" {
-			n.PeerHints = append(n.PeerHints, pe)
+		if pe == "" {
+			continue
 		}
+		if hasControlChar(pe) {
+			return Normalized{}, errors.New("magnet: control character in x.pe")
+		}
+		n.PeerHints = append(n.PeerHints, pe)
 	}
 	// "ws" web seeds (BEP 19) repeat like "tr" but Normalized carries no field for them.
 
@@ -70,6 +92,11 @@ func ParseMagnet(raw string) (Normalized, error) {
 		return Normalized{}, errors.New("magnet: no usable xt exact topic")
 	}
 	return n, nil
+}
+
+// hasControlChar reports whether s holds a raw control character.
+func hasControlChar(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
 }
 
 // parseBTIH normalises a btih value to 40 lowercase hex characters, accepting the

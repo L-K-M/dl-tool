@@ -290,6 +290,31 @@ func TestParseMagnet(t *testing.T) {
 		}
 	})
 
+	t.Run("control characters in dn, tr and x.pe are rejected", func(t *testing.T) {
+		for _, raw := range []string{
+			"magnet:?xt=urn:btih:" + btihV1Hex + "&dn=%0D%0Aforged-line",
+			"magnet:?xt=urn:btih:" + btihV1Hex + "&tr=http://x/%0A",
+			"magnet:?xt=urn:btih:" + btihV1Hex + "&x.pe=1.2.3.4:6881%00",
+		} {
+			if n, err := ParseMagnet(raw); err == nil {
+				t.Errorf("ParseMagnet(%q) = %+v, nil; want error", raw, n)
+			}
+		}
+	})
+
+	t.Run("parse error redacts tracker credentials", func(t *testing.T) {
+		raw := "magnet:?xt=urn:btih:" + btihV1Hex + "&tr=http://u:secre%t@t/#%zz"
+		_, err := ParseMagnet(raw)
+		if err == nil {
+			t.Fatal("ParseMagnet error = nil, want a parse error")
+		}
+		for _, leak := range []string{"secre", "%t"} {
+			if strings.Contains(err.Error(), leak) {
+				t.Errorf("error text %q leaks %q", err.Error(), leak)
+			}
+		}
+	})
+
 	t.Run("non-magnet scheme is ErrUnsupportedScheme", func(t *testing.T) {
 		_, err := ParseMagnet("http://example.org/file.iso")
 		if !errors.Is(err, ErrUnsupportedScheme) {
