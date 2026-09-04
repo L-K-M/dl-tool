@@ -26,10 +26,10 @@ var allTaskStates = []string{
 // removed) are each covered from downloading, seeding and paused — for
 // example downloading -> seeding, seeding -> downloading and paused ->
 // checking. From completed the table admits only checking, seeding,
-// paused, error and removed; completed -> queued/downloading are illegal,
-// so a completed task the engine reports as transferring again needs an
-// intermediate hop: checking or paused reach downloading directly, error
-// only through queued.
+// extracting, moving, paused, error and removed; completed ->
+// queued/downloading are illegal, so a completed task the engine reports
+// as transferring again needs an intermediate hop: checking, seeding or
+// paused reach downloading directly, error only through queued.
 var expectedLegalTransitions = map[string][]string{
 	"queued":      {"downloading", "checking", "seeding", "completed", "paused", "error", "removed"},
 	"downloading": {"queued", "checking", "seeding", "completed", "paused", "error", "removed"},
