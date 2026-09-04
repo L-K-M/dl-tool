@@ -165,7 +165,59 @@ never lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG=./internal/engine/aria2/...` on 2026-09-04:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/aria2/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	1.039s
+```
+
+Named tests, same run with `-v`:
+
+```
+--- PASS: TestToState (0.00s)
+--- PASS: TestToStateUnknownStatusWarnsOnce (0.00s)
+--- PASS: TestToErrorCode (0.00s)
+--- PASS: TestToFileEntries (0.00s)
+--- PASS: TestToTaskInfo (0.00s)
+--- PASS: TestToTaskInfoGolden (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	1.045s
+```
+
+Scope check `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```
+internal/engine/aria2/map.go
+internal/engine/aria2/map_test.go
+internal/engine/aria2/testdata/README.md
+internal/engine/aria2/testdata/aria2_tellstatus_1.37.0.golden.json
+internal/engine/aria2/testdata/aria2_tellstatus_1.37.0.json
+```
+
+Exactly the Files-table paths plus `testdata/README.md` and one companion the
+scope check did not enumerate: `aria2_tellstatus_1.37.0.golden.json`. Step 10
+and the last acceptance criterion require a committed golden file, and
+docs/13-testing-and-verification.md §5 fixes its name (same stem +
+`.golden.json`), so it belongs to the fixture row of the Files table.
+
+The fixture was recorded from a live aria2 1.37.0 daemon on 2026-09-04 (musl
+static build of the upstream `release-1.37.0` source; no Docker or aria2
+package on the capturing machine) — capture commands and the `/data` path
+redaction are in `testdata/README.md`. `go.mod`/`go.sum` are unchanged:
+go-cmp v0.7.0 was already pinned with its hashes, and `go mod tidy` is
+forbidden here (it strips T004's pin registry; T010's commit records the
+rule), so the first test import needed no module edit.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

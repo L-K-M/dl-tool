@@ -1,0 +1,23 @@
+{
+  "ID": "aria2:de2be02fec9a659e",
+  "Engine": "aria2",
+  "Name": "",
+  "State": "downloading",
+  "TotalBytes": 152620004,
+  "CompletedBytes": 25182208,
+  "UploadedBytes": 0,
+  "DownloadRate": 996597,
+  "UploadRate": 0,
+  "ETASeconds": null,
+  "SaveDir": "/data",
+  "ContentPath": "/data/linux-6.16.tar.xz",
+  "ErrorCode": "",
+  "ErrorMessage": "",
+  "InfohashV1": "",
+  "InfohashV2": "",
+  "NumSeeds": null,
+  "NumPeers": 1,
+  "Ratio": null,
+  "CreatedAt": null,
+  "CompletedAt": null
+}
