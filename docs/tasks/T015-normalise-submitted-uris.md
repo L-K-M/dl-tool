@@ -162,9 +162,9 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-`make lint && make test PKG=./internal/uri/...`, re-run at the merged HEAD 5112f24 (the
-original paste documented 77c768f; the four review commits that followed changed the sources and
-the subtest set without re-running Verification):
+`make lint && make test PKG=./internal/uri/...`, re-run at 5112f24 (HEAD at re-run time; the
+original paste documented 77c768f, and the four review commits that followed changed the sources
+and the subtest set without re-running Verification):
 
 ```
 $ make lint
@@ -187,7 +187,12 @@ ok  	github.com/L-K-M/dl-tool/internal/uri	1.035s
 
 `make lint` printed no findings (`0 issues.`, eslint and prettier silent). One `ok` line, no `FAIL`, no
 `[no test files]`. With `-v`, `TestDecodeObfuscated`, `TestNormalizeClassifies`, `TestParseMagnet` and
-`TestParseED2K` all run and pass (22 + 32 + 14 + 9 subtests, counted from `-v` output at 5112f24).
+`TestParseED2K` all run and pass (22 + 32 + 14 + 9 = 77 subtests, counted at 5112f24):
+
+```
+$ go test -race -count=1 -v ./internal/uri/... 2>&1 | grep -Ec '^=== RUN\s+Test.*/'
+77
+```
 
 Scope check (files staged for the task commit):
 
