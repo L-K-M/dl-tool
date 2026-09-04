@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T021 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T017, T020 |
 | **Blocks** | T022, T023, T025, T032, T034, T042, T050 |
 | **Parallel-safe** | no — extends the shared `internal/api/tasks.go` |
@@ -102,11 +102,11 @@ Sort allowlist, exactly these and no others, each accepting a leading `-`:
     case for a cursor reused under a different filter, and a `404` case for an unknown id.
 
 ## Acceptance criteria
-- [ ] Each of the seven sidebar filters returns exactly the states in the table above.
-- [ ] A 5 000-row cursor walk returns every id exactly once.
-- [ ] `total` counts the filter and ignores the cursor.
-- [ ] A sort key outside the allowlist returns `422` `/problems/validation-failed`.
-- [ ] A cursor replayed under a different filter returns `422`, never a wrong page.
+- [x] Each of the seven sidebar filters returns exactly the states in the table above.
+- [x] A 5 000-row cursor walk returns every id exactly once.
+- [x] `total` counts the filter and ignores the cursor.
+- [x] A sort key outside the allowlist returns `422` `/problems/validation-failed`.
+- [x] A cursor replayed under a different filter returns `422`, never a wrong page.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -137,7 +137,99 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+```
+
+`make test PKG=./internal/...`:
+
+```
+ok	github.com/L-K-M/dl-tool/internal/api	25.709s
+ok	github.com/L-K-M/dl-tool/internal/config	1.087s
+ok	github.com/L-K-M/dl-tool/internal/engine	1.029s
+ok	github.com/L-K-M/dl-tool/internal/engine/aria2	2.078s
+ok	github.com/L-K-M/dl-tool/internal/jobs	4.313s
+ok	github.com/L-K-M/dl-tool/internal/obs	1.183s
+ok	github.com/L-K-M/dl-tool/internal/secure	4.099s
+ok	github.com/L-K-M/dl-tool/internal/store	56.422s
+ok	github.com/L-K-M/dl-tool/internal/sync	2.040s
+ok	github.com/L-K-M/dl-tool/internal/uri	1.038s
+```
+
+Named tests (`go test -race -count=1 -v ./internal/store/ ./internal/api/`):
+
+```
+--- PASS: TestSidebarFilterSets (0.37s)
+--- PASS: TestCursorWalksEveryRowOnce (44.68s)   # walks the 5000 rows descending and ascending
+--- PASS: TestListTasksRejectsUnknownSort (0.40s) # internal/store
+--- PASS: TestListTasksRejectsUnknownSort (0.31s) # internal/api
+```
+
+Scope. The work was committed in steps, so this is the branch diff against
+`main`, sorted as the check command sorts (the two generated files ride
+along per docs/13 §7.1):
+
+```
+api/openapi.json
+internal/api/tasks.go
+internal/api/tasks_test.go
+internal/store/tasks_list.go
+internal/store/tasks_test.go
+web/src/api/schema.d.ts
+```
+
+`internal/api/server.go` needed no edit: `s.tasks.registerOperations(s.API)`
+(the call site T020 landed in server.go) already mounts every operation
+`TaskHandlers` registers, so `list-tasks` and `get-task` register beside
+their handlers in `internal/api/tasks.go` rather than as direct
+`huma.Register` calls in server.go.
+
+Also inside `internal/store/tasks_test.go` (a listed file): the pre-existing
+`TestListEventsPagination` and `TestTransitionWritesEvent` flaked ~50% on
+`main` — they assume same-millisecond ULIDs order by insertion while
+`NewID` draws fully random entropy. The pagination fixture now seeds
+monotonic ids itself, the transition test asserts by event code, and the
+ordering contract is still pinned, deterministically. A monotonic entropy
+in `NewID` (`internal/store/models.go`, outside this task's Files table)
+would fix the class for every future id; left to whichever task owns that
+file next.
+
+Review round 1 (GLM 5.3, 2026-09-04): ten suggestions applied — the page
+honours `limit` in the HTTP walk; the walk seeds distinct names, asserts
+ascending order and is bounded; the stale-cursor test checks status before
+decoding; `?limit=1` and `?limit=500` asserted accepted; the redundant
+ordered-equal check dropped; the cursor check runs before the COUNT; LIKE
+wildcard decoys make the escaping assertions discriminating; the
+newest-first `at` ordering re-asserted where it is deterministic; a
+partially decoded query keeps `?category=`/`?tag=` present when another
+pair fails to unescape (regression test included). Two declined as false
+premises: `added_at`/`completed_at` cursors do not round-trip as RFC 3339
+strings — the columns and the cursor values are int64 Unix milliseconds,
+JSON numbers compared numerically (the 5000-row walk pins it); and the
+`state` parameter does carry an enum in the committed `api/openapi.json`.
+
+Review round 2 (GLM 5.3, 2026-09-04): ten applied — `get-task` also
+rejects unknown query keys; a crafted cursor whose value binds to nothing
+answers 422 instead of a driver error; the 5000-row walk skips in short
+mode before opening the store; an unused fixture map dropped; and five
+test-decode spots gained explicit status and length guards. The
+`T020` roster row in the index's second table was left `todo` by its own
+PR and is flipped `done` here. Two declined: making the list row's
+`ratio` a `*float64` and unwrapping it for the cursor — the column is
+`ratio REAL NOT NULL DEFAULT 0` in the migration, so NULL cannot occur.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

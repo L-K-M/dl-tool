@@ -108,13 +108,34 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    get?: never;
+    /**
+     * List, filter and sort tasks
+     * @description Cursor-paginated task list. state accepts a canonical state or a sidebar filter; an empty category or tag selects the uncategorised and untagged tasks. A cursor is bound to the filter and sort that issued it.
+     */
+    get: operations["list-tasks"];
     put?: never;
     /**
      * Create tasks from submitted URIs
      * @description Creates one queued task per accepted URI and reports the refused ones in rejected[]. Partial success is normal. No engine is contacted: the admission pass owns Engine.Add.
      */
     post: operations["create-tasks"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/tasks/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read one task */
+    get: operations["get-task"];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -205,6 +226,17 @@ export interface components {
     FTPCredentials: {
       password: string;
       username: string;
+    };
+    ListTasksOutputBody: {
+      /** @description Full Task objects, ordered by the requested sort */
+      items: components["schemas"]["TaskDTO"][] | null;
+      /** @description Token for the next page; null on the last page */
+      next_cursor: string | null;
+      /**
+       * Format: int64
+       * @description Rows matching the filter, ignoring the cursor
+       */
+      total: number;
     };
     LoginInputBody: {
       /** @description Account password */
@@ -482,6 +514,64 @@ export interface operations {
       };
     };
   };
+  "list-tasks": {
+    parameters: {
+      query?: {
+        /** @description A canonical state, or a sidebar filter: all, downloading, completed, active, inactive, stopped, error */
+        state?:
+          | "all"
+          | "active"
+          | "checking"
+          | "completed"
+          | "downloading"
+          | "error"
+          | "extracting"
+          | "inactive"
+          | "moving"
+          | "paused"
+          | "queued"
+          | "removed"
+          | "seeding"
+          | "stopped";
+        /** @description Category name; the empty value selects uncategorised tasks */
+        category?: string;
+        /** @description Tag name; the empty value selects untagged tasks */
+        tag?: string;
+        /** @description Case-insensitive substring of name */
+        q?: string;
+        /** @description Sort column with an optional leading - to reverse; default -added_at */
+        sort?: string;
+        /** @description Page size */
+        limit?: number;
+        /** @description Opaque page token from a previous response */
+        cursor?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListTasksOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "create-tasks": {
     parameters: {
       query?: never;
@@ -502,6 +592,38 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["CreateTasksOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-task": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TaskDTO"];
         };
       };
       /** @description Error */

@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -248,6 +251,67 @@ func (e *tasksTestEnv) countTasks(t *testing.T) int {
 	}
 
 	return count
+}
+
+// listTasks calls GET /tasks with the test bearer credential.
+func (e *tasksTestEnv) listTasks(t *testing.T, query string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Get("/tasks"+query, "Authorization: Bearer "+e.bearer)
+}
+
+// getTask calls GET /tasks/{id} with the test bearer credential.
+func (e *tasksTestEnv) getTask(t *testing.T, id string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Get("/tasks/"+id, "Authorization: Bearer "+e.bearer)
+}
+
+// decodeListBody decodes the cursor pagination envelope of doc 05 1.4.
+func decodeListBody(t *testing.T, recorder *httptest.ResponseRecorder) struct {
+	Items      []TaskDTO `json:"items"`
+	NextCursor *string   `json:"next_cursor"`
+	Total      int       `json:"total"`
+} {
+	t.Helper()
+
+	var body struct {
+		Items      []TaskDTO `json:"items"`
+		NextCursor *string   `json:"next_cursor"`
+		Total      int       `json:"total"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body %q: %v", recorder.Body.String(), err)
+	}
+
+	return body
+}
+
+// seedTaskStates writes one task per state straight through the store,
+// because POST /tasks can only reach queued and paused.
+func (e *tasksTestEnv) seedTaskStates(t *testing.T) map[string]string {
+	t.Helper()
+
+	tasks := store.NewTaskStore(e.db)
+	stateOf := map[string]string{} // id -> state
+	for _, state := range []string{
+		"queued", "downloading", "checking", "paused", "seeding",
+		"completed", "extracting", "moving", "error", "removed",
+	} {
+		task, err := tasks.Create(t.Context(), store.Task{
+			Engine:      "aria2",
+			SourceKind:  "http",
+			Name:        "fixture-" + state,
+			State:       state,
+			Destination: "/data",
+		})
+		if err != nil {
+			t.Fatalf("seed task in %s: %v", state, err)
+		}
+		stateOf[task.ID] = state
+	}
+
+	return stateOf
 }
 
 // decodeCreateBody decodes a create response envelope. The wire shape is
@@ -653,5 +717,378 @@ func TestNewServerRegistersAria2(t *testing.T) {
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	); err == nil {
 		t.Errorf("NewServer with a malformed aria2 url succeeded, want an error")
+	}
+}
+
+// TestSidebarFiltersOverHTTP pins FR-012/FR-013 through the endpoint: each
+// of the seven sidebar filters returns exactly the states of the membership
+// table, removed tombstones appear only under an explicit state=removed.
+func TestSidebarFiltersOverHTTP(t *testing.T) {
+	env := newTasksTestEnv(t)
+	stateOf := env.seedTaskStates(t)
+
+	want := map[string][]string{
+		"all":         {"queued", "downloading", "checking", "paused", "seeding", "completed", "extracting", "moving", "error"},
+		"downloading": {"downloading"},
+		"completed":   {"completed", "seeding"},
+		"active":      {"downloading", "seeding"},
+		"inactive":    {"error", "queued", "paused"},
+		"stopped":     {"paused"},
+		"error":       {"error"},
+	}
+	for _, filter := range slices.Sorted(maps.Keys(want)) {
+		t.Run(filter, func(t *testing.T) {
+			response := env.listTasks(t, "?state="+filter)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+			}
+
+			body := decodeListBody(t, response)
+			if body.Total != len(want[filter]) {
+				t.Errorf("total = %d, want %d", body.Total, len(want[filter]))
+			}
+			got := make([]string, len(body.Items))
+			for i, item := range body.Items {
+				got[i] = stateOf[item.ID]
+			}
+			if !equalAsSets(want[filter], got) {
+				t.Errorf("states = %v, want %v", got, want[filter])
+			}
+			if body.NextCursor != nil {
+				t.Errorf("next_cursor = %v, want null", body.NextCursor)
+			}
+		})
+	}
+
+	t.Run("no state behaves like all", func(t *testing.T) {
+		response := env.listTasks(t, "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+		}
+		body := decodeListBody(t, response)
+		if body.Total != len(want["all"]) {
+			t.Errorf("total = %d, want %d", body.Total, len(want["all"]))
+		}
+	})
+
+	t.Run("explicit removed lists tombstones", func(t *testing.T) {
+		response := env.listTasks(t, "?state=removed")
+		body := decodeListBody(t, response)
+		if body.Total != 1 || len(body.Items) != 1 {
+			t.Fatalf("total = %d items = %d, want one tombstone", body.Total, len(body.Items))
+		}
+		if stateOf[body.Items[0].ID] != "removed" {
+			t.Errorf("returned %v, want the removed task", body.Items[0].ID)
+		}
+	})
+
+	t.Run("unknown state is 422", func(t *testing.T) {
+		response := env.listTasks(t, "?state=downloding")
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	})
+}
+
+func equalAsSets(a, b []string) bool {
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
+}
+
+// TestListTasksFilterAndSort pins the remaining query dimensions over HTTP:
+// category, tag and the name substring resolve, and a documented sort key
+// orders the page.
+func TestListTasksFilterAndSort(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	// POST /tasks requires the category to exist already.
+	_, err := env.db.ExecContext(t.Context(),
+		`INSERT INTO categories (id, name, save_path, created_at, updated_at)
+VALUES (?, 'linux', '/data/linux', 0, 0)`, store.NewID(store.PrefixCategory))
+	if err != nil {
+		t.Fatalf("seed category: %v", err)
+	}
+
+	seeded := func(name, category string, tags ...string) string {
+		body := map[string]any{"uris": []string{"https://example.org/" + name + ".iso"}}
+		if category != "" {
+			body["category"] = category
+		}
+		if len(tags) > 0 {
+			body["tags"] = tags
+		}
+		response := env.createTasks(t, body)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("seed %s: status %d body %s", name, response.Code, response.Body.String())
+		}
+		created := decodeCreateBody(t, response).Created
+		if len(created) != 1 {
+			t.Fatalf("seed %s: created %d tasks, want 1", name, len(created))
+		}
+
+		return created[0].ID
+	}
+
+	ubuntu := seeded("Ubuntu", "linux", "iso")
+	debian := seeded("Debian", "")
+	arch := seeded("Arch", "", "iso")
+
+	t.Run("category name and empty category", func(t *testing.T) {
+		body := decodeListBody(t, env.listTasks(t, "?category=linux"))
+		if body.Total != 1 || len(body.Items) != 1 || body.Items[0].ID != ubuntu {
+			t.Errorf("category=linux returned %+v, want the ubuntu task", body.Items)
+		}
+		if cat := body.Items[0].Category; cat == nil || *cat != "linux" {
+			t.Errorf("category member = %v, want the name linux", cat)
+		}
+
+		body = decodeListBody(t, env.listTasks(t, "?category="))
+		if body.Total != 2 {
+			t.Errorf("empty category total = %d, want 2", body.Total)
+		}
+	})
+
+	t.Run("tag name and empty tag", func(t *testing.T) {
+		body := decodeListBody(t, env.listTasks(t, "?tag=iso"))
+		if body.Total != 2 {
+			t.Errorf("tag=iso total = %d, want 2", body.Total)
+		}
+		gotTags := map[string][]string{}
+		for _, item := range body.Items {
+			gotTags[item.ID] = item.Tags
+		}
+		if !slices.Equal(gotTags[arch], []string{"iso"}) {
+			t.Errorf("tags of the arch task = %v, want [iso]", gotTags[arch])
+		}
+
+		body = decodeListBody(t, env.listTasks(t, "?tag="))
+		if body.Total != 1 || len(body.Items) != 1 || body.Items[0].ID != debian {
+			t.Fatalf("empty tag returned %+v, want the untagged debian task", body.Items)
+		}
+		if items := body.Items[0].Tags; items == nil || len(items) != 0 {
+			t.Errorf("tags of an untagged task = %v, want []", items)
+		}
+	})
+
+	t.Run("name substring", func(t *testing.T) {
+		body := decodeListBody(t, env.listTasks(t, "?q=ubu"))
+		if body.Total != 1 || len(body.Items) != 1 || body.Items[0].ID != ubuntu {
+			t.Fatalf("q=ubu returned %+v, want the ubuntu task", body.Items)
+		}
+	})
+
+	t.Run("sort orders the page", func(t *testing.T) {
+		body := decodeListBody(t, env.listTasks(t, "?sort=name"))
+		names := []string{}
+		for _, item := range body.Items {
+			names = append(names, item.Name)
+		}
+		if !slices.Equal(names, []string{"Arch.iso", "Debian.iso", "Ubuntu.iso"}) {
+			t.Errorf("names = %v, want ascending", names)
+		}
+	})
+}
+
+// TestListTasksCursorWalk pins the envelope: pages chain through
+// next_cursor, total stays the filter's count on every page, and the last
+// page carries null.
+func TestListTasksCursorWalk(t *testing.T) {
+	env := newTasksTestEnv(t)
+	// Distinct names, so sort=name orders the walk deterministically.
+	for _, uri := range []string{
+		"https://example.org/walk-a.iso",
+		"https://example.org/walk-b.iso",
+		"https://example.org/walk-c.iso",
+	} {
+		response := env.createTasks(t, map[string]any{"uris": []string{uri}})
+		if response.Code != http.StatusCreated {
+			t.Fatalf("seed: status %d body %s", response.Code, response.Body.String())
+		}
+	}
+
+	seen := map[string]bool{}
+	var names []string
+	query := "?limit=2&sort=name"
+	for page := 0; ; page++ {
+		if page > 10 {
+			t.Fatalf("cursor walk exceeded 10 pages; the server keeps issuing cursors")
+		}
+		response := env.listTasks(t, query)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d body %s", response.Code, response.Body.String())
+		}
+		body := decodeListBody(t, response)
+		if len(body.Items) > 2 {
+			t.Errorf("page returned %d items, want at most limit=2", len(body.Items))
+		}
+		if body.Total != 3 {
+			t.Errorf("total = %d, want 3 on every page", body.Total)
+		}
+		for _, item := range body.Items {
+			if seen[item.ID] {
+				t.Fatalf("task %s returned twice", item.ID)
+			}
+			seen[item.ID] = true
+			names = append(names, item.Name)
+		}
+		if body.NextCursor == nil {
+			break
+		}
+		query = "?limit=2&sort=name&cursor=" + url.QueryEscape(*body.NextCursor)
+	}
+
+	if len(seen) != 3 {
+		t.Errorf("walk returned %d tasks, want 3", len(seen))
+	}
+	if !slices.Equal(names, []string{"walk-a.iso", "walk-b.iso", "walk-c.iso"}) {
+		t.Errorf("names across pages = %v, want ascending", names)
+	}
+}
+
+// TestListTasksRejectsUnknownSort pins the 422 of a sort key outside the
+// allowlist, with the offending field located in errors[].
+func TestListTasksRejectsUnknownSort(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.listTasks(t, "?sort=password")
+	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if len(problem.Errors) != 1 || problem.Errors[0].Location != "query.sort" {
+		t.Errorf("errors = %+v, want the query.sort field error", problem.Errors)
+	}
+}
+
+// TestListTasksRejectsStaleCursor pins the cursor binding: a token replayed
+// under a different filter or sort is a 422, never a wrong page.
+func TestListTasksRejectsStaleCursor(t *testing.T) {
+	env := newTasksTestEnv(t)
+	env.seedTaskStates(t)
+
+	response := env.listTasks(t, "?state=active&limit=1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	first := decodeListBody(t, response)
+	if first.NextCursor == nil {
+		t.Fatalf("first page carries no cursor: %d items", len(first.Items))
+	}
+	cursor := url.QueryEscape(*first.NextCursor)
+
+	for _, query := range []string{
+		"?state=error&limit=1&cursor=" + cursor,
+		"?state=active&limit=1&sort=name&cursor=" + cursor,
+	} {
+		response := env.listTasks(t, query)
+		problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+		if len(problem.Errors) != 1 || problem.Errors[0].Location != "query.cursor" {
+			t.Errorf("errors = %+v, want the query.cursor field error", problem.Errors)
+		}
+	}
+}
+
+// TestListTasksRejectsUnknownQueryKey pins FR-012's strictness: a mistyped
+// filter key is a 422, never silently ignored.
+func TestListTasksRejectsUnknownQueryKey(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.listTasks(t, "?stats=downloading")
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+}
+
+// TestListTasksPresenceSurvivesMalformedPair pins the presence detection:
+// a query with one malformed escape must not silently drop the empty
+// category filter — the pairs that do decode stay authoritative.
+func TestListTasksPresenceSurvivesMalformedPair(t *testing.T) {
+	env := newTasksTestEnv(t)
+	stateOf := env.seedTaskStates(t)
+
+	// ?q=100% holds a lone percent sign that fails QueryUnescape; the
+	// well-formed ?category= beside it still selects the uncategorised set.
+	// The default state set omits the removed tombstone, so nine of the ten
+	// seeded tasks remain.
+	response := env.listTasks(t, "?q=100%&category=")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	body := decodeListBody(t, response)
+	if body.Total != len(stateOf)-1 {
+		t.Fatalf("total = %d, want the uncategorised subset of %d", body.Total, len(stateOf)-1)
+	}
+	for _, item := range body.Items {
+		if item.Category != nil {
+			t.Errorf("task %s carries category %q, want the uncategorised set", item.ID, *item.Category)
+		}
+	}
+}
+
+// TestListTasksLimitRange pins the documented limit range 1..500.
+func TestListTasksLimitRange(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	for _, limit := range []string{"0", "501"} {
+		response := env.listTasks(t, "?limit="+limit)
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	}
+	for _, limit := range []string{"1", "500"} {
+		response := env.listTasks(t, "?limit="+limit)
+		if response.Code != http.StatusOK {
+			t.Errorf("limit=%s: status = %d, want %d", limit, response.Code, http.StatusOK)
+		}
+	}
+}
+
+// TestGetTask pins GET /tasks/{id}: one Task object for a known id, the
+// registered not-found problem for an unknown one.
+func TestGetTask(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	created := decodeCreateBody(t, env.createTasks(t, map[string]any{"uris": []string{mixedHTTPS}})).Created
+	if len(created) != 1 {
+		t.Fatalf("seed failed: %d tasks created", len(created))
+	}
+
+	response := env.getTask(t, created[0].ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	var task TaskDTO
+	if err := json.Unmarshal(response.Body.Bytes(), &task); err != nil {
+		t.Fatalf("decode body %q: %v", response.Body.String(), err)
+	}
+	if task.ID != created[0].ID {
+		t.Errorf("id = %q, want %q", task.ID, created[0].ID)
+	}
+	if task.SourceURI == nil || *task.SourceURI != mixedHTTPS {
+		t.Errorf("source_uri = %v, want the display uri", task.SourceURI)
+	}
+	if task.State != "queued" {
+		t.Errorf("state = %q, want queued", task.State)
+	}
+
+	response = env.getTask(t, "tsk_01JKQ8Z9YV6M3P0R2S4T6V8W0X")
+	assertProblem(t, response, http.StatusNotFound, SlugNotFound)
+}
+
+// TestListAndGetHideFTPPassword pins FR-009 on the read path: the stored
+// engine source carries the credentials, and neither the list nor the
+// single-task response echoes them.
+func TestListAndGetHideFTPPassword(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	created := decodeCreateBody(t, env.createTasks(t, map[string]any{
+		"uris": []string{"ftp://mirror.example.org/pub/file.iso"},
+		"ftp_credentials": map[string]string{
+			"username": ftpUser,
+			"password": ftpPassword,
+		},
+	})).Created
+	if len(created) != 1 {
+		t.Fatalf("seed failed: %d tasks created", len(created))
+	}
+
+	list := env.listTasks(t, "")
+	if strings.Contains(list.Body.String(), ftpPassword) {
+		t.Errorf("list response leaks the ftp password: %s", list.Body.String())
+	}
+	single := env.getTask(t, created[0].ID)
+	if strings.Contains(single.Body.String(), ftpPassword) {
+		t.Errorf("task response leaks the ftp password: %s", single.Body.String())
 	}
 }

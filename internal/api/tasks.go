@@ -28,6 +28,8 @@ const (
 	maxCreateURIs = 50
 
 	operationCreateTasks = "create-tasks"
+	operationListTasks   = "list-tasks"
+	operationGetTask     = "get-task"
 
 	queryCategoryIDByName = `SELECT id FROM categories WHERE name = ?`
 	queryInsertTag        = `INSERT INTO tags (id, name, created_at, updated_at)
@@ -47,6 +49,13 @@ VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING`
 	queryTaskIDByInfohash = `SELECT id FROM tasks
 WHERE state <> 'removed' AND ((? <> '' AND infohash_v1 = ?) OR (? <> '' AND infohash_v2 = ?))
 LIMIT 1`
+
+	queryCategoryNamesByIDs = `SELECT id, name FROM categories WHERE id IN (?)`
+
+	queryTagNamesByTaskIDs = `SELECT tt.task_id, t.name
+FROM task_tags tt JOIN tags t ON t.id = tt.tag_id
+WHERE tt.task_id IN (?)
+ORDER BY t.name`
 )
 
 // CreateTasksBody is the JSON body of POST /tasks. The multipart form is
@@ -93,6 +102,65 @@ type CreateTasksOutput struct {
 	}
 }
 
+// ListTasksInput is the query of GET /tasks (docs/05-api-contract.md
+// section 5.1). Category and Tag are read from the raw query as well,
+// because Huma cannot distinguish ?category= (the uncategorised filter)
+// from an absent parameter.
+type ListTasksInput struct {
+	State    string `query:"state" enum:"all,active,checking,completed,downloading,error,extracting,inactive,moving,paused,queued,removed,seeding,stopped" doc:"A canonical state, or a sidebar filter: all, downloading, completed, active, inactive, stopped, error"`
+	Category string `query:"category" doc:"Category name; the empty value selects uncategorised tasks"`
+	Tag      string `query:"tag" doc:"Tag name; the empty value selects untagged tasks"`
+	Q        string `query:"q" doc:"Case-insensitive substring of name"`
+	Sort     string `query:"sort" doc:"Sort column with an optional leading - to reverse; default -added_at"`
+	Limit    int    `query:"limit" minimum:"1" maximum:"500" default:"100" doc:"Page size"`
+	Cursor   string `query:"cursor" doc:"Opaque page token from a previous response"`
+}
+
+// ListTasksOutput is the cursor pagination envelope of doc 05 section 1.4.
+type ListTasksOutput struct {
+	Body struct {
+		Items      []TaskDTO `json:"items" doc:"Full Task objects, ordered by the requested sort"`
+		NextCursor *string   `json:"next_cursor" doc:"Token for the next page; null on the last page"`
+		Total      int       `json:"total" doc:"Rows matching the filter, ignoring the cursor"`
+	}
+}
+
+// GetTaskInput addresses one task by id.
+type GetTaskInput struct {
+	ID string `path:"id" doc:"The tsk_ id of the task"`
+}
+
+// GetTaskOutput is one canonical Task object.
+type GetTaskOutput struct {
+	Body TaskDTO
+}
+
+// rawQueryKey carries the unparsed query string through a Huma operation
+// middleware: Huma's parameter parsing treats an empty value as an absent
+// parameter, and the list endpoint needs the difference.
+type rawQueryKey struct{}
+
+// stashRawQuery is the per-operation middleware that puts the raw query on
+// the request context before Huma parses the input.
+func stashRawQuery(ctx huma.Context, next func(huma.Context)) {
+	next(huma.WithValue(ctx, rawQueryKey{}, ctx.URL().RawQuery))
+}
+
+// rawQueryValues returns the parsed query as sent, including keys Huma
+// drops; ok is false outside the list operation.
+func rawQueryValues(ctx context.Context) (url.Values, bool) {
+	raw, ok := ctx.Value(rawQueryKey{}).(string)
+	if !ok {
+		return nil, false
+	}
+
+	// The partially decoded pairs are authoritative for presence even
+	// when another pair failed to unescape.
+	values, _ := url.ParseQuery(raw)
+
+	return values, true
+}
+
 // TaskDTO is the canonical Task object of doc 05 section 3. Timestamps are
 // RFC 3339; sizes and rates are bytes and bytes per second; unknown is null.
 type TaskDTO struct {
@@ -136,9 +204,8 @@ type TaskDTO struct {
 	UpdatedAt            string   `json:"updated_at" format:"date-time"`
 }
 
-// TaskHandlers owns the /tasks collection operations. T020 lands the create
-// operation; the list, patch, action and file operations arrive with their
-// own tasks.
+// TaskHandlers owns the /tasks collection operations: create, list and
+// get; the patch, action and file operations arrive with their own tasks.
 type TaskHandlers struct {
 	db      *sqlx.DB
 	tasks   *store.TaskStore
@@ -166,6 +233,34 @@ func (h *TaskHandlers) registerOperations(hapi huma.API) {
 		Tags:        []string{"tasks"},
 		Security:    credentialRequired,
 	}, h.CreateTasks)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: operationListTasks,
+		Method:      http.MethodGet,
+		Path:        "/tasks",
+		Summary:     "List, filter and sort tasks",
+		Description: "Cursor-paginated task list. state accepts a canonical state or a sidebar filter; an empty category or tag selects the uncategorised and untagged tasks. A cursor is bound to the filter and sort that issued it.",
+		Tags:        []string{"tasks"},
+		Security:    credentialRequired,
+		// A mistyped query key is never silently ignored
+		// (docs/05-api-contract.md 5.1, step 8 of the task).
+		RejectUnknownQueryParameters: true,
+		// The raw query reaches the handler because Huma parses an empty
+		// value (?category=) as an absent parameter, and the empty value is
+		// the uncategorised filter.
+		Middlewares: huma.Middlewares{stashRawQuery},
+	}, h.ListTasks)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: operationGetTask,
+		Method:      http.MethodGet,
+		Path:        "/tasks/{id}",
+		Summary:     "Read one task",
+		Tags:        []string{"tasks"},
+		Security:    credentialRequired,
+		// Same strictness as the list: a mistyped query key is 422.
+		RejectUnknownQueryParameters: true,
+	}, h.GetTask)
 }
 
 // plannedTask is one accepted URI with its routing decided, ready to insert.
@@ -538,6 +633,224 @@ func displayName(n uri.Normalized) string {
 	}
 
 	return n.URI
+}
+
+// ListTasks serves GET /tasks: one cursor-paginated page of canonical
+// Task objects, filtered, sorted and counted by the store (doc 05 5.1).
+func (h *TaskHandlers) ListTasks(ctx context.Context, in *ListTasksInput) (*ListTasksOutput, error) {
+	filter := store.TaskFilter{
+		State:    in.State,
+		Category: in.Category,
+		Tag:      in.Tag,
+		Query:    in.Q,
+		Sort:     in.Sort,
+		Limit:    in.Limit,
+		Cursor:   in.Cursor,
+	}
+	// An empty ?category= / ?tag= is the uncategorised / untagged filter;
+	// Huma cannot tell it from an absent parameter, so read presence from
+	// the raw query the operation middleware stashed. ParseQuery returns
+	// the pairs it could decode even when another pair is malformed
+	// (e.g. ?q=100% with a lone percent sign); keep the partial result so
+	// ?category= and ?tag= still count as present.
+	if values, ok := rawQueryValues(ctx); ok {
+		_, filter.HasCategory = values["category"]
+		_, filter.HasTag = values["tag"]
+	}
+
+	rows, nextCursor, total, err := h.tasks.ListTasks(ctx, filter)
+	if err != nil {
+		return nil, listTasksProblem(ctx, err, filter)
+	}
+
+	items, err := h.renderTasks(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+
+	output := &ListTasksOutput{}
+	output.Body.Items = items
+	output.Body.Total = total
+	if nextCursor != "" {
+		output.Body.NextCursor = &nextCursor
+	}
+
+	return output, nil
+}
+
+// GetTask serves GET /tasks/{id}: one canonical Task object, 404 for an
+// unknown id (doc 05 5.4).
+func (h *TaskHandlers) GetTask(ctx context.Context, in *GetTaskInput) (*GetTaskOutput, error) {
+	task, err := h.tasks.Get(ctx, in.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, Problem(SlugNotFound, http.StatusNotFound, "the addressed task does not exist")
+	}
+	if err != nil {
+		return nil, internalFailure(ctx, "get task", err)
+	}
+
+	items, err := h.renderTasks(ctx, []store.Task{task})
+	if err != nil {
+		return nil, err
+	}
+
+	return &GetTaskOutput{Body: items[0]}, nil
+}
+
+// listTasksProblem maps the store's list errors onto the registered
+// problem slugs: an unknown sort key, state or cursor is 422 with the
+// offending field located in errors[]; anything else is internal.
+func listTasksProblem(ctx context.Context, err error, filter store.TaskFilter) error {
+	var field, detail string
+	switch {
+	case errors.Is(err, store.ErrInvalidSort):
+		field = "query.sort"
+		detail = "the sort key is not a sortable column"
+	case errors.Is(err, store.ErrUnknownFilterState):
+		field = "query.state"
+		detail = "state is neither a canonical state nor a sidebar filter"
+	case errors.Is(err, store.ErrStaleCursor):
+		field = "query.cursor"
+		detail = "the cursor was issued for a different filter or sort"
+	default:
+		return internalFailure(ctx, "list tasks", err)
+	}
+
+	return &huma.ErrorModel{
+		Type:   SlugValidationFailed,
+		Title:  http.StatusText(http.StatusUnprocessableEntity),
+		Status: http.StatusUnprocessableEntity,
+		Detail: detail,
+		Errors: []*huma.ErrorDetail{{Message: detail, Location: field}},
+	}
+}
+
+// renderTasks turns stored rows into canonical Task objects: category and
+// tag names resolved for the page, the API-safe source URI and the derived
+// progress (doc 05 section 3).
+func (h *TaskHandlers) renderTasks(ctx context.Context, rows []store.Task) ([]TaskDTO, error) {
+	items := make([]TaskDTO, 0, len(rows))
+	if len(rows) == 0 {
+		return items, nil
+	}
+
+	categories, err := h.categoryNames(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := h.tagNamesByTask(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, row := range rows {
+		var category *string
+		if row.CategoryID != nil {
+			if name, ok := categories[*row.CategoryID]; ok {
+				category = &name
+			}
+		}
+
+		dto := newTaskDTO(row, "", category, tags[row.ID])
+		dto.SourceURI = displaySourceURI(row)
+		dto.Progress = taskProgress(row)
+		items = append(items, dto)
+	}
+
+	return items, nil
+}
+
+// categoryNames maps the page's category ids to their names. The foreign
+// key sets the column NULL on category deletion, so a missing id cannot
+// happen; the lookup stays defensive anyway.
+func (h *TaskHandlers) categoryNames(ctx context.Context, rows []store.Task) (map[string]string, error) {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.CategoryID != nil {
+			ids = append(ids, *row.CategoryID)
+		}
+	}
+	if len(ids) == 0 {
+		return map[string]string{}, nil
+	}
+
+	query, args, err := sqlx.In(queryCategoryNamesByIDs, ids)
+	if err != nil {
+		return nil, internalFailure(ctx, "list task categories", err)
+	}
+
+	var pairs []struct {
+		ID   string `db:"id"`
+		Name string `db:"name"`
+	}
+	if err := h.db.SelectContext(ctx, &pairs, query, args...); err != nil {
+		return nil, internalFailure(ctx, "list task categories", err)
+	}
+
+	names := make(map[string]string, len(pairs))
+	for _, pair := range pairs {
+		names[pair.ID] = pair.Name
+	}
+
+	return names, nil
+}
+
+// tagNamesByTask maps the page's task ids to their tag names, in name
+// order.
+func (h *TaskHandlers) tagNamesByTask(ctx context.Context, rows []store.Task) (map[string][]string, error) {
+	ids := make([]string, len(rows))
+	for i, row := range rows {
+		ids[i] = row.ID
+	}
+
+	query, args, err := sqlx.In(queryTagNamesByTaskIDs, ids)
+	if err != nil {
+		return nil, internalFailure(ctx, "list task tags", err)
+	}
+
+	var pairs []struct {
+		TaskID string `db:"task_id"`
+		Name   string `db:"name"`
+	}
+	if err := h.db.SelectContext(ctx, &pairs, query, args...); err != nil {
+		return nil, internalFailure(ctx, "list task tags", err)
+	}
+
+	tags := make(map[string][]string, len(pairs))
+	for _, pair := range pairs {
+		tags[pair.TaskID] = append(tags[pair.TaskID], pair.Name)
+	}
+
+	return tags, nil
+}
+
+// displaySourceURI renders the API-safe source reference. The stored
+// source_uri is the server-only engine source and may embed FTP
+// credentials, so userinfo is stripped before a row ever reaches a
+// response; a source that cannot be parsed is never echoed back.
+func displaySourceURI(t store.Task) *string {
+	if t.SourceURI == nil {
+		return nil
+	}
+
+	u, err := url.Parse(*t.SourceURI)
+	if err != nil {
+		return nil
+	}
+	u.User = nil
+	display := u.String()
+
+	return &display
+}
+
+// taskProgress derives progress as completed_bytes / total_bytes, 0.0
+// while total_bytes is null or zero (doc 05 section 3).
+func taskProgress(t store.Task) float64 {
+	if t.TotalBytes == nil || *t.TotalBytes == 0 {
+		return 0
+	}
+
+	return min(float64(t.CompletedBytes)/float64(*t.TotalBytes), 1.0)
 }
 
 // newTaskDTO renders one canonical Task object from a stored row. display is
