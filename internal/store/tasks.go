@@ -143,6 +143,24 @@ WHERE id = ?`
 SET state = ?, updated_at = ?
 WHERE id = ? AND state = ?`
 
+	// The tombstone of docs/05-api-contract.md 5.6 step 6: state plus the
+	// cleared liveness columns, guarded by the same compare-and-swap.
+	// queue_position is cleared too so the task leaves dl-tool's queue —
+	// queue membership is exactly a non-NULL queue_position (doc 05
+	// section 3: "null for tasks not in a queue"). Positions are
+	// ordering-only, so the gap a mid-queue removal leaves is harmless:
+	// ReorderQueue renumbers the whole queue densely from 1 on the next
+	// queue action, and the admission pass reads order, never density.
+	queryMarkTaskRemoved = `UPDATE tasks
+SET state = 'removed', engine_ref = NULL, download_rate = 0, upload_rate = 0,
+    eta_seconds = NULL, queue_position = NULL, updated_at = ?
+WHERE id = ? AND state = ?`
+
+	queryListTaskFiles = `SELECT id, task_id, file_index, path, size_bytes, completed_bytes, selected, priority, created_at, updated_at
+FROM task_files
+WHERE task_id = ?
+ORDER BY file_index`
+
 	queryQueueMembers = `SELECT id FROM tasks
 WHERE queue_position IS NOT NULL
 ORDER BY queue_position, id`
@@ -326,6 +344,116 @@ func errTransitionConflict(id, expected, next string) error {
 		"store: transition task %q: expected state %q, attempted move to %q: %w",
 		id, expected, next, ErrTransitionConflict,
 	)
+}
+
+// The task_events codes MarkRemoved writes (docs/14-conventions.md
+// section 4: the constant lives next to the emitting code).
+const (
+	codeTaskRemoved     = "task.removed"
+	codeTaskDataDeleted = "task.data_deleted"
+)
+
+const (
+	messageTaskRemoved     = "removed by user request"
+	messageTaskDataDeleted = "downloaded data deleted by user request"
+)
+
+// DeletedData carries what a delete_data removal unlinked, recorded as the
+// detail of the task.data_deleted event (docs/05-api-contract.md 5.6
+// step 5: the file count and the byte total).
+type DeletedData struct {
+	Files int   `json:"files"`
+	Bytes int64 `json:"bytes"`
+}
+
+// TaskFile is one row of the task_files table (docs/04-data-model.md
+// section 3.3). Path is relative to tasks.destination; joining it onto the
+// destination belongs to the caller, which owns the path-safety check.
+type TaskFile struct {
+	ID             string `db:"id"`
+	TaskID         string `db:"task_id"`
+	FileIndex      int    `db:"file_index"`
+	Path           string `db:"path"`
+	SizeBytes      int64  `db:"size_bytes"`
+	CompletedBytes int64  `db:"completed_bytes"`
+	Selected       int    `db:"selected"`
+	Priority       *int   `db:"priority"`
+	CreatedAt      int64  `db:"created_at"`
+	UpdatedAt      int64  `db:"updated_at"`
+}
+
+// ListFiles returns the task's recorded files in file_index order, the
+// enumerated targets of the delete path (docs/05-api-contract.md 5.6
+// step 1). It reads task_files alone — never the filesystem.
+func (s *TaskStore) ListFiles(ctx context.Context, taskID string) ([]TaskFile, error) {
+	var files []TaskFile
+	if err := s.db.SelectContext(ctx, &files, queryListTaskFiles, taskID); err != nil {
+		return nil, fmt.Errorf("store: list files of task %q: %w", taskID, err)
+	}
+
+	return files, nil
+}
+
+// MarkRemoved tombstones a task, running steps 5 and 6 of the delete path
+// (docs/05-api-contract.md 5.6) in one transaction: the task.removed event,
+// plus the warn-level task.data_deleted event carrying data when the
+// request unlinked files, then state="removed", engine_ref=NULL, both
+// rates zeroed and eta_seconds and queue_position cleared, so the task
+// leaves dl-tool's queue. It never deletes a row: the task and every
+// child row stay so the event and file history remain queryable.
+func (s *TaskStore) MarkRemoved(ctx context.Context, id string, data *DeletedData) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin removal of task %q: %w", id, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of task removal failed", "task_id", id, "error", err)
+		}
+	}()
+
+	var current string
+	err = tx.GetContext(ctx, &current, queryTaskState, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: remove task %q: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("store: remove task %q: read state: %w", id, err)
+	}
+
+	if !transitionLegal(current, "removed") {
+		return fmt.Errorf("store: remove task %q from %q: %w", id, current, ErrIllegalTransition)
+	}
+
+	now := time.Now().UnixMilli()
+	result, err := tx.ExecContext(ctx, queryMarkTaskRemoved, now, id, current)
+	if err != nil {
+		return fmt.Errorf("store: remove task %q: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: remove task %q: count rows: %w", id, err)
+	}
+	if affected == 0 {
+		return errTransitionConflict(id, current, "removed")
+	}
+
+	if err := insertTaskEvent(ctx, tx, id, "info", codeTaskRemoved, messageTaskRemoved, nil, now); err != nil {
+		return err
+	}
+	if data != nil {
+		if err := insertTaskEvent(ctx, tx, id, "warn", codeTaskDataDeleted, messageTaskDataDeleted, data, now); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit removal of task %q: %w", id, err)
+	}
+
+	return nil
 }
 
 // transitionEventLevel records a move into the error state as an error

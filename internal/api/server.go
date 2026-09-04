@@ -240,6 +240,18 @@ func (s *Server) registerOperations() {
 	}, s.tasks.PatchTask)
 
 	huma.Register(s.API, huma.Operation{
+		OperationID: operationDeleteTask,
+		Method:      http.MethodDelete,
+		Path:        "/tasks/{id}",
+		Summary:     "Remove a task with or without its data",
+		Description: "Marks the task removed and, with delete_data=true, unlinks exactly the files recorded in task_files after re-checking every resolved path against the data roots. delete_data=false keeps every byte. force_complete=true completes the task instead of removing it. The response reports what happened, so a client never has to guess.",
+		Tags:        []string{"tasks"},
+		Security:    credentialRequired,
+		// Same strictness as the read path: a mistyped query key is 422.
+		RejectUnknownQueryParameters: true,
+	}, s.tasks.DeleteTask)
+
+	huma.Register(s.API, huma.Operation{
 		OperationID: "get-system-info",
 		Method:      http.MethodGet,
 		Path:        "/system/info",

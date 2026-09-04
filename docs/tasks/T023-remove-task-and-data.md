@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T023 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T020, T021, T022 |
 | **Blocks** | T024, T044, T111 |
 | **Parallel-safe** | no — extends the shared `internal/api/tasks.go` |
@@ -100,12 +100,12 @@ deleted and no file is unlinked.
     `422`.
 
 ## Acceptance criteria
-- [ ] `delete_data=false` leaves the task row in state `removed` and unlinks nothing.
-- [ ] `delete_data=true` unlinks exactly the recorded files and reports the counts in the body.
-- [ ] One escaping path aborts the request with `403` and leaves every file present.
-- [ ] `503` from the engine leaves the task row present.
-- [ ] Both flags together return `422`.
-- [ ] A successful `delete_data=true` writes exactly one `task.data_deleted` event at level `warn`.
+- [x] `delete_data=false` leaves the task row in state `removed` and unlinks nothing.
+- [x] `delete_data=true` unlinks exactly the recorded files and reports the counts in the body.
+- [x] One escaping path aborts the request with `403` and leaves every file present.
+- [x] `503` from the engine leaves the task row present.
+- [x] Both flags together return `422`.
+- [x] A successful `delete_data=true` writes exactly one `task.data_deleted` event at level `warn`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -137,7 +137,58 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/api/...`:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> lint
+> eslint .
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+$ make test PKG=./internal/api/...
+go test -race -count=1 ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/api	36.417s
+```
+
+`go test -v -run 'TestDelete' ./internal/api/`:
+
+```
+=== RUN   TestDeleteKeepsData
+--- PASS: TestDeleteKeepsData (0.06s)
+=== RUN   TestDeleteUnlinksRecordedFiles
+--- PASS: TestDeleteUnlinksRecordedFiles (0.03s)
+=== RUN   TestDeleteRejectsEscapingPath
+--- PASS: TestDeleteRejectsEscapingPath (0.02s)
+=== RUN   TestDeleteRefusesWhenEngineDown
+--- PASS: TestDeleteRefusesWhenEngineDown (0.03s)
+=== RUN   TestDeleteRejectsBothFlags
+--- PASS: TestDeleteRejectsBothFlags (0.04s)
+=== RUN   TestDeleteForceComplete
+--- PASS: TestDeleteForceComplete (0.02s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.218s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/server.go
+internal/api/tasks_delete.go
+internal/api/tasks_delete_test.go
+internal/store/tasks.go
+web/src/api/schema.d.ts
+```
+
+The Files table's four paths plus `api/openapi.json` and `web/src/api/schema.d.ts`, the
+implicitly-in-scope generated pair this task owes `make gen` for registering `delete-task`
+(docs/13-testing-and-verification.md §7.1).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
