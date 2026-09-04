@@ -84,6 +84,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/events": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Stream task deltas over SSE
+     * @description One `sync` event per second at most, and only when something changed. The `id` line is the rid inside the payload; Last-Event-ID is the reconnect key. An absent, unparseable or evicted key yields one message with full_update and seq_gap true carrying every task. The `hb` event is the 15-second keep-alive.
+     */
+    get: operations["stream-events"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/sync": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Poll the delta since a rid
+     * @description The byte-identical JSON object the event stream's `sync` data line carries for the same rid, without event framing. A rid of 0, or one outside the ring, forces a full update.
+     */
+    get: operations["get-sync"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/system/info": {
     parameters: {
       query?: never;
@@ -285,6 +325,21 @@ export interface components {
       /** @description Whether the task entered the removed state */
       removed: boolean;
     };
+    Delta: {
+      categories?: {
+        [key: string]: unknown;
+      };
+      categories_removed?: string[] | null;
+      full_update: boolean;
+      /** Format: int64 */
+      rid: number;
+      seq_gap: boolean;
+      stats: components["schemas"]["Stats"];
+      tasks: {
+        [key: string]: unknown;
+      };
+      tasks_removed: string[] | null;
+    };
     ErrorDetail: {
       /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
       location?: string;
@@ -330,6 +385,7 @@ export interface components {
       password: string;
       username: string;
     };
+    HeartbeatEvent: Record<string, never>;
     ListTaskEventsOutputBody: {
       /** @description Event rows, newest first */
       items: components["schemas"]["TaskEventDTO"][] | null;
@@ -405,6 +461,16 @@ export interface components {
       setup_token: string;
       /** @description Operator username */
       username: string;
+    };
+    Stats: {
+      /** Format: int64 */
+      active: number;
+      /** Format: int64 */
+      queued: number;
+      /** Format: int64 */
+      speed_down: number;
+      /** Format: int64 */
+      speed_up: number;
     };
     SystemInfoOutputBody: {
       /** @description Build version of the dl-tool process */
@@ -636,6 +702,95 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AuthEnvelope"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "stream-events": {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description The rid to resume from; absent, unparseable or evicted forces a full update */
+        "Last-Event-ID"?: string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "text/event-stream": (
+            | {
+                data: components["schemas"]["HeartbeatEvent"];
+                /**
+                 * @description The event name.
+                 * @constant
+                 */
+                event: "hb";
+                /** @description The event ID. */
+                id?: number;
+                /** @description The retry time in milliseconds. */
+                retry?: number;
+              }
+            | {
+                data: components["schemas"]["Delta"];
+                /**
+                 * @description The event name.
+                 * @constant
+                 */
+                event: "sync";
+                /** @description The event ID. */
+                id?: number;
+                /** @description The retry time in milliseconds. */
+                retry?: number;
+              }
+          )[];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-sync": {
+    parameters: {
+      query?: {
+        /** @description The last rid the client holds; 0 forces a full update */
+        rid?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Delta"];
         };
       };
       /** @description Error */
