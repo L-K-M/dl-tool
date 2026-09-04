@@ -57,6 +57,74 @@ func TestSinceCoalesces(t *testing.T) {
 	}
 }
 
+func TestSinceMergesPartialFields(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		r := NewRing()
+		r.Append(Delta{RID: 1})
+		first := json.RawMessage(`{"state":"downloading","eta_seconds":12,"completed_bytes":9007199254740993}`)
+		r.Append(Delta{RID: 2, FullUpdate: full,
+			Tasks:      map[string]json.RawMessage{"tsk_a": first},
+			Categories: map[string]json.RawMessage{"linux": json.RawMessage(`{"name":"linux","save_path":"/old"}`)},
+		})
+		r.Append(Delta{RID: 3,
+			Tasks:      map[string]json.RawMessage{"tsk_a": json.RawMessage(`{"eta_seconds":null,"download_rate":7}`)},
+			Categories: map[string]json.RawMessage{"linux": json.RawMessage(`{"save_path":"/new"}`)},
+		})
+
+		d, ok := r.Since(1)
+		if !ok || d.FullUpdate != full {
+			t.Fatalf("hit=%v full=%v, want true/%v", ok, d.FullUpdate, full)
+		}
+		assertPatch(t, d.Tasks["tsk_a"], `{"state":"downloading","eta_seconds":null,"completed_bytes":9007199254740993,"download_rate":7}`)
+		assertPatch(t, d.Categories["linux"], `{"name":"linux","save_path":"/new"}`)
+		assertPatch(t, first, `{"state":"downloading","eta_seconds":12,"completed_bytes":9007199254740993}`)
+
+		// Reading an earlier cursor must not mutate retained patches.
+		later, ok := r.Since(2)
+		if !ok {
+			t.Fatal("later cursor missed")
+		}
+		assertPatch(t, later.Tasks["tsk_a"], `{"eta_seconds":null,"download_rate":7}`)
+	}
+}
+
+func TestPublishMergesPartialFields(t *testing.T) {
+	h := NewHub()
+	ch, cancel := h.Subscribe(t.Context(), "", emptySnapshot)
+	defer cancel()
+	<-ch
+	h.Publish(Delta{})
+	<-ch // Open the delivery window before publishing both patches.
+	h.Publish(Delta{Tasks: map[string]json.RawMessage{"tsk_a": json.RawMessage(`{"state":"paused"}`)}})
+	h.Publish(Delta{Tasks: map[string]json.RawMessage{"tsk_a": json.RawMessage(`{"download_rate":0}`)}})
+
+	select {
+	case d := <-ch:
+		assertPatch(t, d.Tasks["tsk_a"], `{"state":"paused","download_rate":0}`)
+	case <-time.After(3 * publishInterval):
+		t.Fatal("coalesced delivery never arrived")
+	}
+}
+
+func assertPatch(t *testing.T, got json.RawMessage, want string) {
+	t.Helper()
+	var fields, expected map[string]json.RawMessage
+	if err := json.Unmarshal(got, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(want), &expected); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != len(expected) {
+		t.Fatalf("patch = %s, want %s", got, want)
+	}
+	for name, value := range expected {
+		if string(fields[name]) != string(value) {
+			t.Errorf("field %s = %s, want %s", name, fields[name], value)
+		}
+	}
+}
+
 func TestSinceRemovalBeatsUpdate(t *testing.T) {
 	r := NewRing()
 	r.Append(Delta{RID: 1})
