@@ -125,6 +125,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/tasks/actions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Apply bulk lifecycle actions
+     * @description Applies one of the nine actions to up to 500 tasks and reports a per-id outcome, so one bad id never fails the batch. The queue actions rewrite dl-tool's own queue and contact no engine. delete_data is accepted but currently a no-op: local data removal arrives with a later task.
+     */
+    post: operations["task-actions"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/tasks/{id}": {
     parameters: {
       query?: never;
@@ -139,13 +159,51 @@ export interface paths {
     delete?: never;
     options?: never;
     head?: never;
-    patch?: never;
+    /**
+     * Update a task
+     * @description Partial update of the display name, category, tags, per-task rate limits, share limits and the sequential flag. Omitted fields are untouched; a non-nil tags array replaces the whole set. The rate limits reach a running task without restarting it.
+     */
+    patch: operations["patch-task"];
     trace?: never;
   };
 }
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    ActionResult: {
+      /** @description Why the action did not apply */
+      detail?: string;
+      /** @description The task id this outcome reports */
+      id: string;
+      /** @description Whether the action applied */
+      ok: boolean;
+      /** @description A problem slug; set only when ok is false */
+      type?: string;
+    };
+    ActionsInputBody: {
+      /**
+       * @description The action applied to every id
+       * @enum {string}
+       */
+      action:
+        | "pause"
+        | "resume"
+        | "remove"
+        | "recheck"
+        | "force_complete"
+        | "queue_top"
+        | "queue_up"
+        | "queue_down"
+        | "queue_bottom";
+      /** @description Only meaningful with remove; the data unlink arrives with the delete endpoint's own task */
+      delete_data?: boolean;
+      /** @description Task ids; one outcome per entry, in request order */
+      ids: string[] | null;
+    };
+    ActionsOutputBody: {
+      /** @description One outcome per requested id, in request order */
+      results: components["schemas"]["ActionResult"][] | null;
+    };
     AuthEnvelope: {
       /** @description Per-session token; send as X-DLTOOL-CSRF on cookie-authenticated mutations */
       csrf_token: string;
@@ -243,6 +301,36 @@ export interface components {
       password: string;
       /** @description Account username */
       username: string;
+    };
+    PatchTaskBody: {
+      /** @description Category name; must already exist */
+      category?: string;
+      /**
+       * Format: int64
+       * @description Bytes/second; 0 means unlimited; applied to a running task without restarting it
+       */
+      dl_limit?: number;
+      /** @description Display name only; files on disk are not renamed */
+      name?: string;
+      /**
+       * Format: double
+       * @description Share ratio at which seeding stops
+       */
+      ratio_limit?: number;
+      /**
+       * Format: int64
+       * @description Seconds of seeding after which seeding stops
+       */
+      seeding_time_limit?: number;
+      /** @description Download the files of a multi-file task in order */
+      sequential?: boolean;
+      /** @description Replaces the whole tag set; an empty array clears it */
+      tags?: string[] | null;
+      /**
+       * Format: int64
+       * @description As dl_limit, for the upload direction
+       */
+      ul_limit?: number;
     };
     RejectedURI: {
       detail: string;
@@ -605,6 +693,39 @@ export interface operations {
       };
     };
   };
+  "task-actions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ActionsInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ActionsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "get-task": {
     parameters: {
       query?: never;
@@ -616,6 +737,42 @@ export interface operations {
       cookie?: never;
     };
     requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TaskDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-task": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PatchTaskBody"];
+      };
+    };
     responses: {
       /** @description OK */
       200: {
