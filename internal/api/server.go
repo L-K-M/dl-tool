@@ -252,6 +252,19 @@ func (s *Server) registerOperations() {
 	}, s.tasks.DeleteTask)
 
 	huma.Register(s.API, huma.Operation{
+		OperationID: operationListTaskEvents,
+		Method:      http.MethodGet,
+		Path:        "/tasks/{id}/events",
+		Summary:     "Read the task's event log",
+		Description: "Cursor-paginated, newest first; one row per state transition and engine outcome. code is a stable i18n key; the UI translates it and falls back to message.",
+		Tags:        []string{"tasks"},
+		Security:    credentialRequired,
+		// Same strictness as every other query-carrying operation: a
+		// mistyped query key is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, s.tasks.ListTaskEvents)
+
+	huma.Register(s.API, huma.Operation{
 		OperationID: "get-system-info",
 		Method:      http.MethodGet,
 		Path:        "/system/info",

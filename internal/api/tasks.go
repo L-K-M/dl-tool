@@ -438,7 +438,10 @@ func (h *TaskHandlers) insertPlanned(
 		source = embedCredentials(n.URI, *body.FTPCredentials)
 	}
 
-	task, err := h.tasks.Create(ctx, store.Task{
+	// CreateLogged writes the row and its task.created event in one
+	// transaction (FR-150): a task can never persist without the first
+	// entry of its event log.
+	task, err := h.tasks.CreateLogged(ctx, store.Task{
 		Engine:      p.engine,
 		SourceKind:  string(n.Kind),
 		SourceURI:   &source,

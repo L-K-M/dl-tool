@@ -170,6 +170,26 @@ export interface paths {
     patch: operations["patch-task"];
     trace?: never;
   };
+  "/tasks/{id}/events": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Read the task's event log
+     * @description Cursor-paginated, newest first; one row per state transition and engine outcome. code is a stable i18n key; the UI translates it and falls back to message.
+     */
+    get: operations["list-task-events"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -310,6 +330,17 @@ export interface components {
       password: string;
       username: string;
     };
+    ListTaskEventsOutputBody: {
+      /** @description Event rows, newest first */
+      items: components["schemas"]["TaskEventDTO"][] | null;
+      /** @description Token for the next page; null on the last page */
+      next_cursor: string | null;
+      /**
+       * Format: int64
+       * @description Rows logged for the task, ignoring the cursor
+       */
+      total: number;
+    };
     ListTasksOutputBody: {
       /** @description Full Task objects, ordered by the requested sort */
       items: components["schemas"]["TaskDTO"][] | null;
@@ -440,6 +471,26 @@ export interface components {
       upload_rate: number;
       /** Format: int64 */
       uploaded_bytes: number;
+    };
+    TaskEventDTO: {
+      /**
+       * Format: date-time
+       * @description When the event was logged
+       */
+      at: string;
+      /** @description A stable i18n key; the UI translates it and falls back to message */
+      code: string;
+      /** @description Structured payload of the event, or null */
+      detail: unknown;
+      /** @description The evt_ id of the event */
+      id: string;
+      /**
+       * @description info, warn or error
+       * @enum {string}
+       */
+      level: "info" | "warn" | "error";
+      /** @description Human-readable fallback for the code */
+      message: string;
     };
     UserBody: {
       /**
@@ -843,6 +894,43 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["TaskDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-task-events": {
+    parameters: {
+      query?: {
+        /** @description Page size */
+        limit?: number;
+        /** @description Opaque page token from a previous response */
+        cursor?: string;
+      };
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListTaskEventsOutputBody"];
         };
       };
       /** @description Error */

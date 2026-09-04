@@ -283,18 +283,24 @@ func TestTransitionWritesEvent(t *testing.T) {
 	tasks := NewTaskStore(db)
 
 	task := createTaskInState(t, tasks, "queued")
-	require.NoError(t, tasks.Transition(t.Context(), task.ID, "downloading", "engine.accepted", "accepted by aria2"))
+	// The code is an arbitrary fixture string, deliberately not a
+	// vocabulary constant: Transition writes whatever code its caller
+	// passes, and engine.accepted has exactly one writer — SetEngineRef
+	// (TestSetEngineRefWritesEvent) — so a transition must not look like a
+	// second one.
+	require.NoError(t, tasks.Transition(t.Context(), task.ID, "downloading", "e.moved", "moved by the poller"))
 
-	events, err := tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 10)
+	events, _, total, err := tasks.ListEvents(t.Context(), task.ID, 10, "")
 	require.NoError(t, err)
 	require.Len(t, events, 1)
+	require.Equal(t, 1, total)
 
 	event := events[0]
 	require.True(t, strings.HasPrefix(event.ID, PrefixTaskEvent))
 	require.Equal(t, task.ID, event.TaskID)
 	require.Equal(t, "info", event.Level)
-	require.Equal(t, "engine.accepted", event.Code)
-	require.Equal(t, "accepted by aria2", event.Message)
+	require.Equal(t, "e.moved", event.Code)
+	require.Equal(t, "moved by the poller", event.Message)
 	require.Nil(t, event.DetailJSON)
 	require.Equal(t, event.At, event.CreatedAt)
 	require.Equal(t, event.At, event.UpdatedAt)
@@ -305,7 +311,7 @@ func TestTransitionWritesEvent(t *testing.T) {
 	// two transitions share a millisecond and NewID's random part does not
 	// order same-millisecond ULIDs, so the page order is not asserted here:
 	// TestListEventsPagination pins the ordering with deterministic ids.
-	events, err = tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 10)
+	events, _, _, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
 	require.NoError(t, err)
 	require.Len(t, events, 2)
 	// The at half of the ordering contract is deterministic whatever the
@@ -315,8 +321,144 @@ func TestTransitionWritesEvent(t *testing.T) {
 	for _, event := range events {
 		levels[event.Code] = event.Level
 	}
-	require.Equal(t, "info", levels["engine.accepted"])
+	require.Equal(t, "info", levels["e.moved"])
 	require.Equal(t, "error", levels["engine.failed"])
+}
+
+func TestCreateLoggedWritesEvent(t *testing.T) {
+	db, _, _ := openTestStore(t)
+	tasks := NewTaskStore(db)
+
+	created, err := tasks.CreateLogged(t.Context(), Task{
+		Engine:      "aria2",
+		SourceKind:  "http",
+		Name:        "evented-fixture",
+		Destination: "/data",
+	})
+	require.NoError(t, err)
+
+	// The row and its first event log entry persist together: the log of a
+	// CreateLogged task starts at task.created (FR-150).
+	events, _, total, err := tasks.ListEvents(t.Context(), created.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, events, 1)
+	require.Equal(t, CodeTaskCreated, events[0].Code)
+	require.Equal(t, "info", events[0].Level)
+	require.Equal(t, created.CreatedAt, events[0].At)
+	require.Nil(t, events[0].DetailJSON)
+
+	// The bare Create stays event-free — it backs fixtures and internal
+	// seeds, whose event assertions would otherwise double-count.
+	bare := createTaskInState(t, tasks, "queued")
+	events, _, total, err = tasks.ListEvents(t.Context(), bare.ID, 10, "")
+	require.NoError(t, err)
+	require.Empty(t, events)
+	require.Zero(t, total)
+}
+
+// TestCreateLoggedRollsBackWhenEventFails pins the transaction's reason to
+// exist: when the event insert fails, the task insert dies with it, so no
+// task row can persist without the first entry of its log.
+func TestCreateLoggedRollsBackWhenEventFails(t *testing.T) {
+	db, _, _ := openTestStore(t)
+
+	// Make the event insert fail deterministically: with task_events gone,
+	// the task INSERT still succeeds and only insertTaskEvent errors.
+	if _, err := db.Exec(`DROP TABLE task_events`); err != nil {
+		t.Fatalf("drop task_events: %v", err)
+	}
+
+	tasks := NewTaskStore(db)
+	_, err := tasks.CreateLogged(t.Context(), Task{
+		Engine:      "aria2",
+		SourceKind:  "http",
+		Name:        "rollback-fixture",
+		Destination: "/data",
+	})
+	require.ErrorContains(t, err, "rollback-fixture")
+	// Pin the failure to the event insert, not the task insert, so the
+	// rollback assertion below cannot pass for the wrong reason: the
+	// dropped table's name only reaches the error through
+	// insertTaskEvent's %w chain.
+	require.ErrorContains(t, err, "task_events")
+
+	var count int
+	require.NoError(t, db.GetContext(t.Context(), &count, `SELECT COUNT(*) FROM tasks`))
+	require.Zero(t, count, "the task row survived the failed event insert")
+}
+
+func TestSetEngineRefWritesEvent(t *testing.T) {
+	db, _, _ := openTestStore(t)
+	tasks := NewTaskStore(db)
+	task := createTaskInState(t, tasks, "queued")
+
+	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "2089b05ecca3d829"))
+
+	events, _, total, err := tasks.ListEvents(t.Context(), task.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, events, 1)
+	require.Equal(t, CodeEngineAccepted, events[0].Code)
+	require.Equal(t, "info", events[0].Level)
+	require.Nil(t, events[0].DetailJSON)
+	require.Equal(t, events[0].At, events[0].CreatedAt)
+
+	// A no-op re-set — a reconciliation loop re-learning the same handle
+	// — writes nothing at all: no event, and not even an updated_at bump.
+	before, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	// Advance past the previous write's millisecond so a buggy
+	// updated_at bump on the re-set cannot hide inside the same tick. The
+	// deadline turns a clock that never advances into a descriptive
+	// failure instead of a spin until the package timeout.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().UnixMilli() <= before.UpdatedAt {
+		if time.Now().After(deadline) {
+			t.Fatalf("wall clock never advanced past updated_at=%d", before.UpdatedAt)
+		}
+	}
+	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "2089b05ecca3d829"))
+	after, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	require.Equal(t, before.UpdatedAt, after.UpdatedAt)
+	events, _, total, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, events, 1)
+
+	// A changed handle is a new acceptance: the engine took the task
+	// again, and the log says so exactly once more.
+	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "a1b2c3d4e5f60718"))
+	events, _, total, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+	count := 0
+	for _, event := range events {
+		if event.Code == CodeEngineAccepted {
+			count++
+		}
+	}
+	require.Equal(t, 2, count)
+
+	// An empty handle is refused outright: no row write, no event.
+	err = tasks.SetEngineRef(t.Context(), task.ID, "")
+	require.ErrorContains(t, err, "empty engine ref")
+	row, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.EngineRef)
+	_, _, total, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+
+	// A handle aimed at a missing task writes neither the handle nor the
+	// event.
+	err = tasks.SetEngineRef(t.Context(), "tsk_missing", "2089b05ecca3d829")
+	require.ErrorIs(t, err, ErrNotFound)
+	events, _, total, err = tasks.ListEvents(t.Context(), "tsk_missing", 10, "")
+	require.NoError(t, err)
+	require.Empty(t, events)
+	require.Zero(t, total)
 }
 
 func TestListEventsPagination(t *testing.T) {
@@ -345,33 +487,41 @@ VALUES (?, ?, ?, 'info', ?, ?, ?, ?, ?)`,
 	}
 
 	var order []string
-	cursor := EventCursor{}
+	cursor := ""
 	for {
-		page, err := tasks.ListEvents(t.Context(), task.ID, cursor, 2)
+		page, next, _, err := tasks.ListEvents(t.Context(), task.ID, 2, cursor)
 		require.NoError(t, err)
-		if len(page) == 0 {
-			break
-		}
 		for _, event := range page {
 			order = append(order, event.Code)
 		}
-		last := page[len(page)-1]
-		cursor = EventCursor{At: last.At, ID: last.ID}
+		// next is empty exactly on the last page, so the walk stops on it
+		// rather than on an empty page — a page that exactly fills the
+		// limit is the last one and carries no cursor.
+		if next == "" {
+			break
+		}
+		cursor = next
 	}
 
 	// Newest first; within one millisecond, the later ULID sorts first.
 	require.Equal(t, []string{"e.five", "e.four", "e.three", "e.two", "e.one"}, order)
 
-	events, err := tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 10)
+	events, _, total, err := tasks.ListEvents(t.Context(), task.ID, 10, "")
 	require.NoError(t, err)
+	require.Equal(t, len(codes), total)
 	require.JSONEq(t, `{"n":0}`, *events[len(events)-1].DetailJSON)
 
-	_, err = tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 0)
+	// The envelope treats an absent limit (0) as the default page size and
+	// still rejects an out-of-range one.
+	events, _, _, err = tasks.ListEvents(t.Context(), task.ID, 0, "")
+	require.NoError(t, err)
+	require.Len(t, events, len(codes))
+	_, _, _, err = tasks.ListEvents(t.Context(), task.ID, 501, "")
 	require.Error(t, err)
 
 	// A typed nil detail stores SQL NULL, not the JSON literal "null".
 	require.NoError(t, tasks.AppendEvent(t.Context(), task.ID, "info", "e.typednil", "typed nil", (*struct{})(nil)))
-	events, err = tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 1)
+	events, _, _, err = tasks.ListEvents(t.Context(), task.ID, 1, "")
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Nil(t, events[0].DetailJSON)

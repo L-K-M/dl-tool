@@ -130,11 +130,19 @@ SET total_bytes = ?, completed_bytes = ?, uploaded_bytes = ?,
     download_rate = ?, upload_rate = ?, eta_seconds = ?, updated_at = ?
 WHERE id = ?`
 
+	// The handle guard is the compare-and-swap discipline of
+	// queryTransitionTask, and it decides the acceptance event atomically:
+	// exactly the write that changed the handle logs engine.accepted, and a
+	// no-op re-set matches no row and writes nothing — not even updated_at,
+	// which a reconciliation loop re-learning the same handle every tick
+	// must not churn.
 	querySetTaskEngineRef = `UPDATE tasks
 SET engine_ref = ?, updated_at = ?
-WHERE id = ?`
+WHERE id = ? AND (engine_ref IS NULL OR engine_ref <> ?)`
 
 	queryTaskState = `SELECT state FROM tasks WHERE id = ?`
+
+	queryTaskEngineRef = `SELECT engine_ref FROM tasks WHERE id = ?`
 
 	// The state guard makes the update a compare-and-swap: a concurrent
 	// transition that committed after the read above turns this into a
@@ -182,23 +190,62 @@ func NewTaskStore(db *sqlx.DB) *TaskStore {
 // empty state to the state machine's entry state queued
 // (docs/03-architecture.md section 8.1) and stamping added_at, created_at
 // and updated_at with the same Unix millisecond. It returns the row as
-// stored.
+// stored. It writes no event: fixtures and internal seeds use it, and the
+// create path uses CreateLogged so a task row never exists without its
+// task.created row (FR-150).
 func (s *TaskStore) Create(ctx context.Context, t Task) (Task, error) {
-	if t.ID == "" {
-		t.ID = NewID(PrefixTask)
-	}
-	if t.State == "" {
-		t.State = "queued"
-	} else if !slices.Contains(taskStates, t.State) {
-		return Task{}, fmt.Errorf("store: create task %q: unknown state %q, want one of %q", t.Name, t.State, taskStates)
+	if err := prepareNewTask(&t); err != nil {
+		return Task{}, err
 	}
 
-	now := time.Now().UnixMilli()
-	t.AddedAt = now
-	t.CreatedAt = now
-	t.UpdatedAt = now
+	if err := insertTaskRow(ctx, s.db, t); err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
+	}
 
-	_, err := s.db.ExecContext(
+	return t, nil
+}
+
+// CreateLogged inserts one task and its task.created event in a single
+// transaction, so a task row can never persist without the first entry of
+// its event log. The row semantics are Create's.
+func (s *TaskStore) CreateLogged(ctx context.Context, t Task) (Task, error) {
+	if err := prepareNewTask(&t); err != nil {
+		return Task{}, err
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of task creation failed", "task_id", t.ID, "error", err)
+		}
+	}()
+
+	if err := insertTaskRow(ctx, tx, t); err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
+	}
+
+	if err := insertTaskEvent(ctx, tx, t.ID, "info", CodeTaskCreated, messageTaskCreated, nil, t.CreatedAt); err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: commit: %w", t.Name, err)
+	}
+
+	return t, nil
+}
+
+// insertTaskRow writes one tasks row through the executor both creation
+// paths share, so the column list and its argument list are maintained in
+// exactly one place and cannot drift between them. ext is *sqlx.DB or a
+// *sqlx.Tx, the same contract insertTaskEvent has.
+func insertTaskRow(ctx context.Context, ext sqlx.ExtContext, t Task) error {
+	_, err := ext.ExecContext(
 		ctx,
 		queryCreateTask,
 		t.ID, t.Engine, t.EngineRef, t.SourceKind, t.SourceURI, t.Name,
@@ -208,11 +255,29 @@ func (s *TaskStore) Create(ctx context.Context, t Task) (Task, error) {
 		t.Sequential, t.QueuePosition, t.AddedAt, t.StartedAt, t.CompletedAt,
 		t.CreatedAt, t.UpdatedAt,
 	)
-	if err != nil {
-		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
+
+	return err
+}
+
+// prepareNewTask fills a task row's generated defaults: the id when empty,
+// the state machine's entry state when empty (validated against the
+// vocabulary otherwise) and the added/created/updated stamps.
+func prepareNewTask(t *Task) error {
+	if t.ID == "" {
+		t.ID = NewID(PrefixTask)
+	}
+	if t.State == "" {
+		t.State = "queued"
+	} else if !slices.Contains(taskStates, t.State) {
+		return fmt.Errorf("store: create task %q: unknown state %q, want one of %q", t.Name, t.State, taskStates)
 	}
 
-	return t, nil
+	now := time.Now().UnixMilli()
+	t.AddedAt = now
+	t.CreatedAt = now
+	t.UpdatedAt = now
+
+	return nil
 }
 
 // Get returns the task with the given id, or ErrNotFound.
@@ -259,20 +324,76 @@ func (s *TaskStore) UpdateProgress(ctx context.Context, id string, p Progress) e
 }
 
 // SetEngineRef records the engine-side identity (aria2 GID, qBittorrent
-// infohash, yt-dlp job id) once the engine accepted the task, and bumps
-// updated_at. A missing id is ErrNotFound.
+// infohash, yt-dlp job id) once the engine accepted the task. A guarded
+// update makes the write itself decide the acceptance event: the handle
+// landing or changing writes the row, bumps updated_at and logs
+// engine.accepted in the same transaction; a re-set of the handle already
+// stored — a reconciliation loop re-learning it — writes nothing at all.
+// A missing id is ErrNotFound.
 func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) error {
-	result, err := s.db.ExecContext(ctx, querySetTaskEngineRef, engineRef, time.Now().UnixMilli(), id)
+	// An empty handle is a caller bug — an adapter with no handle yet
+	// must simply not call — and writing it would wipe a good handle while
+	// logging a meaningless acceptance.
+	if engineRef == "" {
+		return fmt.Errorf("store: set engine ref of task %q: empty engine ref", id)
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: set engine ref of task %q: %w", id, err)
 	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of engine ref failed", "task_id", id, "error", err)
+		}
+	}()
 
+	// The current handle read inside the transaction serves one purpose:
+	// telling a missing id (ErrNotFound) from the no-op re-set the guarded
+	// update below answers with zero affected rows.
+	var current *string
+	err = tx.GetContext(ctx, &current, queryTaskEngineRef, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: set engine ref of task %q: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("store: set engine ref of task %q: read handle: %w", id, err)
+	}
+
+	now := time.Now().UnixMilli()
+	result, err := tx.ExecContext(ctx, querySetTaskEngineRef, engineRef, now, id, engineRef)
+	if err != nil {
+		return fmt.Errorf("store: set engine ref of task %q: %w", id, err)
+	}
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("store: set engine ref of task %q: count rows: %w", id, err)
 	}
 	if affected == 0 {
+		// The guarded update matched nothing because the stored handle is
+		// the same one — a reconciliation loop re-learning it: neither the
+		// write nor the event belongs here.
+		if current != nil && *current == engineRef {
+			return nil
+		}
+
 		return fmt.Errorf("store: set engine ref of task %q: %w", id, ErrNotFound)
+	}
+
+	// Exactly the write that changed the handle logs the acceptance — the
+	// first landing, or an engine that took the task again
+	// (docs/14-conventions.md section 4); the event rides the same
+	// transaction so a task row and its acceptance never disagree.
+	if affected == 1 {
+		if err := insertTaskEvent(ctx, tx, id, "info", CodeEngineAccepted, "engine accepted the task", nil, now); err != nil {
+			return fmt.Errorf("store: set engine ref of task %q: %w", id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: set engine ref of task %q: commit: %w", id, err)
 	}
 
 	return nil
@@ -346,14 +467,10 @@ func errTransitionConflict(id, expected, next string) error {
 	)
 }
 
-// The task_events codes MarkRemoved writes (docs/14-conventions.md
-// section 4: the constant lives next to the emitting code).
+// The task_events messages written beside the codes the events package
+// owns (CodeTaskCreated, CodeTaskRemoved, CodeTaskDataDeleted).
 const (
-	codeTaskRemoved     = "task.removed"
-	codeTaskDataDeleted = "task.data_deleted"
-)
-
-const (
+	messageTaskCreated     = "created by user request"
 	messageTaskRemoved     = "removed by user request"
 	messageTaskDataDeleted = "downloaded data deleted by user request"
 )
@@ -440,11 +557,11 @@ func (s *TaskStore) MarkRemoved(ctx context.Context, id string, data *DeletedDat
 		return errTransitionConflict(id, current, "removed")
 	}
 
-	if err := insertTaskEvent(ctx, tx, id, "info", codeTaskRemoved, messageTaskRemoved, nil, now); err != nil {
+	if err := insertTaskEvent(ctx, tx, id, "info", CodeTaskRemoved, messageTaskRemoved, nil, now); err != nil {
 		return err
 	}
 	if data != nil {
-		if err := insertTaskEvent(ctx, tx, id, "warn", codeTaskDataDeleted, messageTaskDataDeleted, data, now); err != nil {
+		if err := insertTaskEvent(ctx, tx, id, "warn", CodeTaskDataDeleted, messageTaskDataDeleted, data, now); err != nil {
 			return err
 		}
 	}
