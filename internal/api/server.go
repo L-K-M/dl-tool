@@ -361,6 +361,9 @@ func recoverer(next http.Handler) http.Handler {
 	})
 }
 
+// peerAddressContextKey preserves the socket peer before proxy rewriting.
+type peerAddressContextKey struct{}
+
 // realIP rewrites RemoteAddr to the original client address from
 // X-Forwarded-For, but only when the direct peer is a configured trusted
 // proxy (docs/10-deployment-and-compose.md section 7.3). chi's
@@ -368,6 +371,8 @@ func recoverer(next http.Handler) http.Handler {
 func realIP(trusted []netip.Prefix) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// TLS forwarding is trusted by socket peer, not by the client IP.
+			r = r.WithContext(context.WithValue(r.Context(), peerAddressContextKey{}, r.RemoteAddr))
 			forwardedFor := r.Header.Get("X-Forwarded-For")
 			if forwardedFor == "" || !isTrustedProxy(r.RemoteAddr, trusted) {
 				next.ServeHTTP(w, r)

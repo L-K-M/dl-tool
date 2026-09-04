@@ -146,6 +146,7 @@ func NewSessionCookie(cfg *config.Config, value string, transport Transport) *ht
 		Path:     cfg.BasePath + "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(math.Ceil(cfg.SessionTTL.Seconds())),
 	}
 	if transport == TransportTLS {
 		cookie.Secure = true
@@ -328,9 +329,14 @@ type requestInfo struct {
 type requestInfoContextKey struct{}
 
 func newRequestInfo(cfg *config.Config, r *http.Request) requestInfo {
+	peer, ok := r.Context().Value(peerAddressContextKey{}).(string)
+	if !ok {
+		peer = r.RemoteAddr
+	}
+
 	transport := TransportPlain
-	if r.TLS != nil || (r.Header.Get("X-Forwarded-Proto") == "https" &&
-		isTrustedProxy(r.RemoteAddr, cfg.TrustedProxies)) {
+	if r.TLS != nil || (strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") &&
+		isTrustedProxy(peer, cfg.TrustedProxies)) {
 		transport = TransportTLS
 	}
 

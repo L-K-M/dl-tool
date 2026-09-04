@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,7 +37,7 @@ const sessionTestExpiry = time.Hour
 // newAuthTestServer builds the full server against a real migrated store, so
 // the auth middleware is installed exactly as in production. The config
 // directory sits beside the database, where the boot mints the setup token.
-func newAuthTestServer(t *testing.T) (*Server, *sqlx.DB) {
+func newAuthTestServer(t *testing.T, configure ...func(*config.Config)) (*Server, *sqlx.DB) {
 	t.Helper()
 
 	root := t.TempDir()
@@ -54,11 +56,12 @@ func newAuthTestServer(t *testing.T) (*Server, *sqlx.DB) {
 		}
 	})
 
-	server, err := NewServer(
-		&config.Config{ConfigDir: configDir, SessionTTL: sessionTestExpiry},
-		db,
-		slog.New(slog.NewJSONHandler(io.Discard, nil)),
-	)
+	cfg := &config.Config{ConfigDir: configDir, SessionTTL: sessionTestExpiry}
+	for _, apply := range configure {
+		apply(cfg)
+	}
+
+	server, err := NewServer(cfg, db, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -705,6 +708,68 @@ func TestSessionCookieAttributes(t *testing.T) {
 				t.Errorf("Secure = %v, want %v", cookie.Secure, test.wantSecure)
 			}
 		})
+	}
+}
+
+// TestSessionCookiesThroughRoot checks cookie policy after proxy rewriting.
+func TestSessionCookiesThroughRoot(t *testing.T) {
+	for _, base := range []string{"", "/dl-tool"} {
+		for _, test := range []struct {
+			name, peer, forwarded, proto string
+			transport                    Transport
+			wantSecure                   bool
+		}{
+			{"plain", "203.0.113.23:1234", "", "", TransportPlain, false},
+			{"direct TLS", "203.0.113.23:1234", "", "", TransportTLS, true},
+			{"trusted TLS proxy", "192.0.2.10:1234", "203.0.113.23", "https", TransportPlain, true},
+			{"normalized TLS scheme", "192.0.2.10:1234", "203.0.113.23", " HTTPS ", TransportPlain, true},
+			{"forged TLS proxy", "203.0.113.23:1234", "192.0.2.10", "https", TransportPlain, false},
+		} {
+			t.Run(base+"/"+test.name, func(t *testing.T) {
+				server, _ := newAuthTestServer(t, func(cfg *config.Config) {
+					cfg.BasePath = base
+					cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
+				})
+				for _, endpoint := range []string{"/auth/setup", "/auth/login"} {
+					credentials := map[string]string{"username": "alice", "password": "correct horse battery"}
+					if endpoint == "/auth/setup" {
+						credentials["setup_token"] = server.auth.setupToken
+					}
+					body, err := json.Marshal(credentials)
+					if err != nil {
+						t.Fatal(err)
+					}
+					request := httptest.NewRequest(http.MethodPost, base+apiV1Path+endpoint, strings.NewReader(string(body)))
+					request.RemoteAddr = test.peer
+					request.Header.Set("Content-Type", "application/json")
+					request.Header.Set("X-Forwarded-For", test.forwarded)
+					request.Header.Set("X-Forwarded-Proto", test.proto)
+					if test.transport == TransportTLS {
+						request.TLS = &tls.ConnectionState{}
+					}
+					response := httptest.NewRecorder()
+					server.Router.ServeHTTP(response, request)
+					wantStatus := http.StatusOK
+					if endpoint == "/auth/setup" {
+						wantStatus = http.StatusCreated
+					}
+					if response.Code != wantStatus {
+						t.Fatalf("%s: status %d: %s", endpoint, response.Code, response.Body.String())
+					}
+
+					cookie, err := http.ParseSetCookie(response.Header().Get("Set-Cookie"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if cookie.Secure != test.wantSecure || cookie.Path != base+"/" || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
+						t.Errorf("%s: incorrect cookie attributes: %s", endpoint, cookie)
+					}
+					if cookie.MaxAge != int(sessionTestExpiry/time.Second) {
+						t.Errorf("%s: Max-Age = %d, want %d", endpoint, cookie.MaxAge, int(sessionTestExpiry/time.Second))
+					}
+				}
+			})
+		}
 	}
 }
 
