@@ -395,6 +395,7 @@ func TestActionsPerIDOutcomes(t *testing.T) {
 	if calls := env.aria2.recorded(); !slices.Equal(calls, []string{"Pause aria2:" + aria2GID}) {
 		t.Errorf("aria2 calls = %v, want exactly one Pause of the namespaced id", calls)
 	}
+	env.qbittorrent.assertNoCalls(t)
 
 	for _, id := range []string{admitted, held} {
 		if state := env.taskState(t, id); state != string(engine.StatePaused) {

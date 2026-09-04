@@ -224,7 +224,7 @@ func (s *Server) registerOperations() {
 		Method:      http.MethodPost,
 		Path:        "/tasks/actions",
 		Summary:     "Apply bulk lifecycle actions",
-		Description: "Applies one of the nine actions to up to 500 tasks and reports a per-id outcome, so one bad id never fails the batch. The queue actions rewrite dl-tool's own queue and contact no engine.",
+		Description: "Applies one of the nine actions to up to 500 tasks and reports a per-id outcome, so one bad id never fails the batch. The queue actions rewrite dl-tool's own queue and contact no engine. delete_data is accepted but currently a no-op: local data removal arrives with a later task.",
 		Tags:        []string{"tasks"},
 		Security:    credentialRequired,
 	}, s.tasks.Actions)
