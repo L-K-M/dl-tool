@@ -320,6 +320,38 @@ func TestTransitionWritesEvent(t *testing.T) {
 	require.Equal(t, "error", levels["engine.failed"])
 }
 
+func TestCreateLoggedWritesEvent(t *testing.T) {
+	db, _, _ := openTestStore(t)
+	tasks := NewTaskStore(db)
+
+	created, err := tasks.CreateLogged(t.Context(), Task{
+		Engine:      "aria2",
+		SourceKind:  "http",
+		Name:        "evented-fixture",
+		Destination: "/data",
+	})
+	require.NoError(t, err)
+
+	// The row and its first event log entry persist together: the log of a
+	// CreateLogged task starts at task.created (FR-150).
+	events, _, total, err := tasks.ListEvents(t.Context(), created.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, events, 1)
+	require.Equal(t, CodeTaskCreated, events[0].Code)
+	require.Equal(t, "info", events[0].Level)
+	require.Equal(t, created.CreatedAt, events[0].At)
+	require.Nil(t, events[0].DetailJSON)
+
+	// The bare Create stays event-free — it backs fixtures and internal
+	// seeds, whose event assertions would otherwise double-count.
+	bare := createTaskInState(t, tasks, "queued")
+	events, _, total, err = tasks.ListEvents(t.Context(), bare.ID, 10, "")
+	require.NoError(t, err)
+	require.Empty(t, events)
+	require.Zero(t, total)
+}
+
 func TestSetEngineRefWritesEvent(t *testing.T) {
 	db, _, _ := openTestStore(t)
 	tasks := NewTaskStore(db)

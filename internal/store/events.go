@@ -115,7 +115,9 @@ func (s *TaskStore) ListEvents(
 	if cursor != "" {
 		decoded, err := decodeEventCursor(cursor)
 		if err != nil {
-			return nil, "", 0, err
+			// Wrapped like every other failure of this function, with %w so
+			// ErrStaleCursor stays detectable for the 422 mapping.
+			return nil, "", 0, fmt.Errorf("store: list events of task %q: %w", taskID, err)
 		}
 		page = decoded
 	}

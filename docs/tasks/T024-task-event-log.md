@@ -27,11 +27,11 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | Path | Action | Purpose |
 |---|---|---|
 | `internal/api/server.go` | modify | Register `list-task-events`. |
-| `internal/api/tasks.go` | edit | Emit `task.created` (`store.CodeTaskCreated`) in `insertPlanned` after the insert of each accepted URI. |
+| `internal/api/tasks.go` | edit | Create each accepted URI through the store's tx-bound `CreateLogged`, which emits `task.created` with the insert. |
 | `internal/api/tasks_events.go` | create | The `GET /tasks/{id}/events` handler. |
 | `internal/api/tasks_events_test.go` | create | Ordering, pagination and end-to-end coverage of the codes. |
 | `internal/store/events.go` | modify | Add the code constants and the cursor query. |
-| `internal/store/tasks.go` | edit | Emit `engine.accepted` (`store.CodeEngineAccepted`) inside `SetEngineRef`, transactionally with the handle write. |
+| `internal/store/tasks.go` | edit | Add `CreateLogged`, the tx-bound insert emitting `task.created` (`store.CodeTaskCreated`) with the row; emit `engine.accepted` (`store.CodeEngineAccepted`) inside `SetEngineRef`, transactionally with the handle write. |
 | `internal/store/tasks_test.go` | edit | Migrate the `ListEvents` call sites to the envelope signature; cover the `SetEngineRef` emission. |
 
 No other file may be modified.
@@ -175,17 +175,17 @@ Checking formatting...
 All matched files use Prettier code style!
 $ make test PKG=./internal/...
 go test -race -count=1 ./internal/...
-ok  	github.com/L-K-M/dl-tool/internal/api	38.809s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.092s
-ok  	github.com/L-K-M/dl-tool/internal/engine	1.038s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.080s
+ok  	github.com/L-K-M/dl-tool/internal/api	38.367s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.080s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.083s
 ?   	github.com/L-K-M/dl-tool/internal/fsx	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.504s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.192s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.141s
-ok  	github.com/L-K-M/dl-tool/internal/store	57.706s
-ok  	github.com/L-K-M/dl-tool/internal/sync	2.041s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.036s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.549s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.190s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.272s
+ok  	github.com/L-K-M/dl-tool/internal/store	57.815s
+ok  	github.com/L-K-M/dl-tool/internal/sync	2.045s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.039s
 ```
 
 The two named tests, from a `-v` run of the same tree:
@@ -221,11 +221,12 @@ Step 8: `web/src/locales/en/tasks.json` does not exist yet (T052 creates it), so
 recorded here per the step's own fallback: `task.created`, `task.paused`, `task.resumed`,
 `task.removed`, `task.completed`, `task.data_deleted`, `engine.accepted`, `engine.rejected`,
 `engine.unavailable` — each needs an i18next key in that file when T052 lands. Emission points
-shipped: `task.created` (create endpoint, per accepted URI), `engine.accepted` (`SetEngineRef`,
-transactionally with the handle), `task.removed`/`task.data_deleted` (T023's MarkRemoved, now on the
-canonical constants), the five action codes (T022, unchanged). `engine.rejected` and
-`engine.unavailable` ship as constants only: no M1 code path reaches an engine refusal, because
-POST /tasks contacts no engine — the admission pass T098 owns `Engine.Add` and wires both.
+shipped: `task.created` (`CreateLogged`, transactionally with the row insert), `engine.accepted`
+(`SetEngineRef`, transactionally with the handle), `task.removed`/`task.data_deleted` (T023's
+MarkRemoved, now on the canonical constants), the five action codes (T022, unchanged).
+`engine.rejected` and `engine.unavailable` ship as constants only: no M1 code path reaches an engine
+refusal, because POST /tasks contacts no engine — the admission pass T098 owns `Engine.Add` and wires
+both.
 
 ## Blocked
 

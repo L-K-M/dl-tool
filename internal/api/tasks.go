@@ -438,7 +438,10 @@ func (h *TaskHandlers) insertPlanned(
 		source = embedCredentials(n.URI, *body.FTPCredentials)
 	}
 
-	task, err := h.tasks.Create(ctx, store.Task{
+	// CreateLogged writes the row and its task.created event in one
+	// transaction (FR-150): a task can never persist without the first
+	// entry of its event log.
+	task, err := h.tasks.CreateLogged(ctx, store.Task{
 		Engine:      p.engine,
 		SourceKind:  string(n.Kind),
 		SourceURI:   &source,
@@ -455,13 +458,6 @@ func (h *TaskHandlers) insertPlanned(
 	})
 	if err != nil {
 		return TaskDTO{}, internalFailure(ctx, "create task", err)
-	}
-
-	// One task.created row per accepted URI, the first entry of the task's
-	// event log (FR-150); the insert above succeeded, so the row it names
-	// exists.
-	if err := h.tasks.AppendEvent(ctx, task.ID, "info", store.CodeTaskCreated, "created by user request", nil); err != nil {
-		return TaskDTO{}, internalFailure(ctx, "record task.created", err)
 	}
 
 	if err := h.linkTags(ctx, task.ID, body.Tags); err != nil {

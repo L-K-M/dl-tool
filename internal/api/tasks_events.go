@@ -17,6 +17,10 @@ import (
 
 const operationListTaskEvents = "list-task-events"
 
+// staleCursorDetail is the 422 a cursor this endpoint never issued answers
+// with (docs/05-api-contract.md section 1.4).
+const staleCursorDetail = "the cursor was not issued by this endpoint"
+
 // ListTaskEventsInput is the query of GET /tasks/{id}/events: the cursor
 // pagination envelope of doc 05 section 1.4 and nothing else.
 type ListTaskEventsInput struct {
@@ -40,7 +44,11 @@ type ListTaskEventsOutput struct {
 // conversion happens here, at the API boundary. Detail is null when
 // detail_json is NULL and the decoded JSON value otherwise.
 type TaskEventDTO struct {
-	ID      string `json:"id"      doc:"The evt_ id of the event"`
+	ID string `json:"id"      doc:"The evt_ id of the event"`
+	// At carries second granularity, the house style of every TaskDTO
+	// timestamp (doc 05 section 1.6). The sub-second order of same-second
+	// events is the (at, id) tiebreak the server applies when paging; the
+	// id travels with each row, so a client can reproduce it.
 	At      string `json:"at"      doc:"When the event was logged" format:"date-time"`
 	Level   string `json:"level"   enum:"info,warn,error" doc:"info, warn or error"`
 	Code    string `json:"code"    doc:"A stable i18n key; the UI translates it and falls back to message"`
@@ -64,15 +72,16 @@ func (h *TaskHandlers) ListTaskEvents(ctx context.Context, in *ListTaskEventsInp
 
 	rows, nextCursor, total, err := h.tasks.ListEvents(ctx, task.ID, in.Limit, in.Cursor)
 	if errors.Is(err, store.ErrStaleCursor) {
-		problem := Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "the cursor was not issued by this endpoint")
-		var model *huma.ErrorModel
-		errors.As(problem, &model)
-		model.Errors = []*huma.ErrorDetail{{
-			Message:  "the cursor was not issued by this endpoint",
-			Location: "query.cursor",
-		}}
-
-		return nil, problem
+		return nil, &huma.ErrorModel{
+			Type:   SlugValidationFailed,
+			Title:  http.StatusText(http.StatusUnprocessableEntity),
+			Status: http.StatusUnprocessableEntity,
+			Detail: staleCursorDetail,
+			Errors: []*huma.ErrorDetail{{
+				Message:  staleCursorDetail,
+				Location: "query.cursor",
+			}},
+		}
 	}
 	if err != nil {
 		return nil, internalFailure(ctx, "list task events", err)

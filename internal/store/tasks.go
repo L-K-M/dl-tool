@@ -182,21 +182,13 @@ func NewTaskStore(db *sqlx.DB) *TaskStore {
 // empty state to the state machine's entry state queued
 // (docs/03-architecture.md section 8.1) and stamping added_at, created_at
 // and updated_at with the same Unix millisecond. It returns the row as
-// stored.
+// stored. It writes no event: fixtures and internal seeds use it, and the
+// create path uses CreateLogged so a task row never exists without its
+// task.created row (FR-150).
 func (s *TaskStore) Create(ctx context.Context, t Task) (Task, error) {
-	if t.ID == "" {
-		t.ID = NewID(PrefixTask)
+	if err := prepareNewTask(&t); err != nil {
+		return Task{}, err
 	}
-	if t.State == "" {
-		t.State = "queued"
-	} else if !slices.Contains(taskStates, t.State) {
-		return Task{}, fmt.Errorf("store: create task %q: unknown state %q, want one of %q", t.Name, t.State, taskStates)
-	}
-
-	now := time.Now().UnixMilli()
-	t.AddedAt = now
-	t.CreatedAt = now
-	t.UpdatedAt = now
 
 	_, err := s.db.ExecContext(
 		ctx,
@@ -213,6 +205,71 @@ func (s *TaskStore) Create(ctx context.Context, t Task) (Task, error) {
 	}
 
 	return t, nil
+}
+
+// CreateLogged inserts one task and its task.created event in a single
+// transaction, so a task row can never persist without the first entry of
+// its event log. The row semantics are Create's.
+func (s *TaskStore) CreateLogged(ctx context.Context, t Task) (Task, error) {
+	if err := prepareNewTask(&t); err != nil {
+		return Task{}, err
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of task creation failed", "task_id", t.ID, "error", err)
+		}
+	}()
+
+	if _, err := tx.ExecContext(
+		ctx,
+		queryCreateTask,
+		t.ID, t.Engine, t.EngineRef, t.SourceKind, t.SourceURI, t.Name,
+		t.InfohashV1, t.InfohashV2, t.State, t.ErrorCode, t.ErrorMessage,
+		t.Destination, t.ContentPath, t.CategoryID, t.TotalBytes, t.CompletedBytes,
+		t.UploadedBytes, t.DownloadRate, t.UploadRate, t.ETASeconds,
+		t.Sequential, t.QueuePosition, t.AddedAt, t.StartedAt, t.CompletedAt,
+		t.CreatedAt, t.UpdatedAt,
+	); err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
+	}
+
+	if err := insertTaskEvent(ctx, tx, t.ID, "info", CodeTaskCreated, messageTaskCreated, nil, t.CreatedAt); err != nil {
+		return Task{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: commit: %w", t.Name, err)
+	}
+
+	return t, nil
+}
+
+// prepareNewTask fills a task row's generated defaults: the id when empty,
+// the state machine's entry state when empty (validated against the
+// vocabulary otherwise) and the added/created/updated stamps.
+func prepareNewTask(t *Task) error {
+	if t.ID == "" {
+		t.ID = NewID(PrefixTask)
+	}
+	if t.State == "" {
+		t.State = "queued"
+	} else if !slices.Contains(taskStates, t.State) {
+		return fmt.Errorf("store: create task %q: unknown state %q, want one of %q", t.Name, t.State, taskStates)
+	}
+
+	now := time.Now().UnixMilli()
+	t.AddedAt = now
+	t.CreatedAt = now
+	t.UpdatedAt = now
+
+	return nil
 }
 
 // Get returns the task with the given id, or ErrNotFound.
@@ -370,9 +427,10 @@ func errTransitionConflict(id, expected, next string) error {
 	)
 }
 
-// The task_events messages MarkRemoved writes beside the codes the events
-// package owns (CodeTaskRemoved, CodeTaskDataDeleted).
+// The task_events messages written beside the codes the events package
+// owns (CodeTaskCreated, CodeTaskRemoved, CodeTaskDataDeleted).
 const (
+	messageTaskCreated     = "created by user request"
 	messageTaskRemoved     = "removed by user request"
 	messageTaskDataDeleted = "downloaded data deleted by user request"
 )
