@@ -186,5 +186,15 @@ internal/sync/ring.go
 internal/sync/ring_test.go
 ```
 
+Audit regressions cover partial-field merging in replay and fan-out, explicit nulls,
+large integers and immutable retained patches.
+
+```text
+$ make test PKG=./internal/sync/... && echo SYNC_OK
+go test -race -count=1 ./internal/sync/...
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.377s
+SYNC_OK
+```
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

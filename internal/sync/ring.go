@@ -6,6 +6,7 @@ package sync
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sync"
 )
@@ -106,7 +107,7 @@ func newDelta() Delta {
 }
 
 // coalesceInto merges next into dst, walking oldest first: Tasks and
-// Categories entries win newest-last — a re-add after a removal cancels the
+// Categories fields win newest-last — a re-add after a removal cancels the
 // tombstone — removals union, Stats always come from the newest entry, and
 // a full snapshot replaces everything merged before it. FullUpdate is
 // sticky — a full snapshot inside a range keeps the coalesced result a
@@ -119,7 +120,7 @@ func coalesceInto(dst *Delta, next Delta) {
 		*dst = newDelta()
 	}
 	for id, patch := range next.Tasks {
-		dst.Tasks[id] = patch
+		dst.Tasks[id] = mergePatch(dst.Tasks[id], patch)
 		// Newest wins: an add after a removal cancels the tombstone.
 		dst.TasksRemoved = slices.DeleteFunc(dst.TasksRemoved, func(v string) bool { return v == id })
 	}
@@ -130,7 +131,7 @@ func coalesceInto(dst *Delta, next Delta) {
 	}
 
 	for name, cat := range next.Categories {
-		dst.Categories[name] = cat
+		dst.Categories[name] = mergePatch(dst.Categories[name], cat)
 		// Newest wins, for the same reason, on the category side.
 		dst.CategoriesRemoved = slices.DeleteFunc(dst.CategoriesRemoved, func(v string) bool { return v == name })
 	}
@@ -143,6 +144,30 @@ func coalesceInto(dst *Delta, next Delta) {
 		dst.FullUpdate = true
 	}
 	dst.Stats = next.Stats
+}
+
+// mergePatch retains omitted fields and explicit nulls without rounding byte counts.
+// Patches are server-built JSON objects; malformed input is a programming error.
+func mergePatch(previous, next json.RawMessage) json.RawMessage {
+	if len(previous) == 0 {
+		return next
+	}
+
+	fields := make(map[string]json.RawMessage)
+	for _, patch := range []json.RawMessage{previous, next} {
+		if err := json.Unmarshal(patch, &fields); err != nil {
+			panic(fmt.Errorf("sync: decode patch: %w", err))
+		}
+		if fields == nil {
+			panic("sync: patch must be an object")
+		}
+	}
+
+	merged, err := json.Marshal(fields)
+	if err != nil {
+		panic(fmt.Errorf("sync: encode patch: %w", err))
+	}
+	return merged
 }
 
 // finalizeRemovals guarantees the invariant the coalescing already keeps:
