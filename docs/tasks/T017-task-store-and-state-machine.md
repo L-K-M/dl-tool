@@ -186,7 +186,57 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG=./internal/store/...`, re-run after each review fix on the working tree
+of the HEAD commit — the compare-and-swap guard in `Transition`, the `ErrTransitionConflict` sentinel,
+the `ErrNotFound` mutators, the queued create-time default and the typed-nil detail guard. Final paste:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG=./internal/store/...
+go test -race -count=1 ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/store	8.986s
+```
+
+`make lint` printed no findings (`0 issues.`, eslint and prettier silent). One `ok` line, no `FAIL`.
+With `-v`, `TestTaskRoundTrip`, `TestTransitionTable`, `TestTransitionWritesEvent`, `TestTaskMutators`
+and `TestListEventsPagination` all run and pass (108 subtests: 5 round-trip cases, the exhaustive
+100-pair transition matrix, the missing-task case, the stale-state guard case and the conflict-error
+sentinel case), plus the top-level `TestTaskStatesMatchTransitionTable` drift guard:
+
+```
+$ go test -race -count=1 -v ./internal/store/... 2>&1 | grep -Ec '^=== RUN[[:space:]]+Test(TaskRoundTrip|TransitionTable|TransitionWritesEvent|TaskMutators|ListEventsPagination)/'
+108
+```
+
+Scope check: `git status` run with the four task files staged for the first commit, and the
+branch-level check after the review fix:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/store/events.go
+internal/store/models.go
+internal/store/tasks.go
+internal/store/tasks_test.go
+
+$ git diff --name-only origin/main -- . ':(exclude)docs' | sort
+internal/store/events.go
+internal/store/models.go
+internal/store/tasks.go
+internal/store/tasks_test.go
+```
+
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
