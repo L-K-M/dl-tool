@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,11 +36,17 @@ VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING`
 	queryInsertTaskTag = `INSERT INTO task_tags (task_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING`
 
 	emptySubmissionDetail = "the submission holds no uri; send between 1 and 50"
+	tooManyURIsFormat     = "the submission holds %d uris; send between 1 and %d"
 	allRejectedDetail     = "every uri in the submission was rejected; see rejected[] for the per-uri reasons"
 	unknownCategoryFormat = "category %q does not exist"
 	engineUnavailableFmt  = "the %s engine is required for this submission but is not registered"
 	uriRejectedDetail     = "the uri scheme is not supported in v1"
 	engineRefusesURIFmt   = "engine %q does not accept this uri"
+	duplicateDetail       = "a task for this torrent already exists"
+
+	queryTaskIDByInfohash = `SELECT id FROM tasks
+WHERE state <> 'removed' AND ((? <> '' AND infohash_v1 = ?) OR (? <> '' AND infohash_v2 = ?))
+LIMIT 1`
 )
 
 // CreateTasksBody is the JSON body of POST /tasks. The multipart form is
@@ -123,10 +130,10 @@ type TaskDTO struct {
 	QueuePosition        *int64   `json:"queue_position"`
 	UnzipProgress        *int     `json:"unzip_progress"`
 	FileCount            *int     `json:"file_count"`
-	AddedAt              string   `json:"added_at"`
-	StartedAt            *string  `json:"started_at"`
-	CompletedAt          *string  `json:"completed_at"`
-	UpdatedAt            string   `json:"updated_at"`
+	AddedAt              string   `json:"added_at" format:"date-time"`
+	StartedAt            *string  `json:"started_at" format:"date-time"`
+	CompletedAt          *string  `json:"completed_at" format:"date-time"`
+	UpdatedAt            string   `json:"updated_at" format:"date-time"`
 }
 
 // TaskHandlers owns the /tasks collection operations. T020 lands the create
@@ -174,9 +181,17 @@ type plannedTask struct {
 // govern a new task exactly as they govern a resumed one.
 func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*CreateTasksOutput, error) {
 	// Shape validation runs before any other work, so a malformed submission
-	// can create no row and touch no engine.
-	if len(in.Body.URIs) == 0 || len(in.Body.URIs) > maxCreateURIs {
+	// can create no row and touch no engine. The schema's maxItems tag
+	// usually answers the over-long case first; this branch is the backstop.
+	if len(in.Body.URIs) == 0 {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, emptySubmissionDetail)
+	}
+	if len(in.Body.URIs) > maxCreateURIs {
+		return nil, Problem(
+			SlugValidationFailed,
+			http.StatusUnprocessableEntity,
+			fmt.Sprintf(tooManyURIsFormat, len(in.Body.URIs), maxCreateURIs),
+		)
 	}
 
 	destination, err := fsx.ResolveDestination(h.roots, in.Body.Destination)
@@ -189,7 +204,7 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 		return nil, err
 	}
 
-	planned, rejected, err := h.planURIs(in.Body)
+	planned, rejected, err := h.planURIs(ctx, in.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -203,6 +218,13 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 		}
 
 		return nil, Problem(SlugUnsupportedScheme, http.StatusUnprocessableEntity, detail)
+	}
+
+	// Tag rows are created up-front, before any task insert: every write that
+	// can conflict lands before the batch starts, so a failure cannot leave
+	// half a submission behind.
+	if err := h.ensureTags(ctx, in.Body.Tags); err != nil {
+		return nil, internalFailure(ctx, "create tags", err)
 	}
 
 	created := make([]TaskDTO, 0, len(planned))
@@ -224,9 +246,15 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 // planURIs normalises and routes every URI, collecting a rejection for each
 // refused one. It returns an error only for the whole-request failures: an
 // explicit engine that is not registered, or a routed engine that is not.
-func (h *TaskHandlers) planURIs(body CreateTasksBody) ([]plannedTask, []RejectedURI, error) {
+func (h *TaskHandlers) planURIs(ctx context.Context, body CreateTasksBody) ([]plannedTask, []RejectedURI, error) {
 	planned := make([]plannedTask, 0, len(body.URIs))
 	rejected := []RejectedURI{}
+
+	// The tasks table forbids a live duplicate of an infohash (partial unique
+	// indexes), so a repeated torrent would otherwise fail the INSERT. Both
+	// an existing row and a repeat within this submission become a per-URI
+	// conflict rejection instead.
+	seenInfohashes := map[string]bool{}
 
 	for _, raw := range body.URIs {
 		n, err := uri.Normalize(raw)
@@ -269,6 +297,17 @@ func (h *TaskHandlers) planURIs(body CreateTasksBody) ([]plannedTask, []Rejected
 		if _, ok := h.engines.Get(engineName); !ok {
 			return nil, nil, engineUnavailable(engineName)
 		}
+
+		duplicate, err := h.duplicateInfohash(ctx, n, seenInfohashes)
+		if err != nil {
+			return nil, nil, err
+		}
+		if duplicate {
+			rejected = append(rejected, RejectedURI{URI: raw, Type: SlugConflict, Detail: duplicateDetail})
+
+			continue
+		}
+		seenInfohashes[normaliseInfohashKey(n)] = true
 
 		planned = append(planned, plannedTask{normalized: n, engine: engineName})
 	}
@@ -313,6 +352,9 @@ func (h *TaskHandlers) insertPlanned(
 		Destination: destination,
 		CategoryID:  categoryID,
 		Sequential:  boolToInt(body.Sequential),
+		// extract_password and create_subfolder have no store.Task field yet:
+		// their columns are owned by the auto-extract and upload tasks, which
+		// extend the store with them.
 	})
 	if err != nil {
 		return TaskDTO{}, internalFailure(ctx, "create task", err)
@@ -327,7 +369,15 @@ func (h *TaskHandlers) insertPlanned(
 		category = &body.Category
 	}
 
-	return newTaskDTO(task, n.URI, category, body.Tags), nil
+	dto := newTaskDTO(task, n.URI, category, body.Tags)
+	// The canonical object echoes what the client asked for whenever the
+	// server resolved it to something else (doc 05 section 3).
+	if body.Destination != "" && filepath.Clean(body.Destination) != task.Destination {
+		requested := body.Destination
+		dto.RequestedDestination = &requested
+	}
+
+	return dto, nil
 }
 
 // resolveCategory maps a category name to its id. The category must already
@@ -355,17 +405,26 @@ func (h *TaskHandlers) resolveCategory(ctx context.Context, name string) (*strin
 	return &id, nil
 }
 
-// linkTags creates tag rows on demand and links them to the task (doc 05
-// section 5.2). The tag store arrives with its own task; until then these
-// two statements are the only tag access the create path needs.
-func (h *TaskHandlers) linkTags(ctx context.Context, taskID string, names []string) error {
+// ensureTags creates the tag rows of a submission (doc 05 section 5.2,
+// "created on demand") before any task insert. The tag store arrives with
+// its own task; until then this statement is the only tag access the create
+// path needs.
+func (h *TaskHandlers) ensureTags(ctx context.Context, names []string) error {
 	now := time.Now().UnixMilli()
 
 	for _, name := range names {
 		if _, err := h.db.ExecContext(ctx, queryInsertTag, store.NewID(store.PrefixTag), name, now, now); err != nil {
 			return fmt.Errorf("create tag %q: %w", name, err)
 		}
+	}
 
+	return nil
+}
+
+// linkTags links a task to its tag rows. The rows exist by the time this
+// runs: ensureTags ran before the task inserts.
+func (h *TaskHandlers) linkTags(ctx context.Context, taskID string, names []string) error {
+	for _, name := range names {
 		var tagID string
 		if err := h.db.GetContext(ctx, &tagID, queryTagIDByName, name); err != nil {
 			return fmt.Errorf("resolve tag %q: %w", name, err)
@@ -377,6 +436,37 @@ func (h *TaskHandlers) linkTags(ctx context.Context, taskID string, names []stri
 	}
 
 	return nil
+}
+
+// duplicateInfohash reports whether a live task already carries n's
+// infohash, or the same submission already planned it. The lookup mirrors
+// the partial unique indexes on infohash_v1/infohash_v2; the check is
+// advisory — a concurrent create can still lose the INSERT race.
+func (h *TaskHandlers) duplicateInfohash(ctx context.Context, n uri.Normalized, seen map[string]bool) (bool, error) {
+	if n.InfohashV1 == "" && n.InfohashV2 == "" {
+		return false, nil
+	}
+	if seen[normaliseInfohashKey(n)] {
+		return true, nil
+	}
+
+	var id string
+	err := h.db.GetContext(ctx, &id, queryTaskIDByInfohash,
+		n.InfohashV1, n.InfohashV1, n.InfohashV2, n.InfohashV2)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, internalFailure(ctx, "check duplicate torrent", err)
+	}
+
+	return true, nil
+}
+
+// normaliseInfohashKey keys the within-submission duplicate set on whichever
+// infohash the submission carries.
+func normaliseInfohashKey(n uri.Normalized) string {
+	return n.InfohashV1 + "|" + n.InfohashV2
 }
 
 // rejectURI renders one rejected[] entry for a URI that normalising or

@@ -64,8 +64,9 @@ type Server struct {
 	// Engines is the routing-time availability table: the create endpoint
 	// resolves every URI to an engine through it and answers 503 when that
 	// engine is not registered (doc 05 section 5.2). It is exported so tests
-	// can inject stand-ins; the composition root below registers the real
-	// adapters.
+	// can register stand-ins into this shared registry; the task handlers
+	// capture the same pointer in NewServer, so reassigning the field after
+	// construction has no effect.
 	Engines *engine.Registry
 
 	// tasks owns the /tasks collection operations.
@@ -134,7 +135,10 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// The engine registry owns engine availability at routing time. The
 	// aria2 adapter joins when its RPC endpoint is configured; adapters that
 	// arrive with their own tasks register the same way, and a routed engine
-	// that is absent leaves POST /tasks answering 503 for its URIs.
+	// that is absent leaves POST /tasks answering 503 for its URIs. A
+	// malformed RPC URL is a configuration error and fails server
+	// construction loudly — degradation to 503 is for engines that are
+	// absent or down, not for operator mistakes.
 	engines := engine.NewRegistry()
 	if cfg.Aria2URL != "" {
 		aria2Engine, err := aria2.New(aria2.Config{URL: cfg.Aria2URL, Secret: cfg.Aria2Secret.Reveal()}, nil)

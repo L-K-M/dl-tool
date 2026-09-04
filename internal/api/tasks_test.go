@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/L-K-M/dl-tool/internal/config"
 	"github.com/L-K-M/dl-tool/internal/engine"
+	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
@@ -61,6 +63,16 @@ func newTasksTestEnv(t *testing.T) *tasksTestEnv {
 	if err := os.Mkdir(dataRoot, 0o755); err != nil {
 		t.Fatalf("make data root: %v", err)
 	}
+
+	return newTasksTestEnvWithRoots(t, dataRoot, []string{dataRoot})
+}
+
+// newTasksTestEnvWithRoots builds the env against an explicit root set, so a
+// test can pin the containment rules of unusual configurations.
+func newTasksTestEnvWithRoots(t *testing.T, dataRoot string, roots []string) *tasksTestEnv {
+	t.Helper()
+
+	root := filepath.Dir(dataRoot)
 	configDir := filepath.Join(root, "config")
 	db, err := store.Open(
 		t.Context(),
@@ -81,10 +93,12 @@ func newTasksTestEnv(t *testing.T) *tasksTestEnv {
 		&config.Config{
 			ConfigDir:  configDir,
 			SessionTTL: time.Hour,
-			DataRoots:  []string{dataRoot},
+			DataRoots:  roots,
 		},
 		db,
-		slog.New(slog.NewJSONHandler(logs, nil)),
+		// Debug level so the leak test sees everything the process could
+		// emit, not just Info and above.
+		slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -375,7 +389,10 @@ func TestCreateTasksHidesFTPPassword(t *testing.T) {
 	env := newTasksTestEnv(t)
 
 	response := env.createTasks(t, map[string]any{
-		"uris": []string{"ftp://ftpuser:Sup3rS3cretPw@mirror.example.org/pub/file.iso"},
+		"uris": []string{
+			"ftp://ftpuser:Sup3rS3cretPw@mirror.example.org/pub/file.iso",
+			"http://webuser:Sup3rS3cretPw@www.example.org/pub/page.html",
+		},
 		"ftp_credentials": map[string]string{
 			"username": ftpUser,
 			"password": ftpPassword,
@@ -392,13 +409,21 @@ func TestCreateTasksHidesFTPPassword(t *testing.T) {
 	}
 
 	// The row's server-only source carries the credentials so the admission
-	// pass can forward them to aria2 (docs/04-data-model.md section 3.3).
+	// pass can forward them to aria2 (docs/04-data-model.md section 3.3); the
+	// http row carries none, its userinfo was stripped at ingest.
 	var stored []string
-	if err := env.db.SelectContext(t.Context(), &stored, `SELECT source_uri FROM tasks`); err != nil {
+	if err := env.db.SelectContext(t.Context(), &stored,
+		`SELECT source_uri FROM tasks ORDER BY source_kind`); err != nil {
 		t.Fatalf("read stored sources: %v", err)
 	}
-	if len(stored) != 1 || !strings.Contains(stored[0], ftpPassword) {
-		t.Errorf("stored source_uri = %v, want the credential-bearing engine source", stored)
+	if len(stored) != 2 {
+		t.Fatalf("stored %d sources, want 2: %v", len(stored), stored)
+	}
+	if !strings.Contains(stored[0], ftpPassword) {
+		t.Errorf("ftp source_uri = %q, want the credential-bearing engine source", stored[0])
+	}
+	if strings.Contains(stored[1], ftpPassword) {
+		t.Errorf("http source_uri = %q, want the stripped display URI", stored[1])
 	}
 }
 
@@ -410,17 +435,23 @@ func TestCreateTasksValidation(t *testing.T) {
 	cases := []struct {
 		name string
 		uris []string
+		null bool
 	}{
-		{"empty submission", []string{}},
-		{"fifty-one uris", make([]string, 51)},
+		{"empty submission", []string{}, false},
+		{"null uris", nil, true},
+		{"fifty-one uris", make([]string, 51), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			for i := range tc.uris {
 				tc.uris[i] = mixedHTTPS
 			}
+			body := map[string]any{"uris": tc.uris}
+			if tc.null {
+				body = map[string]any{"uris": nil}
+			}
 
-			response := env.createTasks(t, map[string]any{"uris": tc.uris})
+			response := env.createTasks(t, body)
 			if response.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusUnprocessableEntity, response.Body.String())
 			}
@@ -507,4 +538,120 @@ func TestCreateTasksExplicitEngine(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
 	}
 	assertProblem(t, response, http.StatusServiceUnavailable, SlugEngineUnavailable)
+	if got := env.countTasks(t); got != 1 {
+		t.Errorf("unavailable engine left %d tasks, want only the 1 from the first request", got)
+	}
+}
+
+// TestCreateTasksDuplicateTorrent pins the uniqueness rule the tasks table
+// enforces through its partial unique indexes: a repeated torrent — in one
+// submission or against a live task — is a per-URI conflict, not a 500.
+func TestCreateTasksDuplicateTorrent(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.createTasks(t, map[string]any{
+		"uris": []string{mixedMagnet, mixedMagnet},
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	body := decodeCreateBody(t, response)
+	if len(body.Created) != 1 {
+		t.Fatalf("created %d tasks, want 1", len(body.Created))
+	}
+	if len(body.Rejected) != 1 || body.Rejected[0].Type != SlugConflict {
+		t.Fatalf("rejected = %+v, want one conflict entry", body.Rejected)
+	}
+
+	// The same magnet in a later submission hits the live row the same way;
+	// with every URI refused it answers the all-rejected 422, its detail
+	// carrying the conflict reason.
+	response = env.createTasks(t, map[string]any{"uris": []string{mixedMagnet}})
+	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugUnsupportedScheme)
+	if problem.Detail != duplicateDetail {
+		t.Errorf("detail = %q, want %q", problem.Detail, duplicateDetail)
+	}
+	if env.countTasks(t) != 1 {
+		t.Errorf("%d tasks after duplicate submissions, want 1", env.countTasks(t))
+	}
+}
+
+// TestCreateTasksRequestedDestination pins the canonical echo rule: when
+// the server resolves the client's destination to a different path (here
+// through a symlink), the response carries both.
+func TestCreateTasksRequestedDestination(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	real := filepath.Join(env.dataRoot, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatalf("make real dir: %v", err)
+	}
+	link := filepath.Join(env.dataRoot, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	response := env.createTasks(t, map[string]any{
+		"uris":        []string{mixedHTTPS},
+		"destination": filepath.Join(link, "iso"),
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+
+	body := decodeCreateBody(t, response)
+	created := body.Created[0]
+	if created.Destination != filepath.Join(real, "iso") {
+		t.Errorf("destination = %q, want the resolved %q", created.Destination, filepath.Join(real, "iso"))
+	}
+	if created.RequestedDestination == nil || *created.RequestedDestination != filepath.Join(link, "iso") {
+		t.Errorf("requested_destination = %v, want %q", created.RequestedDestination, filepath.Join(link, "iso"))
+	}
+}
+
+// TestCreateTasksFilesystemRoot pins the containment edge of a root that is
+// the filesystem root itself: every absolute destination stays inside.
+func TestCreateTasksFilesystemRoot(t *testing.T) {
+	env := newTasksTestEnvWithRoots(t, t.TempDir(), []string{"/"})
+
+	response := env.createTasks(t, map[string]any{
+		"uris":        []string{mixedHTTPS},
+		"destination": filepath.Join(env.dataRoot, "iso"),
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if env.countTasks(t) != 1 {
+		t.Errorf("%d tasks, want 1", env.countTasks(t))
+	}
+}
+
+// TestNewServerRegistersAria2 pins the composition-root branch: a
+// configured aria2 endpoint joins the registry, and a malformed one fails
+// server construction loudly rather than degrading silently.
+func TestNewServerRegistersAria2(t *testing.T) {
+	t.Parallel()
+
+	valid, err := NewServer(
+		&config.Config{
+			Aria2URL:    "http://aria2.test:6800/jsonrpc",
+			Aria2Secret: secure.Secret("rpc-secret"),
+		},
+		nil,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("NewServer with aria2: %v", err)
+	}
+	if _, ok := valid.Engines.Get(engine.NameAria2); !ok {
+		t.Errorf("aria2 is not registered")
+	}
+
+	if _, err := NewServer(
+		&config.Config{Aria2URL: "not-a-url", Aria2Secret: secure.Secret("rpc-secret")},
+		nil,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	); err == nil {
+		t.Errorf("NewServer with a malformed aria2 url succeeded, want an error")
+	}
 }

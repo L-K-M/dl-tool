@@ -189,16 +189,20 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 make lint exit: 0
-ok  	github.com/L-K-M/dl-tool/internal/api	21.137s
---- PASS: TestCreateTasksMixedBatch (0.05s)
---- PASS: TestCreateTasksRejectsED2K (0.02s)
---- PASS: TestCreateTasksRejectsDestination (0.02s)
---- PASS: TestCreateTasksHidesFTPPassword (0.02s)
---- PASS: TestCreateTasksValidation (0.02s)
---- PASS: TestCreateTasksUnknownCategory (0.02s)
---- PASS: TestCreateTasksPaused (0.02s)
---- PASS: TestCreateTasksExplicitEngine (0.02s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.230s
+ok  	github.com/L-K-M/dl-tool/internal/api	4.630s (review round)
+--- PASS: TestCreateTasksMixedBatch
+--- PASS: TestCreateTasksRejectsED2K
+--- PASS: TestCreateTasksRejectsDestination
+--- PASS: TestCreateTasksHidesFTPPassword
+--- PASS: TestCreateTasksValidation (empty, null uris, 51)
+--- PASS: TestCreateTasksUnknownCategory
+--- PASS: TestCreateTasksPaused
+--- PASS: TestCreateTasksExplicitEngine
+--- PASS: TestCreateTasksDuplicateTorrent
+--- PASS: TestCreateTasksRequestedDestination
+--- PASS: TestCreateTasksFilesystemRoot
+--- PASS: TestNewServerRegistersAria2
+ok  	github.com/L-K-M/dl-tool/internal/api	(initial round: 21.137s / 0.230s, four named tests above)
 ```
 
 Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'`), the Files table plus the two generated files of docs/13 §7.1:

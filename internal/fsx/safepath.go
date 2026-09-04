@@ -20,8 +20,11 @@ var ErrPathRejected = errors.New("fsx: path rejected")
 //
 // Containment is judged only after symlink resolution, so a destination that
 // walks through a link pointing outside the roots is rejected even though
-// its textual form stays inside. The request is never joined onto a root:
-// the caller's path is resolved on its own and then checked, so no request
+// its textual form stays inside. Resolution happens once, here: a component
+// swapped for a symlink after this check (TOCTOU) is not detected, so T046
+// must re-anchor containment on an open root descriptor (os.Root / openat)
+// before engines write. The request is never joined onto a root: the
+// caller's path is resolved on its own and then checked, so no request
 // input can build a path by concatenation.
 func ResolveDestination(roots []string, requested string) (string, error) {
 	if len(roots) == 0 {
@@ -59,7 +62,19 @@ func ResolveDestination(roots []string, requested string) (string, error) {
 // arrive cleaned and symlink-resolved; the separator keeps /data/iso2 from
 // matching the root /data/iso.
 func within(path, root string) bool {
-	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+	if path == root {
+		return true
+	}
+
+	// A cleaned root only ends in a separator when it is the filesystem (or
+	// volume) root, e.g. "/"; appending another separator would then match
+	// nothing and every destination under it would be rejected.
+	sep := string(filepath.Separator)
+	if strings.HasSuffix(root, sep) {
+		return strings.HasPrefix(path, root)
+	}
+
+	return strings.HasPrefix(path, root+sep)
 }
 
 // resolveExisting runs filepath.EvalSymlinks on path and, when trailing

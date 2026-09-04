@@ -235,8 +235,10 @@ export interface components {
       version: string;
     };
     TaskDTO: {
+      /** Format: date-time */
       added_at: string;
       category: string | null;
+      /** Format: date-time */
       completed_at: string | null;
       /** Format: int64 */
       completed_bytes: number;
@@ -275,6 +277,7 @@ export interface components {
       sequential: boolean;
       source_kind: string;
       source_uri: string | null;
+      /** Format: date-time */
       started_at: string | null;
       state: string;
       tags: string[] | null;
@@ -286,6 +289,7 @@ export interface components {
       ul_limit: number;
       /** Format: int64 */
       unzip_progress: number | null;
+      /** Format: date-time */
       updated_at: string;
       /** Format: int64 */
       upload_rate: number;
