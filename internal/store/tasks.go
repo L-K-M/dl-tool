@@ -331,6 +331,13 @@ func (s *TaskStore) UpdateProgress(ctx context.Context, id string, p Progress) e
 // stored — a reconciliation loop re-learning it — writes nothing at all.
 // A missing id is ErrNotFound.
 func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) error {
+	// An empty handle is a caller bug — an adapter with no handle yet
+	// must simply not call — and writing it would wipe a good handle while
+	// logging a meaningless acceptance.
+	if engineRef == "" {
+		return fmt.Errorf("store: set engine ref of task %q: empty engine ref", id)
+	}
+
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: set engine ref of task %q: %w", id, err)

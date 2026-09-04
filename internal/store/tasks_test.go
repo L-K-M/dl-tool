@@ -441,6 +441,16 @@ func TestSetEngineRefWritesEvent(t *testing.T) {
 	}
 	require.Equal(t, 2, count)
 
+	// An empty handle is refused outright: no row write, no event.
+	err = tasks.SetEngineRef(t.Context(), task.ID, "")
+	require.ErrorContains(t, err, "empty engine ref")
+	row, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, row.EngineRef)
+	events, _, total, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+
 	// A handle aimed at a missing task writes neither the handle nor the
 	// event.
 	err = tasks.SetEngineRef(t.Context(), "tsk_missing", "2089b05ecca3d829")
