@@ -408,6 +408,10 @@ func TestSetEngineRefWritesEvent(t *testing.T) {
 	// — writes nothing at all: no event, and not even an updated_at bump.
 	before, err := tasks.Get(t.Context(), task.ID)
 	require.NoError(t, err)
+	// Advance past the previous write's millisecond so a buggy
+	// updated_at bump on the re-set cannot hide inside the same tick.
+	for time.Now().UnixMilli() <= before.UpdatedAt {
+	}
 	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "2089b05ecca3d829"))
 	after, err := tasks.Get(t.Context(), task.ID)
 	require.NoError(t, err)
