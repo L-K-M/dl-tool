@@ -155,9 +155,10 @@ func (s *TaskStore) Get(ctx context.Context, id string) (Task, error) {
 }
 
 // UpdateProgress replaces the transfer counters of a task and bumps
-// updated_at.
+// updated_at. A missing id is ErrNotFound: the poller reads that as the
+// signal to stop polling the task.
 func (s *TaskStore) UpdateProgress(ctx context.Context, id string, p Progress) error {
-	_, err := s.db.ExecContext(
+	result, err := s.db.ExecContext(
 		ctx,
 		queryUpdateTaskProgress,
 		p.TotalBytes, p.CompletedBytes, p.UploadedBytes,
@@ -168,16 +169,32 @@ func (s *TaskStore) UpdateProgress(ctx context.Context, id string, p Progress) e
 		return fmt.Errorf("store: update progress of task %q: %w", id, err)
 	}
 
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update progress of task %q: count rows: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: update progress of task %q: %w", id, ErrNotFound)
+	}
+
 	return nil
 }
 
 // SetEngineRef records the engine-side identity (aria2 GID, qBittorrent
 // infohash, yt-dlp job id) once the engine accepted the task, and bumps
-// updated_at.
+// updated_at. A missing id is ErrNotFound.
 func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) error {
-	_, err := s.db.ExecContext(ctx, querySetTaskEngineRef, engineRef, time.Now().UnixMilli(), id)
+	result, err := s.db.ExecContext(ctx, querySetTaskEngineRef, engineRef, time.Now().UnixMilli(), id)
 	if err != nil {
 		return fmt.Errorf("store: set engine ref of task %q: %w", id, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: set engine ref of task %q: count rows: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: set engine ref of task %q: %w", id, ErrNotFound)
 	}
 
 	return nil

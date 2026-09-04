@@ -166,6 +166,13 @@ func TestTaskMutators(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "gid-1", *got.EngineRef)
 	require.GreaterOrEqual(t, got.UpdatedAt, afterProgress)
+
+	// A mutator aimed at a missing task is ErrNotFound, never a silent
+	// success: the poller reads that as the signal to stop polling.
+	err = tasks.UpdateProgress(t.Context(), "tsk_missing", progress)
+	require.ErrorIs(t, err, ErrNotFound)
+	err = tasks.SetEngineRef(t.Context(), "tsk_missing", "gid-2")
+	require.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestTransitionTable(t *testing.T) {
