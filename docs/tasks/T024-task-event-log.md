@@ -175,17 +175,17 @@ Checking formatting...
 All matched files use Prettier code style!
 $ make test PKG=./internal/...
 go test -race -count=1 ./internal/...
-ok  	github.com/L-K-M/dl-tool/internal/api	40.770s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.187s
+ok  	github.com/L-K-M/dl-tool/internal/api	38.446s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.082s
 ok  	github.com/L-K-M/dl-tool/internal/engine	1.031s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.095s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.085s
 ?   	github.com/L-K-M/dl-tool/internal/fsx	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.682s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.194s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.321s
-ok  	github.com/L-K-M/dl-tool/internal/store	60.060s
-ok  	github.com/L-K-M/dl-tool/internal/sync	2.023s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.039s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.338s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.166s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.199s
+ok  	github.com/L-K-M/dl-tool/internal/store	57.758s
+ok  	github.com/L-K-M/dl-tool/internal/sync	2.040s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.040s
 ```
 
 The two named tests, from a `-v` run of the same tree:

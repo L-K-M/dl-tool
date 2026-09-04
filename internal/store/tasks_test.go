@@ -405,8 +405,13 @@ func TestSetEngineRefWritesEvent(t *testing.T) {
 	require.Equal(t, events[0].At, events[0].CreatedAt)
 
 	// A no-op re-set — a reconciliation loop re-learning the same handle
-	// — logs nothing: one acceptance, one row.
+	// — writes nothing at all: no event, and not even an updated_at bump.
+	before, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
 	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "2089b05ecca3d829"))
+	after, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	require.Equal(t, before.UpdatedAt, after.UpdatedAt)
 	events, _, total, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
 	require.NoError(t, err)
 	require.Equal(t, 1, total)

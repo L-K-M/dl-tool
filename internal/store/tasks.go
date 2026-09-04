@@ -130,9 +130,15 @@ SET total_bytes = ?, completed_bytes = ?, uploaded_bytes = ?,
     download_rate = ?, upload_rate = ?, eta_seconds = ?, updated_at = ?
 WHERE id = ?`
 
+	// The handle guard is the compare-and-swap discipline of
+	// queryTransitionTask, and it decides the acceptance event atomically:
+	// exactly the write that changed the handle logs engine.accepted, and a
+	// no-op re-set matches no row and writes nothing — not even updated_at,
+	// which a reconciliation loop re-learning the same handle every tick
+	// must not churn.
 	querySetTaskEngineRef = `UPDATE tasks
 SET engine_ref = ?, updated_at = ?
-WHERE id = ?`
+WHERE id = ? AND (engine_ref IS NULL OR engine_ref <> ?)`
 
 	queryTaskState = `SELECT state FROM tasks WHERE id = ?`
 
@@ -318,11 +324,12 @@ func (s *TaskStore) UpdateProgress(ctx context.Context, id string, p Progress) e
 }
 
 // SetEngineRef records the engine-side identity (aria2 GID, qBittorrent
-// infohash, yt-dlp job id) once the engine accepted the task, writing the
-// engine.accepted event in the same transaction — but only when the handle
-// actually changes: a no-op re-set or a reconciliation loop re-learning the
-// same handle must not log another acceptance. A missing id is
-// ErrNotFound.
+// infohash, yt-dlp job id) once the engine accepted the task. A guarded
+// update makes the write itself decide the acceptance event: the handle
+// landing or changing writes the row, bumps updated_at and logs
+// engine.accepted in the same transaction; a re-set of the handle already
+// stored — a reconciliation loop re-learning it — writes nothing at all.
+// A missing id is ErrNotFound.
 func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) error {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -336,8 +343,9 @@ func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) erro
 		}
 	}()
 
-	// The current handle, read inside the transaction, decides whether this
-	// is an acceptance (NULL or a different ref landing) or a no-op re-set.
+	// The current handle read inside the transaction serves one purpose:
+	// telling a missing id (ErrNotFound) from the no-op re-set the guarded
+	// update below answers with zero affected rows.
 	var current *string
 	err = tx.GetContext(ctx, &current, queryTaskEngineRef, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -348,7 +356,7 @@ func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) erro
 	}
 
 	now := time.Now().UnixMilli()
-	result, err := tx.ExecContext(ctx, querySetTaskEngineRef, engineRef, now, id)
+	result, err := tx.ExecContext(ctx, querySetTaskEngineRef, engineRef, now, id, engineRef)
 	if err != nil {
 		return fmt.Errorf("store: set engine ref of task %q: %w", id, err)
 	}
@@ -357,14 +365,21 @@ func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) erro
 		return fmt.Errorf("store: set engine ref of task %q: count rows: %w", id, err)
 	}
 	if affected == 0 {
+		// The guarded update matched nothing because the stored handle is
+		// the same one — a reconciliation loop re-learning it: neither the
+		// write nor the event belongs here.
+		if current != nil && *current == engineRef {
+			return nil
+		}
+
 		return fmt.Errorf("store: set engine ref of task %q: %w", id, ErrNotFound)
 	}
 
-	// The first handle — or a changed one, an engine that took the task
-	// again — is the moment of acceptance (docs/14-conventions.md section 4);
-	// the event rides the same transaction so a task row and its acceptance
-	// never disagree.
-	if current == nil || *current != engineRef {
+	// Exactly the write that changed the handle logs the acceptance — the
+	// first landing, or an engine that took the task again
+	// (docs/14-conventions.md section 4); the event rides the same
+	// transaction so a task row and its acceptance never disagree.
+	if affected == 1 {
 		if err := insertTaskEvent(ctx, tx, id, "info", CodeEngineAccepted, "engine accepted the task", nil, now); err != nil {
 			return fmt.Errorf("store: set engine ref of task %q: %w", id, err)
 		}
