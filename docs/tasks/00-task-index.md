@@ -289,7 +289,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T021 | List, filter and sort tasks | T017, T020 | no | done | [T021](T021-list-and-filter-tasks.md) |
 | T022 | Update a task and apply bulk lifecycle actions | T019, T020, T021 | no | done | [T022](T022-task-actions-and-patch.md) |
 | T023 | Remove a task with or without its data | T020, T021, T022 | no | done | [T023](T023-remove-task-and-data.md) |
-| T024 | Record and serve the per-task event log | T017, T020, T023 | no | todo | [T024](T024-task-event-log.md) |
+| T024 | Record and serve the per-task event log | T017, T020, T023 | no | done | [T024](T024-task-event-log.md) |
 | T025 | Compute rid deltas and stream them over SSE | T011, T021, T022, T024 | no | done | [T025](T025-rid-deltas-over-sse.md) |
 | T026 | Reconcile tasks with the engines at boot and on every poll | T019, T024, T025 | yes | todo | [T026](T026-boot-reconciliation.md) |
 | T027 | List engines and test connectivity | T019, T020 | yes | todo | [T027](T027-list-and-test-engines.md) |
