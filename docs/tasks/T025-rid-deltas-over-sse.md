@@ -174,31 +174,37 @@ Checking formatting...
 All matched files use Prettier code style!
 $ make test PKG=./internal/...
 go test -race -count=1 ./internal/...
-ok  	github.com/L-K-M/dl-tool/internal/api	37.740s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.091s
-ok  	github.com/L-K-M/dl-tool/internal/engine	1.034s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.078s
+ok  	github.com/L-K-M/dl-tool/internal/api	41.114s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.157s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.029s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.082s
 ?   	github.com/L-K-M/dl-tool/internal/fsx	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.353s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.178s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.221s
-ok  	github.com/L-K-M/dl-tool/internal/store	58.814s
-ok  	github.com/L-K-M/dl-tool/internal/sync	3.383s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.038s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.710s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.210s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.176s
+ok  	github.com/L-K-M/dl-tool/internal/store	62.041s
+ok  	github.com/L-K-M/dl-tool/internal/sync	3.367s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.035s
 ```
 
-The named tests, isolated:
+The named tests, isolated (the review fixes add the opaque-source,
+failed-tick and heartbeat-comment cases):
 
 ```
-$ go test ./internal/sync/... -run 'TestDiffOnlyChangedTasks|TestIdleTickPublishesNothing|TestSSEAndSyncPayloadsAreIdentical' -v
+$ go test ./internal/sync/... -run 'TestDiffOnlyChangedTasks|TestIdleTickPublishesNothing|TestSSEAndSyncPayloadsAreIdentical|TestProjectDropsUnsanitizableSources|TestLoopFoldsTheWindowAroundAFailedTick|TestEventsHeartbeatWhileIdle' -v
 === RUN   TestDiffOnlyChangedTasks
 --- PASS: TestDiffOnlyChangedTasks (0.00s)
 === RUN   TestIdleTickPublishesNothing
---- PASS: TestIdleTickPublishesNothing (0.06s)
+--- PASS: TestIdleTickPublishesNothing (0.05s)
+=== RUN   TestLoopFoldsTheWindowAroundAFailedTick
+--- PASS: TestLoopFoldsTheWindowAroundAFailedTick (0.01s)
+=== RUN   TestProjectDropsUnsanitizableSources
+--- PASS: TestProjectDropsUnsanitizableSources (0.00s)
 === RUN   TestSSEAndSyncPayloadsAreIdentical
 --- PASS: TestSSEAndSyncPayloadsAreIdentical (0.60s)
-pass
-ok  	github.com/L-K-M/dl-tool/internal/sync	0.675s
+=== RUN   TestEventsHeartbeatWhileIdle
+--- PASS: TestEventsHeartbeatWhileIdle (0.30s)
+ok  	github.com/L-K-M/dl-tool/internal/sync	0.991s
 ```
 
 Scope:

@@ -1,7 +1,7 @@
 // Delta computation: the projection of store rows onto the canonical Task
-// object of docs/05-api-contract.md section 3, the snapshot diff that feeds
-// Hub.Publish, and the 1 Hz loop that drives it. The wire envelope itself
-// (Delta, Stats, Ring, Hub) belongs to ring.go and hub.go.
+// object of docs/05-api-contract.md section 3, and the snapshot diff that
+// feeds Hub.Publish. The wire envelope (Delta, Stats, Ring, Hub) and the
+// 1 Hz loop that drives the publish belong to ring.go and hub.go.
 
 package sync
 
@@ -71,15 +71,21 @@ func Project(t store.Task) map[string]any {
 
 // displaySourceURI renders the API-safe source reference. The stored
 // source_uri is the server-only engine source and may embed FTP credentials,
-// so userinfo is stripped before a row ever reaches a snapshot; a source that
-// cannot be parsed is never echoed back.
+// so userinfo is stripped before a row ever reaches a snapshot; a source
+// that cannot be parsed is never echoed back.
+//
+// A scheme-less opaque source ("user:pass@host") is dropped whole: there
+// url.Parse sees no authority, so u.User is nil, the credentials ride in
+// u.Opaque and cannot be stripped. Dropping beats echoing what cannot be
+// sanitized; authority forms ("ftp://user:pass@host/...") and magnet links
+// (empty Opaque) still pass through.
 func displaySourceURI(t store.Task) any {
 	if t.SourceURI == nil {
 		return nil
 	}
 
 	u, err := url.Parse(*t.SourceURI)
-	if err != nil {
+	if err != nil || u.Opaque != "" {
 		return nil
 	}
 	u.User = nil

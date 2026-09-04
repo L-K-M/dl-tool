@@ -51,6 +51,7 @@ type snapState struct {
 	mu     stdsync.Mutex
 	tasks  map[string]store.Task
 	failOn bool
+	failed int // snapshot calls that failed, so tests can await real ticks
 }
 
 func newSnapState(tasks ...store.Task) *snapState {
@@ -86,6 +87,7 @@ func (s *snapState) snapshot(context.Context) (isync.Snapshot, error) {
 	defer s.mu.Unlock()
 
 	if s.failOn {
+		s.failed++
 		return nil, errSnapshotUnavailable
 	}
 
@@ -150,19 +152,38 @@ func deltaSince(t *testing.T, hub *isync.Hub, lastEventID string) isync.Delta {
 	return seed
 }
 
-// startLoop runs the hub's diff loop in the background of a test. The
-// loop's exit error lands on a buffered channel so it is handled without
-// blocking a test that never reads it; the loop returns nil on cancel.
+// failedTicks reports how many snapshot calls have failed, so a test can
+// prove the loop really ran its failing branch instead of sleeping past it.
+func (s *snapState) failedTicks() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.failed
+}
+
+// startLoop runs the hub's diff loop in the background of a test. Cleanup
+// cancels the loop and then insists it exited cleanly: a loop that died on
+// its own error would otherwise surface only as a publish timeout.
 func startLoop(t *testing.T, hub *isync.Hub, snap func(context.Context) (isync.Snapshot, error)) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
 	loopDone := make(chan error, 1)
 	go func() {
 		loopDone <- hub.Loop(ctx, 2*time.Millisecond, snap)
 	}()
+
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-loopDone:
+			if err != nil {
+				t.Errorf("hub loop exited with error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Errorf("hub loop did not exit within 2s of cancel")
+		}
+	})
 }
 
 func TestDiffOnlyChangedTasks(t *testing.T) {
@@ -315,13 +336,21 @@ func TestLoopFoldsTheWindowAroundAFailedTick(t *testing.T) {
 
 	waitForRID(t, hub, 1)
 
-	// Fail the source while both a mutation and a removal land.
+	// Fail the source while both a mutation and a removal land. Wait until
+	// the loop has really run (and skipped) a few failed ticks — a fixed
+	// sleep could race past the branch entirely on a loaded runner.
 	state.fail(true)
 	mutated := taskFixture("tsk_a")
 	mutated.CompletedBytes = 1500
 	state.set(mutated)
 	state.remove("tsk_b")
-	time.Sleep(20 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for state.failedTicks() < 3 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if state.failedTicks() < 3 {
+		t.Fatalf("the loop never ran a failed tick in 2s")
+	}
 	if rid := currentRID(t, hub); rid != 1 {
 		t.Fatalf("a failed tick publishes nothing, got rid %d", rid)
 	}
@@ -388,6 +417,30 @@ func TestProjectRendersWireScalars(t *testing.T) {
 	wire = isync.Project(unknown)
 	if wire["progress"] != 0.0 || wire["total_bytes"] != nil {
 		t.Fatalf("unknown size yields progress 0.0 and total_bytes null, got %v %v", wire["progress"], wire["total_bytes"])
+	}
+}
+
+// A source whose credentials cannot be stripped — a scheme-less opaque
+// URI, where they ride in u.Opaque and u.User is nil — is never echoed;
+// authority and magnet sources still render.
+func TestProjectDropsUnsanitizableSources(t *testing.T) {
+	cases := []struct {
+		stored string
+		want   any
+	}{
+		{"ftp://user:secret@mirror.example.org/pub/file.iso", "ftp://mirror.example.org/pub/file.iso"},
+		{"user:secret@mirror.example.org", nil},
+		{"magnet:?xt=urn:btih:abcdef", "magnet:?xt=urn:btih:abcdef"},
+		{"/data/watch/file.torrent", "/data/watch/file.torrent"},
+	}
+
+	for _, tc := range cases {
+		row := taskFixture("tsk_a")
+		row.SourceURI = strPtr(tc.stored)
+
+		if got := isync.Project(row)["source_uri"]; got != tc.want {
+			t.Fatalf("stored %q projects to %v, want %v", tc.stored, got, tc.want)
+		}
 	}
 }
 
@@ -619,7 +672,15 @@ func TestEventsHeartbeatWhileIdle(t *testing.T) {
 
 	body := getEvents(t, testAPI)
 
-	if !strings.Contains(body, ": hb") {
+	// The comment heartbeat asserted through parsed frames: a substring
+	// check against ": hb" would also match inside "event: hb".
+	commentBeats := 0
+	for _, f := range parseFrames(body) {
+		if f.comment == "hb" {
+			commentBeats++
+		}
+	}
+	if commentBeats == 0 {
 		t.Fatalf("the idle stream carries the comment heartbeat:\n%s", body)
 	}
 	if !strings.Contains(body, "event: hb") {
