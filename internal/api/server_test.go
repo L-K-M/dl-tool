@@ -214,6 +214,50 @@ func TestHumaErrorsCarryRegistrySlug(t *testing.T) {
 	}
 }
 
+func TestErrorDetailsHandlesNilAndPreservesOriginal(t *testing.T) {
+	var missing *huma.ErrorDetail
+	original := &huma.ErrorDetail{Message: "invalid", Location: "body.password", Value: "secret-marker"}
+	details := errorDetails([]error{missing, original})
+	if len(details) != 1 || details[0].Value != nil {
+		t.Fatalf("details = %#v, want one sanitized error", details)
+	}
+	if original.Value != "secret-marker" {
+		t.Fatal("sanitization mutated the source error")
+	}
+}
+
+func TestValidationErrorsDoNotEchoCredentials(t *testing.T) {
+	server := newTestServer(t, "")
+	for _, test := range []struct {
+		name, endpoint, body string
+	}{
+		{"short password", "/auth/setup", `{"setup_token":"setup-secret-marker","username":"alice","password":"shh-secret"}`},
+		{"unexpected property", "/auth/setup", `{"setup_token":"setup-secret-marker","username":"alice","password":"password-secret-marker","extra":true}`},
+		{"wrong password type", "/auth/login", `{"username":"alice","password":{"nested":"password-secret-marker"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, apiV1Path+test.endpoint, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			server.Router.ServeHTTP(response, request)
+			problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+			if len(problem.Errors) == 0 {
+				t.Fatal("field errors were lost")
+			}
+			for _, detail := range problem.Errors {
+				if detail.Message == "" || detail.Location == "" {
+					t.Fatal("field error lost its explanation or location")
+				}
+			}
+			for _, secret := range []string{"shh-secret", "setup-secret-marker", "password-secret-marker"} {
+				if strings.Contains(response.Body.String(), secret) {
+					t.Errorf("validation response disclosed %q", secret)
+				}
+			}
+		})
+	}
+}
+
 // TestRealIPHonoursTrustedProxies asserts the X-Forwarded-For rewrite applies
 // only when the direct peer is a configured trusted proxy.
 func TestRealIPHonoursTrustedProxies(t *testing.T) {
