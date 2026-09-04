@@ -19,8 +19,8 @@ Capture commands:
 
 ```sh
 aria2c --enable-rpc --rpc-listen-port=6800 --dir=<DLDIR> --daemon=true
-GID=$(curl -s http://127.0.0.1:6800/jsonrpc -d '{"jsonrpc":"2.0","id":"add","method":"aria2.addUri","params":[["https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.16.tar.xz"],{"max-download-limit":"1M"}]}')
-curl -s http://127.0.0.1:6800/jsonrpc -d "{\"jsonrpc\":\"2.0\",\"id\":\"rec\",\"method\":\"aria2.tellStatus\",\"params\":[$GID,[\"gid\",\"status\",\"totalLength\",\"completedLength\",\"uploadLength\",\"downloadSpeed\",\"uploadSpeed\",\"dir\",\"files\",\"errorCode\",\"errorMessage\",\"infoHash\",\"numSeeders\",\"seeder\",\"connections\",\"followedBy\",\"verifiedLength\",\"verifyIntegrityPending\"]]}" > aria2_tellstatus_1.37.0.json
+GID=$(curl -s http://127.0.0.1:6800/jsonrpc -d '{"jsonrpc":"2.0","id":"add","method":"aria2.addUri","params":[["https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.16.tar.xz"],{"max-download-limit":"1M"}]}' | grep -o '"result":"[a-f0-9]*"' | cut -d'"' -f4)
+curl -s http://127.0.0.1:6800/jsonrpc -d "{\"jsonrpc\":\"2.0\",\"id\":\"rec\",\"method\":\"aria2.tellStatus\",\"params\":[\"$GID\",[\"gid\",\"status\",\"totalLength\",\"completedLength\",\"uploadLength\",\"downloadSpeed\",\"uploadSpeed\",\"dir\",\"files\",\"errorCode\",\"errorMessage\",\"infoHash\",\"numSeeders\",\"seeder\",\"connections\",\"followedBy\",\"verifiedLength\",\"verifyIntegrityPending\"]]}" > aria2_tellstatus_1.37.0.json
 ```
 
 Redaction per docs/13-testing-and-verification.md §5: the local absolute path prefix in `dir` and
