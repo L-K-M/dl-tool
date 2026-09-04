@@ -457,6 +457,13 @@ func (h *TaskHandlers) insertPlanned(
 		return TaskDTO{}, internalFailure(ctx, "create task", err)
 	}
 
+	// One task.created row per accepted URI, the first entry of the task's
+	// event log (FR-150); the insert above succeeded, so the row it names
+	// exists.
+	if err := h.tasks.AppendEvent(ctx, task.ID, "info", store.CodeTaskCreated, "created by user request", nil); err != nil {
+		return TaskDTO{}, internalFailure(ctx, "record task.created", err)
+	}
+
 	if err := h.linkTags(ctx, task.ID, body.Tags); err != nil {
 		return TaskDTO{}, internalFailure(ctx, "link tags", err)
 	}

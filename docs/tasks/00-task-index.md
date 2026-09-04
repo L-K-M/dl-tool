@@ -85,7 +85,7 @@ URI normalisation, the Engine interface, the aria2 adapter, the queue and the ev
 | [T021](T021-list-and-filter-tasks.md) | List, filter and sort tasks | T017, T020 | done |
 | [T022](T022-task-actions-and-patch.md) | Update a task and apply bulk lifecycle actions | T019, T020, T021 | done |
 | [T023](T023-remove-task-and-data.md) | Remove a task with or without its data | T020, T021, T022 | done |
-| [T024](T024-task-event-log.md) | Record and serve the per-task event log | T017, T020, T023 | todo |
+| [T024](T024-task-event-log.md) | Record and serve the per-task event log | T017, T020, T023 | done |
 | [T025](T025-rid-deltas-over-sse.md) | Compute rid deltas and stream them over SSE | T011, T021, T022, T024 | todo |
 | [T026](T026-boot-reconciliation.md) | Reconcile tasks with the engines at boot and on every poll | T019, T024, T025 | todo |
 | [T027](T027-list-and-test-engines.md) | List engines and test connectivity | T019, T020 | todo |

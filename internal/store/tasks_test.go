@@ -285,9 +285,10 @@ func TestTransitionWritesEvent(t *testing.T) {
 	task := createTaskInState(t, tasks, "queued")
 	require.NoError(t, tasks.Transition(t.Context(), task.ID, "downloading", "engine.accepted", "accepted by aria2"))
 
-	events, err := tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 10)
+	events, _, total, err := tasks.ListEvents(t.Context(), task.ID, 10, "")
 	require.NoError(t, err)
 	require.Len(t, events, 1)
+	require.Equal(t, 1, total)
 
 	event := events[0]
 	require.True(t, strings.HasPrefix(event.ID, PrefixTaskEvent))
@@ -305,7 +306,7 @@ func TestTransitionWritesEvent(t *testing.T) {
 	// two transitions share a millisecond and NewID's random part does not
 	// order same-millisecond ULIDs, so the page order is not asserted here:
 	// TestListEventsPagination pins the ordering with deterministic ids.
-	events, err = tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 10)
+	events, _, _, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
 	require.NoError(t, err)
 	require.Len(t, events, 2)
 	// The at half of the ordering contract is deterministic whatever the
@@ -317,6 +318,32 @@ func TestTransitionWritesEvent(t *testing.T) {
 	}
 	require.Equal(t, "info", levels["engine.accepted"])
 	require.Equal(t, "error", levels["engine.failed"])
+}
+
+func TestSetEngineRefWritesEvent(t *testing.T) {
+	db, _, _ := openTestStore(t)
+	tasks := NewTaskStore(db)
+	task := createTaskInState(t, tasks, "queued")
+
+	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "2089b05ecca3d829"))
+
+	events, _, total, err := tasks.ListEvents(t.Context(), task.ID, 10, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Len(t, events, 1)
+	require.Equal(t, CodeEngineAccepted, events[0].Code)
+	require.Equal(t, "info", events[0].Level)
+	require.Nil(t, events[0].DetailJSON)
+	require.Equal(t, events[0].At, events[0].CreatedAt)
+
+	// A handle aimed at a missing task writes neither the handle nor the
+	// event.
+	err = tasks.SetEngineRef(t.Context(), "tsk_missing", "2089b05ecca3d829")
+	require.ErrorIs(t, err, ErrNotFound)
+	events, _, total, err = tasks.ListEvents(t.Context(), "tsk_missing", 10, "")
+	require.NoError(t, err)
+	require.Empty(t, events)
+	require.Zero(t, total)
 }
 
 func TestListEventsPagination(t *testing.T) {
@@ -345,33 +372,41 @@ VALUES (?, ?, ?, 'info', ?, ?, ?, ?, ?)`,
 	}
 
 	var order []string
-	cursor := EventCursor{}
+	cursor := ""
 	for {
-		page, err := tasks.ListEvents(t.Context(), task.ID, cursor, 2)
+		page, next, _, err := tasks.ListEvents(t.Context(), task.ID, 2, cursor)
 		require.NoError(t, err)
-		if len(page) == 0 {
-			break
-		}
 		for _, event := range page {
 			order = append(order, event.Code)
 		}
-		last := page[len(page)-1]
-		cursor = EventCursor{At: last.At, ID: last.ID}
+		// next is empty exactly on the last page, so the walk stops on it
+		// rather than on an empty page — a page that exactly fills the
+		// limit is the last one and carries no cursor.
+		if next == "" {
+			break
+		}
+		cursor = next
 	}
 
 	// Newest first; within one millisecond, the later ULID sorts first.
 	require.Equal(t, []string{"e.five", "e.four", "e.three", "e.two", "e.one"}, order)
 
-	events, err := tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 10)
+	events, _, total, err := tasks.ListEvents(t.Context(), task.ID, 10, "")
 	require.NoError(t, err)
+	require.Equal(t, len(codes), total)
 	require.JSONEq(t, `{"n":0}`, *events[len(events)-1].DetailJSON)
 
-	_, err = tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 0)
+	// The envelope treats an absent limit (0) as the default page size and
+	// still rejects an out-of-range one.
+	events, _, _, err = tasks.ListEvents(t.Context(), task.ID, 0, "")
+	require.NoError(t, err)
+	require.Len(t, events, len(codes))
+	_, _, _, err = tasks.ListEvents(t.Context(), task.ID, 501, "")
 	require.Error(t, err)
 
 	// A typed nil detail stores SQL NULL, not the JSON literal "null".
 	require.NoError(t, tasks.AppendEvent(t.Context(), task.ID, "info", "e.typednil", "typed nil", (*struct{})(nil)))
-	events, err = tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 1)
+	events, _, _, err = tasks.ListEvents(t.Context(), task.ID, 1, "")
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Nil(t, events[0].DetailJSON)

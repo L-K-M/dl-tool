@@ -259,20 +259,44 @@ func (s *TaskStore) UpdateProgress(ctx context.Context, id string, p Progress) e
 }
 
 // SetEngineRef records the engine-side identity (aria2 GID, qBittorrent
-// infohash, yt-dlp job id) once the engine accepted the task, and bumps
-// updated_at. A missing id is ErrNotFound.
+// infohash, yt-dlp job id) once the engine accepted the task, writing the
+// engine.accepted event in the same transaction, and bumps updated_at. A
+// missing id is ErrNotFound.
 func (s *TaskStore) SetEngineRef(ctx context.Context, id, engineRef string) error {
-	result, err := s.db.ExecContext(ctx, querySetTaskEngineRef, engineRef, time.Now().UnixMilli(), id)
+	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: set engine ref of task %q: %w", id, err)
 	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of engine ref failed", "task_id", id, "error", err)
+		}
+	}()
 
+	now := time.Now().UnixMilli()
+	result, err := tx.ExecContext(ctx, querySetTaskEngineRef, engineRef, now, id)
+	if err != nil {
+		return fmt.Errorf("store: set engine ref of task %q: %w", id, err)
+	}
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("store: set engine ref of task %q: count rows: %w", id, err)
 	}
 	if affected == 0 {
 		return fmt.Errorf("store: set engine ref of task %q: %w", id, ErrNotFound)
+	}
+
+	// The handle landing is the moment the engine took ownership of the
+	// transfer (docs/14-conventions.md section 4); the event rides the same
+	// transaction so a task row and its acceptance never disagree.
+	if err := insertTaskEvent(ctx, tx, id, "info", CodeEngineAccepted, "engine accepted the task", nil, now); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: set engine ref of task %q: commit: %w", id, err)
 	}
 
 	return nil
@@ -346,13 +370,8 @@ func errTransitionConflict(id, expected, next string) error {
 	)
 }
 
-// The task_events codes MarkRemoved writes (docs/14-conventions.md
-// section 4: the constant lives next to the emitting code).
-const (
-	codeTaskRemoved     = "task.removed"
-	codeTaskDataDeleted = "task.data_deleted"
-)
-
+// The task_events messages MarkRemoved writes beside the codes the events
+// package owns (CodeTaskRemoved, CodeTaskDataDeleted).
 const (
 	messageTaskRemoved     = "removed by user request"
 	messageTaskDataDeleted = "downloaded data deleted by user request"
@@ -440,11 +459,11 @@ func (s *TaskStore) MarkRemoved(ctx context.Context, id string, data *DeletedDat
 		return errTransitionConflict(id, current, "removed")
 	}
 
-	if err := insertTaskEvent(ctx, tx, id, "info", codeTaskRemoved, messageTaskRemoved, nil, now); err != nil {
+	if err := insertTaskEvent(ctx, tx, id, "info", CodeTaskRemoved, messageTaskRemoved, nil, now); err != nil {
 		return err
 	}
 	if data != nil {
-		if err := insertTaskEvent(ctx, tx, id, "warn", codeTaskDataDeleted, messageTaskDataDeleted, data, now); err != nil {
+		if err := insertTaskEvent(ctx, tx, id, "warn", CodeTaskDataDeleted, messageTaskDataDeleted, data, now); err != nil {
 			return err
 		}
 	}
