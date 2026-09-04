@@ -1096,6 +1096,79 @@ func TestLoginFailureIsIndistinguishable(t *testing.T) {
 	}
 }
 
+func TestLoginThrottleEscalatesAcrossEligibleAttempts(t *testing.T) {
+	for _, username := range []string{"alice", "ALIce"} {
+		t.Run(username, func(t *testing.T) {
+			throttle := newLoginThrottle()
+			now := time.Now()
+			for _, delay := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second} {
+				if _, limited := throttle.checkAccount(username, now); limited {
+					t.Fatal("elapsed backoff still blocks an attempt")
+				}
+				throttle.recordFailure("alice", now)
+				wait, limited := throttle.checkAccount(username, now)
+				if !limited || wait != delay {
+					t.Fatalf("backoff = %s, limited = %v; want %s", wait, limited, delay)
+				}
+				now = now.Add(delay)
+				throttle.sweepLocked(now)
+			}
+		})
+	}
+}
+
+func TestLoginThrottleBackoffCapAndReset(t *testing.T) {
+	throttle := newLoginThrottle()
+	now := time.Now()
+	for range 2 * throttleBackoffMaxShift {
+		throttle.recordFailure("Alice", now)
+	}
+	if wait, limited := throttle.checkAccount("alice", now); !limited || wait != throttleBackoffCap {
+		t.Fatalf("capped wait = %s, limited = %v", wait, limited)
+	}
+	throttle.recordSuccess("ALICE")
+	if _, limited := throttle.checkAccount("alice", now); limited {
+		t.Fatal("success did not reset the ladder")
+	}
+	throttle.recordFailure("alice", now)
+	if wait, _ := throttle.checkAccount("alice", now); wait != throttleBackoffStart {
+		t.Fatalf("wait after success = %s, want %s", wait, throttleBackoffStart)
+	}
+}
+
+func TestLoginThrottleSourceReservationIsAtomic(t *testing.T) {
+	throttle := newLoginThrottle()
+	now := time.Now()
+	results := make(chan bool, 2*throttleSourceCapacity)
+	for range cap(results) {
+		go func() {
+			_, limited := throttle.checkSource("peer", now)
+			results <- limited
+		}()
+	}
+	accepted := 0
+	for range cap(results) {
+		if !<-results {
+			accepted++
+		}
+	}
+	if accepted != throttleSourceCapacity {
+		t.Fatalf("admitted %d concurrent attempts, want %d", accepted, throttleSourceCapacity)
+	}
+
+	// A token bucket refills gradually, not all at once after five minutes.
+	refill := throttleSourceWindow / throttleSourceCapacity
+	if wait, limited := throttle.checkSource("peer", now); !limited || wait != refill {
+		t.Fatalf("empty bucket: wait %s, limited %v; want %s", wait, limited, refill)
+	}
+	if _, limited := throttle.checkSource("peer", now.Add(refill)); limited {
+		t.Fatal("one refill interval must admit one attempt")
+	}
+	if _, limited := throttle.checkSource("peer", now.Add(refill)); !limited {
+		t.Fatal("one refill interval admitted a second attempt")
+	}
+}
+
 // TestAccountBackoffAfterFailures pins the per-account ladder of doc 12
 // section 6.3: the second rapid failure for one account answers 429 with
 // Retry-After.

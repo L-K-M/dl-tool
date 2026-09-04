@@ -75,8 +75,8 @@ const (
 	eventLoginFailed = "auth.login_failed"
 	eventSetupFailed = "auth.setup_failed"
 
-	// Brute-force controls of doc 12 section 6.3. The account ladder resets
-	// once a wait has fully elapsed, so there is never a permanent lockout.
+	// Brute-force controls of doc 12 section 6.3. Waiting permits another
+	// attempt; only success or inactivity resets consecutive failures.
 	throttleSourceCapacity = 10
 	throttleSourceWindow   = 5 * time.Minute
 	throttleBackoffStart   = 1 * time.Second
@@ -502,149 +502,121 @@ func internalFailure(ctx context.Context, operation string, err error) error {
 	return Problem(SlugInternal, http.StatusInternalServerError, "an internal error occurred")
 }
 
-// loginThrottle implements the brute-force controls of doc 12 section 6.3:
-// a per-account exponential backoff and a per-source-IP attempt budget.
-// Both answer through rateLimited; neither ever locks an account out
-// permanently — the ladder resets once its wait has fully elapsed.
+// loginThrottle combines an account backoff with atomic source admission.
 type loginThrottle struct {
 	mu       sync.Mutex
 	accounts map[string]time.Time // username → earliest next attempt
-	failures map[string]int       // consecutive failures feeding the ladder
-	sources  map[string][]time.Time
+	failures map[string]int
+	sources  map[string]sourceBucket
+}
+
+// sourceBucket measures tokens in refill time, avoiding fractional rounding.
+type sourceBucket struct {
+	credit time.Duration
+	at     time.Time
 }
 
 func newLoginThrottle() loginThrottle {
 	return loginThrottle{
 		accounts: map[string]time.Time{},
 		failures: map[string]int{},
-		sources:  map[string][]time.Time{},
+		sources:  map[string]sourceBucket{},
 	}
 }
 
-// checkAccount reports the remaining wait when the account's backoff has not
-// elapsed. An elapsed wait resets the ladder, so waits stay bounded.
+// accountKey matches SQLite's ASCII-only NOCASE username comparison.
+func accountKey(username string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, username)
+}
+
+// checkAccount allows an elapsed wait without erasing consecutive failures.
 func (t *loginThrottle) checkAccount(username string, now time.Time) (time.Duration, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	username = accountKey(username)
 	eligible, pending := t.accounts[username]
-	if !pending || !now.Before(eligible) {
+	if pending && now.Sub(eligible) >= throttleBackoffCap {
 		delete(t.accounts, username)
 		delete(t.failures, username)
-
+	}
+	if !pending || !now.Before(eligible) {
 		return 0, false
 	}
 
 	return eligible.Sub(now), true
 }
 
-// checkSource reports the remaining wait when the peer has exhausted its
-// attempts for the window.
+// checkSource reserves an attempt before password work, even under concurrency.
 func (t *loginThrottle) checkSource(ip string, now time.Time) (time.Duration, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	attempts := t.sources[ip][:0:0]
-	for _, attempt := range t.sources[ip] {
-		if now.Sub(attempt) < throttleSourceWindow {
-			attempts = append(attempts, attempt)
-		}
+	bucket, exists := t.sources[ip]
+	if !exists {
+		bucket = sourceBucket{credit: throttleSourceWindow, at: now}
 	}
-	t.sources[ip] = attempts
-	if len(attempts) == 0 {
-		// Peer addresses are unbounded; drop empty buckets so the map cannot
-		// grow forever.
-		delete(t.sources, ip)
-
-		return 0, false
-	}
-	if len(attempts) < throttleSourceCapacity {
-		return 0, false
+	if now.After(bucket.at) {
+		bucket.credit += min(now.Sub(bucket.at), throttleSourceWindow-bucket.credit)
+		bucket.at = now
 	}
 
-	return throttleSourceWindow - now.Sub(attempts[0]), true
+	const attemptCost = throttleSourceWindow / throttleSourceCapacity
+	if bucket.credit < attemptCost {
+		t.sources[ip] = bucket
+		return attemptCost - bucket.credit, true
+	}
+
+	bucket.credit -= attemptCost
+	t.sources[ip] = bucket
+	if len(t.sources) > throttleSweepFloor {
+		t.sweepLocked(now)
+	}
+	return 0, false
 }
 
-// recordFailure escalates the account's ladder and consumes one attempt of
-// the peer's budget.
-func (t *loginThrottle) recordFailure(username, ip string, now time.Time) {
+// recordFailure escalates only the account; source admission already spent a token.
+func (t *loginThrottle) recordFailure(username string, now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	failures := t.failures[username] + 1
+	username = accountKey(username)
+	failures := min(t.failures[username]+1, throttleBackoffMaxShift+1)
 	t.failures[username] = failures
-
-	shift := failures - 1
-	if shift > throttleBackoffMaxShift {
-		shift = throttleBackoffMaxShift
-	}
-	delay := throttleBackoffStart << shift
-	if delay > throttleBackoffCap {
-		delay = throttleBackoffCap
-	}
+	delay := min(throttleBackoffStart<<(failures-1), throttleBackoffCap)
 	t.accounts[username] = now.Add(delay)
 
-	t.recordSourceAttemptLocked(ip, now)
-	// Username spray grows accounts without growing sources; sweep this map
-	// on its own floor.
 	if len(t.accounts) > throttleSweepFloor {
 		t.sweepLocked(now)
 	}
 }
 
-// recordAttempt consumes one attempt of the peer's budget; the budget of
-// doc 12 section 6.3 counts attempts, successful or not.
-func (t *loginThrottle) recordAttempt(ip string, now time.Time) {
+// recordSuccess clears the account ladder without refunding its source token.
+func (t *loginThrottle) recordSuccess(username string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.recordSourceAttemptLocked(ip, now)
-}
-
-// recordSuccess clears the account's ladder and consumes one attempt.
-func (t *loginThrottle) recordSuccess(username, ip string, now time.Time) {
-	t.mu.Lock()
+	username = accountKey(username)
 	delete(t.accounts, username)
 	delete(t.failures, username)
-	t.mu.Unlock()
-
-	t.recordAttempt(ip, now)
 }
 
-func (t *loginThrottle) recordSourceAttemptLocked(ip string, now time.Time) {
-	attempts := append(t.sources[ip], now)
-	// Only the newest capacity entries can matter; drop the rest.
-	if len(attempts) > throttleSourceCapacity {
-		attempts = attempts[len(attempts)-throttleSourceCapacity:]
-	}
-	t.sources[ip] = attempts
-
-	if len(t.sources) > throttleSweepFloor {
-		t.sweepLocked(now)
-	}
-}
-
-// sweepLocked drops every entry whose wait or window has fully elapsed, so
-// sprayed usernames and rotating addresses cannot pin memory forever. It
-// runs opportunistically once a map outgrows the sweep floor.
+// sweepLocked retains recent failures, but drops inactive account and source keys.
 func (t *loginThrottle) sweepLocked(now time.Time) {
 	for username, eligible := range t.accounts {
-		if !now.Before(eligible) {
+		if now.Sub(eligible) >= throttleBackoffCap {
 			delete(t.accounts, username)
 			delete(t.failures, username)
 		}
 	}
-	for ip, attempts := range t.sources {
-		kept := attempts[:0:0]
-		for _, attempt := range attempts {
-			if now.Sub(attempt) < throttleSourceWindow {
-				kept = append(kept, attempt)
-			}
-		}
-		if len(kept) == 0 {
+	for ip, bucket := range t.sources {
+		if now.Sub(bucket.at) >= throttleSourceWindow {
 			delete(t.sources, ip)
-		} else {
-			t.sources[ip] = kept
 		}
 	}
 }
@@ -797,7 +769,6 @@ func (a *authService) handleSetup(ctx context.Context, input *setupInput) (*setu
 		// The source budget covers token guessing; the per-account ladder is
 		// for login only — an attacker must not pre-load it for a username
 		// they pick freely during the setup window.
-		a.throttle.recordAttempt(info.PeerIP, now)
 		logFromContext(ctx).Warn(eventSetupFailed, slog.String("source_ip", info.PeerIP))
 
 		return nil, unauthenticated(setupTokenDetail)
@@ -828,7 +799,6 @@ func (a *authService) handleSetup(ctx context.Context, input *setupInput) (*setu
 	}
 	a.setupToken = ""
 	a.setupDone.Store(true)
-	a.throttle.recordAttempt(info.PeerIP, now)
 
 	envelope, cookieValue, err := a.issueSession(ctx, user, now)
 	if err != nil {
@@ -895,7 +865,7 @@ func (a *authService) handleLogin(ctx context.Context, input *loginInput) (*logi
 		logFromContext(ctx).Debug("password hash is below the current parameters; upgrade it on the next password change")
 	}
 
-	a.throttle.recordSuccess(input.Body.Username, info.PeerIP, now)
+	a.throttle.recordSuccess(input.Body.Username)
 	if err := store.TouchLastLogin(ctx, a.db, user.ID, now.UnixMilli()); err != nil {
 		return nil, internalFailure(ctx, "touch last login", err)
 	}
@@ -917,7 +887,7 @@ func (a *authService) handleLogin(ctx context.Context, input *loginInput) (*logi
 // loginRejected records the failure and answers the one 401 every login
 // failure shares.
 func (a *authService) loginRejected(ctx context.Context, username, ip string, now time.Time) error {
-	a.throttle.recordFailure(username, ip, now)
+	a.throttle.recordFailure(username, now)
 	logFromContext(ctx).Warn(eventLoginFailed, slog.String("source_ip", ip))
 
 	return unauthenticated(loginRejectionDetail)

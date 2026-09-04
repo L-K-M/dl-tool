@@ -215,6 +215,18 @@ Notes:
   the handlers that use them. File a doc-12 §6.3 amendment (or an ADR note) recording this
   placement so later tasks find them.
 
+Audit regressions cover backoff escalation, case-equivalent usernames, atomic source admission,
+refill and reset.
+
+```text
+$ make test PKG='./internal/api/... ./internal/secure/... ./internal/store/...' && echo SETUP_OK
+go test -race -count=1 ./internal/api/... ./internal/secure/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	42.696s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.065s
+ok  	github.com/L-K-M/dl-tool/internal/store	59.117s
+SETUP_OK
+```
+
 ## Blocked
 
 None. An earlier session stopped here because `internal/api/server.go` — the registration
