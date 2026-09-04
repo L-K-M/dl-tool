@@ -10,7 +10,7 @@
 | **Parallel-safe** | no — extends the shared `internal/api/tasks.go` |
 | **Implements** | [FR-150](../02-requirements.md#fr-150-record-a-per-task-event-log) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |
-| **Est. size** | 2 new files, ~250 LOC |
+| **Est. size** | 2 new files, 5 edits, ~250 LOC |
 
 ## Goal
 Every state transition and every engine outcome writes one `task_events` row carrying a stable dotted code,
@@ -26,10 +26,13 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
+| `internal/api/server.go` | modify | Register `list-task-events`. |
+| `internal/api/tasks.go` | edit | Emit `task.created` (`store.CodeTaskCreated`) in `insertPlanned` after the insert of each accepted URI. |
 | `internal/api/tasks_events.go` | create | The `GET /tasks/{id}/events` handler. |
 | `internal/api/tasks_events_test.go` | create | Ordering, pagination and end-to-end coverage of the codes. |
 | `internal/store/events.go` | modify | Add the code constants and the cursor query. |
-| `internal/api/server.go` | modify | Register `list-task-events`. |
+| `internal/store/tasks.go` | edit | Emit `engine.accepted` (`store.CodeEngineAccepted`) inside `SetEngineRef`, transactionally with the handle write. |
+| `internal/store/tasks_test.go` | edit | Migrate the `ListEvents` call sites to the envelope signature; cover the `SetEngineRef` emission. |
 
 No other file may be modified.
 
@@ -158,30 +161,11 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Blocked
 
-**Step 7's emission points and the `ListEvents` envelope cannot be built from the Files table: T017
-and T020 already shipped the pieces this task was written to add, against different shapes.**
-
-1. **`ListEvents` already exists with a different signature.** T017 shipped
-   `ListEvents(ctx, taskID, cursor EventCursor, limit int) ([]TaskEvent, error)` plus tests in
-   `internal/store/tasks_test.go` that pin it at five call sites (`TestTransitionWritesEvent`,
-   `TestListEventsPagination`). This task's interface contract requires the cursor-envelope shape
-   `ListEvents(ctx, taskID, limit, cursor string) (items, nextCursor, total, err)`; migrating breaks
-   the compilation of `internal/store/tasks_test.go`, which no Files-table row covers.
-2. **`task.created` has no emission point in the table.** Step 7 and acceptance criterion 1 require
-   one row at insert. The insert runs in `TaskStore.Create` (`internal/store/tasks.go`) called by
-   `insertPlanned` (`internal/api/tasks.go`); neither file is in the table, and no in-table file sits
-   on the create path.
-3. **`engine.accepted` has no emission point either.** The store's handle-recording moment is
-   `SetEngineRef` (`internal/store/tasks.go`, outside the table). `engine.unavailable`/`engine.rejected`
-   have **no call site at all in M1**: POST /tasks deliberately contacts no engine (the admission pass
-   T098 owns `Engine.Add`), so there is no engine refusal moment to hook. Those two codes ship as
-   constants now and their emission points arrive with T098.
-
-**Minimal amendment:** add to the Files table —
-`internal/api/tasks.go | edit | Emit task.created (store.CodeTaskCreated) in insertPlanned after the
-insert of each accepted URI.`, `internal/store/tasks.go | edit | Emit engine.accepted
-(store.CodeEngineAccepted) inside SetEngineRef, transactionally with the handle write.` and
-`internal/store/tasks_test.go | edit | Migrate the ListEvents call sites to the envelope signature;
-cover the SetEngineRef emission.` Nothing else changes: the API-level `task.created` home matches the
-conventions table ("`task.` — Task lifecycle in `internal/api` and `internal/store`") and keeps the
-emission out of the store-level fixtures the actions and delete tests seed through `store.Create`.
+None. An earlier session stopped here because three rows were missing from the Files table: T017
+had already shipped `ListEvents` with a different signature pinned by five test call sites, and the
+`task.created` and `engine.accepted` emission points live in `internal/api/tasks.go` and
+`internal/store/tasks.go`. The amendment it proposed is the three rows above (`internal/api/tasks.go`,
+`internal/store/tasks.go`, `internal/store/tasks_test.go`); the task then proceeded with no other
+scope change. `engine.unavailable` and `engine.rejected` ship as constants with no M1 emission
+point: POST /tasks contacts no engine (the admission pass T098 owns `Engine.Add`), so no refusal
+moment exists to hook; T098 wires them.
