@@ -190,17 +190,7 @@ func (s *TaskStore) Create(ctx context.Context, t Task) (Task, error) {
 		return Task{}, err
 	}
 
-	_, err := s.db.ExecContext(
-		ctx,
-		queryCreateTask,
-		t.ID, t.Engine, t.EngineRef, t.SourceKind, t.SourceURI, t.Name,
-		t.InfohashV1, t.InfohashV2, t.State, t.ErrorCode, t.ErrorMessage,
-		t.Destination, t.ContentPath, t.CategoryID, t.TotalBytes, t.CompletedBytes,
-		t.UploadedBytes, t.DownloadRate, t.UploadRate, t.ETASeconds,
-		t.Sequential, t.QueuePosition, t.AddedAt, t.StartedAt, t.CompletedAt,
-		t.CreatedAt, t.UpdatedAt,
-	)
-	if err != nil {
+	if err := insertTaskRow(ctx, s.db, t); err != nil {
 		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
 	}
 
@@ -227,7 +217,28 @@ func (s *TaskStore) CreateLogged(ctx context.Context, t Task) (Task, error) {
 		}
 	}()
 
-	if _, err := tx.ExecContext(
+	if err := insertTaskRow(ctx, tx, t); err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
+	}
+
+	if err := insertTaskEvent(ctx, tx, t.ID, "info", CodeTaskCreated, messageTaskCreated, nil, t.CreatedAt); err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Task{}, fmt.Errorf("store: create task %q: commit: %w", t.Name, err)
+	}
+
+	return t, nil
+}
+
+// insertTaskRow writes one tasks row through the executor both creation
+// paths share, so the column list and its argument list exist exactly once
+// — a schema change that misses an edit here fails to compile, not bind
+// values to the wrong column silently. ext is *sqlx.DB or a *sqlx.Tx, the
+// same contract insertTaskEvent has.
+func insertTaskRow(ctx context.Context, ext sqlx.ExtContext, t Task) error {
+	_, err := ext.ExecContext(
 		ctx,
 		queryCreateTask,
 		t.ID, t.Engine, t.EngineRef, t.SourceKind, t.SourceURI, t.Name,
@@ -236,19 +247,9 @@ func (s *TaskStore) CreateLogged(ctx context.Context, t Task) (Task, error) {
 		t.UploadedBytes, t.DownloadRate, t.UploadRate, t.ETASeconds,
 		t.Sequential, t.QueuePosition, t.AddedAt, t.StartedAt, t.CompletedAt,
 		t.CreatedAt, t.UpdatedAt,
-	); err != nil {
-		return Task{}, fmt.Errorf("store: create task %q: %w", t.Name, err)
-	}
+	)
 
-	if err := insertTaskEvent(ctx, tx, t.ID, "info", CodeTaskCreated, messageTaskCreated, nil, t.CreatedAt); err != nil {
-		return Task{}, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return Task{}, fmt.Errorf("store: create task %q: commit: %w", t.Name, err)
-	}
-
-	return t, nil
+	return err
 }
 
 // prepareNewTask fills a task row's generated defaults: the id when empty,

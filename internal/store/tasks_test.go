@@ -352,6 +352,32 @@ func TestCreateLoggedWritesEvent(t *testing.T) {
 	require.Zero(t, total)
 }
 
+// TestCreateLoggedRollsBackWhenEventFails pins the transaction's reason to
+// exist: when the event insert fails, the task insert dies with it, so no
+// task row can persist without the first entry of its log.
+func TestCreateLoggedRollsBackWhenEventFails(t *testing.T) {
+	db, _, _ := openTestStore(t)
+
+	// Make the event insert fail deterministically: with task_events gone,
+	// the task INSERT still succeeds and only insertTaskEvent errors.
+	if _, err := db.Exec(`DROP TABLE task_events`); err != nil {
+		t.Fatalf("drop task_events: %v", err)
+	}
+
+	tasks := NewTaskStore(db)
+	_, err := tasks.CreateLogged(t.Context(), Task{
+		Engine:      "aria2",
+		SourceKind:  "http",
+		Name:        "rollback-fixture",
+		Destination: "/data",
+	})
+	require.ErrorContains(t, err, "rollback-fixture")
+
+	var count int
+	require.NoError(t, db.GetContext(t.Context(), &count, `SELECT COUNT(*) FROM tasks`))
+	require.Zero(t, count, "the task row survived the failed event insert")
+}
+
 func TestSetEngineRefWritesEvent(t *testing.T) {
 	db, _, _ := openTestStore(t)
 	tasks := NewTaskStore(db)

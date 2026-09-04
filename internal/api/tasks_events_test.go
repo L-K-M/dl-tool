@@ -201,11 +201,28 @@ func TestListTaskEventsUnknownTask(t *testing.T) {
 }
 
 // TestListTaskEventsRejectsStaleCursor pins the 422 of a cursor this
-// endpoint never issued (doc 05 section 1.4).
+// endpoint never issued (doc 05 section 1.4). The body is asserted field
+// by field so the hand-built model cannot drift from what Problem builds
+// for the same slug and status.
 func TestListTaskEventsRejectsStaleCursor(t *testing.T) {
 	env := newTasksTestEnv(t)
 	id := env.createLifecycleTask(t)
 
 	response := env.getTaskEvents(t, id, "?cursor=not-a-token")
-	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	// Field by field, so the hand-built model cannot drift from what
+	// Problem builds for the same slug and status.
+	if problem.Title != http.StatusText(http.StatusUnprocessableEntity) {
+		t.Errorf("title = %q, want %q", problem.Title, http.StatusText(http.StatusUnprocessableEntity))
+	}
+	if problem.Detail != staleCursorDetail {
+		t.Errorf("detail = %q, want %q", problem.Detail, staleCursorDetail)
+	}
+	if len(problem.Errors) != 1 {
+		t.Fatalf("errors = %+v, want exactly one", problem.Errors)
+	}
+	if problem.Errors[0].Message != staleCursorDetail || problem.Errors[0].Location != "query.cursor" {
+		t.Errorf("errors[0] = %+v, want message %q at query.cursor", problem.Errors[0], staleCursorDetail)
+	}
 }

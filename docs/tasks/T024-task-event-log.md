@@ -175,17 +175,17 @@ Checking formatting...
 All matched files use Prettier code style!
 $ make test PKG=./internal/...
 go test -race -count=1 ./internal/...
-ok  	github.com/L-K-M/dl-tool/internal/api	38.367s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.080s
-ok  	github.com/L-K-M/dl-tool/internal/engine	1.034s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.083s
+ok  	github.com/L-K-M/dl-tool/internal/api	38.810s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.096s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.032s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.087s
 ?   	github.com/L-K-M/dl-tool/internal/fsx	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.549s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.190s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.272s
-ok  	github.com/L-K-M/dl-tool/internal/store	57.815s
-ok  	github.com/L-K-M/dl-tool/internal/sync	2.045s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.039s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.438s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.179s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.145s
+ok  	github.com/L-K-M/dl-tool/internal/store	58.109s
+ok  	github.com/L-K-M/dl-tool/internal/sync	2.022s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.040s
 ```
 
 The two named tests, from a `-v` run of the same tree:
@@ -195,8 +195,8 @@ $ go test ./internal/api/ -run 'TestEventLogCoversLifecycle|TestEventCursorWalks
 === RUN   TestEventLogCoversLifecycle
 --- PASS: TestEventLogCoversLifecycle (0.06s)
 === RUN   TestEventCursorWalksEveryRowOnce
---- PASS: TestEventCursorWalksEveryRowOnce (0.06s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.135s
+--- PASS: TestEventCursorWalksEveryRowOnce (0.08s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.156s
 ```
 
 Scope check:
