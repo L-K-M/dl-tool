@@ -201,5 +201,18 @@ internal/store/users.go
 ```
 Exactly the paths in the Files table, and nothing else.
 
+Audit regression: proxy TLS and cookie lifetime, verified through `Server.Router`.
+
+```text
+$ go test -race ./internal/api -run 'TestSessionCookie|TestRealIP|TestLogout' -count=1
+ok  	github.com/L-K-M/dl-tool/internal/api	5.589s
+$ make test PKG='./internal/api/... ./internal/secure/... ./internal/store/...' && echo AUTH_OK
+go test -race -count=1 ./internal/api/... ./internal/secure/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	45.001s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.106s
+ok  	github.com/L-K-M/dl-tool/internal/store	59.765s
+AUTH_OK
+```
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
