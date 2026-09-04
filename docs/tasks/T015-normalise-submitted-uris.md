@@ -190,8 +190,10 @@ ok  	github.com/L-K-M/dl-tool/internal/uri	1.035s
 `TestParseED2K` all run and pass (22 + 32 + 14 + 9 = 77 subtests, counted at 5112f24):
 
 ```
-$ go test -race -count=1 -v ./internal/uri/... 2>&1 | grep -Ec '^=== RUN\s+Test.*/'
+$ go test -race -count=1 -v ./internal/uri/... 2>&1 | grep -Ec '^=== RUN[[:space:]]+Test.*/'
 77
+$ git rev-parse --short HEAD
+5112f24
 ```
 
 Scope check (files staged for the task commit):
