@@ -179,7 +179,62 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
 
+`make lint && make test PKG=./internal/engine/...`:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+$ make test PKG=./internal/engine/...
+go test -race -count=1 ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.029s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.100s
+```
+
+The four named tests all run and pass:
+
+```
+$ go test -race -count=1 -run 'TestCallSendsToken|TestAddURI|TestSetFilesRejectsPriorities|TestRegistry' -v ./internal/engine/aria2/
+=== RUN   TestCallSendsToken
+--- PASS: TestCallSendsToken (0.00s)
+=== RUN   TestAddURI
+--- PASS: TestAddURI (0.00s)
+=== RUN   TestSetFilesRejectsPriorities
+--- PASS: TestSetFilesRejectsPriorities (0.00s)
+=== RUN   TestRegistry
+--- PASS: TestRegistry (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	1.053s
+```
+
+Fault-message verification: `curl -sL
+https://raw.githubusercontent.com/aria2/aria2/release-1.37.0/src/RpcMethodImpl.cc`
+greps the gid-missing and state-ambiguous fault strings quoted in
+`isNotFoundMessage` and its doc comment.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/engine/aria2/client.go
+internal/engine/aria2/client_test.go
+internal/engine/registry.go
+```
+
+Exactly the Files table, in that order, and nothing else.
+
+Note on the interface contract — `Remove` is implemented as
+`Remove(ctx, id) error`, matching the committed `engine.Engine` interface
+(docs/06-download-engines.md §1) and the method-mapping table above. The
+two-parameter form in this task's contract block contradicts both and cannot
+satisfy the interface (Go has no method overloading). The `aria2.remove` +
+`aria2.removeDownloadResult` behaviour is as specified. This spec conflict is
+recorded here under Evidence until the contract block is fixed.
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+None — the agent did not stop. The `Remove` signature discrepancy in this file's contract block is a docs typo; the shipped adapter implements the committed one-parameter `engine.Engine` interface (see the note under Evidence).

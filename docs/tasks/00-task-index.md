@@ -80,7 +80,7 @@ URI normalisation, the Engine interface, the aria2 adapter, the queue and the ev
 | [T016](T016-engine-interface-and-router.md) | Define the Engine interface and the protocol router | T004, T015 | done |
 | [T017](T017-task-store-and-state-machine.md) | Persist tasks and enforce the task state machine | T006, T016 | done |
 | [T018](T018-aria2-status-mapping.md) | Map aria2 JSON-RPC status to the canonical task state | T016 | done |
-| [T019](T019-aria2-adapter.md) | Implement the aria2 adapter and the engine registry | T016, T018 | todo |
+| [T019](T019-aria2-adapter.md) | Implement the aria2 adapter and the engine registry | T016, T018 | done |
 | [T020](T020-create-tasks-endpoint.md) | Create tasks from submitted URIs | T007, T008, T015, T016, T017, T019 | todo |
 | [T021](T021-list-and-filter-tasks.md) | List, filter and sort tasks | T017, T020 | todo |
 | [T022](T022-task-actions-and-patch.md) | Update a task and apply bulk lifecycle actions | T019, T020, T021 | todo |
@@ -284,7 +284,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T016 | Define the Engine interface and the protocol router | T004, T015 | yes | done | [T016](T016-engine-interface-and-router.md) |
 | T017 | Persist tasks and enforce the task state machine | T006, T016 | yes | done | [T017](T017-task-store-and-state-machine.md) |
 | T018 | Map aria2 JSON-RPC status to the canonical task state | T016 | yes | done | [T018](T018-aria2-status-mapping.md) |
-| T019 | Implement the aria2 adapter and the engine registry | T016, T018 | no | todo | [T019](T019-aria2-adapter.md) |
+| T019 | Implement the aria2 adapter and the engine registry | T016, T018 | no | done | [T019](T019-aria2-adapter.md) |
 | T020 | Create tasks from submitted URIs | T007, T008, T015, T016, T017, T019 | no | todo | [T020](T020-create-tasks-endpoint.md) |
 | T021 | List, filter and sort tasks | T017, T020 | no | todo | [T021](T021-list-and-filter-tasks.md) |
 | T022 | Update a task and apply bulk lifecycle actions | T019, T020, T021 | no | todo | [T022](T022-task-actions-and-patch.md) |
