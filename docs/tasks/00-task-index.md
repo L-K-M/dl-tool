@@ -77,7 +77,7 @@ URI normalisation, the Engine interface, the aria2 adapter, the queue and the ev
 | Task | Title | Depends on | Status |
 |---|---|---|---|
 | [T015](T015-normalise-submitted-uris.md) | Normalise and decode a submitted URI | T004 | done |
-| [T016](T016-engine-interface-and-router.md) | Define the Engine interface and the protocol router | T004, T015 | todo |
+| [T016](T016-engine-interface-and-router.md) | Define the Engine interface and the protocol router | T004, T015 | done |
 | [T017](T017-task-store-and-state-machine.md) | Persist tasks and enforce the task state machine | T006, T016 | todo |
 | [T018](T018-aria2-status-mapping.md) | Map aria2 JSON-RPC status to the canonical task state | T016 | todo |
 | [T019](T019-aria2-adapter.md) | Implement the aria2 adapter and the engine registry | T016, T018 | todo |

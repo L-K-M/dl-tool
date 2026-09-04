@@ -139,7 +139,44 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/engine/...`:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG=./internal/engine/...
+go test -race -count=1 ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.031s
+```
+
+`go test -race -count=1 -v ./internal/engine/... -run TestRoute` shows all 19 subtests
+PASS: both row-1 decode fixtures, the magnet, `.torrent` URL and both bare-infohash rows of
+row 2, the two row-3 fixtures sharing one `mediaMatch`, rows 4–6 (`http`, `https`, `ftp`,
+`ftps`, `sftp`, `.metalink`, `.meta4`), and the row 7/8/9 rejections asserting
+`errors.Is(err, ErrNoEngine)`.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/engine/engine.go
+internal/engine/router.go
+internal/engine/router_test.go
+```
+
+Exactly the Files table, in that order.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
