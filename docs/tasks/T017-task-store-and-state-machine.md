@@ -186,8 +186,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-`make lint && make test PKG=./internal/store/...`, run on the working tree of this commit
-(origin/main e4854f8 plus the four Files-table paths):
+`make lint && make test PKG=./internal/store/...`, re-run after the review fix (the
+compare-and-swap guard in `Transition`) on the working tree of the HEAD commit:
 
 ```
 $ make lint
@@ -205,23 +205,30 @@ All matched files use Prettier code style!
 
 $ make test PKG=./internal/store/...
 go test -race -count=1 ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/store	9.103s
+ok  	github.com/L-K-M/dl-tool/internal/store	9.292s
 ```
 
 `make lint` printed no findings (`0 issues.`, eslint and prettier silent). One `ok` line, no `FAIL`.
 With `-v`, `TestTaskRoundTrip`, `TestTransitionTable`, `TestTransitionWritesEvent`, `TestTaskMutators`
-and `TestListEventsPagination` all run and pass (104 subtests: 3 round-trip cases plus the exhaustive
-100-pair transition matrix plus the missing-task case):
+and `TestListEventsPagination` all run and pass (105 subtests: 3 round-trip cases, the exhaustive
+100-pair transition matrix, the missing-task case and the stale-state guard case):
 
 ```
 $ go test -race -count=1 -v ./internal/store/... 2>&1 | grep -Ec '^=== RUN[[:space:]]+Test(TaskRoundTrip|TransitionTable|TransitionWritesEvent|TaskMutators|ListEventsPagination)/'
-104
+105
 ```
 
-Scope check (files changed by this commit):
+Scope check: `git status` run with the four task files staged for the first commit, and the
+branch-level check after the review fix:
 
 ```
 $ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/store/events.go
+internal/store/models.go
+internal/store/tasks.go
+internal/store/tasks_test.go
+
+$ git diff --name-only origin/main -- . ':(exclude)docs' | sort
 internal/store/events.go
 internal/store/models.go
 internal/store/tasks.go

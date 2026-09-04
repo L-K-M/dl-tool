@@ -203,6 +203,23 @@ func TestTransitionTable(t *testing.T) {
 		err := tasks.Transition(t.Context(), "tsk_missing", "paused", "test.transition", "test")
 		require.ErrorIs(t, err, ErrNotFound)
 	})
+
+	// The compare-and-swap guard against a concurrent transition
+	// committing between Transition's read and its update: a stale
+	// expected state matches no row and leaves the task untouched.
+	t.Run("stale expected state updates nothing", func(t *testing.T) {
+		task := createTaskInState(t, tasks, "queued")
+
+		result, err := db.ExecContext(t.Context(), queryTransitionTask, "downloading", int64(0), task.ID, "paused")
+		require.NoError(t, err)
+		affected, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.Equal(t, int64(0), affected)
+
+		got, err := tasks.Get(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.Equal(t, "queued", got.State)
+	})
 }
 
 func TestTransitionWritesEvent(t *testing.T) {

@@ -88,9 +88,12 @@ WHERE id = ?`
 
 	queryTaskState = `SELECT state FROM tasks WHERE id = ?`
 
+	// The state guard makes the update a compare-and-swap: a concurrent
+	// transition that committed after the read above turns this into a
+	// no-op instead of a lost update.
 	queryTransitionTask = `UPDATE tasks
 SET state = ?, updated_at = ?
-WHERE id = ?`
+WHERE id = ? AND state = ?`
 )
 
 // TaskStore persists tasks rows and enforces the task state machine.
@@ -208,8 +211,21 @@ func (s *TaskStore) Transition(ctx context.Context, id, next, code, message stri
 	}
 
 	now := time.Now().UnixMilli()
-	if _, err := tx.ExecContext(ctx, queryTransitionTask, next, now, id); err != nil {
+	result, err := tx.ExecContext(ctx, queryTransitionTask, next, now, id, current)
+	if err != nil {
 		return fmt.Errorf("store: transition task %q to %q: %w", id, next, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: transition task %q to %q: count rows: %w", id, next, err)
+	}
+	if affected == 0 {
+		// The state validated above changed underneath this transaction;
+		// the move must be re-evaluated against the new state.
+		return fmt.Errorf(
+			"store: transition task %q from %q to %q: %w",
+			id, current, next, ErrIllegalTransition,
+		)
 	}
 
 	if err := insertTaskEvent(ctx, tx, id, transitionEventLevel(next), code, message, nil, now); err != nil {
