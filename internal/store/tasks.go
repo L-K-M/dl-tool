@@ -169,6 +169,9 @@ func (s *TaskStore) UpdateProgress(ctx context.Context, id string, p Progress) e
 		return fmt.Errorf("store: update progress of task %q: %w", id, err)
 	}
 
+	// SQLite's changes() counts matched rows even when the written values
+	// are identical, so a no-op progress write still reports 1 and 0 means
+	// the task row is genuinely gone.
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("store: update progress of task %q: count rows: %w", id, err)
