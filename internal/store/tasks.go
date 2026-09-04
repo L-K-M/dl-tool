@@ -228,10 +228,7 @@ func (s *TaskStore) Transition(ctx context.Context, id, next, code, message stri
 	if affected == 0 {
 		// The state validated above changed underneath this transaction;
 		// the move must be re-evaluated against the new state.
-		return fmt.Errorf(
-			"store: transition task %q from %q to %q: %w",
-			id, current, next, ErrTransitionConflict,
-		)
+		return errTransitionConflict(id, current, next)
 	}
 
 	if err := insertTaskEvent(ctx, tx, id, transitionEventLevel(next), code, message, nil, now); err != nil {
@@ -243,6 +240,15 @@ func (s *TaskStore) Transition(ctx context.Context, id, next, code, message stri
 	}
 
 	return nil
+}
+
+// errTransitionConflict reports a compare-and-swap miss: expected is the
+// stale state the legality check read, not the state the task is in now.
+func errTransitionConflict(id, expected, next string) error {
+	return fmt.Errorf(
+		"store: transition task %q: expected state %q, attempted move to %q: %w",
+		id, expected, next, ErrTransitionConflict,
+	)
 }
 
 // transitionEventLevel records a move into the error state as an error

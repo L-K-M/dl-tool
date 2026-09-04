@@ -225,6 +225,14 @@ func TestTransitionTable(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "queued", got.State)
 	})
+
+	// The branch itself is unreachable through Transition under this pool,
+	// so pin the sentinel mapping on the error constructor directly.
+	t.Run("conflict error wraps ErrTransitionConflict", func(t *testing.T) {
+		err := errTransitionConflict("tsk_x", "queued", "paused")
+		require.ErrorIs(t, err, ErrTransitionConflict)
+		require.NotErrorIs(t, err, ErrIllegalTransition)
+	})
 }
 
 func TestTransitionWritesEvent(t *testing.T) {
