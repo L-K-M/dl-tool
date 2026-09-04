@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T020 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T007, T008, T015, T016, T017, T019 |
 | **Blocks** | T021, T022, T023, T024, T027, T031, T033, T046, T049, T050, T071, T083, T098, T099, T100, T122 |
 | **Parallel-safe** | no — adds the shared `internal/api/tasks.go` |
@@ -173,7 +173,48 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/api/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+make lint exit: 0
+ok  	github.com/L-K-M/dl-tool/internal/api	4.630s (review round)
+--- PASS: TestCreateTasksMixedBatch
+--- PASS: TestCreateTasksRejectsED2K
+--- PASS: TestCreateTasksRejectsDestination
+--- PASS: TestCreateTasksHidesFTPPassword
+--- PASS: TestCreateTasksValidation (empty, null uris, 51)
+--- PASS: TestCreateTasksUnknownCategory
+--- PASS: TestCreateTasksPaused
+--- PASS: TestCreateTasksExplicitEngine
+--- PASS: TestCreateTasksDuplicateTorrent
+--- PASS: TestCreateTasksRequestedDestination
+--- PASS: TestCreateTasksFilesystemRoot
+--- PASS: TestNewServerRegistersAria2
+ok  	github.com/L-K-M/dl-tool/internal/api	(initial round: 21.137s / 0.230s, four named tests above)
+```
+
+Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'`), the Files table plus the two generated files of docs/13 §7.1:
+
+```
+api/openapi.json
+internal/api/server.go
+internal/api/tasks.go
+internal/api/tasks_test.go
+internal/fsx/safepath.go
+web/src/api/schema.d.ts
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

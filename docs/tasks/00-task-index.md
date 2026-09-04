@@ -81,7 +81,7 @@ URI normalisation, the Engine interface, the aria2 adapter, the queue and the ev
 | [T017](T017-task-store-and-state-machine.md) | Persist tasks and enforce the task state machine | T006, T016 | done |
 | [T018](T018-aria2-status-mapping.md) | Map aria2 JSON-RPC status to the canonical task state | T016 | done |
 | [T019](T019-aria2-adapter.md) | Implement the aria2 adapter and the engine registry | T016, T018 | done |
-| [T020](T020-create-tasks-endpoint.md) | Create tasks from submitted URIs | T007, T008, T015, T016, T017, T019 | todo |
+| [T020](T020-create-tasks-endpoint.md) | Create tasks from submitted URIs | T007, T008, T015, T016, T017, T019 | done |
 | [T021](T021-list-and-filter-tasks.md) | List, filter and sort tasks | T017, T020 | todo |
 | [T022](T022-task-actions-and-patch.md) | Update a task and apply bulk lifecycle actions | T019, T020, T021 | todo |
 | [T023](T023-remove-task-and-data.md) | Remove a task with or without its data | T020, T021, T022 | todo |

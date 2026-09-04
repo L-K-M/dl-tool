@@ -24,6 +24,8 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/L-K-M/dl-tool/internal/config"
+	"github.com/L-K-M/dl-tool/internal/engine"
+	"github.com/L-K-M/dl-tool/internal/engine/aria2"
 	"github.com/L-K-M/dl-tool/internal/obs"
 )
 
@@ -58,6 +60,17 @@ type Server struct {
 	// auth owns the first-run gate, the /auth operations and the login
 	// throttles.
 	auth *authService
+
+	// Engines is the routing-time availability table: the create endpoint
+	// resolves every URI to an engine through it and answers 503 when that
+	// engine is not registered (doc 05 section 5.2). It is exported so tests
+	// can register stand-ins into this shared registry; the task handlers
+	// capture the same pointer in NewServer, so reassigning the field after
+	// construction has no effect.
+	Engines *engine.Registry
+
+	// tasks owns the /tasks collection operations.
+	tasks *TaskHandlers
 }
 
 // NewServer builds the router and the Huma API. Every route lives under
@@ -119,14 +132,32 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// section 1 defines no such member.
 	humaConfig.CreateHooks = nil
 
+	// The engine registry owns engine availability at routing time. The
+	// aria2 adapter joins when its RPC endpoint is configured; adapters that
+	// arrive with their own tasks register the same way, and a routed engine
+	// that is absent leaves POST /tasks answering 503 for its URIs. A
+	// malformed RPC URL is a configuration error and fails server
+	// construction loudly — degradation to 503 is for engines that are
+	// absent or down, not for operator mistakes.
+	engines := engine.NewRegistry()
+	if cfg.Aria2URL != "" {
+		aria2Engine, err := aria2.New(aria2.Config{URL: cfg.Aria2URL, Secret: cfg.Aria2Secret.Reveal()}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build aria2 engine: %w", err)
+		}
+		engines.Register(aria2Engine)
+	}
+
 	server := &Server{
-		Router: root,
-		Base:   base,
-		V1:     v1,
-		API:    humachi.New(v1, humaConfig),
-		db:     db,
-		Health: health,
-		auth:   auth,
+		Router:  root,
+		Base:    base,
+		V1:      v1,
+		API:     humachi.New(v1, humaConfig),
+		db:      db,
+		Health:  health,
+		auth:    auth,
+		Engines: engines,
+		tasks:   NewTaskHandlers(db, engines, cfg.DataRoots),
 	}
 	// The two credentials of docs/05-api-contract.md section 1.2, so the
 	// generated document tells clients how the API is protected. Individual
@@ -184,6 +215,7 @@ func (s *Server) Spec() ([]byte, error) {
 // non-empty until the real resources land; their tasks own them.
 func (s *Server) registerOperations() {
 	s.auth.registerOperations(s.API)
+	s.tasks.registerOperations(s.API)
 
 	huma.Register(s.API, huma.Operation{
 		OperationID: "get-system-info",
