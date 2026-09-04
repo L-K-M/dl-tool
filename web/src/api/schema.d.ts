@@ -101,6 +101,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/tasks": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Create tasks from submitted URIs
+     * @description Creates one queued task per accepted URI and reports the refused ones in rejected[]. Partial success is normal. No engine is contacted: the admission pass owns Engine.Add.
+     */
+    post: operations["create-tasks"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -110,6 +130,36 @@ export interface components {
       csrf_token: string;
       /** @description The operator account */
       user: components["schemas"]["UserBody"];
+    };
+    CreateTasksBody: {
+      /** @description Category name; must already exist */
+      category?: string;
+      /** @description Place content in <destination>/<manifest name>/ (applied by the admission pass) */
+      create_subfolder?: boolean;
+      /** @description Must resolve inside a configured data root; defaults to the first root */
+      destination?: string;
+      /**
+       * @description Overrides the routing table when that engine accepts the URI
+       * @enum {string}
+       */
+      engine?: "aria2" | "qbittorrent" | "ytdlp";
+      /** @description Stored for auto-extract; never returned */
+      extract_password?: string;
+      /** @description Used for this request's ftp, ftps and sftp URIs only; never returned */
+      ftp_credentials?: components["schemas"]["FTPCredentials"];
+      /** @description Create in paused instead of queued */
+      paused?: boolean;
+      sequential?: boolean;
+      /** @description Tag names; created on demand */
+      tags?: string[] | null;
+      /** @description One entry per download; http(s), ftp(s), sftp, magnet, bare infohash and the obfuscated schemes */
+      uris: string[] | null;
+    };
+    CreateTasksOutputBody: {
+      /** @description The full Task objects of the created tasks */
+      created: components["schemas"]["TaskDTO"][] | null;
+      /** @description One entry per URI the submission refused; empty when everything was created */
+      rejected: components["schemas"]["RejectedURI"][] | null;
     };
     ErrorDetail: {
       /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -152,11 +202,20 @@ export interface components {
        */
       type: string;
     };
+    FTPCredentials: {
+      password: string;
+      username: string;
+    };
     LoginInputBody: {
       /** @description Account password */
       password: string;
       /** @description Account username */
       username: string;
+    };
+    RejectedURI: {
+      detail: string;
+      type: string;
+      uri: string;
     };
     SetupInputBody: {
       /**
@@ -174,6 +233,64 @@ export interface components {
     SystemInfoOutputBody: {
       /** @description Build version of the dl-tool process */
       version: string;
+    };
+    TaskDTO: {
+      added_at: string;
+      category: string | null;
+      completed_at: string | null;
+      /** Format: int64 */
+      completed_bytes: number;
+      /** Format: int64 */
+      connected_leechers: number;
+      /** Format: int64 */
+      connected_seeders: number;
+      content_path: string | null;
+      destination: string;
+      /** Format: int64 */
+      dl_limit: number;
+      /** Format: int64 */
+      download_rate: number;
+      engine: string;
+      error_code: string | null;
+      error_message: string | null;
+      /** Format: int64 */
+      eta_seconds: number | null;
+      /** Format: int64 */
+      file_count: number | null;
+      id: string;
+      infohash_v1: string | null;
+      infohash_v2: string | null;
+      name: string;
+      /** Format: double */
+      progress: number;
+      /** Format: int64 */
+      queue_position: number | null;
+      /** Format: double */
+      ratio: number;
+      /** Format: double */
+      ratio_limit: number | null;
+      requested_destination: string | null;
+      /** Format: int64 */
+      seeding_time_limit: number | null;
+      sequential: boolean;
+      source_kind: string;
+      source_uri: string | null;
+      started_at: string | null;
+      state: string;
+      tags: string[] | null;
+      /** Format: int64 */
+      total_bytes: number | null;
+      /** Format: int64 */
+      total_peers: number;
+      /** Format: int64 */
+      ul_limit: number;
+      /** Format: int64 */
+      unzip_progress: number | null;
+      updated_at: string;
+      /** Format: int64 */
+      upload_rate: number;
+      /** Format: int64 */
+      uploaded_bytes: number;
     };
     UserBody: {
       /**
@@ -348,6 +465,39 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["SystemInfoOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-tasks": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateTasksBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreateTasksOutputBody"];
         };
       };
       /** @description Error */
