@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -353,7 +354,7 @@ func TestListEventsPagination(t *testing.T) {
 	// not a CHECK constraint dump.
 	err = tasks.AppendEvent(t.Context(), task.ID, "warning", "e.badlevel", "bad level", nil)
 	require.ErrorContains(t, err, "unknown level")
-	require.ErrorContains(t, err, "info")
+	require.ErrorContains(t, err, fmt.Sprintf("want one of %q", eventLevels))
 }
 
 func TestTaskStatesMatchTransitionTable(t *testing.T) {
