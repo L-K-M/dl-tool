@@ -409,8 +409,14 @@ func TestSetEngineRefWritesEvent(t *testing.T) {
 	before, err := tasks.Get(t.Context(), task.ID)
 	require.NoError(t, err)
 	// Advance past the previous write's millisecond so a buggy
-	// updated_at bump on the re-set cannot hide inside the same tick.
+	// updated_at bump on the re-set cannot hide inside the same tick. The
+	// deadline turns a clock that never advances into a descriptive
+	// failure instead of a spin until the package timeout.
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().UnixMilli() <= before.UpdatedAt {
+		if time.Now().After(deadline) {
+			t.Fatalf("wall clock never advanced past updated_at=%d", before.UpdatedAt)
+		}
 	}
 	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "2089b05ecca3d829"))
 	after, err := tasks.Get(t.Context(), task.ID)
