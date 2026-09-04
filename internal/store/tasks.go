@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -63,6 +64,39 @@ var taskStates = []string{
 // any task may be paused, fail or be deleted at any time.
 var universalTransitionTargets = []string{"paused", "error", "removed"}
 
+// TaskPatch carries the PATCH-able columns of docs/05-api-contract.md
+// section 5.5. A nil field leaves its column untouched. Tags are absent
+// because they live in task_tags, and destination is absent because the
+// cross-filesystem move is owned by T076.
+type TaskPatch struct {
+	Name             *string
+	CategoryID       *string
+	DLLimit          *int64
+	ULLimit          *int64
+	RatioLimit       *float64
+	SeedingTimeLimit *int64
+	Sequential       *bool
+}
+
+// Empty reports whether the patch carries no column at all — a tags-only
+// PATCH, whose set lives in task_tags and never reaches Update.
+func (p TaskPatch) Empty() bool {
+	return p.Name == nil && p.CategoryID == nil && p.DLLimit == nil &&
+		p.ULLimit == nil && p.RatioLimit == nil && p.SeedingTimeLimit == nil &&
+		p.Sequential == nil
+}
+
+// QueueMove names one of the four queue rewrites of docs/05-api-contract.md
+// section 5.7.
+type QueueMove int
+
+const (
+	QueueMoveTop QueueMove = iota
+	QueueMoveUp
+	QueueMoveDown
+	QueueMoveBottom
+)
+
 // transitionLegal reports whether from -> next is a legal edge: a table row
 // or a universal rule, and never a self-loop or an exit from removed.
 func transitionLegal(from, next string) bool {
@@ -108,6 +142,14 @@ WHERE id = ?`
 	queryTransitionTask = `UPDATE tasks
 SET state = ?, updated_at = ?
 WHERE id = ? AND state = ?`
+
+	queryQueueMembers = `SELECT id FROM tasks
+WHERE queue_position IS NOT NULL
+ORDER BY queue_position, id`
+
+	querySetQueuePosition = `UPDATE tasks
+SET queue_position = ?, updated_at = ?
+WHERE id = ?`
 )
 
 // TaskStore persists tasks rows and enforces the task state machine.
@@ -294,4 +336,178 @@ func transitionEventLevel(next string) string {
 	}
 
 	return "info"
+}
+
+// Update writes the columns a patch carries and bumps updated_at, in one
+// UPDATE whose column list is built from the patch's non-nil fields alone,
+// so an omitted field is never written (docs/05-api-contract.md 5.5). A
+// missing id is ErrNotFound; an empty patch is a caller bug and errors
+// rather than bumping updated_at for nothing.
+func (s *TaskStore) Update(ctx context.Context, id string, patch TaskPatch) error {
+	sets := make([]string, 0, 8)
+	args := make([]any, 0, 9)
+
+	if patch.Name != nil {
+		sets = append(sets, "name = ?")
+		args = append(args, *patch.Name)
+	}
+	if patch.CategoryID != nil {
+		sets = append(sets, "category_id = ?")
+		args = append(args, *patch.CategoryID)
+	}
+	if patch.DLLimit != nil {
+		sets = append(sets, "dl_limit = ?")
+		args = append(args, *patch.DLLimit)
+	}
+	if patch.ULLimit != nil {
+		sets = append(sets, "ul_limit = ?")
+		args = append(args, *patch.ULLimit)
+	}
+	if patch.RatioLimit != nil {
+		sets = append(sets, "ratio_limit = ?")
+		args = append(args, *patch.RatioLimit)
+	}
+	if patch.SeedingTimeLimit != nil {
+		sets = append(sets, "seeding_time_limit = ?")
+		args = append(args, *patch.SeedingTimeLimit)
+	}
+	if patch.Sequential != nil {
+		sets = append(sets, "sequential = ?")
+		args = append(args, boolToInt(*patch.Sequential))
+	}
+
+	if len(sets) == 0 {
+		return fmt.Errorf("store: update task %q: empty patch", id)
+	}
+
+	sets = append(sets, "updated_at = ?")
+	args = append(args, time.Now().UnixMilli(), id)
+
+	result, err := s.db.ExecContext(ctx, "UPDATE tasks SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...)
+	if err != nil {
+		return fmt.Errorf("store: update task %q: %w", id, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update task %q: count rows: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: update task %q: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+// boolToInt maps a boolean onto the 0/1 integer columns.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+
+	return 0
+}
+
+// ReorderQueue moves ids inside the queue — every task whose queue_position
+// is not NULL — and renumbers the whole queue densely from 1 in one
+// transaction. No engine is contacted: dl-tool owns the queue
+// (docs/05-api-contract.md section 5.7). It returns the requested ids that
+// are not part of the queue, in request order, so the caller can answer
+// them per-id.
+func (s *TaskStore) ReorderQueue(ctx context.Context, ids []string, move QueueMove) ([]string, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("store: reorder queue: %w", err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of queue reorder failed", "error", err)
+		}
+	}()
+
+	var order []string
+	if err := tx.SelectContext(ctx, &order, queryQueueMembers); err != nil {
+		return nil, fmt.Errorf("store: reorder queue: read members: %w", err)
+	}
+
+	selected := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+
+	now := time.Now().UnixMilli()
+	for position, id := range reorderQueueMembers(order, selected, move) {
+		if _, err := tx.ExecContext(ctx, querySetQueuePosition, position+1, now, id); err != nil {
+			return nil, fmt.Errorf("store: reorder queue: write position of task %q: %w", id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: reorder queue: commit: %w", err)
+	}
+
+	inQueue := make(map[string]bool, len(order))
+	for _, id := range order {
+		inQueue[id] = true
+	}
+
+	absent := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !inQueue[id] {
+			absent = append(absent, id)
+		}
+	}
+
+	return absent, nil
+}
+
+// reorderQueueMembers computes the queue's new order. The selected members
+// keep their relative order however far they move, and so do the
+// unselected ones: a move rewrites the boundary between the two groups,
+// never the order inside either.
+func reorderQueueMembers(order []string, selected map[string]bool, move QueueMove) []string {
+	next := slices.Clone(order)
+
+	switch move {
+	case QueueMoveTop:
+		return stablePartition(next, func(id string) bool { return selected[id] })
+	case QueueMoveBottom:
+		return stablePartition(next, func(id string) bool { return !selected[id] })
+	case QueueMoveUp:
+		// Front to back: every selected task swaps with an unselected
+		// predecessor, so a contiguous selected run advances one slot as a
+		// block instead of jumping over itself.
+		for i := 1; i < len(next); i++ {
+			if selected[next[i]] && !selected[next[i-1]] {
+				next[i-1], next[i] = next[i], next[i-1]
+			}
+		}
+	case QueueMoveDown:
+		// Back to front, the mirror of QueueMoveUp.
+		for i := len(next) - 2; i >= 0; i-- {
+			if selected[next[i]] && !selected[next[i+1]] {
+				next[i], next[i+1] = next[i+1], next[i]
+			}
+		}
+	}
+
+	return next
+}
+
+// stablePartition returns the members for which keep holds followed by the
+// rest, each group in its original order.
+func stablePartition(order []string, keep func(string) bool) []string {
+	head := make([]string, 0, len(order))
+	tail := make([]string, 0, len(order))
+	for _, id := range order {
+		if keep(id) {
+			head = append(head, id)
+		} else {
+			tail = append(tail, id)
+		}
+	}
+
+	return append(head, tail...)
 }

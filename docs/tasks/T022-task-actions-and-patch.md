@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T022 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T019, T020, T021 |
 | **Blocks** | T023, T025, T036, T037, T044, T082 |
 | **Parallel-safe** | no — extends the shared `internal/api/tasks.go` |
@@ -154,7 +154,74 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/api/...`:
+
+```
+$ make lint
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> eslint .
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+$ make test PKG=./internal/api/...
+go test -race -count=1 ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/api	34.214s
+```
+
+`go test -v -run 'TestActionsPerIDOutcomes|TestActionsRejectsUnknownAction|TestQueueActionsTouchNoEngine|TestPatchTaskAppliesRateLimit' ./internal/api/`:
+
+```
+=== RUN   TestActionsPerIDOutcomes
+--- PASS: TestActionsPerIDOutcomes (0.06s)
+=== RUN   TestActionsRejectsUnknownAction
+--- PASS: TestActionsRejectsUnknownAction (0.02s)
+=== RUN   TestQueueActionsTouchNoEngine
+=== RUN   TestQueueActionsTouchNoEngine/queue_top_moves_the_task_to_the_front
+=== RUN   TestQueueActionsTouchNoEngine/queue_bottom_moves_the_task_to_the_end
+=== RUN   TestQueueActionsTouchNoEngine/queue_up_advances_one_slot
+=== RUN   TestQueueActionsTouchNoEngine/queue_down_retards_one_slot
+=== RUN   TestQueueActionsTouchNoEngine/a_contiguous_batch_moves_as_a_block
+=== RUN   TestQueueActionsTouchNoEngine/a_task_outside_the_queue_fails_per-id
+--- PASS: TestQueueActionsTouchNoEngine (0.18s)
+=== RUN   TestPatchTaskAppliesRateLimit
+--- PASS: TestPatchTaskAppliesRateLimit (0.02s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	0.305s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/server.go
+internal/api/tasks_actions.go
+internal/api/tasks_actions_test.go
+internal/store/tasks.go
+web/src/api/schema.d.ts
+```
+
+Exactly the Files table plus the two standing `make gen` outputs
+(docs/13-testing-and-verification.md §7.1). `make doclint` reports 0 errors.
+The full `go test ./...` is green across every package.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+Nothing blocking. Three notes:
+
+- `store.Task` carries no `dl_limit`/`ul_limit`/`ratio_limit`/`seeding_time_limit`
+  fields (their read path belongs to later tasks, per the comment in
+  `internal/store/models.go`), so `PATCH` reads the four columns back from the
+  row when it renders the updated Task object; every other render keeps the DDL
+  defaults until those tasks add the fields. `models.go` is outside this task's
+  Files table, so the columns were not added to the struct here.
+- `recheck` rides an optional `recheckable` interface asserted in the handler:
+  the base `Engine` interface has no Recheck method, and no M1 engine implements
+  it, so the action is a per-id `/problems/validation-failed` everywhere today,
+  exactly as the task's action table says. qBittorrent's `torrents/recheck`
+  (doc 06 §9) can implement the method when its adapter lands.
+- `delete_data` is accepted on the wire but not acted on: the six-step unlink of
+  doc 05 §5.6 is T023's, per this task's "Out of scope — do NOT".

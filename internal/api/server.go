@@ -217,6 +217,28 @@ func (s *Server) registerOperations() {
 	s.auth.registerOperations(s.API)
 	s.tasks.registerOperations(s.API)
 
+	// The bulk-action and patch operations of docs/05-api-contract.md
+	// sections 5.7 and 5.5; their handlers live in tasks_actions.go.
+	huma.Register(s.API, huma.Operation{
+		OperationID: operationTaskActions,
+		Method:      http.MethodPost,
+		Path:        "/tasks/actions",
+		Summary:     "Apply bulk lifecycle actions",
+		Description: "Applies one of the nine actions to up to 500 tasks and reports a per-id outcome, so one bad id never fails the batch. The queue actions rewrite dl-tool's own queue and contact no engine.",
+		Tags:        []string{"tasks"},
+		Security:    credentialRequired,
+	}, s.tasks.Actions)
+
+	huma.Register(s.API, huma.Operation{
+		OperationID: operationPatchTask,
+		Method:      http.MethodPatch,
+		Path:        "/tasks/{id}",
+		Summary:     "Update a task",
+		Description: "Partial update of the display name, category, tags, per-task rate limits, share limits and the sequential flag. Omitted fields are untouched; a non-nil tags array replaces the whole set. The rate limits reach a running task without restarting it.",
+		Tags:        []string{"tasks"},
+		Security:    credentialRequired,
+	}, s.tasks.PatchTask)
+
 	huma.Register(s.API, huma.Operation{
 		OperationID: "get-system-info",
 		Method:      http.MethodGet,
