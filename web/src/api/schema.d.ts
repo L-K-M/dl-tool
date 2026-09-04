@@ -156,7 +156,11 @@ export interface paths {
     get: operations["get-task"];
     put?: never;
     post?: never;
-    delete?: never;
+    /**
+     * Remove a task with or without its data
+     * @description Marks the task removed and, with delete_data=true, unlinks exactly the files recorded in task_files after re-checking every resolved path against the data roots. delete_data=false keeps every byte. force_complete=true completes the task instead of removing it. The response reports what happened, so a client never has to guess.
+     */
+    delete: operations["delete-task"];
     options?: never;
     head?: never;
     /**
@@ -239,6 +243,27 @@ export interface components {
       created: components["schemas"]["TaskDTO"][] | null;
       /** @description One entry per URI the submission refused; empty when everything was created */
       rejected: components["schemas"]["RejectedURI"][] | null;
+    };
+    DeleteTaskOutputBody: {
+      /**
+       * Format: int64
+       * @description Recorded byte total of the unlinked files
+       */
+      bytes_unlinked: number;
+      /** @description Whether the recorded files were unlinked */
+      delete_data: boolean;
+      /**
+       * Format: int64
+       * @description Files actually unlinked
+       */
+      files_unlinked: number;
+      /**
+       * Format: int64
+       * @description Recorded files that were already gone
+       */
+      missing: number;
+      /** @description Whether the task entered the removed state */
+      removed: boolean;
     };
     ErrorDetail: {
       /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -745,6 +770,43 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["TaskDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-task": {
+    parameters: {
+      query?: {
+        /** @description Also unlink the downloaded data; the only irreversible operation in the product */
+        delete_data?: boolean;
+        /** @description Move the incomplete data to the destination and mark the task completed instead of removing it */
+        force_complete?: boolean;
+      };
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DeleteTaskOutputBody"];
         };
       };
       /** @description Error */
