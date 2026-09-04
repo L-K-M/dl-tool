@@ -159,12 +159,13 @@ func TestTaskMutators(t *testing.T) {
 	require.Equal(t, progress.UploadRate, got.UploadRate)
 	require.Equal(t, progress.ETASeconds, got.ETASeconds)
 	require.GreaterOrEqual(t, got.UpdatedAt, task.UpdatedAt)
+	afterProgress := got.UpdatedAt
 
 	require.NoError(t, tasks.SetEngineRef(t.Context(), task.ID, "gid-1"))
 	got, err = tasks.Get(t.Context(), task.ID)
 	require.NoError(t, err)
 	require.Equal(t, "gid-1", *got.EngineRef)
-	require.GreaterOrEqual(t, got.UpdatedAt, task.UpdatedAt)
+	require.GreaterOrEqual(t, got.UpdatedAt, afterProgress)
 }
 
 func TestTransitionTable(t *testing.T) {
