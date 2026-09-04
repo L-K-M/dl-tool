@@ -203,6 +203,51 @@ func (h *Hub) Clients() int {
 	return len(h.subs)
 }
 
+// Loop builds a snapshot every tick, diffs it against the previous one and
+// calls Publish only when changed, removed or Stats differ. It returns nil
+// when ctx is cancelled.
+//
+// A failed snapshot skips its tick without disturbing the previous one: the
+// diff runs snapshot to snapshot, so the next successful tick folds the whole
+// missed window into one delta instead of losing or duplicating it. An idle
+// system — nothing changed and the stats stand still — publishes no rid at
+// all.
+func (h *Hub) Loop(ctx context.Context, tick time.Duration, snap func(context.Context) (Snapshot, error)) error {
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
+
+	var prev Snapshot
+	var lastStats Stats
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		next, err := snap(ctx)
+		if err != nil {
+			continue
+		}
+
+		changed, removed := Diff(prev, next)
+		stats := Aggregate(next)
+		if len(changed) == 0 && len(removed) == 0 && stats == lastStats {
+			continue
+		}
+
+		d := newDelta()
+		d.Tasks = changed
+		d.TasksRemoved = removed
+		d.Stats = stats
+		h.Publish(d)
+
+		prev = next
+		lastStats = stats
+	}
+}
+
 // remove deletes one subscriber and closes its channel so its read loop
 // ends. A subscriber already evicted by deliverLocked is absent, which makes
 // this a no-op.

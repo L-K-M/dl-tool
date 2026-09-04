@@ -86,7 +86,7 @@ URI normalisation, the Engine interface, the aria2 adapter, the queue and the ev
 | [T022](T022-task-actions-and-patch.md) | Update a task and apply bulk lifecycle actions | T019, T020, T021 | done |
 | [T023](T023-remove-task-and-data.md) | Remove a task with or without its data | T020, T021, T022 | done |
 | [T024](T024-task-event-log.md) | Record and serve the per-task event log | T017, T020, T023 | done |
-| [T025](T025-rid-deltas-over-sse.md) | Compute rid deltas and stream them over SSE | T011, T021, T022, T024 | todo |
+| [T025](T025-rid-deltas-over-sse.md) | Compute rid deltas and stream them over SSE | T011, T021, T022, T024 | done |
 | [T026](T026-boot-reconciliation.md) | Reconcile tasks with the engines at boot and on every poll | T019, T024, T025 | todo |
 | [T027](T027-list-and-test-engines.md) | List engines and test connectivity | T019, T020 | todo |
 | [T098](T098-concurrency-limiter.md) | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | todo |
@@ -290,7 +290,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T022 | Update a task and apply bulk lifecycle actions | T019, T020, T021 | no | done | [T022](T022-task-actions-and-patch.md) |
 | T023 | Remove a task with or without its data | T020, T021, T022 | no | done | [T023](T023-remove-task-and-data.md) |
 | T024 | Record and serve the per-task event log | T017, T020, T023 | no | todo | [T024](T024-task-event-log.md) |
-| T025 | Compute rid deltas and stream them over SSE | T011, T021, T022, T024 | no | todo | [T025](T025-rid-deltas-over-sse.md) |
+| T025 | Compute rid deltas and stream them over SSE | T011, T021, T022, T024 | no | done | [T025](T025-rid-deltas-over-sse.md) |
 | T026 | Reconcile tasks with the engines at boot and on every poll | T019, T024, T025 | yes | todo | [T026](T026-boot-reconciliation.md) |
 | T027 | List engines and test connectivity | T019, T020 | yes | todo | [T027](T027-list-and-test-engines.md) |
 | T098 | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | yes | todo | [T098](T098-concurrency-limiter.md) |

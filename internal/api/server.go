@@ -27,6 +27,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/engine/aria2"
 	"github.com/L-K-M/dl-tool/internal/obs"
+	"github.com/L-K-M/dl-tool/internal/sync"
 )
 
 const (
@@ -71,6 +72,12 @@ type Server struct {
 
 	// tasks owns the /tasks collection operations.
 	tasks *TaskHandlers
+
+	// SSE owns the live-update endpoints: GET /events and GET /sync, and
+	// the hub they read from. It is exported for the composition root in
+	// cmd/dl-tool, which owns the *obs.Metrics instance whose
+	// dltool_sse_clients gauge the hub's client count connects to.
+	SSE *SSEHandlers
 }
 
 // NewServer builds the router and the Huma API. Every route lives under
@@ -148,6 +155,24 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		engines.Register(aria2Engine)
 	}
 
+	// The sync hub fans task deltas to SSE subscribers at 1 Hz and answers
+	// GET /sync from its ring. The loop is process-lifetime: it starts with
+	// the server, idles through snapshot errors (a closed store) and dies
+	// with the process — no request context could own it. With a nil db the
+	// operations still register for the generated document, but nothing
+	// feeds the hub.
+	hub := sync.NewHub()
+	sseHandlers := NewSSEHandlers(hub, db)
+	if db != nil {
+		go func() {
+			// Loop returns nil once its context is cancelled; anything else
+			// is a defect worth a log line even though the loop runs detached.
+			if err := hub.Loop(context.Background(), time.Second, sseHandlers.Snapshot); err != nil {
+				log.Error("sync loop stopped", slog.String("err", err.Error()))
+			}
+		}()
+	}
+
 	server := &Server{
 		Router:  root,
 		Base:    base,
@@ -158,6 +183,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		auth:    auth,
 		Engines: engines,
 		tasks:   NewTaskHandlers(db, engines, cfg.DataRoots),
+		SSE:     sseHandlers,
 	}
 	// The two credentials of docs/05-api-contract.md section 1.2, so the
 	// generated document tells clients how the API is protected. Individual
@@ -216,6 +242,7 @@ func (s *Server) Spec() ([]byte, error) {
 func (s *Server) registerOperations() {
 	s.auth.registerOperations(s.API)
 	s.tasks.registerOperations(s.API)
+	s.SSE.RegisterOperations(s.API)
 
 	// The bulk-action and patch operations of docs/05-api-contract.md
 	// sections 5.7 and 5.5; their handlers live in tasks_actions.go.

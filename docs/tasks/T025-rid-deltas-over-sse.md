@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T025 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T011, T021, T022, T024 |
 | **Blocks** | T026, T041, T051 |
 | **Parallel-safe** | no — extends T011's `internal/sync/hub.go` |
@@ -156,7 +156,86 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/...`:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+$ make test PKG=./internal/...
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	41.114s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.157s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.029s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.082s
+?   	github.com/L-K-M/dl-tool/internal/fsx	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.710s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.210s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.176s
+ok  	github.com/L-K-M/dl-tool/internal/store	62.041s
+ok  	github.com/L-K-M/dl-tool/internal/sync	3.367s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.035s
+```
+
+The named tests, isolated (the review fixes add the opaque-source,
+failed-tick and heartbeat-comment cases):
+
+```
+$ go test ./internal/sync/... -run 'TestDiffOnlyChangedTasks|TestIdleTickPublishesNothing|TestSSEAndSyncPayloadsAreIdentical|TestProjectDropsUnsanitizableSources|TestLoopFoldsTheWindowAroundAFailedTick|TestEventsHeartbeatWhileIdle' -v
+=== RUN   TestDiffOnlyChangedTasks
+--- PASS: TestDiffOnlyChangedTasks (0.00s)
+=== RUN   TestIdleTickPublishesNothing
+--- PASS: TestIdleTickPublishesNothing (0.05s)
+=== RUN   TestLoopFoldsTheWindowAroundAFailedTick
+--- PASS: TestLoopFoldsTheWindowAroundAFailedTick (0.01s)
+=== RUN   TestProjectDropsUnsanitizableSources
+--- PASS: TestProjectDropsUnsanitizableSources (0.00s)
+=== RUN   TestSSEAndSyncPayloadsAreIdentical
+--- PASS: TestSSEAndSyncPayloadsAreIdentical (0.60s)
+=== RUN   TestEventsHeartbeatWhileIdle
+--- PASS: TestEventsHeartbeatWhileIdle (0.30s)
+ok  	github.com/L-K-M/dl-tool/internal/sync	0.991s
+```
+
+Scope:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+go.mod
+internal/api/server.go
+internal/api/sse.go
+internal/sync/delta.go
+internal/sync/delta_test.go
+internal/sync/hub.go
+web/src/api/schema.d.ts
+```
+
+The Files table's five paths, plus the three standing exceptions of doc 13
+§7.1: `api/openapi.json` and `web/src/api/schema.d.ts` from `make gen` for the
+two registered operations, and `go.mod` promoting the already-pinned
+`github.com/google/go-cmp` to direct for the payload-equality test.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+One clause of step 9 — "connect `hub.Clients` to the `dltool_sse_clients` gauge
+T010 registered" — cannot be finished inside this task's Files table.
+`obs.NewMetrics` builds a private registry per instance and hands it to each
+component at the composition root, and that instance is constructed in
+`cmd/dl-tool/main.go`, which is outside the table (T010 and T012 both listed it
+when they needed it; this task does not). The API side is complete:
+`Server.SSE.SetClientsGauge` maintains the gauge's Inc/Dec around every event
+connection. The missing handoff is one line in `cmd/dl-tool/main.go`, next to
+`server.Health.MarkReady()`: `server.SSE.SetClientsGauge(metrics.SSEClients)`.
+Until it lands, `/metrics` reports `dltool_sse_clients 0`. Everything else in
+the task is done and verified.
