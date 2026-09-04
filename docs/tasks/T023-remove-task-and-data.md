@@ -153,25 +153,25 @@ Checking formatting...
 All matched files use Prettier code style!
 $ make test PKG=./internal/api/...
 go test -race -count=1 ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/api	36.162s
+ok  	github.com/L-K-M/dl-tool/internal/api	36.696s
 ```
 
 `go test -v -run 'TestDelete' ./internal/api/`:
 
 ```
 === RUN   TestDeleteKeepsData
---- PASS: TestDeleteKeepsData (0.05s)
+--- PASS: TestDeleteKeepsData (0.06s)
 === RUN   TestDeleteUnlinksRecordedFiles
 --- PASS: TestDeleteUnlinksRecordedFiles (0.03s)
 === RUN   TestDeleteRejectsEscapingPath
---- PASS: TestDeleteRejectsEscapingPath (0.05s)
+--- PASS: TestDeleteRejectsEscapingPath (0.02s)
 === RUN   TestDeleteRefusesWhenEngineDown
 --- PASS: TestDeleteRefusesWhenEngineDown (0.03s)
 === RUN   TestDeleteRejectsBothFlags
---- PASS: TestDeleteRejectsBothFlags (0.03s)
+--- PASS: TestDeleteRejectsBothFlags (0.04s)
 === RUN   TestDeleteForceComplete
---- PASS: TestDeleteForceComplete (0.03s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.225s
+--- PASS: TestDeleteForceComplete (0.02s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.218s
 ```
 
 Scope check:

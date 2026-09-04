@@ -91,7 +91,9 @@ type seededFile struct {
 
 // seedTask writes one downloading task held by aria2 at destination,
 // straight through the store because POST /tasks can set no engine handle.
-func (e *deleteTestEnv) seedTask(t *testing.T, destination string) string {
+// mutate adjusts the row before the insert, for the fixtures that need a
+// queue position or another column.
+func (e *deleteTestEnv) seedTask(t *testing.T, destination string, mutate func(*store.Task)) string {
 	t.Helper()
 
 	ref := aria2GID
@@ -102,6 +104,9 @@ func (e *deleteTestEnv) seedTask(t *testing.T, destination string) string {
 		Name:        "delete-fixture",
 		State:       "downloading",
 		Destination: destination,
+	}
+	if mutate != nil {
+		mutate(&task)
 	}
 	created, err := store.NewTaskStore(e.db).Create(t.Context(), task)
 	if err != nil {
@@ -140,12 +145,18 @@ VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
 }
 
 // seedDownloadedTask is the whole fixture: a task plus its recorded files,
-// with the shared data root as the destination.
-func (e *deleteTestEnv) seedDownloadedTask(t *testing.T, files []seededFile) (id, destination string) {
+// with the shared data root as the destination. mutate adjusts the task row
+// before the insert, for the fixtures that need a queue position or another
+// column.
+func (e *deleteTestEnv) seedDownloadedTask(
+	t *testing.T,
+	files []seededFile,
+	mutate func(*store.Task),
+) (id, destination string) {
 	t.Helper()
 
 	destination = e.dataRoot
-	id = e.seedTask(t, destination)
+	id = e.seedTask(t, destination, mutate)
 	e.seedFiles(t, id, destination, files)
 
 	return id, destination
@@ -232,8 +243,8 @@ func decodeDeleteBody(t *testing.T, recorder *httptest.ResponseRecorder) deleteO
 	return body
 }
 
-// assertTombstone pins step 6: state removed, engine_ref cleared, both
-// rates zeroed, ETA cleared.
+// assertTombstone pins step 6: state removed, engine_ref, ETA and queue
+// position cleared, both rates zeroed.
 func assertTombstone(t *testing.T, row store.Task) {
 	t.Helper()
 
@@ -248,6 +259,9 @@ func assertTombstone(t *testing.T, row store.Task) {
 	}
 	if row.ETASeconds != nil {
 		t.Errorf("eta_seconds = %d, want cleared", *row.ETASeconds)
+	}
+	if row.QueuePosition != nil {
+		t.Errorf("queue_position = %d, want the task out of the queue", *row.QueuePosition)
 	}
 }
 
@@ -277,6 +291,10 @@ func TestDeleteKeepsData(t *testing.T) {
 	id, destination := env.seedDownloadedTask(t, []seededFile{
 		{path: "keep.iso", size: 4096},
 		{path: "keep.torrent", size: 128},
+	}, func(task *store.Task) {
+		// In the queue, so the removal has to take the task out of it.
+		position := int64(1)
+		task.QueuePosition = &position
 	})
 
 	response := env.deleteTask(t, id, "")
@@ -327,7 +345,7 @@ func TestDeleteUnlinksRecordedFiles(t *testing.T) {
 		{path: "ubuntu/ubuntu.iso", size: 5000},
 		{path: "ubuntu/SHA256SUMS", size: 300},
 		{path: "ubuntu/already-gone.txt", size: 100, alreadyGone: true},
-	})
+	}, nil)
 
 	response := env.deleteTask(t, id, "delete_data=true")
 	if response.Code != http.StatusOK {
@@ -398,7 +416,7 @@ func TestDeleteRejectsEscapingPath(t *testing.T) {
 	id, destination := env.seedDownloadedTask(t, []seededFile{
 		{path: "keep.iso", size: 4096},
 		{path: "../../../../etc/passwd", size: 1, alreadyGone: true},
-	})
+	}, nil)
 
 	response := env.deleteTask(t, id, "delete_data=true")
 	problem := assertProblem(t, response, http.StatusForbidden, SlugPathRejected)
@@ -432,7 +450,7 @@ func TestDeleteRefusesWhenEngineDown(t *testing.T) {
 	env := newDeleteTestEnv(t)
 	env.aria2.removeErr = engine.ErrUnavailable
 
-	id, destination := env.seedDownloadedTask(t, []seededFile{{path: "keep.iso", size: 4096}})
+	id, destination := env.seedDownloadedTask(t, []seededFile{{path: "keep.iso", size: 4096}}, nil)
 
 	response := env.deleteTask(t, id, "delete_data=true")
 	assertProblem(t, response, http.StatusServiceUnavailable, SlugEngineUnavailable)
@@ -458,7 +476,7 @@ func TestDeleteRefusesWhenEngineDown(t *testing.T) {
 func TestDeleteRejectsBothFlags(t *testing.T) {
 	env := newDeleteTestEnv(t)
 
-	id, destination := env.seedDownloadedTask(t, []seededFile{{path: "keep.iso", size: 4096}})
+	id, destination := env.seedDownloadedTask(t, []seededFile{{path: "keep.iso", size: 4096}}, nil)
 
 	response := env.deleteTask(t, id, "delete_data=true&force_complete=true")
 	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
@@ -478,7 +496,7 @@ func TestDeleteRejectsBothFlags(t *testing.T) {
 func TestDeleteForceComplete(t *testing.T) {
 	env := newDeleteTestEnv(t)
 
-	id, destination := env.seedDownloadedTask(t, []seededFile{{path: "keep.iso", size: 4096}})
+	id, destination := env.seedDownloadedTask(t, []seededFile{{path: "keep.iso", size: 4096}}, nil)
 
 	response := env.deleteTask(t, id, "force_complete=true")
 	if response.Code != http.StatusOK {

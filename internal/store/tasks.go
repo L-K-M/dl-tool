@@ -145,9 +145,12 @@ WHERE id = ? AND state = ?`
 
 	// The tombstone of docs/05-api-contract.md 5.6 step 6: state plus the
 	// cleared liveness columns, guarded by the same compare-and-swap.
+	// queue_position is cleared too so the task leaves dl-tool's queue —
+	// queue membership is exactly a non-NULL queue_position (doc 05
+	// section 3: "null for tasks not in a queue").
 	queryMarkTaskRemoved = `UPDATE tasks
 SET state = 'removed', engine_ref = NULL, download_rate = 0, upload_rate = 0,
-    eta_seconds = NULL, updated_at = ?
+    eta_seconds = NULL, queue_position = NULL, updated_at = ?
 WHERE id = ? AND state = ?`
 
 	queryListTaskFiles = `SELECT id, task_id, file_index, path, size_bytes, completed_bytes, selected, priority, created_at, updated_at
@@ -392,8 +395,9 @@ func (s *TaskStore) ListFiles(ctx context.Context, taskID string) ([]TaskFile, e
 // (docs/05-api-contract.md 5.6) in one transaction: the task.removed event,
 // plus the warn-level task.data_deleted event carrying data when the
 // request unlinked files, then state="removed", engine_ref=NULL, both
-// rates zeroed and eta_seconds cleared. It never deletes a row: the task
-// and every child row stay so the event and file history remain queryable.
+// rates zeroed and eta_seconds and queue_position cleared, so the task
+// leaves dl-tool's queue. It never deletes a row: the task and every
+// child row stay so the event and file history remain queryable.
 func (s *TaskStore) MarkRemoved(ctx context.Context, id string, data *DeletedData) error {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {

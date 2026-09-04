@@ -283,6 +283,9 @@ func removeOwnDir(ctx context.Context, roots []string, destination string, targe
 		return
 	}
 	if _, err := fsx.ResolveDestination(roots, dir); err != nil {
+		logFromContext(ctx).Warn("task's own directory does not resolve inside the data roots; leaving it in place",
+			slog.String("dir", dir), slog.Any("err", err))
+
 		return
 	}
 
