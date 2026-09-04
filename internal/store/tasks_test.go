@@ -23,9 +23,12 @@ var allTaskStates = []string{
 // implementation's table so a drift in either fails here. The
 // engine-reported targets of docs/06-download-engines.md sections 4.6 and
 // 5.6 (queued, downloading, checking, seeding, completed, paused, error,
-// removed) are each covered from downloading, seeding, paused and
-// completed — for example downloading -> seeding, seeding -> downloading,
-// paused -> checking and completed -> removed.
+// removed) are each covered from downloading, seeding and paused — for
+// example downloading -> seeding, seeding -> downloading and paused ->
+// checking. From completed the table admits only checking, seeding,
+// paused, error and removed; completed -> queued/downloading are illegal,
+// so a completed task the engine reports as transferring again must pass
+// through checking or error first.
 var expectedLegalTransitions = map[string][]string{
 	"queued":      {"downloading", "checking", "seeding", "completed", "paused", "error", "removed"},
 	"downloading": {"queued", "checking", "seeding", "completed", "paused", "error", "removed"},
