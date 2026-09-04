@@ -208,6 +208,10 @@ func TestTransitionTable(t *testing.T) {
 	// The compare-and-swap guard against a concurrent transition
 	// committing between Transition's read and its update: a stale
 	// expected state matches no row and leaves the task untouched.
+	// Transition maps that to ErrTransitionConflict; under this pool
+	// (single connection, immediate transactions) the branch cannot be
+	// reached through Transition itself, so it is pinned here at the SQL
+	// level.
 	t.Run("stale expected state updates nothing", func(t *testing.T) {
 		task := createTaskInState(t, tasks, "queued")
 

@@ -17,6 +17,12 @@ import (
 // owns it for the whole package.
 var ErrIllegalTransition = errors.New("store: illegal state transition")
 
+// ErrTransitionConflict is returned when the state a transition validated
+// against changed before its update landed. Unlike ErrIllegalTransition the
+// move may well be legal from the new state: the caller should re-read and
+// decide again.
+var ErrTransitionConflict = errors.New("store: task state changed since read")
+
 // Progress carries the mutable transfer counters an engine poll produces.
 type Progress struct {
 	TotalBytes     *int64
@@ -224,7 +230,7 @@ func (s *TaskStore) Transition(ctx context.Context, id, next, code, message stri
 		// the move must be re-evaluated against the new state.
 		return fmt.Errorf(
 			"store: transition task %q from %q to %q: %w",
-			id, current, next, ErrIllegalTransition,
+			id, current, next, ErrTransitionConflict,
 		)
 	}
 
