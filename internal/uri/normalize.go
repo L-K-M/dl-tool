@@ -52,7 +52,7 @@ type Normalized struct {
 func Normalize(raw string) (Normalized, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return Normalized{}, fmt.Errorf("empty uri: %w", ErrUnsupportedScheme)
+		return Normalized{}, errors.New("uri: empty input")
 	}
 
 	scheme := schemeOf(raw)
@@ -72,9 +72,8 @@ func Normalize(raw string) (Normalized, error) {
 		m.OriginalScheme = n.OriginalScheme
 		return m, nil
 	case "ed2k":
-		if _, err := ParseED2K(n.URI); err != nil {
-			return Normalized{}, err
-		}
+		// Parsed for display by ParseED2K, never downloaded: any ed2k
+		// submission, valid or malformed, is the same unsupported scheme.
 		return Normalized{}, fmt.Errorf("%w: ed2k is not supported in v1", ErrUnsupportedScheme)
 	case "http", "https":
 		return classifyTransport(n, KindHTTP)
@@ -123,11 +122,17 @@ func ParseED2K(raw string) (ED2K, error) {
 func classifyTransport(n Normalized, kind Kind) (Normalized, error) {
 	u, err := url.Parse(n.URI)
 	if err != nil {
-		return Normalized{}, fmt.Errorf("parse uri: %w", err)
+		// url.Parse quotes the full URI in its error text, userinfo
+		// included — redact it so a password never reaches a log.
+		msg := strings.ReplaceAll(err.Error(), n.URI, "<redacted>")
+		return Normalized{}, fmt.Errorf("parse uri: %s", msg)
 	}
 	if u.User != nil {
 		u.User = nil
 		n.URI = u.String()
+	}
+	if u.Host == "" {
+		return Normalized{}, fmt.Errorf("uri: missing host in %s uri", kind)
 	}
 
 	n.Kind = kind

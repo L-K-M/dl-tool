@@ -2,6 +2,7 @@ package uri
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -29,6 +30,9 @@ func TestDecodeObfuscated(t *testing.T) {
 		{"freeznet junk suffix", "thunder://QUFodHRwOi8vd3d3LmZyZWUtei5uZXQvMS5yYXJaWg==&freeznet", "http://www.free-z.net/1.rar"},
 		{"ed2k behind thunder is a valid decode", "thunder://QUFlZDJrOi8vfGZpbGV8bW92aWUuYXZpfDczMzE4MzEwNHwzMUQ2Q0ZFMEQxNkFFOTMxQjczQzU5RDdFMEMwODlDMHwvWlo=", "ed2k://|file|movie.avi|733183104|31D6CFE0D16AE931B73C59D7E0C089C0|/"},
 		{"uppercase scheme", "THUNDER://QUFodHRwOi8vZXhhbXBsZS5vcmcvZmlsZS5pc29aWg==", "http://example.org/file.iso"},
+		{"trailing garbage tolerated", "thunder://QUFodHRwOi8vZXhhbXBsZS5vcmcvZmlsZS5pc29aWg==xyz", "http://example.org/file.iso"}, // doc 06 §3.1 step 5: decode leniently
+		{"unpadded qqdl payload ending in slash", "qqdl://aHR0cDovL2V4YW1wbGUuY29tL3A/", "http://example.com/p?"},                  // "/" is base64 alphabet, not a paste artifact
+		{"utf-8 in the decoded url", "thunder://QUFodHRwOi8vZXhhbXBsZS5vcmcvZsO4bGUucmFyWlo=", "http://example.org/føle.rar"},
 	}
 	for _, tt := range decodes {
 		t.Run(tt.name, func(t *testing.T) {
@@ -51,6 +55,9 @@ func TestDecodeObfuscated(t *testing.T) {
 		{"payload is not base64", "thunder://%%%"},
 		{"empty payload", "thunder://"},
 		{"no scheme separator", "thunder:QUFodHRw"},
+		{"decoded newline", "thunder://QUFodHRwOi8vZXhhCm1wbGUuY29tWlo="},
+		{"decoded carriage return", "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vDXhaWg=="},
+		{"decoded NUL", "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vAHhaWg=="},
 	}
 	for _, tt := range rejects {
 		t.Run(tt.name, func(t *testing.T) {
@@ -75,11 +82,13 @@ func TestNormalizeClassifies(t *testing.T) {
 		{"ftps", "ftps://example.org/file.iso", KindFTP, "ftps://example.org/file.iso", ""},
 		{"sftp", "sftp://example.org/file.iso", KindSFTP, "sftp://example.org/file.iso", ""},
 		{"http path ending .torrent", "https://example.org/file.torrent", KindTorrent, "https://example.org/file.torrent", ""},
+		{"torrent url with query string", "https://example.org/file.torrent?token=abc", KindTorrent, "https://example.org/file.torrent?token=abc", ""},
 		{"uppercase .TORRENT suffix", "https://example.org/File.TORRENT", KindTorrent, "https://example.org/File.TORRENT", ""},
 		{"http path ending .metalink", "https://example.org/file.metalink", KindMetalink, "https://example.org/file.metalink", ""},
 		{"http path ending .meta4", "https://example.org/file.meta4", KindMetalink, "https://example.org/file.meta4", ""},
 		{"magnet", "magnet:?xt=urn:btih:" + btihV1Hex, KindMagnet, "magnet:?xt=urn:btih:" + btihV1Hex, ""},
 		{"thunder wraps http", "thunder://QUFodHRwOi8vd3d3LmV4YW1wbGUuY29tL2ZpbGUuemlwWlo=", KindHTTP, "http://www.example.com/file.zip", "thunder"},
+		{"uppercase wrapper scheme reports lowercase", "THUNDER://QUFodHRwOi8vd3d3LmV4YW1wbGUuY29tL2ZpbGUuemlwWlo=", KindHTTP, "http://www.example.com/file.zip", "thunder"},
 		{"flashget wraps ftp", "flashget://W0ZMQVNIR0VUXWZ0cDovL2V4YW1wbGUub3JnL2ZpbGUuaXNvW0ZMQVNIR0VUXQ==", KindFTP, "ftp://example.org/file.iso", "flashget"},
 		{"userinfo never reaches the URI", "https://user:secret@example.org/file.iso", KindHTTP, "https://example.org/file.iso", ""},
 		{"userinfo stripped after decode", "thunder://QUFodHRwczovL3VzZXI6c2VjcmV0QGV4YW1wbGUub3JnL2ZpbGUuaXNvWlo=", KindHTTP, "https://example.org/file.iso", "thunder"},
@@ -108,11 +117,13 @@ func TestNormalizeClassifies(t *testing.T) {
 		raw  string
 	}{
 		{"ed2k fixture", "ed2k://|file|The_Two_Towers-The_Purist_Edit-Trailer.avi|14997504|965c013e991ee246d63d45ea71954c4d|/"},
+		{"malformed ed2k is the same unsupported scheme", "ed2k://|file|name|abc|xyz|/"},
 		{"ed2k behind thunder", "thunder://QUFlZDJrOi8vfGZpbGV8bW92aWUuYXZpfDczMzE4MzEwNHwzMUQ2Q0ZFMEQxNkFFOTMxQjczQzU5RDdFMEMwODlDMHwvWlo="},
+		{"file scheme", "file:///etc/passwd"},
+		{"file behind thunder", "thunder://QUFmaWxlOi8vL2V0Yy9wYXNzd2RaWg=="}, // decodes to AAfile:///etc/passwdZZ
 		{"nzb", "nzb://x"},
 		{"unknown scheme", "gopher://example.org/file"},
 		{"no scheme", "example.org/file.iso"},
-		{"empty", ""},
 	}
 	for _, tt := range rejects {
 		t.Run(tt.name, func(t *testing.T) {
@@ -122,6 +133,39 @@ func TestNormalizeClassifies(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("empty input is not ErrUnsupportedScheme", func(t *testing.T) {
+		_, err := Normalize("")
+		if err == nil || errors.Is(err, ErrUnsupportedScheme) {
+			t.Errorf("Normalize(\"\") error = %v, want a distinct non-sentinel error", err)
+		}
+	})
+
+	malformed := []struct {
+		name string
+		raw  string
+	}{
+		{"http without host", "http:"},
+		{"ftp without host", "ftp:///file"},
+		{"https with query but no host", "https://?q=1"},
+	}
+	for _, tt := range malformed {
+		t.Run(tt.name, func(t *testing.T) {
+			if n, err := Normalize(tt.raw); err == nil {
+				t.Errorf("Normalize(%q) = %+v, nil; want error", tt.raw, n)
+			}
+		})
+	}
+
+	t.Run("url.Parse error redacts pasted credentials", func(t *testing.T) {
+		_, err := Normalize("https://user:sec%ret@example.com/")
+		if err == nil {
+			t.Fatal("Normalize error = nil, want a parse error")
+		}
+		if strings.Contains(err.Error(), "sec") {
+			t.Errorf("error text %q leaks the pasted password", err.Error())
+		}
+	})
 }
 
 func TestParseMagnet(t *testing.T) {
@@ -217,6 +261,7 @@ func TestParseMagnet(t *testing.T) {
 		{"btih of neither length", "magnet:?xt=urn:btih:xyz"},
 		{"btih hex with non-hex digits", "magnet:?xt=urn:btih:zz1ec1a478f2b3c793bf88a45e9c0d6d81f2a3b4"},
 		{"btmh with a non-sha2-256 multihash tag", "magnet:?xt=urn:btmh:2200" + btmhV2Digest},
+		{"btmh digest shorter than the declared 32 bytes", "magnet:?xt=urn:btmh:1220" + btmhV2Digest[:32]},
 	}
 	for _, tt := range rejects {
 		t.Run(tt.name, func(t *testing.T) {
@@ -225,6 +270,16 @@ func TestParseMagnet(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("empty tr and x.pe values are dropped", func(t *testing.T) {
+		n, err := ParseMagnet("magnet:?xt=urn:btih:" + btihV1Hex + "&tr=&x.pe=")
+		if err != nil {
+			t.Fatalf("ParseMagnet error = %v", err)
+		}
+		if len(n.Trackers) != 0 || len(n.PeerHints) != 0 {
+			t.Errorf("Trackers = %v, PeerHints = %v; want both empty", n.Trackers, n.PeerHints)
+		}
+	})
 
 	t.Run("non-magnet scheme is ErrUnsupportedScheme", func(t *testing.T) {
 		_, err := ParseMagnet("http://example.org/file.iso")
@@ -269,6 +324,7 @@ func TestParseED2K(t *testing.T) {
 		{"hash too short", "ed2k://|file|x.avi|12|abcd|/"},
 		{"hash is not hex", "ed2k://|file|x.avi|12|zz5c013e991ee246d63d45ea71954c4d|/"},
 		{"too few segments", "ed2k://|file|x.avi|12"},
+		{"missing hash segment", "ed2k://|file|x.avi|12|/"},
 	}
 	for _, tt := range rejects {
 		t.Run(tt.name, func(t *testing.T) {

@@ -36,8 +36,17 @@ func ParseMagnet(raw string) (Normalized, error) {
 	n := Normalized{Kind: KindMagnet, URI: strings.TrimSpace(raw)}
 	q := u.Query()
 	n.DisplayName = q.Get("dn")
-	n.Trackers = q["tr"]
-	n.PeerHints = q["x.pe"]
+	// Drop empty values: a "tr=" or "x.pe=" pair must not become a junk row.
+	for _, tr := range q["tr"] {
+		if tr != "" {
+			n.Trackers = append(n.Trackers, tr)
+		}
+	}
+	for _, pe := range q["x.pe"] {
+		if pe != "" {
+			n.PeerHints = append(n.PeerHints, pe)
+		}
+	}
 	// "ws" web seeds (BEP 19) repeat like "tr" but Normalized carries no field for them.
 
 	for _, xt := range q["xt"] {

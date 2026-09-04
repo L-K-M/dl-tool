@@ -33,8 +33,12 @@ func DecodeObfuscated(raw string) (plain string, ok bool) {
 	if i := strings.IndexByte(payload, '&'); i >= 0 {
 		payload = payload[:i]
 	}
-	// Links are frequently pasted with a trailing "/".
-	payload = strings.TrimSuffix(payload, "/")
+	// Links are frequently pasted with a trailing "/", but "/" is itself a
+	// legal Base64 character — strip it only when the length cannot be valid
+	// Base64 anyway, i.e. the slash is certainly the spurious extra.
+	if len(payload)%4 == 1 {
+		payload = strings.TrimSuffix(payload, "/")
+	}
 	// Padding is frequently missing in the wild: re-pad to a multiple of four.
 	if rem := len(payload) % 4; rem != 0 {
 		payload += strings.Repeat("=", 4-rem)
@@ -63,6 +67,15 @@ func DecodeObfuscated(raw string) (plain string, ok bool) {
 		plain = strings.TrimSuffix(strings.TrimPrefix(plain, flashgetMarker), flashgetMarker)
 	}
 	plain = strings.TrimSpace(plain)
+
+	// Raw control bytes never occur in a real URL — they must be
+	// percent-encoded — and CRLF/NUL in attacker-controlled text can poison
+	// logs. Bytes >= 0x80 (multi-byte UTF-8) are fine.
+	for i := 0; i < len(plain); i++ {
+		if plain[i] < 0x20 || plain[i] == 0x7f {
+			return "", false
+		}
+	}
 
 	lower := strings.ToLower(plain)
 	for _, p := range plainSchemes {
