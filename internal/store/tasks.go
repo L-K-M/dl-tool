@@ -51,6 +51,14 @@ var taskTransitions = map[string][]string{
 	"error":       {"queued", "completed"},
 }
 
+// taskStates is the ten-state vocabulary of docs/04-data-model.md section
+// 4.1. The DDL CHECK constraint enforces the same set; Create consults it
+// to answer a typo with a legible error instead of a constraint dump.
+var taskStates = []string{
+	"queued", "downloading", "checking", "paused", "seeding",
+	"completed", "extracting", "moving", "error", "removed",
+}
+
 // universalTransitionTargets are reachable from every non-terminal state:
 // any task may be paused, fail or be deleted at any time.
 var universalTransitionTargets = []string{"paused", "error", "removed"}
@@ -121,6 +129,8 @@ func (s *TaskStore) Create(ctx context.Context, t Task) (Task, error) {
 	}
 	if t.State == "" {
 		t.State = "queued"
+	} else if !slices.Contains(taskStates, t.State) {
+		return Task{}, fmt.Errorf("store: create task %q: unknown state %q", t.Name, t.State)
 	}
 
 	now := time.Now().UnixMilli()

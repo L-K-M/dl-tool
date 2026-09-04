@@ -137,6 +137,17 @@ VALUES (?, 'linux', '/data/linux', 0, 0)`,
 		require.ErrorIs(t, err, ErrNotFound)
 	})
 
+	t.Run("unknown state is rejected", func(t *testing.T) {
+		_, err := tasks.Create(t.Context(), Task{
+			Engine:      "aria2",
+			SourceKind:  "http",
+			Name:        "typo",
+			State:       "queeud",
+			Destination: "/data",
+		})
+		require.ErrorContains(t, err, "unknown state")
+	})
+
 	t.Run("empty state enters at queued", func(t *testing.T) {
 		created, err := tasks.Create(t.Context(), Task{
 			Engine:      "aria2",
