@@ -233,10 +233,9 @@ func (s *TaskStore) CreateLogged(ctx context.Context, t Task) (Task, error) {
 }
 
 // insertTaskRow writes one tasks row through the executor both creation
-// paths share, so the column list and its argument list exist exactly once
-// — a schema change that misses an edit here fails to compile, not bind
-// values to the wrong column silently. ext is *sqlx.DB or a *sqlx.Tx, the
-// same contract insertTaskEvent has.
+// paths share, so the column list and its argument list are maintained in
+// exactly one place and cannot drift between them. ext is *sqlx.DB or a
+// *sqlx.Tx, the same contract insertTaskEvent has.
 func insertTaskRow(ctx context.Context, ext sqlx.ExtContext, t Task) error {
 	_, err := ext.ExecContext(
 		ctx,

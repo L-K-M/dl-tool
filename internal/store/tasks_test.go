@@ -372,6 +372,11 @@ func TestCreateLoggedRollsBackWhenEventFails(t *testing.T) {
 		Destination: "/data",
 	})
 	require.ErrorContains(t, err, "rollback-fixture")
+	// Pin the failure to the event insert, not the task insert, so the
+	// rollback assertion below cannot pass for the wrong reason: the
+	// dropped table's name only reaches the error through
+	// insertTaskEvent's %w chain.
+	require.ErrorContains(t, err, "task_events")
 
 	var count int
 	require.NoError(t, db.GetContext(t.Context(), &count, `SELECT COUNT(*) FROM tasks`))
