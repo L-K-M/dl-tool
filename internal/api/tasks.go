@@ -220,9 +220,11 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 		return nil, Problem(SlugUnsupportedScheme, http.StatusUnprocessableEntity, detail)
 	}
 
-	// Tag rows are created up-front, before any task insert: every write that
-	// can conflict lands before the batch starts, so a failure cannot leave
-	// half a submission behind.
+	// Tag rows are created up-front, before any task insert, so a tag-name
+	// conflict surfaces before the batch starts. Task inserts themselves can
+	// still fail mid-batch (the infohash race duplicateInfohash notes), which
+	// leaves a partial submission behind; wrap ensureTags plus the insert
+	// loop in a transaction once the store grows a tx-bound Create.
 	if err := h.ensureTags(ctx, in.Body.Tags); err != nil {
 		return nil, internalFailure(ctx, "create tags", err)
 	}
