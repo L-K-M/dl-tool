@@ -210,13 +210,13 @@ ok  	github.com/L-K-M/dl-tool/internal/store	9.292s
 
 `make lint` printed no findings (`0 issues.`, eslint and prettier silent). One `ok` line, no `FAIL`.
 With `-v`, `TestTaskRoundTrip`, `TestTransitionTable`, `TestTransitionWritesEvent`, `TestTaskMutators`
-and `TestListEventsPagination` all run and pass (106 subtests: 3 round-trip cases, the exhaustive
+and `TestListEventsPagination` all run and pass (107 subtests: 4 round-trip cases, the exhaustive
 100-pair transition matrix, the missing-task case, the stale-state guard case and the conflict-error
 sentinel case):
 
 ```
 $ go test -race -count=1 -v ./internal/store/... 2>&1 | grep -Ec '^=== RUN[[:space:]]+Test(TaskRoundTrip|TransitionTable|TransitionWritesEvent|TaskMutators|ListEventsPagination)/'
-106
+107
 ```
 
 Scope check: `git status` run with the four task files staged for the first commit, and the

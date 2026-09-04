@@ -110,12 +110,17 @@ func NewTaskStore(db *sqlx.DB) *TaskStore {
 	return &TaskStore{db: db}
 }
 
-// Create inserts one task, generating the id when empty and stamping
-// added_at, created_at and updated_at with the same Unix millisecond. It
-// returns the row as stored.
+// Create inserts one task, generating the id when empty, defaulting an
+// empty state to the state machine's entry state queued
+// (docs/03-architecture.md section 8.1) and stamping added_at, created_at
+// and updated_at with the same Unix millisecond. It returns the row as
+// stored.
 func (s *TaskStore) Create(ctx context.Context, t Task) (Task, error) {
 	if t.ID == "" {
 		t.ID = NewID(PrefixTask)
+	}
+	if t.State == "" {
+		t.State = "queued"
 	}
 
 	now := time.Now().UnixMilli()

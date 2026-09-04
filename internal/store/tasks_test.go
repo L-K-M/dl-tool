@@ -136,6 +136,21 @@ VALUES (?, 'linux', '/data/linux', 0, 0)`,
 		_, err := tasks.Get(t.Context(), "tsk_missing")
 		require.ErrorIs(t, err, ErrNotFound)
 	})
+
+	t.Run("empty state enters at queued", func(t *testing.T) {
+		created, err := tasks.Create(t.Context(), Task{
+			Engine:      "aria2",
+			SourceKind:  "http",
+			Name:        "stateless",
+			Destination: "/data",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "queued", created.State)
+
+		got, err := tasks.Get(t.Context(), created.ID)
+		require.NoError(t, err)
+		require.Equal(t, "queued", got.State)
+	})
 }
 
 func TestTaskMutators(t *testing.T) {
