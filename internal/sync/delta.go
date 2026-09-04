@@ -74,11 +74,12 @@ func Project(t store.Task) map[string]any {
 // so userinfo is stripped before a row ever reaches a snapshot; a source
 // that cannot be parsed is never echoed back.
 //
-// A scheme-less opaque source ("user:pass@host") is dropped whole: there
-// url.Parse sees no authority, so u.User is nil, the credentials ride in
-// u.Opaque and cannot be stripped. Dropping beats echoing what cannot be
-// sanitized; authority forms ("ftp://user:pass@host/...") and magnet links
-// (empty Opaque) still pass through.
+// An opaque-form source ("user:pass@host") is dropped whole: url.Parse
+// reads it as scheme "user" plus opaque data, so there is no authority,
+// u.User is nil, and the credentials ride in u.Opaque where they cannot
+// be stripped. Dropping beats echoing what cannot be sanitized; authority
+// forms ("ftp://user:pass@host/...") and magnet links (empty Opaque)
+// still pass through.
 func displaySourceURI(t store.Task) any {
 	if t.SourceURI == nil {
 		return nil

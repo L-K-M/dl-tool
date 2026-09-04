@@ -432,6 +432,7 @@ func TestProjectDropsUnsanitizableSources(t *testing.T) {
 		{"user:secret@mirror.example.org", nil},
 		{"magnet:?xt=urn:btih:abcdef", "magnet:?xt=urn:btih:abcdef"},
 		{"/data/watch/file.torrent", "/data/watch/file.torrent"},
+		{"mailto:admin@example.org", nil}, // opaque without credentials: dropped too
 	}
 
 	for _, tc := range cases {
