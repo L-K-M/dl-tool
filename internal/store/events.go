@@ -88,8 +88,11 @@ func insertTaskEvent(
 		if err != nil {
 			return fmt.Errorf("store: marshal detail of task event %q: %w", code, err)
 		}
-		encoded := string(data)
-		detailJSON = &encoded
+		// A typed nil (nil pointer, map or slice in a non-nil interface)
+		// marshals to the literal null; store SQL NULL for it too.
+		if encoded := string(data); encoded != "null" {
+			detailJSON = &encoded
+		}
 	}
 
 	_, err := ex.ExecContext(

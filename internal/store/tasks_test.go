@@ -330,6 +330,13 @@ func TestListEventsPagination(t *testing.T) {
 
 	_, err = tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 0)
 	require.Error(t, err)
+
+	// A typed nil detail stores SQL NULL, not the JSON literal "null".
+	require.NoError(t, tasks.AppendEvent(t.Context(), task.ID, "info", "e.typednil", "typed nil", (*struct{})(nil)))
+	events, err = tasks.ListEvents(t.Context(), task.ID, EventCursor{}, 1)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Nil(t, events[0].DetailJSON)
 }
 
 func createTaskInState(t *testing.T, tasks *TaskStore, state string) Task {
