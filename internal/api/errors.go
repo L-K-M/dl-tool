@@ -101,15 +101,21 @@ func slugForStatus(status int) string {
 	}
 }
 
-// errorDetails mirrors Huma's default detail conversion, so validation
-// failures keep their field-level errors[] entries.
+// errorDetails keeps field explanations, never submitted values. Even an
+// unrelated unknown property can make Huma attach the entire credential body.
 func errorDetails(errs []error) []*huma.ErrorDetail {
 	details := make([]*huma.ErrorDetail, 0, len(errs))
 	for _, err := range errs {
 		var detailer huma.ErrorDetailer
 		switch {
 		case errors.As(err, &detailer):
-			details = append(details, detailer.ErrorDetail())
+			original := detailer.ErrorDetail()
+			if original == nil {
+				continue
+			}
+			detail := *original
+			detail.Value = nil
+			details = append(details, &detail)
 		case err != nil:
 			details = append(details, &huma.ErrorDetail{Message: err.Error()})
 		}

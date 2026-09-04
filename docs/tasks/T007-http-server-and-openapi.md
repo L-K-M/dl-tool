@@ -223,5 +223,21 @@ Boot smoke test with `DLTOOL_BASE_PATH=/dl-tool`: `GET /dl-tool/api/v1/system/in
 `"type":"/problems/not-found"`; `GET /dl-tool/api/v1/nope` → the same 404 problem;
 `GET /dl-tool/api/v1/openapi.json` → 200. Request logs carry `request_id` and the redacted path.
 
+Audit regression: validation failures no longer echo passwords or setup tokens, including
+whole-body errors on unrelated properties.
+
+```text
+$ make gen && (cd web && ./node_modules/.bin/prettier --check src/api/schema.d.ts) && make test PKG=./internal/api/... && echo API_OK
+./scripts/gen.sh
+✨ openapi-typescript 7.13.0
+🚀 ../api/openapi.json → src/api/schema.d.ts [72.9ms]
+src/api/schema.d.ts 136ms
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/api	42.075s
+API_OK
+```
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
