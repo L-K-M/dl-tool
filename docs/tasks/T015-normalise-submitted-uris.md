@@ -162,7 +162,42 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG=./internal/uri/...`:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG=./internal/uri/...
+go test -race -count=1 ./internal/uri/...
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.033s
+```
+
+`make lint` printed no findings (`0 issues.`, eslint and prettier silent). One `ok` line, no `FAIL`, no
+`[no test files]`. With `-v`, `TestDecodeObfuscated`, `TestNormalizeClassifies`, `TestParseMagnet` and
+`TestParseED2K` all run and pass (11 + 14 + 10 + 6 subtests).
+
+Scope check (files staged for the task commit):
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/uri/magnet.go
+internal/uri/normalize.go
+internal/uri/normalize_test.go
+internal/uri/obfuscated.go
+```
+
+Exactly the Files table, nothing else.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
