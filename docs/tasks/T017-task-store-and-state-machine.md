@@ -186,7 +186,48 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG=./internal/store/...`, run on the working tree of this commit
+(origin/main e4854f8 plus the four Files-table paths):
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG=./internal/store/...
+go test -race -count=1 ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/store	9.103s
+```
+
+`make lint` printed no findings (`0 issues.`, eslint and prettier silent). One `ok` line, no `FAIL`.
+With `-v`, `TestTaskRoundTrip`, `TestTransitionTable`, `TestTransitionWritesEvent`, `TestTaskMutators`
+and `TestListEventsPagination` all run and pass (104 subtests: 3 round-trip cases plus the exhaustive
+100-pair transition matrix plus the missing-task case):
+
+```
+$ go test -race -count=1 -v ./internal/store/... 2>&1 | grep -Ec '^=== RUN[[:space:]]+Test(TaskRoundTrip|TransitionTable|TransitionWritesEvent|TaskMutators|ListEventsPagination)/'
+104
+```
+
+Scope check (files changed by this commit):
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/store/events.go
+internal/store/models.go
+internal/store/tasks.go
+internal/store/tasks_test.go
+```
+
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
