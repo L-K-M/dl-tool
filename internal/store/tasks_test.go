@@ -447,7 +447,7 @@ func TestSetEngineRefWritesEvent(t *testing.T) {
 	row, err := tasks.Get(t.Context(), task.ID)
 	require.NoError(t, err)
 	require.NotNil(t, row.EngineRef)
-	events, _, total, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
+	_, _, total, err = tasks.ListEvents(t.Context(), task.ID, 10, "")
 	require.NoError(t, err)
 	require.Equal(t, 2, total)
 
