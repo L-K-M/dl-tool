@@ -148,6 +148,8 @@ func TestNormalizeClassifies(t *testing.T) {
 		{"http without host", "http:"},
 		{"ftp without host", "ftp:///file"},
 		{"https with query but no host", "https://?q=1"},
+		{"http with port but no host", "http://:8080/file"},
+		{"ftp with port but no host", "ftp://:21/file"},
 	}
 	for _, tt := range malformed {
 		t.Run(tt.name, func(t *testing.T) {
@@ -158,12 +160,19 @@ func TestNormalizeClassifies(t *testing.T) {
 	}
 
 	t.Run("url.Parse error redacts pasted credentials", func(t *testing.T) {
-		_, err := Normalize("https://user:sec%ret@example.com/")
-		if err == nil {
-			t.Fatal("Normalize error = nil, want a parse error")
-		}
-		if strings.Contains(err.Error(), "sec") {
-			t.Errorf("error text %q leaks the pasted password", err.Error())
+		for _, raw := range []string{
+			"https://user:sec%ret@example.com/",
+			"https://user:secret\tx@example.com/",
+		} {
+			_, err := Normalize(raw)
+			if err == nil {
+				t.Fatalf("Normalize(%q) error = nil, want a parse error", raw)
+			}
+			for _, leak := range []string{"sec", "%re"} {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("Normalize(%q) error text %q leaks %q", raw, err.Error(), leak)
+				}
+			}
 		}
 	})
 }

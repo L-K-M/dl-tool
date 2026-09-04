@@ -122,16 +122,23 @@ func ParseED2K(raw string) (ED2K, error) {
 func classifyTransport(n Normalized, kind Kind) (Normalized, error) {
 	u, err := url.Parse(n.URI)
 	if err != nil {
-		// url.Parse quotes the full URI in its error text, userinfo
-		// included — redact it so a password never reaches a log.
-		msg := strings.ReplaceAll(err.Error(), n.URI, "<redacted>")
-		return Normalized{}, fmt.Errorf("parse uri: %s", msg)
+		// url.Error renders the URL with %q and its cause can echo input
+		// fragments (invalid URL escape "%re"), so when the paste could carry
+		// credentials, fall back to a static message: a password must never
+		// reach a log.
+		if ue, ok := err.(*url.Error); ok {
+			if strings.Contains(n.URI, "@") {
+				return Normalized{}, errors.New("parse uri: invalid uri (credentials redacted)")
+			}
+			err = ue.Err
+		}
+		return Normalized{}, fmt.Errorf("parse uri: %w", err)
 	}
 	if u.User != nil {
 		u.User = nil
 		n.URI = u.String()
 	}
-	if u.Host == "" {
+	if u.Hostname() == "" {
 		return Normalized{}, fmt.Errorf("uri: missing host in %s uri", kind)
 	}
 
