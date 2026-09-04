@@ -147,7 +147,10 @@ WHERE id = ? AND state = ?`
 	// cleared liveness columns, guarded by the same compare-and-swap.
 	// queue_position is cleared too so the task leaves dl-tool's queue —
 	// queue membership is exactly a non-NULL queue_position (doc 05
-	// section 3: "null for tasks not in a queue").
+	// section 3: "null for tasks not in a queue"). Positions are
+	// ordering-only, so the gap a mid-queue removal leaves is harmless:
+	// ReorderQueue renumbers the whole queue densely from 1 on the next
+	// queue action, and the admission pass reads order, never density.
 	queryMarkTaskRemoved = `UPDATE tasks
 SET state = 'removed', engine_ref = NULL, download_rate = 0, upload_rate = 0,
     eta_seconds = NULL, queue_position = NULL, updated_at = ?

@@ -296,6 +296,11 @@ func TestDeleteKeepsData(t *testing.T) {
 		position := int64(1)
 		task.QueuePosition = &position
 	})
+	// The fixture is only meaningful when the position really landed; a
+	// Create that dropped it would make the tombstone check vacuous.
+	if seeded := env.taskRow(t, id); seeded.QueuePosition == nil || *seeded.QueuePosition != 1 {
+		t.Fatalf("fixture did not persist queue_position = 1: %v", seeded.QueuePosition)
+	}
 
 	response := env.deleteTask(t, id, "")
 	if response.Code != http.StatusOK {
