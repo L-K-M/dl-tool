@@ -267,4 +267,6 @@ own them, this file's Files table needs `internal/api/server.go` added
 and a follow-up that constructs the Admitter, builds `load` over the
 settings rows and starts `Run` beside the reconciler's loop. The debt is
 tracked structurally as a row of the task index's deferral register
-(“M1 exit: the admission pass's ticker”), not only in this paragraph.
+(“M1 exit: the admission pass's ticker”), whose Carried-by cell binds the
+wiring to T099 — including the Files-table amendment it needs — not only
+to this paragraph.
