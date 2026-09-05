@@ -275,18 +275,25 @@ single PR comment per round, so only the last round's summary survives; earlier
 rounds survive as inline comments. Round 1 left three inline findings — bound
 the boot probe with one deadline, make the engines lookup a primary-key query,
 and drop a null from the generated schema — of which two were applied in
-0fc8f07 and the third declined in the PR thread as `make gen` output. Round 2
-left no inline findings; the implementer's PR note of 07:37:54Z records it
+0fc8f07 and the third was declined in the PR thread as `make gen` output.
+Round 2 left no inline findings; the implementer's PR note of
+2026-09-05T07:37:54Z ([comment][r2note], inside the [r2] run window) records it
 clean. Round 3 posted two minor findings — collapse the fake daemon's
 duplicated single/batch reply encoding into one `Encode` call
 (`internal/engine/reconcile_test.go:501`), and update the Evidence section's
 stale "`make test` … not green" line — which b3366d2 applies. Round 4, the
 final run, reported "Actionable suggestions identified: 0" with two
-non-blocking notes. There was no infrastructure deadlock to justify
+non-blocking notes — the boot probe's shared deadline can record a reachable
+engine as errored when only the follow-up `Health` misses the budget
+(`internal/api/server.go:432`), and `last_seen_at` is documented as the last
+successful probe but is stamped by every probe (`internal/api/settings.go:42`)
+— quoted from the surviving bot summary on PR #89; neither note was applied or
+declined before the merge. There was no infrastructure deadlock to justify
 proceeding.
 
 [r1]: https://github.com/L-K-M/dl-tool/actions/runs/33951358999
 [r2]: https://github.com/L-K-M/dl-tool/actions/runs/33952359385
+[r2note]: https://github.com/L-K-M/dl-tool/pull/89#issuecomment-5550336871
 [r3]: https://github.com/L-K-M/dl-tool/actions/runs/33953641244
 [r4]: https://github.com/L-K-M/dl-tool/actions/runs/33954093267
 
