@@ -213,5 +213,15 @@ internal/store/migrations/00001_init.sql
 internal/store/models.go
 ```
 
+Audit regressions cover literal database/backup filenames containing URI punctuation and
+rejection of corrupt backups at those paths.
+
+```text
+$ make test PKG=./internal/store/... && echo STORE_OK
+go test -race -count=1 ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/store	62.935s
+STORE_OK
+```
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
