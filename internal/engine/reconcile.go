@@ -94,9 +94,10 @@ func (r *Reconciler) Boot(ctx context.Context) error {
 // 1.6) — so the loop starts with a tick, not with a sweep: an immediate
 // re-sweep would only duplicate the one that just ran and race the engine
 // registrations that may still follow construction, the same reason the
-// sync hub's loop is ticker-first. A failed sweep logs at debug and
-// retries on the next tick; the store going away is how a process-lifetime
-// loop normally ends, and a transient error must not retire the
+// sync hub's loop is ticker-first. A failed sweep logs at warn and
+// retries on the next tick: at the default Info level a silent loop would
+// hide exactly the outage an operator must see — stale state served by a
+// healthy-looking process — and a transient error must not retire the
 // reconciler for the process lifetime.
 func (r *Reconciler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.poll)
@@ -108,15 +109,18 @@ func (r *Reconciler) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			if err := r.Boot(ctx); err != nil {
-				r.log.Debug("reconciliation sweep failed; retrying on the next tick", "error", err)
+				r.log.Warn("reconciliation sweep failed; retrying on the next tick", "error", err)
 			}
 		}
 	}
 }
 
-// sweepEngine reconciles one engine against the tasks that name it. A store
-// failure aborts the sweep and surfaces; an engine failure is a warning and
-// changes no task state.
+// sweepEngine reconciles one engine against the tasks that name it. A
+// store-wide failure (the listing below) aborts the sweep and surfaces; an
+// engine failure is a warning, and a per-task failure — a row deleted
+// mid-sweep, a state the store refuses — is logged and skipped, because by
+// this point the engine List has already succeeded and the remaining tasks
+// still deserve their writes.
 func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) error {
 	listed, err := e.List(ctx)
 	if err != nil {
@@ -148,7 +152,8 @@ func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) err
 		seen[ref] = true
 
 		if err := r.writeBack(ctx, task, info); err != nil {
-			return err
+			r.log.Error("reconcile write-back failed; continuing with the remaining tasks",
+				"engine", name, "task_id", task.ID, "error", err)
 		}
 	}
 
@@ -173,7 +178,8 @@ func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) err
 			continue
 		}
 		if err := r.resubmit(ctx, name, e, task); err != nil {
-			return err
+			r.log.Error("re-submission failed; continuing with the remaining tasks",
+				"engine", name, "task_id", task.ID, "engine_ref", ref, "error", err)
 		}
 	}
 
@@ -240,10 +246,15 @@ func (r *Reconciler) resubmit(ctx context.Context, name string, e Engine, task s
 		return fmt.Errorf("reconcile task %q: %w", task.ID, err)
 	}
 
+	// The ref is committed, so the reconciliation itself is durable: a
+	// failure to append its audit event must not fail the sweep or roll
+	// anything back — the handle is adopted either way, and the next sweep
+	// would find it healthy and never re-emit this event. Warn and move on.
 	if err := r.tasks.AppendEvent(ctx, task.ID, "info", CodeTaskReconciled,
 		"engine lost the transfer; re-submitted with resume semantics",
 		map[string]string{"engine": name, "engine_ref": bareHandle(name, newID)}); err != nil {
-		return fmt.Errorf("reconcile task %q: %w", task.ID, err)
+		r.log.Warn("re-submitted but failed to record the reconciliation event",
+			"task_id", task.ID, "engine", name, "error", err)
 	}
 
 	return nil

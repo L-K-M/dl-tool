@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -181,6 +182,19 @@ func (f *fakeServer) serveNotifications(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// wsNotificationFrame pins the wire shape aria2 actually sends (§4.5,
+// WebSocketSessionMan.cc of release-1.37.0): a params array whose single
+// element is an object carrying the gid. Deliberately independent of the
+// production rpcNotification type, so a decoder regression cannot silently
+// co-vary with the fake.
+type wsNotificationFrame struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  []struct {
+		GID string `json:"gid"`
+	} `json:"params"`
+}
+
 // notify pushes one aria2 notification frame over the upgraded connection,
 // waiting for the dial if the client has not connected yet.
 func (f *fakeServer) notify(method, gid string) {
@@ -194,8 +208,9 @@ func (f *fakeServer) notify(method, gid string) {
 		return conn != nil
 	}, 2*time.Second, time.Millisecond)
 
-	frame := rpcNotification{
-		Method: method,
+	frame := wsNotificationFrame{
+		JSONRPC: "2.0",
+		Method:  method,
 		Params: []struct {
 			GID string `json:"gid"`
 		}{{GID: gid}},
@@ -1012,6 +1027,77 @@ func TestEventsMapsWebSocketNotifications(t *testing.T) {
 			}
 		case <-ctx.Done():
 			t.Fatalf("no event for notification %s", want.method)
+		}
+	}
+}
+
+// A silent peer — a partition, a NAT timeout, a middlebox that drops
+// instead of closing — never answers a ping, so the read deadline ends the
+// dead connection and the backoff ladder redials instead of hanging the
+// transport forever (§4.5).
+func TestEventsReconnectsPastSilentPeer(t *testing.T) {
+	wsReadIdle = 150 * time.Millisecond
+	t.Cleanup(func() { wsReadIdle = 90 * time.Second })
+
+	var upgrades atomic.Int32
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !websocket.IsWebSocketUpgrade(r) {
+			http.Error(w, "rpc not served here", http.StatusBadRequest)
+			return
+		}
+		conn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		upgrades.Add(1)
+		// Go silent: never read the client's pings and never write, so the
+		// read deadline is the only thing that can end this connection.
+		<-release
+		if err := conn.Close(); err != nil {
+			t.Logf("close silent connection: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(Config{URL: srv.URL, Secret: testSecret, Timeout: time.Second}, srv.Client())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Logf("close client: %v", err)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	events, err := c.Events(ctx)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	// The first dial plus at least one reconnect prove the deadline ended
+	// the silent connection and the transport dialed again.
+	require.Eventually(t, func() bool { return upgrades.Load() >= 2 },
+		4*time.Second, 10*time.Millisecond,
+		"no reconnect past a silent peer (upgrades=%d)", upgrades.Load())
+
+	// Cancelling the context closes the channel; the silent peer sent
+	// nothing, so the drain meets the close immediately.
+	cancel()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, open := <-events:
+			if !open {
+				return
+			}
+		case <-deadline:
+			t.Fatal("channel not closed after cancellation")
 		}
 	}
 }

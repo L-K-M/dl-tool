@@ -244,6 +244,23 @@ ok  	github.com/L-K-M/dl-tool/internal/sync	4.356s
 ok  	github.com/L-K-M/dl-tool/internal/uri	1.030s
 ```
 
+After the review round, the same gates — `make lint` clean, full-repo
+`make test` green — and the named tests plus the two new ones:
+
+```
+$ go test -race -count=1 -v -run 'TestBootWritesKnownHandles|TestForeignTransferIsIgnored|TestVanishedHandleErrors|TestRunStopsWithContext|TestEvents|TestSweepSurvives' ./internal/engine/...
+--- PASS: TestBootWritesKnownHandles (0.00s)
+--- PASS: TestForeignTransferIsIgnored (0.00s)
+--- PASS: TestVanishedHandleErrors (0.00s)
+--- PASS: TestRunStopsWithContext (0.02s)
+--- PASS: TestSweepSurvivesWriteBackFailure (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.078s
+--- PASS: TestEventsEmitsProgress (1.01s)
+--- PASS: TestEventsMapsWebSocketNotifications (0.01s)
+--- PASS: TestEventsReconnectsPastSilentPeer (0.66s)
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.733s
+```
+
 The harness amendment also exposed one real defect step 9 had hidden: with
 the WebSocket actually connected, a blocked `ReadMessage` observes neither a
 cancelled context nor a closed client, so the `Events` channel never closed —
@@ -251,6 +268,27 @@ an acceptance criterion. `notifyEvents` now hands each connection to a
 `closeOnDone` watchdog that owns `conn.Close()` on all three exits and is
 waited on before the loop continues, so cancellation closes the channel
 promptly and no goroutine outlives the loop.
+
+### Review round
+
+The GLM review's one critical finding — that real aria2 sends the gid as a
+bare string `params:["<gid>"]` — is wrong, verified against the pinned
+daemon's own source: `WebSocketSessionMan::addNotification` in
+release-1.37.0 puts a `Dict` holding `gid` into the params list, i.e.
+`params:[{"gid":"…"}]`, exactly what the manual documents and this
+decoder expects. The wire shape stands; the fake now pins it through an
+independent test-local type so a decoder regression cannot co-vary. The
+adopted findings: sweep failure logs at warn (not debug), a per-task
+write-back or re-submission failure no longer aborts the sweep, an
+`AppendEvent` failure after the committed `SetEngineRef` is a warning, the
+notification connection carries a read deadline and client pings so a
+silent peer reconnects instead of hanging, the boot sweep inside
+`NewServer` is bounded by a 10 s budget, and the two flaky-deadline test
+loops were fixed. Rejected with evidence: adopt-orphan re-submission
+(the task forbids an adopt mode; ADR-0017), progress change-detection
+(the rules table writes counters on every report), duplicate-`engine_ref`
+guarding (`idx_tasks_engine_ref` is a partial UNIQUE index, so the
+duplicate is unrepresentable).
 
 ## Blocked
 

@@ -53,6 +53,9 @@ const (
 	// wsHandshakeTimeout bounds a WebSocket dial against a silent host.
 	wsHandshakeTimeout = 10 * time.Second
 
+	// wsPingWriteTimeout bounds one ping frame write against a stuck socket.
+	wsPingWriteTimeout = 5 * time.Second
+
 	// listCount requests all retained records in the required single batch.
 	// aria2 parses the count as a signed 64-bit integer.
 	listCount int64 = math.MaxInt64
@@ -61,6 +64,15 @@ const (
 	// stall a caller forever.
 	defaultCallTimeout = 30 * time.Second
 )
+
+// wsReadIdle bounds the silence a notification connection tolerates: a
+// half-open connection — a partition, a NAT timeout, a middlebox that drops
+// silently — never delivers a close frame, so without a deadline the
+// blocked read would hang the transport until TCP gives up. A ping at a
+// third of the window keeps a healthy connection alive and turns a dead
+// peer into a read error the reconnect ladder answers (§4.5). A variable,
+// not a constant, so the reconnect test can shorten it.
+var wsReadIdle = 90 * time.Second
 
 // JSON-RPC method names dl-tool calls (docs/06-download-engines.md §4.3).
 const (
@@ -639,13 +651,47 @@ func (c *Client) closeOnDone(ctx context.Context, conn *websocket.Conn) (stop fu
 // of the six notifications maps to its TaskEvent kind and is emitted with
 // the namespaced id. A notification is unidirectional — it carries no id,
 // and the client must not respond to it (§4.5) — so this loop never writes
-// to the connection.
+// a data frame; its only writes are ping control frames, which gorilla
+// permits concurrently with reads.
 func (c *Client) readNotifications(ctx context.Context, conn *websocket.Conn, events chan<- engine.TaskEvent) error {
+	resetDeadline := func() {
+		if err := conn.SetReadDeadline(time.Now().Add(wsReadIdle)); err != nil {
+			slog.Debug("aria2: set websocket read deadline", "engine", engine.NameAria2, "error", err)
+		}
+	}
+	resetDeadline()
+	// A healthy peer answers every ping with a pong, and any pong — this
+	// client sends no identifiable pings of its own — proves liveness.
+	conn.SetPongHandler(func(string) error { resetDeadline(); return nil })
+
+	ping := time.NewTicker(wsReadIdle / 3)
+	stopPing := make(chan struct{})
+	pingDone := make(chan struct{})
+	go func() {
+		defer close(pingDone)
+		for {
+			select {
+			case <-ping.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsPingWriteTimeout)); err != nil {
+					return
+				}
+			case <-stopPing:
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(stopPing)
+		ping.Stop()
+		<-pingDone
+	}()
+
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			return err
 		}
+		resetDeadline()
 
 		kind, gid, ok := decodeNotification(data)
 		if !ok {

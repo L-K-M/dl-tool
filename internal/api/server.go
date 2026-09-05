@@ -40,6 +40,14 @@ const (
 	// reconcilerPollInterval is the reconciliation sweep cadence of
 	// docs/17-operations-and-runbook.md section 1.6: once at boot, then 1 Hz.
 	reconcilerPollInterval = time.Second
+
+	// bootSweepBudget bounds the boot sweep inside NewServer: an engine
+	// that black-holes packets would otherwise hold startup — and so the
+	// listener and the UI — for its full per-call RPC timeout, serially per
+	// engine. Whatever the sweep misses, the 1 Hz poll picks up seconds
+	// later (docs/17 section 1.6: a boot must not be locked out of its UI
+	// by an engine that is down).
+	bootSweepBudget = 10 * time.Second
 )
 
 // Version is the build version the spec and the system-info placeholder
@@ -233,10 +241,12 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// no tasks to reconcile and skips both.
 	if db != nil {
 		reconciler := engine.NewReconciler(engines, store.NewTaskStore(db), reconcilerPollInterval)
-		if err := reconciler.Boot(context.Background()); err != nil {
+		bootCtx, cancelBoot := context.WithTimeout(context.Background(), bootSweepBudget)
+		if err := reconciler.Boot(bootCtx); err != nil {
 			log.Warn("boot reconciliation failed; retrying on the poll loop",
 				slog.String("err", err.Error()))
 		}
+		cancelBoot()
 		go func() {
 			if err := reconciler.Run(context.Background()); err != nil {
 				log.Error("reconciler stopped", slog.String("err", err.Error()))

@@ -101,6 +101,10 @@ type fakeTasks struct {
 	transitions []transitionRecord
 	engineRefs  map[string]string
 	events      []eventRecord
+
+	// failProgress names tasks whose UpdateProgress fails, to exercise the
+	// per-task isolation of a sweep.
+	failProgress map[string]error
 }
 
 type transitionRecord struct {
@@ -130,6 +134,9 @@ func (f *fakeTasks) ListNonTerminalByEngine(_ context.Context, engineName string
 func (f *fakeTasks) UpdateProgress(_ context.Context, id string, p store.Progress) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, inject := f.failProgress[id]; inject {
+		return err
+	}
 	f.progress = append(f.progress, id)
 	return nil
 }
@@ -505,7 +512,10 @@ func TestRunStopsWithContext(t *testing.T) {
 	go func() { done <- r.Run(ctx) }()
 
 	// Wait until at least two sweeps ran, so the ticker is provably live
-	// before the cancellation is exercised.
+	// before the cancellation is exercised. The deadline is computed once:
+	// a fresh time.After per iteration could never win against the 2 ms
+	// sleep, so a dead ticker would spin here until the package timeout.
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		tasks.mu.Lock()
 		sweeps := tasks.listCalls
@@ -513,11 +523,10 @@ func TestRunStopsWithContext(t *testing.T) {
 		if sweeps >= 2 {
 			break
 		}
-		select {
-		case <-time.After(2 * time.Millisecond):
-		case <-time.After(5 * time.Second):
-			t.Fatal("fewer than two sweeps ran before the deadline")
+		if time.Now().After(deadline) {
+			t.Fatalf("fewer than two sweeps ran before the deadline (sweeps=%d)", sweeps)
 		}
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	cancel()
@@ -531,10 +540,48 @@ func TestRunStopsWithContext(t *testing.T) {
 		t.Fatal("Run did not return after cancellation")
 	}
 
-	// The goroutine that ran Run has returned; give the scheduler a moment
-	// to retire it, then no goroutine may be left over.
-	time.Sleep(50 * time.Millisecond)
-	if after := runtime.NumGoroutine(); after > before {
-		t.Errorf("goroutines before=%d after=%d, Run leaked a goroutine", before, after)
+	// The goroutine that ran Run has returned; give it a moment to retire,
+	// but fail only if the count never settles back to the baseline — a
+	// single sample after a fixed sleep flakes under CI load.
+	settle := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(settle) {
+			t.Errorf("goroutines before=%d after=%d, Run leaked a goroutine", before, runtime.NumGoroutine())
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// One task's write-back failure must not stop the sweep: the engine List
+// already succeeded, so the failure is per task — logged and skipped — and
+// the other tasks still get their writes, with Boot returning nil.
+func TestSweepSurvivesWriteBackFailure(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameAria2, map[string]store.Reconcilable{
+		"g1": {ID: "tsk_bad", EngineRef: "g1", State: "downloading", SourceURI: source("https://example.org/one")},
+		"g2": {ID: "tsk_ok", EngineRef: "g2", State: "downloading", SourceURI: source("https://example.org/two")},
+	})
+	tasks.failProgress = map[string]error{"tsk_bad": errors.New("store: row deleted mid-sweep")}
+
+	e := &fakeEngine{
+		name: engine.NameAria2,
+		infos: []engine.TaskInfo{
+			{ID: engine.NameAria2 + ":g1", Engine: engine.NameAria2, State: engine.StateDownloading},
+			{ID: engine.NameAria2 + ":g2", Engine: engine.NameAria2, State: engine.StateDownloading},
+		},
+	}
+	r := newSweep(t, e, tasks)
+
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v, want nil — the failure is per task, not store-wide", err)
+	}
+
+	tasks.mu.Lock()
+	defer tasks.mu.Unlock()
+	if !slices.Contains(tasks.progress, "tsk_ok") {
+		t.Errorf("progress writes = %v, want tsk_ok written after tsk_bad failed", tasks.progress)
+	}
+	if ref, ok := tasks.engineRefs["tsk_ok"]; ok {
+		t.Errorf("engine_ref for tsk_ok = %q, want none — its handle is still known", ref)
 	}
 }
