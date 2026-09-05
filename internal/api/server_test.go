@@ -153,6 +153,29 @@ func TestOpenAPIMatchesCommittedDocument(t *testing.T) {
 	}
 }
 
+func TestCDNBackedDocsAreDisabled(t *testing.T) {
+	for _, basePath := range []string{"", "/dl-tool"} {
+		server := newTestServer(t, basePath)
+		for _, endpoint := range []string{"/docs", "/schemas"} {
+			response := do(t, server.Router, http.MethodGet, basePath+apiV1Path+endpoint)
+			assertProblem(t, response, http.StatusNotFound, SlugNotFound)
+		}
+
+		// Huma's schema endpoint is local JSON, not another documentation UI.
+		schema := do(t, server.Router, http.MethodGet, basePath+apiV1Path+"/schemas/SetupInputBody.json")
+		if schema.Code != http.StatusOK || schema.Header().Get("Content-Type") != "application/json" {
+			t.Fatal("local schema endpoint must remain available as JSON")
+		}
+		var document map[string]any
+		if err := json.Unmarshal(schema.Body.Bytes(), &document); err != nil {
+			t.Fatal(err)
+		}
+		if document["type"] != "object" {
+			t.Fatal("local schema endpoint did not return the setup object schema")
+		}
+	}
+}
+
 func TestBasePathMountsEverything(t *testing.T) {
 	for _, basePath := range []string{"", "/dl-tool"} {
 		t.Run("base="+basePath, func(t *testing.T) {
