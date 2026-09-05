@@ -1036,8 +1036,9 @@ func TestEventsMapsWebSocketNotifications(t *testing.T) {
 // dead connection and the backoff ladder redials instead of hanging the
 // transport forever (§4.5).
 func TestEventsReconnectsPastSilentPeer(t *testing.T) {
-	wsReadIdle = 150 * time.Millisecond
-	t.Cleanup(func() { wsReadIdle = 90 * time.Second })
+	// Shortened per client, not through package state, so no other client's
+	// goroutines race the override.
+	const testReadIdle = 150 * time.Millisecond
 
 	var upgrades atomic.Int32
 	release := make(chan struct{})
@@ -1056,9 +1057,10 @@ func TestEventsReconnectsPastSilentPeer(t *testing.T) {
 		// Go silent: never read the client's pings and never write, so the
 		// read deadline is the only thing that can end this connection.
 		<-release
-		if err := conn.Close(); err != nil {
-			t.Logf("close silent connection: %v", err)
-		}
+		// Nothing to assert on teardown — the client may already have closed
+		// its side — and no testing.T method may run in a goroutine that can
+		// outlive the test, so the close error is dropped silently.
+		_ = conn.Close()
 	}))
 	t.Cleanup(srv.Close)
 
@@ -1066,6 +1068,7 @@ func TestEventsReconnectsPastSilentPeer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	c.readIdle = testReadIdle
 	t.Cleanup(func() {
 		if err := c.Close(); err != nil {
 			t.Logf("close client: %v", err)

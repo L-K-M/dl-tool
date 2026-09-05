@@ -65,14 +65,16 @@ const (
 	defaultCallTimeout = 30 * time.Second
 )
 
-// wsReadIdle bounds the silence a notification connection tolerates: a
-// half-open connection — a partition, a NAT timeout, a middlebox that drops
-// silently — never delivers a close frame, so without a deadline the
-// blocked read would hang the transport until TCP gives up. A ping at a
-// third of the window keeps a healthy connection alive and turns a dead
-// peer into a read error the reconnect ladder answers (§4.5). A variable,
-// not a constant, so the reconnect test can shorten it.
-var wsReadIdle = 90 * time.Second
+// wsReadIdle is the default read-idle window of a notification
+// connection: a half-open connection — a partition, a NAT timeout, a
+// middlebox that drops silently — never delivers a close frame, so without
+// a deadline the blocked read would hang the transport until TCP gives up.
+// A ping at a third of the window keeps a healthy connection alive and
+// turns a dead peer into a read error the reconnect ladder answers (§4.5).
+// Per client, snapshotted once per connection: package-level mutable state
+// here would be a latent data race between a test's override and the
+// production goroutines of every other client in the package.
+const wsReadIdle = 90 * time.Second
 
 // JSON-RPC method names dl-tool calls (docs/06-download-engines.md §4.3).
 const (
@@ -165,6 +167,11 @@ type Client struct {
 	timeout time.Duration
 	hc      *http.Client
 
+	// readIdle is the notification connection's read-idle window, snapshotted
+	// per connection from wsReadIdle; the reconnect test shortens it on the
+	// instance it owns, never through package state.
+	readIdle time.Duration
+
 	nextID    atomic.Uint64
 	done      chan struct{}
 	closeOnce sync.Once
@@ -203,11 +210,12 @@ func New(cfg Config, hc *http.Client) (*Client, error) {
 	}
 
 	return &Client{
-		url:     cfg.URL,
-		secret:  cfg.Secret,
-		timeout: timeout,
-		hc:      hc,
-		done:    make(chan struct{}),
+		url:      cfg.URL,
+		secret:   cfg.Secret,
+		timeout:  timeout,
+		hc:       hc,
+		readIdle: wsReadIdle,
+		done:     make(chan struct{}),
 	}, nil
 }
 
@@ -654,8 +662,9 @@ func (c *Client) closeOnDone(ctx context.Context, conn *websocket.Conn) (stop fu
 // a data frame; its only writes are ping control frames, which gorilla
 // permits concurrently with reads.
 func (c *Client) readNotifications(ctx context.Context, conn *websocket.Conn, events chan<- engine.TaskEvent) error {
+	readIdle := c.readIdle
 	resetDeadline := func() {
-		if err := conn.SetReadDeadline(time.Now().Add(wsReadIdle)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(readIdle)); err != nil {
 			slog.Debug("aria2: set websocket read deadline", "engine", engine.NameAria2, "error", err)
 		}
 	}
@@ -664,7 +673,7 @@ func (c *Client) readNotifications(ctx context.Context, conn *websocket.Conn, ev
 	// client sends no identifiable pings of its own — proves liveness.
 	conn.SetPongHandler(func(string) error { resetDeadline(); return nil })
 
-	ping := time.NewTicker(wsReadIdle / 3)
+	ping := time.NewTicker(readIdle / 3)
 	stopPing := make(chan struct{})
 	pingDone := make(chan struct{})
 	go func() {

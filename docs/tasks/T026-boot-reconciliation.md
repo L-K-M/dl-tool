@@ -290,6 +290,13 @@ loops were fixed. Rejected with evidence: adopt-orphan re-submission
 guarding (`idx_tasks_engine_ref` is a partial UNIQUE index, so the
 duplicate is unrepresentable).
 
+The follow-up round flagged two minors in the new test code, both taken:
+the silent-peer handler no longer calls a testing.T method from a goroutine
+that can outlive the test, and the read-idle window became a per-client
+field snapshotted per connection (`c.readIdle`) instead of mutable package
+state. Stability pinned with `go test -race -count=5 -run TestEvents`
+(10 packages `ok` across the full `make test`).
+
 ## Blocked
 
 None. An earlier session stopped here because
