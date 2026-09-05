@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T098 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T017, T019, T020, T024, T026 |
 | **Blocks** | T099 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/tasks_actions.go`, `internal/store/tasks.go` |
@@ -152,7 +152,82 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/...` (the Verification block, run at the
+final tree):
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	45.270s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.108s
+ok  	github.com/L-K-M/dl-tool/internal/engine	5.312s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.137s
+?   	github.com/L-K-M/dl-tool/internal/fsx	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.320s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.191s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.222s
+ok  	github.com/L-K-M/dl-tool/internal/store	63.229s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.354s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.021s
+```
+
+The three named tests ran and passed (with the five companion cases:
+unlimited zeros, creation order, the resume path, the vanished-handle
+re-add, the refusal and the unregistered engine):
+
+```
+$ go test -race -count=1 -run 'TestPassRespectsTotalAndPerEngine|TestSeedingIsNotCounted|TestHeldTaskCarriesConcurrencyLimit' -v ./internal/engine/
+=== RUN   TestPassRespectsTotalAndPerEngine
+--- PASS: TestPassRespectsTotalAndPerEngine (0.45s)
+=== RUN   TestSeedingIsNotCounted
+--- PASS: TestSeedingIsNotCounted (0.32s)
+=== RUN   TestHeldTaskCarriesConcurrencyLimit
+--- PASS: TestHeldTaskCarriesConcurrencyLimit (0.34s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine	2.169s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/api/tasks_actions.go
+internal/engine/admission.go
+internal/engine/admission_test.go
+internal/store/tasks.go
+```
+
+Exactly the four paths of the Files table. No Huma operation or schema
+changed, so `make gen` was not needed; no dependency was first-imported, so
+`go.mod`/`go.sum` are untouched.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+The task did not stop, but one rule of [`docs/14-conventions.md`
+§8.3](../14-conventions.md#83-wire-a-long-lived-component) could not be
+satisfied: `Admitter.Run` has **no composition-root call site**, because
+neither `internal/api/server.go` nor `cmd/dl-tool/main.go` is in this task's
+Files table (“No other file may be modified”). Until a call site lands,
+`Pass` is complete and correct — and the resume action answers headroom
+from the same counts and limits — but nothing drives the pass on a ticker,
+so a queued task still never reaches an engine and the M1 exit checkpoint
+stays unreachable. The contract's `load func(context.Context) (Limits,
+error)` parameter is the likely reason the wiring was left out: no
+settings-key reader exists yet (`internal/store/settings.go` defers the
+settings rows to T092), so the composition root has nothing to build
+`load` from. T099 — the disk-space gate that joins this same `Pass` —
+needs the same reader and is the natural carrier of both; if it does not
+own them, this file's Files table needs `internal/api/server.go` added
+and a follow-up that constructs the Admitter, builds `load` over the
+settings rows and starts `Run` beside the reconciler's loop.

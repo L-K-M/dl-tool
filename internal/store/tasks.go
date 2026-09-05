@@ -188,6 +188,34 @@ WHERE engine = ? AND engine_ref IS NOT NULL AND state NOT IN ('completed', 'remo
 	querySetQueuePosition = `UPDATE tasks
 SET queue_position = ?, updated_at = ?
 WHERE id = ?`
+
+	// One grouped query over the four states a concurrency limit counts
+	// (docs/04-data-model.md section 4.7). seeding is excluded in SQL
+	// rather than in Go: the exclusion is a fact of the counted set, not a
+	// caller's choice, and every reader — the admission pass, a resume
+	// action — must see the same set.
+	queryCountActive = `SELECT engine, COUNT(*) AS active
+FROM tasks
+WHERE state IN ('downloading', 'checking', 'extracting', 'moving')
+GROUP BY engine`
+
+	// process_order is creation date (FR-095): oldest added_at first, the
+	// ULID id as the deterministic tiebreak of one shared millisecond.
+	querySelectQueuedCandidates = `SELECT id, engine, engine_ref, source_uri, infohash_v1, destination
+FROM tasks
+WHERE state = 'queued'
+ORDER BY added_at ASC, id ASC`
+
+	// The guarded error-code write: a row already carrying exactly this
+	// pair writes nothing — not even updated_at — so a 1 Hz admission pass
+	// re-stamping the same held task every tick neither churns the row nor
+	// feeds the sync deltas. The same shape as querySetTaskEngineRef's
+	// handle guard; SQL `IS NOT` compares NULLs correctly on both sides.
+	querySetTaskErrorCode = `UPDATE tasks
+SET error_code = ?, error_message = ?, updated_at = ?
+WHERE id = ? AND (error_code IS NOT ? OR error_message IS NOT ?)`
+
+	queryTaskErrorCode = `SELECT error_code, error_message FROM tasks WHERE id = ?`
 )
 
 // TaskStore persists tasks rows and enforces the task state machine.
@@ -338,6 +366,163 @@ func (s *TaskStore) ListNonTerminalByEngine(ctx context.Context, engineName stri
 	}
 
 	return byRef, nil
+}
+
+// ActiveCounts is one snapshot of the counted set (T098): the tasks in
+// state downloading, checking, extracting or moving, in total and per
+// engine. Tasks in state seeding are excluded from every count — a full
+// seed list must not starve new downloads (docs/04-data-model.md section
+// 4.7). ByEngine is never nil, including for an empty counted set, so a
+// caller may index it for any engine name.
+type ActiveCounts struct {
+	Total    int
+	ByEngine map[string]int
+}
+
+// Candidate is one queued task the admission pass (T098) considers for
+// release. The submission columns ride along because the pass itself
+// rebuilds the Engine.Add request from the stored identity — the same
+// projection the reconciler's Reconcilable makes for a re-submission.
+type Candidate struct {
+	ID          string  `db:"id"`
+	Engine      string  `db:"engine"`
+	EngineRef   *string `db:"engine_ref"` // nil when the task has never been handed to an engine
+	SourceURI   *string `db:"source_uri"`
+	InfohashV1  *string `db:"infohash_v1"`
+	Destination string  `db:"destination"`
+}
+
+// activeCountRow is one grouped row of queryCountActive.
+type activeCountRow struct {
+	Engine string `db:"engine"`
+	Active int    `db:"active"`
+}
+
+// CountActive returns the concurrency-counted set as one snapshot: total
+// and per-engine counts of the four counted states, seeding excluded by
+// the query itself.
+func (s *TaskStore) CountActive(ctx context.Context) (ActiveCounts, error) {
+	var rows []activeCountRow
+	if err := s.db.SelectContext(ctx, &rows, queryCountActive); err != nil {
+		return ActiveCounts{}, fmt.Errorf("store: count active tasks: %w", err)
+	}
+
+	counts := ActiveCounts{ByEngine: make(map[string]int, len(rows))}
+	for _, row := range rows {
+		counts.ByEngine[row.Engine] = row.Active
+		counts.Total += row.Active
+	}
+
+	return counts, nil
+}
+
+// SelectQueuedCandidates returns the queued tasks in process order —
+// oldest added_at first (FR-095) — at most limit of them. limit <= 0 means
+// every queued task, which is what the admission pass asks for: a held
+// task must carry concurrency_limit wherever it sits in the queue, so the
+// pass cannot stop at the first candidate it cannot release.
+func (s *TaskStore) SelectQueuedCandidates(ctx context.Context, limit int) ([]Candidate, error) {
+	query := querySelectQueuedCandidates
+	var args []any
+	if limit > 0 {
+		query += "\nLIMIT ?"
+		args = append(args, limit)
+	}
+
+	var candidates []Candidate
+	if err := s.db.SelectContext(ctx, &candidates, query, args...); err != nil {
+		return nil, fmt.Errorf("store: select queued candidates: %w", err)
+	}
+
+	return candidates, nil
+}
+
+// SetErrorCode writes tasks.error_code and error_message, or clears both
+// when errorCode is empty (SQL NULL is the storage form of an absent
+// value). The update is guarded: a row already carrying exactly this pair
+// is a quiet no-op, so a caller re-stamping a held task every tick writes
+// nothing. No task_events row is written — this is column bookkeeping;
+// the event moments stay with the transitions and stores that own them. A
+// missing id is ErrNotFound.
+func (s *TaskStore) SetErrorCode(ctx context.Context, id, errorCode, message string) error {
+	codeValue, messageValue := nullableText(errorCode), nullableText(message)
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: set error code of task %q: %w", id, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of error code write failed", "task_id", id, "error", err)
+		}
+	}()
+
+	// The current pair read inside the transaction serves one purpose:
+	// telling a missing id (ErrNotFound) from the no-op re-stamp the
+	// guarded update below answers with zero affected rows.
+	var current struct {
+		ErrorCode    *string `db:"error_code"`
+		ErrorMessage *string `db:"error_message"`
+	}
+	err = tx.GetContext(ctx, &current, queryTaskErrorCode, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: set error code of task %q: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("store: set error code of task %q: read pair: %w", id, err)
+	}
+
+	result, err := tx.ExecContext(
+		ctx, querySetTaskErrorCode,
+		codeValue, messageValue, time.Now().UnixMilli(), id, codeValue, messageValue,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set error code of task %q: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: set error code of task %q: count rows: %w", id, err)
+	}
+	if affected == 0 {
+		if textOrEmpty(current.ErrorCode) == errorCode && textOrEmpty(current.ErrorMessage) == message {
+			// The stored pair already equals the requested one; neither the
+			// write nor an event belongs here.
+			return nil
+		}
+
+		return fmt.Errorf(
+			"store: set error code of task %q: expected pair (%q, %q), attempted (%q, %q): %w",
+			id, textOrEmpty(current.ErrorCode), textOrEmpty(current.ErrorMessage), errorCode, message, ErrTransitionConflict,
+		)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: set error code of task %q: commit: %w", id, err)
+	}
+
+	return nil
+}
+
+// nullableText renders "" as SQL NULL — the storage form of an absent
+// value — and any other value as itself.
+func nullableText(v string) any {
+	if v == "" {
+		return nil
+	}
+
+	return v
+}
+
+// textOrEmpty renders a nullable text column as "", never nil, so two
+// values compare with ==.
+func textOrEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+
+	return *p
 }
 
 // UpdateProgress replaces the transfer counters of a task and bumps
