@@ -584,10 +584,9 @@ func (c *Client) notifyEvents(ctx context.Context, events chan<- engine.TaskEven
 		conn, _, err := dialer.DialContext(ctx, c.wsURL(), nil)
 		if err == nil {
 			backoff = wsBackoffInitial
+			stop := c.closeOnDone(ctx, conn)
 			readErr := c.readNotifications(ctx, conn, events)
-			if closeErr := conn.Close(); closeErr != nil {
-				slog.Debug("aria2: close websocket", "engine", engine.NameAria2, "error", closeErr)
-			}
+			stop()
 			if ctx.Err() != nil {
 				return
 			}
@@ -607,6 +606,32 @@ func (c *Client) notifyEvents(ctx context.Context, events chan<- engine.TaskEven
 		case <-time.After(backoff):
 		}
 		backoff = min(2*backoff, wsBackoffMax)
+	}
+}
+
+// closeOnDone hands one connection's lifetime to a watchdog: a blocked
+// ReadMessage observes neither a cancelled context nor a closed client, so
+// closing the socket is the only way to unblock the read loop. The
+// watchdog owns conn.Close() on all three exits — cancelled, closed, or
+// read loop returned on its own — and the returned stop ends it and waits,
+// so no goroutine outlives notifyEvents.
+func (c *Client) closeOnDone(ctx context.Context, conn *websocket.Conn) (stop func()) {
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		select {
+		case <-ctx.Done():
+		case <-c.done:
+		case <-done:
+		}
+		if err := conn.Close(); err != nil {
+			slog.Debug("aria2: close websocket", "engine", engine.NameAria2, "error", err)
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
 	}
 }
 

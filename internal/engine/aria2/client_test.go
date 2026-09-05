@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 )
@@ -33,10 +35,18 @@ type recordedCall struct {
 	Params []any
 }
 
+// wsUpgrader answers the notification dial. The fake is not a browser
+// origin, so every origin is accepted.
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin: func(*http.Request) bool { return true },
+}
+
 // fakeServer is an httptest JSON-RPC endpoint. It asserts that the first
 // positional parameter of every request — single or batch element — is
 // token:<secret>, records every call, and answers from the injected
-// responder. A nil result with a nil fault answers "OK".
+// responder. A nil result with a nil fault answers "OK". A WebSocket
+// upgrade is answered with 101 and held open, so tests can push the six
+// notifications of docs/06-download-engines.md §4.5 through notify.
 type fakeServer struct {
 	t *testing.T
 
@@ -45,6 +55,9 @@ type fakeServer struct {
 	respond func(method string) (any, *rpcFault)
 	isBatch bool // whether the last request body was a batch array
 	srv     *httptest.Server
+
+	wsMu   sync.Mutex
+	wsConn *websocket.Conn // the current notification connection, if any
 }
 
 // newTestClient starts a fakeServer and returns a client pointed at it.
@@ -74,6 +87,14 @@ func okResponder(results map[string]any) func(string) (any, *rpcFault) {
 
 func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.t.Helper()
+
+	// A WebSocket dial is the notification transport (§4.5): an Upgrade
+	// GET that carries no JSON-RPC call — no token, no body — so it branches
+	// before the POST-only assertions below.
+	if websocket.IsWebSocketUpgrade(r) {
+		f.serveNotifications(w, r)
+		return
+	}
 
 	if r.Method != http.MethodPost {
 		f.t.Errorf("rpc request method = %q, want POST", r.Method)
@@ -131,6 +152,57 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(f.t, w, replyFor(requests[0], f.respond))
+}
+
+// serveNotifications answers the dial with 101 and holds the connection
+// open, draining until the client drops it. Notifications are
+// unidirectional (§4.5), so the only legal client frame is the close the
+// read loop exits on — that exit, not an error, is the normal end.
+func (f *fakeServer) serveNotifications(w http.ResponseWriter, r *http.Request) {
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		f.t.Errorf("upgrade notification websocket: %v", err)
+		return
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			f.t.Logf("close notification websocket: %v", err)
+		}
+	}()
+
+	f.wsMu.Lock()
+	f.wsConn = conn
+	f.wsMu.Unlock()
+
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+	}
+}
+
+// notify pushes one aria2 notification frame over the upgraded connection,
+// waiting for the dial if the client has not connected yet.
+func (f *fakeServer) notify(method, gid string) {
+	f.t.Helper()
+
+	var conn *websocket.Conn
+	require.Eventually(f.t, func() bool {
+		f.wsMu.Lock()
+		defer f.wsMu.Unlock()
+		conn = f.wsConn
+		return conn != nil
+	}, 2*time.Second, time.Millisecond)
+
+	frame := rpcNotification{
+		Method: method,
+		Params: []struct {
+			GID string `json:"gid"`
+		}{{GID: gid}},
+	}
+	if err := conn.WriteJSON(frame); err != nil {
+		f.t.Errorf("write notification %s: %v", method, err)
+	}
 }
 
 // wireReply is one JSON-RPC reply, result or fault.
@@ -899,6 +971,47 @@ func TestEventsEmitsProgress(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatal("channel not closed after cancellation")
+		}
+	}
+}
+
+// The six aria2 WebSocket notifications map onto their event kinds with a
+// namespaced task id (§4.5). okResponder answers tellActive with a string,
+// which cannot decode as a status list, so the poll stays silent and every
+// event on the channel is a pushed notification.
+func TestEventsMapsWebSocketNotifications(t *testing.T) {
+	c, f := newTestClient(t, okResponder(nil))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	events, err := c.Events(ctx)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	for _, want := range []struct {
+		method string
+		kind   engine.EventKind
+	}{
+		{notifyDownloadStart, engine.EventStarted},
+		{notifyDownloadPause, engine.EventPaused},
+		{notifyDownloadStop, engine.EventRemoved},
+		{notifyDownloadComplete, engine.EventCompleted},
+		{notifyDownloadError, engine.EventError},
+		{notifyBtDownloadComplete, engine.EventProgress},
+	} {
+		f.notify(want.method, testGID)
+		select {
+		case ev := <-events:
+			if ev.TaskID != engine.NameAria2+":"+testGID {
+				t.Errorf("notification %s: task id = %q, want %q", want.method, ev.TaskID, engine.NameAria2+":"+testGID)
+			}
+			if ev.Kind != want.kind {
+				t.Errorf("notification %s: kind = %q, want %q", want.method, ev.Kind, want.kind)
+			}
+		case <-ctx.Done():
+			t.Fatalf("no event for notification %s", want.method)
 		}
 	}
 }

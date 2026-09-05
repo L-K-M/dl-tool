@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T026 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T019, T024, T025 |
 | **Blocks** | T030, T098 |
 | **Parallel-safe** | no — it also edits the shared files `internal/engine/aria2/client.go`, `internal/store/tasks.go` and `internal/api/server.go` |
@@ -179,26 +179,16 @@ Checking formatting...
 All matched files use Prettier code style!
 ```
 
-`make test PKG=./internal/engine/...` — exit 2; the reconciler package is green
-with every named test running, the aria2 package fails exactly one test, the
-failure named under Blocked:
+`make test PKG=./internal/engine/...` — exit 0, both packages `ok`:
 
 ```
 $ make test PKG=./internal/engine/...
 go test -race -count=1 ./internal/engine/...
-ok  	github.com/L-K-M/dl-tool/internal/engine	1.534s
---- FAIL: TestEventsEmitsProgress (1.00s)
-    server.go:3311: rpc request method = "GET", want POST
-    server.go:3311: rpc request content-type = "", want application/json
-    server.go:3311: rpc request body is empty
-    ... (the same triple repeats while the dial backs off and retries)
-FAIL
-FAIL	github.com/L-K-M/dl-tool/internal/engine/aria2	1.425s
-FAIL
-make: *** [Makefile:41: test-go] Error 1
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.511s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.429s
 ```
 
-The reconciler package's own run, for the record:
+Every named test, plus the two Events tests of the aria2 package:
 
 ```
 $ go test -race -count=1 -v -run 'TestBootWritesKnownHandles|TestForeignTransferIsIgnored|TestVanishedHandleErrors|TestRunStopsWithContext' ./internal/engine/
@@ -209,61 +199,67 @@ $ go test -race -count=1 -v -run 'TestBootWritesKnownHandles|TestForeignTransfer
 === RUN   TestVanishedHandleErrors
 --- PASS: TestVanishedHandleErrors (0.00s)
 === RUN   TestRunStopsWithContext
---- PASS: TestRunStopsWithContext (0.06s)
+--- PASS: TestRunStopsWithContext (0.07s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/engine	0.618s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.125s
+=== RUN   TestEventsEmitsProgress
+--- PASS: TestEventsEmitsProgress (1.01s)
+=== RUN   TestEventsMapsWebSocketNotifications
+--- PASS: TestEventsMapsWebSocketNotifications (0.01s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.062s
 ```
 
-Scope check:
+Scope check over the task's whole diff (the working tree is clean at the
+final commit, so `git status` lists nothing; this is the same check over
+`origin/main..HEAD`):
 
 ```
-$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+$ git diff --name-only origin/main..HEAD -- . ':(exclude)docs' | sort
 go.mod
 internal/api/server.go
 internal/engine/aria2/client.go
+internal/engine/aria2/client_test.go
 internal/engine/reconcile.go
 internal/engine/reconcile_test.go
 internal/store/tasks.go
 ```
 
-The five paths are the Files table; `go.mod` is the docs/13 §7.1 implicit
-addition — first import of the pinned `github.com/gorilla/websocket v1.5.0`,
-whose only delta is the loss of the `// indirect` marker (`go.sum` unchanged,
-no version changed). Full-repo `go test -race ./internal/...` is green except
-the same one aria2 test.
+The six paths are the (amended) Files table; `go.mod` is the docs/13 §7.1
+implicit addition — first import of the pinned `github.com/gorilla/websocket
+v1.5.0`, whose only delta is the loss of the `// indirect` marker
+(`go.sum` unchanged, no version changed). Full-repo `make test` is green:
+
+```
+$ make test | grep -E '^(ok|FAIL)'
+ok  	github.com/L-K-M/dl-tool/internal/api	42.724s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.116s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.527s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.385s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.456s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.168s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.301s
+ok  	github.com/L-K-M/dl-tool/internal/store	63.568s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.356s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.030s
+```
+
+The harness amendment also exposed one real defect step 9 had hidden: with
+the WebSocket actually connected, a blocked `ReadMessage` observes neither a
+cancelled context nor a closed client, so the `Events` channel never closed —
+an acceptance criterion. `notifyEvents` now hands each connection to a
+`closeOnDone` watchdog that owns `conn.Close()` on all three exits and is
+waited on before the loop continues, so cancellation closes the channel
+promptly and no goroutine outlives the loop.
 
 ## Blocked
 
-Step 8 requires `Events` to open "a WebSocket client on the same host and
-path" as the RPC endpoint. A WebSocket handshake is an HTTP **GET** with
-Upgrade headers (RFC 6455 §1.3; gorilla/websocket cannot send it as any
-other method), so the swap necessarily sends GET requests to the configured
-RPC URL.
-
-`internal/engine/aria2/client_test.go` — **not in this task's Files table** —
-defines `fakeServer`, the harness behind `TestEventsEmitsProgress`, and its
-handler fails the test on every non-POST request:
-
-```go
-if r.Method != http.MethodPost {
-    f.t.Errorf("rpc request method = %q, want POST", r.Method)
-}
-```
-
-With step 8 implemented, the notification loop's dial trips that assertion
-(the real output is under Evidence): no production-side implementation of
-step 8 can avoid the GET, so the task cannot pass its Verification without
-editing `client_test.go` — the file T019's Files table listed when that task
-last owned `Events`. T026's Files table lists `reconcile_test.go` but omits
-the aria2 test file its own step 8 necessarily touches; that omission is the
-planning error.
-
-Unblock by adding one row to the Files table:
-
-| `internal/engine/aria2/client_test.go` | modify | Teach `fakeServer` the WebSocket upgrade (answer 101 and push notifications) so the notification transport is testable. |
-
-The code change that row licenses is a ~15-line `gorilla/websocket.Upgrader`
-branch in `fakeServer.ServeHTTP` (upgrade GETs carrying `Connection: Upgrade`,
-assert the six notifications map). Everything else in the task is implemented
-and green: the reconciler, the store methods, the server wiring, and the
-WebSocket transport itself.
+None. An earlier session stopped here because
+`internal/engine/aria2/client_test.go` was missing from the Files table:
+step 8's WebSocket dial is an HTTP GET with Upgrade headers (RFC 6455
+§1.3), which `fakeServer` rejected with its POST-only assertion, so no
+implementation of step 8 could pass the suite. The amendment it proposed
+is the `internal/engine/aria2/client_test.go` row above; the task then
+proceeded with no other scope change — the upgrade branch in `fakeServer`,
+the six-notification mapping test it makes possible, and the `closeOnDone`
+watchdog that test forced (see Evidence).
