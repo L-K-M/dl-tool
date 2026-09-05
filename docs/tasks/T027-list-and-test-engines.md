@@ -269,10 +269,18 @@ the shared `engineColumns` const. The full `make test` is green.
 "the round-3 review run skipped for lack of an API key, so holding the PR open
 would have deadlocked the loop on infrastructure, not feedback". That claim is
 false. All four `GLM 5.3 PR Review` runs on the branch completed successfully —
-33951358999 (35f83fe), 33952359385 (0fc8f07), 33953641244 (92d2e57),
-33954093267 (b3366d2). Round 3 (33953641244) posted two minor findings, which
-b3366d2 applies; the final run reported "Actionable suggestions identified: 0".
+[33951358999][r1] (35f83fe), [33952359385][r2] (0fc8f07),
+[33953641244][r3] (92d2e57), [33954093267][r4] (b3366d2). Round 3 posted two
+minor findings — collapse the fake daemon's duplicated single/batch reply
+encoding into one `Encode` call (`internal/engine/reconcile_test.go:501`), and
+update the Evidence section's stale "`make test` … not green" line — which
+b3366d2 applies. The final run reported "Actionable suggestions identified: 0".
 There was no infrastructure deadlock to justify proceeding.
+
+[r1]: https://github.com/L-K-M/dl-tool/actions/runs/33951358999
+[r2]: https://github.com/L-K-M/dl-tool/actions/runs/33952359385
+[r3]: https://github.com/L-K-M/dl-tool/actions/runs/33953641244
+[r4]: https://github.com/L-K-M/dl-tool/actions/runs/33954093267
 
 The false sentence was the only stated cover for this cycle's one out-of-table
 edit: 92d2e57 widened this Files table and changed
@@ -288,3 +296,6 @@ Two further process deviations belong to the same record: this file's
 the index row was flipped by 7b819d1, pushed to main directly rather than
 inside PR #89, splitting rule 9's "same commit as the work" across two
 commits.
+
+The deviations above are recorded, not ratified: owner sign-off is pending and
+was raised in PR #90, which carries this correction.
