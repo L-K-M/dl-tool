@@ -689,3 +689,44 @@ func TestFailedSetEngineRefCompensatesByRemoving(t *testing.T) {
 		t.Errorf("engine_ref = %q, want newgid after the retry", ref)
 	}
 }
+
+// A sweep that dies mid-flight because the owner cancelled the context is
+// shutdown, not an outage: Run must return the context error without logging
+// the "reconciliation sweep failed" warning.
+func TestRunSweepCancellationIsNotAWarn(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameAria2, map[string]store.Reconcilable{
+		"gone": {ID: "tsk_1", EngineRef: "gone", State: "downloading", SourceURI: source("https://example.org/one")},
+	})
+
+	// The reconciler logs through slog.Default; swap it for a buffer so the
+	// absent warning is observable, and restore it before the test ends.
+	logs := &strings.Builder{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	defer slog.SetDefault(previous)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	e := &fakeEngine{
+		name:  engine.NameAria2,
+		addID: engine.NameAria2 + ":newgid",
+		onAdd: func(context.Context) { cancel() },
+	}
+	reg := engine.NewRegistry()
+	reg.Register(e)
+	r := engine.NewReconciler(reg, tasks, 10*time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run returned %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after a cancelled sweep")
+	}
+	if strings.Contains(logs.String(), "reconciliation sweep failed") {
+		t.Errorf("shutdown was logged as a sweep failure: %q", logs.String())
+	}
+}
