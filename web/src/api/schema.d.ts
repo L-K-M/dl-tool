@@ -693,8 +693,8 @@ export interface operations {
       };
     };
     responses: {
-      /** @description OK */
-      200: {
+      /** @description Created */
+      201: {
         headers: {
           "Cache-Control"?: string;
           "Set-Cookie"?: string;

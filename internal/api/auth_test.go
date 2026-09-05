@@ -1096,6 +1096,18 @@ func TestLoginFailureIsIndistinguishable(t *testing.T) {
 	}
 }
 
+func TestSetupDocumentsCreatedResponse(t *testing.T) {
+	server := newTestServer(t, "")
+	responses := server.API.OpenAPI().Paths["/auth/setup"].Post.Responses
+	created := responses[strconv.Itoa(http.StatusCreated)]
+	if created == nil || created.Content["application/json"] == nil {
+		t.Fatal("setup must document its 201 JSON response")
+	}
+	if responses[strconv.Itoa(http.StatusOK)] != nil {
+		t.Fatal("setup advertises 200 but returns 201")
+	}
+}
+
 func TestLoginThrottleEscalatesAcrossEligibleAttempts(t *testing.T) {
 	for _, username := range []string{"alice", "ALIce"} {
 		t.Run(username, func(t *testing.T) {

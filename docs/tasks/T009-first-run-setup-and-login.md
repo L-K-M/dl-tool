@@ -227,6 +227,17 @@ ok  	github.com/L-K-M/dl-tool/internal/store	59.117s
 SETUP_OK
 ```
 
+Audit regression: setup's generated success response now matches its runtime status.
+
+```text
+$ make test PKG='./internal/api/... ./internal/secure/... ./internal/store/...' && echo SETUP_OK
+go test -race -count=1 ./internal/api/... ./internal/secure/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	42.609s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.158s
+ok  	github.com/L-K-M/dl-tool/internal/store	60.759s
+SETUP_OK
+```
+
 ## Blocked
 
 None. An earlier session stopped here because `internal/api/server.go` — the registration
