@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -671,17 +672,23 @@ func TestNewAdmitterRejectsNonPositiveTick(t *testing.T) {
 	env := newAdmitEnv(t)
 	for _, tick := range []time.Duration{0, -time.Second} {
 		tick := tick
-		deferredPanic(t, func() { engine.NewAdmitter(engine.NewRegistry(), env.tasks, tick) })
+		deferredPanic(t, "admission tick", func() { engine.NewAdmitter(engine.NewRegistry(), env.tasks, tick) })
 	}
 }
 
-// deferredPanic asserts that call panics, recovering it so the caller's
-// remaining iterations still run.
-func deferredPanic(t *testing.T, call func()) {
+// deferredPanic asserts that call panics with a message containing
+// substr, recovering it so the caller's remaining iterations still run.
+func deferredPanic(t *testing.T, substr string, call func()) {
 	t.Helper()
 	defer func() {
-		if recover() == nil {
+		recovered := recover()
+		if recovered == nil {
 			t.Error("call did not panic")
+
+			return
+		}
+		if msg, ok := recovered.(string); !ok || !strings.Contains(msg, substr) {
+			t.Errorf("panic value %v does not mention %q", recovered, substr)
 		}
 	}()
 	call()
