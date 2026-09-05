@@ -294,7 +294,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T025 | Compute rid deltas and stream them over SSE | T011, T021, T022, T024 | no | done | [T025](T025-rid-deltas-over-sse.md) |
 | T026 | Reconcile tasks with the engines at boot and on every poll | T019, T024, T025 | no | done | [T026](T026-boot-reconciliation.md) |
 | T027 | List engines and test connectivity | T019, T020 | yes | done | [T027](T027-list-and-test-engines.md) |
-| T098 | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | yes | done | [T098](T098-concurrency-limiter.md) |
+| T098 | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | no | done | [T098](T098-concurrency-limiter.md) |
 | T099 | Reserve disk space and keep a free-space floor | T020, T024, T098 | yes | todo | [T099](T099-disk-space-reservation.md) |
 
 ### M2

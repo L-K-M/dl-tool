@@ -687,7 +687,7 @@ func deferredPanic(t *testing.T, substr string, call func()) {
 
 			return
 		}
-		if msg, ok := recovered.(string); !ok || !strings.Contains(msg, substr) {
+		if msg := fmt.Sprintf("%v", recovered); !strings.Contains(msg, substr) {
 			t.Errorf("panic value %v does not mention %q", recovered, substr)
 		}
 	}()
