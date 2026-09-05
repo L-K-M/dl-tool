@@ -165,7 +165,104 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint` — exit 0, no findings:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+cd web && npm run lint
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+```
+
+`make test PKG=./internal/engine/...` — exit 2; the reconciler package is green
+with every named test running, the aria2 package fails exactly one test, the
+failure named under Blocked:
+
+```
+$ make test PKG=./internal/engine/...
+go test -race -count=1 ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.534s
+--- FAIL: TestEventsEmitsProgress (1.00s)
+    server.go:3311: rpc request method = "GET", want POST
+    server.go:3311: rpc request content-type = "", want application/json
+    server.go:3311: rpc request body is empty
+    ... (the same triple repeats while the dial backs off and retries)
+FAIL
+FAIL	github.com/L-K-M/dl-tool/internal/engine/aria2	1.425s
+FAIL
+make: *** [Makefile:41: test-go] Error 1
+```
+
+The reconciler package's own run, for the record:
+
+```
+$ go test -race -count=1 -v -run 'TestBootWritesKnownHandles|TestForeignTransferIsIgnored|TestVanishedHandleErrors|TestRunStopsWithContext' ./internal/engine/
+=== RUN   TestBootWritesKnownHandles
+--- PASS: TestBootWritesKnownHandles (0.00s)
+=== RUN   TestForeignTransferIsIgnored
+--- PASS: TestForeignTransferIsIgnored (0.00s)
+=== RUN   TestVanishedHandleErrors
+--- PASS: TestVanishedHandleErrors (0.00s)
+=== RUN   TestRunStopsWithContext
+--- PASS: TestRunStopsWithContext (0.06s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine	0.618s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+go.mod
+internal/api/server.go
+internal/engine/aria2/client.go
+internal/engine/reconcile.go
+internal/engine/reconcile_test.go
+internal/store/tasks.go
+```
+
+The five paths are the Files table; `go.mod` is the docs/13 §7.1 implicit
+addition — first import of the pinned `github.com/gorilla/websocket v1.5.0`,
+whose only delta is the loss of the `// indirect` marker (`go.sum` unchanged,
+no version changed). Full-repo `go test -race ./internal/...` is green except
+the same one aria2 test.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+Step 8 requires `Events` to open "a WebSocket client on the same host and
+path" as the RPC endpoint. A WebSocket handshake is an HTTP **GET** with
+Upgrade headers (RFC 6455 §1.3; gorilla/websocket cannot send it as any
+other method), so the swap necessarily sends GET requests to the configured
+RPC URL.
+
+`internal/engine/aria2/client_test.go` — **not in this task's Files table** —
+defines `fakeServer`, the harness behind `TestEventsEmitsProgress`, and its
+handler fails the test on every non-POST request:
+
+```go
+if r.Method != http.MethodPost {
+    f.t.Errorf("rpc request method = %q, want POST", r.Method)
+}
+```
+
+With step 8 implemented, the notification loop's dial trips that assertion
+(the real output is under Evidence): no production-side implementation of
+step 8 can avoid the GET, so the task cannot pass its Verification without
+editing `client_test.go` — the file T019's Files table listed when that task
+last owned `Events`. T026's Files table lists `reconcile_test.go` but omits
+the aria2 test file its own step 8 necessarily touches; that omission is the
+planning error.
+
+Unblock by adding one row to the Files table:
+
+| `internal/engine/aria2/client_test.go` | modify | Teach `fakeServer` the WebSocket upgrade (answer 101 and push notifications) so the notification transport is testable. |
+
+The code change that row licenses is a ~15-line `gorilla/websocket.Upgrader`
+branch in `fakeServer.ServeHTTP` (upgrade GETs carrying `Connection: Upgrade`,
+assert the six notifications map). Everything else in the task is implemented
+and green: the reconciler, the store methods, the server wiring, and the
+WebSocket transport itself.

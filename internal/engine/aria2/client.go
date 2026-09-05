@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/L-K-M/dl-tool/internal/engine"
 )
 
@@ -37,10 +39,19 @@ const (
 	// loop on a slow consumer.
 	eventsBuffer = 64
 
-	// eventsPollInterval is the tellActive cadence of the polling Events
-	// loop; it keeps rates moving between notifications. The WebSocket
-	// notification transport is added by T026.
+	// eventsPollInterval is the tellActive cadence that keeps rates moving
+	// between WebSocket notifications (docs/06-download-engines.md §4.5).
 	eventsPollInterval = time.Second
+
+	// WebSocket reconnect backoff (§4.5): half a second to start, doubling
+	// per consecutive failure, capped at half a minute. A successful
+	// connection resets the ladder, so a daemon that flaps recovers at full
+	// speed.
+	wsBackoffInitial = 500 * time.Millisecond
+	wsBackoffMax     = 30 * time.Second
+
+	// wsHandshakeTimeout bounds a WebSocket dial against a silent host.
+	wsHandshakeTimeout = 10 * time.Second
 
 	// listCount requests all retained records in the required single batch.
 	// aria2 parses the count as a signed 64-bit integer.
@@ -68,6 +79,29 @@ const (
 	methodChangeOption         = "aria2.changeOption"
 	methodChangeGlobalOption   = "aria2.changeGlobalOption"
 )
+
+// WebSocket notification methods and the TaskEvent kind each maps to
+// (docs/06-download-engines.md §4.5).
+const (
+	notifyDownloadStart      = "aria2.onDownloadStart"
+	notifyDownloadPause      = "aria2.onDownloadPause"
+	notifyDownloadStop       = "aria2.onDownloadStop"
+	notifyDownloadComplete   = "aria2.onDownloadComplete"
+	notifyDownloadError      = "aria2.onDownloadError"
+	notifyBtDownloadComplete = "aria2.onBtDownloadComplete"
+)
+
+// notificationKinds is the six-row table of docs/06-download-engines.md
+// §4.5. A message whose method is absent from this map is not one of
+// aria2's notifications and is dropped.
+var notificationKinds = map[string]engine.EventKind{
+	notifyDownloadStart:      engine.EventStarted,
+	notifyDownloadPause:      engine.EventPaused,
+	notifyDownloadStop:       engine.EventRemoved,
+	notifyDownloadComplete:   engine.EventCompleted,
+	notifyDownloadError:      engine.EventError,
+	notifyBtDownloadComplete: engine.EventProgress,
+}
 
 // Option keys: the long option name without the leading --, every value a
 // string (docs/06-download-engines.md §4.2).
@@ -270,9 +304,14 @@ func (c *Client) addMetalink(ctx context.Context, req engine.AddRequest) (string
 }
 
 // addOptions encodes the add-time options from an AddRequest: long names,
-// string values, absent when unset (§4.2).
+// string values, absent when unset (§4.2). Extra keys ride along verbatim —
+// the engine-specific escape hatch AddRequest documents — with the typed
+// fields winning on a collision.
 func addOptions(req engine.AddRequest) map[string]string {
-	opts := make(map[string]string)
+	opts := make(map[string]string, len(req.Extra)+4)
+	for key, value := range req.Extra {
+		opts[key] = value
+	}
 	if req.SaveDir != "" {
 		opts[optDir] = req.SaveDir
 	}
@@ -516,18 +555,133 @@ func (c *Client) SetShareLimits(ctx context.Context, id string, ratio *float64, 
 	return engine.ErrNotSupported
 }
 
-// Events runs the 1 Hz tellActive poll, emitting one progress event per
-// active transfer so rates keep moving between notifications. The WebSocket
-// notification transport is added by T026; this channel shape stays.
+// Events opens the WebSocket notification transport and keeps the 1 Hz
+// tellActive progress batch beside it. Notifications carry the state
+// changes (§4.5); the poll keeps rates moving between them. The channel
+// closes when ctx is cancelled or the client is closed, after both loops
+// have stopped — one closer, owned by the supervisor below.
 func (c *Client) Events(ctx context.Context) (<-chan engine.TaskEvent, error) {
 	events := make(chan engine.TaskEvent, eventsBuffer)
-	go c.pollEvents(ctx, events)
+
+	var loops sync.WaitGroup
+	loops.Add(2)
+	go func() { defer loops.Done(); c.pollEvents(ctx, events) }()
+	go func() { defer loops.Done(); c.notifyEvents(ctx, events) }()
+	go func() { loops.Wait(); close(events) }()
+
 	return events, nil
 }
 
-func (c *Client) pollEvents(ctx context.Context, events chan<- engine.TaskEvent) {
-	defer close(events)
+// notifyEvents maintains the WebSocket connection on the same host and path
+// as the RPC endpoint, reconnecting with exponential backoff on every drop.
+// It returns only when ctx is cancelled or the client is closed; a daemon
+// that stays down costs one dial per backoff step, nothing more.
+func (c *Client) notifyEvents(ctx context.Context, events chan<- engine.TaskEvent) {
+	dialer := &websocket.Dialer{HandshakeTimeout: wsHandshakeTimeout}
+	backoff := wsBackoffInitial
 
+	for {
+		conn, _, err := dialer.DialContext(ctx, c.wsURL(), nil)
+		if err == nil {
+			backoff = wsBackoffInitial
+			readErr := c.readNotifications(ctx, conn, events)
+			if closeErr := conn.Close(); closeErr != nil {
+				slog.Debug("aria2: close websocket", "engine", engine.NameAria2, "error", closeErr)
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			// Debug, not warn: a flapping daemon drops the socket often, and
+			// the reconnect below is the designed answer (§4.5).
+			slog.Debug("aria2: websocket dropped, reconnecting",
+				"engine", engine.NameAria2, "error", readErr)
+		} else if ctx.Err() != nil {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.done:
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, wsBackoffMax)
+	}
+}
+
+// readNotifications consumes one WebSocket connection until it drops: each
+// of the six notifications maps to its TaskEvent kind and is emitted with
+// the namespaced id. A notification is unidirectional — it carries no id,
+// and the client must not respond to it (§4.5) — so this loop never writes
+// to the connection.
+func (c *Client) readNotifications(ctx context.Context, conn *websocket.Conn, events chan<- engine.TaskEvent) error {
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return err
+		}
+
+		kind, gid, ok := decodeNotification(data)
+		if !ok {
+			continue
+		}
+		event := engine.TaskEvent{TaskID: engine.NameAria2 + ":" + gid, Kind: kind}
+		select {
+		case events <- event:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.done:
+			return nil
+		}
+	}
+}
+
+// rpcNotification is one aria2 WebSocket notification: a method name and a
+// single-element params array whose struct carries the gid (§4.5). The id
+// key is deliberately absent — notifications never carry one.
+type rpcNotification struct {
+	Method string `json:"method"`
+	Params []struct {
+		GID string `json:"gid"`
+	} `json:"params"`
+}
+
+// decodeNotification maps one message onto its event kind and gid. ok is
+// false for anything that is not one of the six notifications with a gid:
+// an unknown method, a malformed frame or a stray reply.
+func decodeNotification(data []byte) (kind engine.EventKind, gid string, ok bool) {
+	var n rpcNotification
+	if err := json.Unmarshal(data, &n); err != nil {
+		return "", "", false
+	}
+	if len(n.Params) == 0 || n.Params[0].GID == "" {
+		return "", "", false
+	}
+
+	kind, known := notificationKinds[n.Method]
+	if !known {
+		return "", "", false
+	}
+
+	return kind, n.Params[0].GID, true
+}
+
+// wsURL derives the WebSocket endpoint from the configured RPC URL: the
+// same host and path with the scheme swapped, http→ws and https→wss, the
+// way aria2 serves the notification transport on its RPC path.
+func (c *Client) wsURL() string {
+	switch {
+	case strings.HasPrefix(c.url, "https://"):
+		return "wss://" + strings.TrimPrefix(c.url, "https://")
+	case strings.HasPrefix(c.url, "http://"):
+		return "ws://" + strings.TrimPrefix(c.url, "http://")
+	default:
+		return c.url
+	}
+}
+
+func (c *Client) pollEvents(ctx context.Context, events chan<- engine.TaskEvent) {
 	ticker := time.NewTicker(eventsPollInterval)
 	defer ticker.Stop()
 
