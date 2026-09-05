@@ -356,6 +356,14 @@ func (h *TaskHandlers) resumeAction(
 	target, code, message string,
 	snap *concurrencySnapshot,
 ) ActionResult {
+	// Actions loads the snapshot for every resume batch, so a nil one is
+	// a wiring bug in this file — fail the id rather than panic.
+	if snap == nil {
+		logFromContext(ctx).Error("resume action without a concurrency snapshot", slog.String("task_id", task.ID))
+
+		return actionFailure(task.ID, SlugInternal, detailActionFailed)
+	}
+
 	outcome := h.transitionAction(ctx, task, target, code, message)
 	if !outcome.Ok {
 		return outcome
@@ -364,6 +372,12 @@ func (h *TaskHandlers) resumeAction(
 	if blocked, detail := snap.limits.Blocked(snap.counts, task.Engine); blocked {
 		return actionFailure(task.ID, SlugConcurrencyLimit, detail)
 	}
+
+	// This id's ok:true has promised one slot of the batch's headroom:
+	// consume it so the later ids of the same request see it spent. The
+	// admission pass re-derives the truth; the snapshot only has to be
+	// self-consistent within the batch.
+	snap.counts.Reserve(task.Engine)
 
 	return ActionResult{ID: task.ID, Ok: true}
 }
@@ -406,8 +420,11 @@ func (h *TaskHandlers) loadConcurrencySnapshot(ctx context.Context) (*concurrenc
 	}
 	for _, row := range rows {
 		value, err := strconv.Atoi(row.ValueJSON)
-		if err != nil {
-			return nil, internalFailure(ctx, "read concurrency settings", fmt.Errorf("key %s: %w", row.Key, err))
+		if err != nil || value < 0 {
+			// A negative limit would silently mean unlimited everywhere
+			// else; the write side rejects it, so the read side must too.
+			return nil, internalFailure(ctx, "read concurrency settings",
+				fmt.Errorf("key %s: invalid non-negative integer %q", row.Key, row.ValueJSON))
 		}
 		switch row.Key {
 		case settingMaxActiveTotal:

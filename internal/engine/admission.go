@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -29,8 +30,10 @@ const ErrorCodeConcurrencyLimit = "concurrency_limit"
 
 // candidatesUnbounded is the candidate limit the pass selects: every
 // queued task, because a held task must carry concurrency_limit wherever
-// it sits in the queue, not only at the head.
-const candidatesUnbounded = 0
+// it sits in the queue, not only at the head. math.MaxInt rather than 0
+// stays correct even under a store that interpolates the limit into a
+// SQL LIMIT clause, where 0 would select no rows.
+const candidatesUnbounded = math.MaxInt
 
 // Limits are the two max_active_* settings keys of
 // docs/11-config-reference.md section 5. 0 means unlimited. The bandwidth
@@ -192,6 +195,16 @@ func (a *Admitter) Run(ctx context.Context, load func(context.Context) (Limits, 
 // source URI nor an infohash, so no Engine.Add request can be built.
 var errNoSubmission = errors.New("engine: queued task has no submission source")
 
+// storeWriteError wraps a failure of the pass's own writes after the
+// engine call — recording the handle, moving the state, clearing a
+// stamp. Its cause is dl-tool's storage, never an engine decision, so
+// releaseFailed must not report it as a refusal.
+type storeWriteError struct{ cause error }
+
+func (e storeWriteError) Error() string { return "admission store write: " + e.cause.Error() }
+
+func (e storeWriteError) Unwrap() error { return e.cause }
+
 // release hands one candidate to its engine and records the release: Add
 // when the task has never been handed over, Resume when it holds a handle
 // — and Add again when the engine no longer knows that handle, the same
@@ -209,7 +222,10 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 		err := e.Resume(ctx, cand.Engine+":"+*cand.EngineRef)
 		switch {
 		case err == nil:
-			return a.markReleased(ctx, cand.ID)
+			if err := a.markReleased(ctx, cand.ID); err != nil {
+				return storeWriteError{cause: err}
+			}
+			return nil
 		case errors.Is(err, ErrNotFound):
 			// The engine lost the handle (an aria2 daemon restart, for
 			// example); fall through to Add with resume semantics.
@@ -248,39 +264,65 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 				"task_id", cand.ID, "engine", cand.Engine, "error", err)
 		}
 
-		return err
+		return storeWriteError{cause: err}
 	}
 
-	return a.markReleased(ctx, cand.ID)
+	if err := a.markReleased(ctx, cand.ID); err != nil {
+		return storeWriteError{cause: err}
+	}
+
+	return nil
 }
 
 // markReleased moves the released task to downloading — the task.resumed
 // event of the release — and clears any stale concurrency_limit, so a
 // started task never carries the code that held it
-// (docs/05-api-contract.md section 5.11).
+// (docs/05-api-contract.md section 5.11). The release is complete once
+// the transition lands: a failed stamp clear is a warning, never an error
+// handed back — a returned error would route the healthy downloading task
+// into releaseFailed and mislabel it as refused. The stamp then survives
+// until the next pass clears it.
 func (a *Admitter) markReleased(ctx context.Context, id string) error {
 	if err := a.tasks.Transition(ctx, id, string(StateDownloading), store.CodeTaskResumed, "released by the admission pass"); err != nil {
 		return err
 	}
 
-	return a.tasks.SetErrorCode(ctx, id, "", "")
+	if err := a.tasks.SetErrorCode(ctx, id, "", ""); err != nil && !errors.Is(err, store.ErrNotFound) {
+		a.log.Warn("released but could not clear the stale concurrency_limit stamp", "task_id", id, "error", err)
+	}
+
+	return nil
 }
 
 // releaseFailed records one release the pass could not complete. An
 // unreachable or unregistered engine is an outage, not a refusal — the
 // candidate stays queued and the next tick retries, exactly the
-// reconciler's policy for an engine that is down. A refusal on a live
-// context is the task_events vocabulary's engine.rejected moment
+// reconciler's policy for an engine that is down; the adapters wrap their
+// transport failures in ErrUnavailable, so the branch sees every outage.
+// A failure of the pass's own writes is the same patience: the cause is
+// dl-tool's storage, never an engine decision. A refusal on a live
+// context — an engine-phase error that is none of the above — is the
+// task_events vocabulary's engine.rejected moment
 // (internal/store/events.go): the task moves to error carrying the
-// refusal, and error -> queued remains the retry path.
+// refusal, and error -> queued remains the retry path. The three
+// staying-queued branches also drop a stale concurrency_limit stamp: the
+// limit no longer holds this task, and an operator reading a held code
+// would chase slots instead of the down engine or the failing write.
 func (a *Admitter) releaseFailed(ctx context.Context, cand store.Candidate, cause error) {
+	var storeWrite storeWriteError
 	switch {
+	case errors.As(cause, &storeWrite):
+		a.clearStaleStamp(ctx, cand.ID)
+		a.log.Warn("admission store write failed; retrying on the next tick",
+			"task_id", cand.ID, "engine", cand.Engine, "error", cause)
 	case errors.Is(cause, errNoSubmission):
 		// Nothing to hand the engine: a queued row without a stored source
 		// or infohash. The reconciler answers the same shape with a
 		// recurring warning; the row is the operator's to look at.
+		a.clearStaleStamp(ctx, cand.ID)
 		a.log.Warn("queued task has no source to release", "task_id", cand.ID, "engine", cand.Engine)
 	case errors.Is(cause, ErrUnavailable):
+		a.clearStaleStamp(ctx, cand.ID)
 		a.log.Warn("engine unreachable at hand-off; retrying on the next tick",
 			"task_id", cand.ID, "engine", cand.Engine, "error", cause)
 	default:
@@ -290,6 +332,16 @@ func (a *Admitter) releaseFailed(ctx context.Context, cand store.Candidate, caus
 			a.log.Error("could not record an engine refusal",
 				"task_id", cand.ID, "engine", cand.Engine, "cause", cause, "error", err)
 		}
+	}
+}
+
+// clearStaleStamp drops a concurrency_limit stamp a held task no longer
+// deserves — its release failed for a reason that is not the limit. Best
+// effort: a vanished task is expected mid-pass, anything else is a warn
+// the next pass repeats.
+func (a *Admitter) clearStaleStamp(ctx context.Context, id string) {
+	if err := a.tasks.SetErrorCode(ctx, id, "", ""); err != nil && !errors.Is(err, store.ErrNotFound) {
+		a.log.Warn("could not clear a stale concurrency_limit stamp", "task_id", id, "error", err)
 	}
 }
 

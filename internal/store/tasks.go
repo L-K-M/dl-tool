@@ -398,6 +398,18 @@ type activeCountRow struct {
 	Active int    `db:"active"`
 }
 
+// Reserve consumes one unit of headroom for engineName: total and
+// per-engine counts both. A caller that has just promised a slot to one
+// more task — a resume batch answering ok:true per id — uses it so the
+// later ids of the same request see the slot spent instead of promising
+// it twice. The admission pass re-derives the truth from the database on
+// its next tick; a snapshot only has to be self-consistent within one
+// batch.
+func (c *ActiveCounts) Reserve(engineName string) {
+	c.Total++
+	c.ByEngine[engineName]++
+}
+
 // CountActive returns the concurrency-counted set as one snapshot: total
 // and per-engine counts of the four counted states, seeding excluded by
 // the query itself.
@@ -439,12 +451,17 @@ func (s *TaskStore) SelectQueuedCandidates(ctx context.Context, limit int) ([]Ca
 
 // SetErrorCode writes tasks.error_code and error_message, or clears both
 // when errorCode is empty (SQL NULL is the storage form of an absent
-// value). The update is guarded: a row already carrying exactly this pair
-// is a quiet no-op, so a caller re-stamping a held task every tick writes
-// nothing. No task_events row is written — this is column bookkeeping;
-// the event moments stay with the transitions and stores that own them. A
-// missing id is ErrNotFound.
+// value; a cleared code never keeps its message). The update is guarded:
+// a row already carrying exactly this pair is a quiet no-op, so a caller
+// re-stamping a held task every tick writes nothing. No task_events row
+// is written — this is column bookkeeping; the event moments stay with
+// the transitions and stores that own them. A missing id is ErrNotFound.
 func (s *TaskStore) SetErrorCode(ctx context.Context, id, errorCode, message string) error {
+	// A cleared code clears its message too: a row must never carry an
+	// error message about an error it no longer has.
+	if errorCode == "" {
+		message = ""
+	}
 	codeValue, messageValue := nullableText(errorCode), nullableText(message)
 
 	tx, err := s.db.BeginTxx(ctx, nil)

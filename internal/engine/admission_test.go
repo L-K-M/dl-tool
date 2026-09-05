@@ -515,11 +515,16 @@ func TestEngineRefusalErrorsTask(t *testing.T) {
 
 // An unreachable engine is an outage, not a refusal: the candidate stays
 // queued with no error_code and the next tick retries — the reconciler's
-// policy for an engine that is down.
+// policy for an engine that is down. A task held by the limit on the
+// previous tick also loses its stale stamp: the engine's absence, not
+// the limit, is what holds it now.
 func TestUnregisteredEngineStaysQueued(t *testing.T) {
 	env := newAdmitEnv(t)
 
-	id := env.seedTask(t, engine.NameYtDlp, "not-configured", nil)
+	id := env.seedTask(t, engine.NameYtDlp, "not-configured", func(task *store.Task) {
+		task.ErrorCode = ptr(engine.ErrorCodeConcurrencyLimit)
+		task.ErrorMessage = ptr("1 of 1 slots in use")
+	})
 
 	released, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 5})
 	if err != nil {
@@ -532,7 +537,122 @@ func TestUnregisteredEngineStaysQueued(t *testing.T) {
 		t.Errorf("state = %q, want queued", state)
 	}
 	if code := env.taskErrorCode(t, id); code != "" {
-		t.Errorf("error_code = %q, want none: the engine's absence is not a concurrency hold", code)
+		t.Errorf("error_code = %q, want it cleared: the engine's absence is not a concurrency hold", code)
+	}
+}
+
+// A freshly admitted task released again after a pause resumes through
+// the stored handle, and the handle composition round-trips exactly once:
+// Add returns the namespaced id, the row stores the bare ref, Resume
+// receives the namespaced form again — never a double prefix.
+func TestPassRoundTripsTheHandle(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	id := env.seedTask(t, engine.NameAria2, "round-trip", nil)
+
+	if _, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 5}); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+
+	// Back to queued the way a pause and a resume action would leave it,
+	// keeping the handle the first release recorded.
+	for _, next := range []string{string(engine.StatePaused), string(engine.StateQueued)} {
+		if err := env.tasks.Transition(t.Context(), id, next, "test", "test step"); err != nil {
+			t.Fatalf("transition to %s: %v", next, err)
+		}
+	}
+
+	if _, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 5}); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	task, err := env.tasks.Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("read task: %v", err)
+	}
+	if task.EngineRef == nil {
+		t.Fatal("engine_ref is nil after the first release")
+	}
+
+	wantResume := engine.NameAria2 + ":" + *task.EngineRef
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 1 || resumes[0] != wantResume {
+		t.Errorf("aria2 resumes = %v, want exactly [%s] with no double prefix", resumes, wantResume)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 1 {
+		t.Errorf("aria2 adds = %v, want the one Add of the first release only", adds)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading", state)
+	}
+}
+
+// flakyClearStore fails every stamp-clearing SetErrorCode (empty code),
+// so a test can pin that a failed clear after a successful release never
+// routes the healthy downloading task into releaseFailed's refusal
+// branch.
+type flakyClearStore struct {
+	engine.AdmissionStore
+}
+
+func (s flakyClearStore) SetErrorCode(ctx context.Context, id, errorCode, message string) error {
+	if errorCode == "" {
+		return errors.New("injected: stamp clear failed")
+	}
+
+	return s.AdmissionStore.SetErrorCode(ctx, id, errorCode, message)
+}
+
+// A failed stamp clear after the release's transition is a warning, not
+// an error: the task stays downloading with its stale stamp until the
+// next pass clears it — it is never flipped to error as a supposed
+// refusal.
+func TestFailedStampClearKeepsTheRelease(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	registry := engine.NewRegistry()
+	registry.Register(env.aria2)
+	admit := engine.NewAdmitter(registry, flakyClearStore{AdmissionStore: env.tasks}, time.Second)
+
+	id := env.seedTask(t, engine.NameAria2, "held-then-freed", func(task *store.Task) {
+		task.ErrorCode = ptr(engine.ErrorCodeConcurrencyLimit)
+		task.ErrorMessage = ptr("1 of 1 slots in use")
+	})
+
+	released, err := admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 1})
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want exactly [%s]", released, id)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Fatalf("state = %q, want downloading — a failed stamp clear must not error the task", state)
+	}
+	if code := env.taskErrorCode(t, id); code != engine.ErrorCodeConcurrencyLimit {
+		t.Errorf("error_code = %q, want the stale stamp the failed clear left behind", code)
+	}
+}
+
+// Reserve consumes one unit of headroom for the named engine, total and
+// per-engine — the arithmetic a resume batch relies on to stop promising
+// one slot to two ids.
+func TestActiveCountsReserve(t *testing.T) {
+	counts := engine.ActiveCounts{Total: 1, ByEngine: map[string]int{engine.NameAria2: 1}}
+	limits := engine.Limits{MaxActiveTotal: 5, MaxActivePerEngine: 2}
+
+	if blocked, _ := limits.Blocked(counts, engine.NameAria2); blocked {
+		t.Fatal("blocked before reserving, want headroom for one more")
+	}
+
+	counts.Reserve(engine.NameAria2)
+
+	if blocked, message := limits.Blocked(counts, engine.NameAria2); !blocked {
+		t.Fatal("not blocked after reserving the last slot")
+	} else if message != "2 of 2 aria2 slots in use" {
+		t.Errorf("message = %q, want the per-engine sentence", message)
+	}
+	if counts.Total != 2 {
+		t.Errorf("total = %d, want 2", counts.Total)
 	}
 }
 
