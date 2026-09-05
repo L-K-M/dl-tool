@@ -85,10 +85,17 @@ type Admitter struct {
 }
 
 // NewAdmitter wires the registry to the task store. tick is Run's pass
-// interval. The loop logs through slog.Default(); the composition root's
+// interval; a non-positive one is a composition bug and panics here, at
+// construction, rather than inside the loop goroutine where
+// time.NewTicker's generic panic would land far from the misconfigured
+// call site. The loop logs through slog.Default(); the composition root's
 // own logger can be installed when Run gains its call site (T099 wires the
 // pass with the disk-space gate that shares it).
 func NewAdmitter(reg *Registry, ts AdmissionStore, tick time.Duration) *Admitter {
+	if tick <= 0 {
+		panic(fmt.Sprintf("engine: admission tick must be positive, got %s", tick))
+	}
+
 	return &Admitter{registry: reg, tasks: ts, tick: tick, log: slog.Default()}
 }
 

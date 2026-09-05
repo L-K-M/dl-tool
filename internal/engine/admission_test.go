@@ -664,6 +664,29 @@ func TestActiveCountsReserve(t *testing.T) {
 	}
 }
 
+// A non-positive tick is a composition bug: it must fail at construction,
+// naming the value, rather than as a generic NewTicker panic inside the
+// loop goroutine.
+func TestNewAdmitterRejectsNonPositiveTick(t *testing.T) {
+	env := newAdmitEnv(t)
+	for _, tick := range []time.Duration{0, -time.Second} {
+		tick := tick
+		deferredPanic(t, func() { engine.NewAdmitter(engine.NewRegistry(), env.tasks, tick) })
+	}
+}
+
+// deferredPanic asserts that call panics, recovering it so the caller's
+// remaining iterations still run.
+func deferredPanic(t *testing.T, call func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Error("call did not panic")
+		}
+	}()
+	call()
+}
+
 // Run stops with its context and drives one pass per tick.
 func TestAdmitterRunStopsWithContext(t *testing.T) {
 	env := newAdmitEnv(t)
