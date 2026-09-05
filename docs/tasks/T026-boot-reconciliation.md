@@ -184,9 +184,11 @@ All matched files use Prettier code style!
 ```
 $ make test PKG=./internal/engine/...
 go test -race -count=1 ./internal/engine/...
-ok  	github.com/L-K-M/dl-tool/internal/engine	1.511s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.429s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.486s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.194s
 ```
+
+(re-run at the final tree, `fb2f8ba`; the named tests all pass there too.)
 
 Every named test, plus the two Events tests of the aria2 package:
 
