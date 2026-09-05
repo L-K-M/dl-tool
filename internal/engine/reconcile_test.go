@@ -488,10 +488,11 @@ func TestNewServerReconcilesBeforeServing(t *testing.T) {
 	// The reconciler's Run loop starts inside NewServer under the process
 	// lifetime and has no test-visible stop, so this server and the store
 	// below deliberately outlive the test: closed, the loop would warn once
-	// a second through whatever slog.Default() then is — racing later
-	// tests' logger swaps — while healthy it sweeps silently forever. Both
-	// live on unlinked TempDir files: t.TempDir removes the directory at
-	// cleanup, and the open handles keep the inodes usable until exit.
+	// a second through its construction-time logger for the rest of the
+	// process, while healthy it sweeps silently forever. Only the store
+	// lives on TempDir files — t.TempDir unlinks them at cleanup, and the
+	// open handles keep the inodes usable until exit; the daemon is a
+	// listener and goroutine the process reaps at exit.
 
 	root := t.TempDir()
 	db, err := store.Open(t.Context(), filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
