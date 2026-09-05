@@ -481,18 +481,18 @@ func TestNewServerReconcilesBeforeServing(t *testing.T) {
 			t.Errorf("encode rpc replies: %v", err)
 		}
 	}))
-	t.Cleanup(rpc.Close)
+	// The reconciler's Run loop starts inside NewServer under the process
+	// lifetime and has no test-visible stop, so this server and the store
+	// below deliberately outlive the test: closed, the loop would warn once
+	// a second through whatever slog.Default() then is — racing later
+	// tests' logger swaps — while healthy it sweeps silently forever. Both
+	// live in TempDir space the process reclaims at exit.
 
 	root := t.TempDir()
 	db, err := store.Open(t.Context(), filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
 
 	// One non-terminal task whose handle the fake daemon reports active.
 	tasks := store.NewTaskStore(db)
