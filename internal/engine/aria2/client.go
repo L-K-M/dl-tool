@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -40,10 +41,9 @@ const (
 	// notification transport is added by T026.
 	eventsPollInterval = time.Second
 
-	// listPage is the offset and count passed to tellWaiting and
-	// tellStopped: one large page from the front, so List reports every GID
-	// the daemon holds.
-	listPage = 1000
+	// listCount requests all retained records in the required single batch.
+	// aria2 parses the count as a signed 64-bit integer.
+	listCount int64 = math.MaxInt64
 
 	// defaultCallTimeout backs a zero Config.Timeout so a hung daemon cannot
 	// stall a caller forever.
@@ -313,8 +313,8 @@ func (c *Client) List(ctx context.Context) ([]engine.TaskInfo, error) {
 	keys := any(statusKeys)
 	batch := []rpcRequest{
 		c.newRequest(methodTellActive, []any{keys}),
-		c.newRequest(methodTellWaiting, []any{0, listPage, keys}),
-		c.newRequest(methodTellStopped, []any{0, listPage, keys}),
+		c.newRequest(methodTellWaiting, []any{0, listCount, keys}),
+		c.newRequest(methodTellStopped, []any{0, listCount, keys}),
 	}
 
 	responses, err := c.post(ctx, batch)
@@ -325,12 +325,22 @@ func (c *Client) List(ctx context.Context) ([]engine.TaskInfo, error) {
 		return nil, fmt.Errorf("aria2: rpc batch returned %d replies for %d requests", len(responses), len(batch))
 	}
 
-	var infos []engine.TaskInfo
-	for i, resp := range responses {
-		if resp.ID != batch[i].ID {
-			return nil, fmt.Errorf("aria2: rpc reply id %q does not match request %q", resp.ID, batch[i].ID)
+	// JSON-RPC permits arbitrary reply order; correlate by ID, never position.
+	byID := make(map[string]rpcReply, len(responses))
+	for _, response := range responses {
+		if _, duplicate := byID[response.ID]; duplicate {
+			return nil, errors.New("aria2: duplicate rpc reply id")
 		}
-		results, err := decodeStatuses(resp)
+		byID[response.ID] = response
+	}
+
+	var infos []engine.TaskInfo
+	for _, request := range batch {
+		response, found := byID[request.ID]
+		if !found {
+			return nil, fmt.Errorf("aria2: missing rpc reply for %q", request.ID)
+		}
+		results, err := decodeStatuses(response)
 		if err != nil {
 			return nil, err
 		}
