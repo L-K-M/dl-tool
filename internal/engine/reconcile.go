@@ -137,6 +137,12 @@ func (r *Reconciler) Run(ctx context.Context) error {
 func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) error {
 	listed, err := e.List(ctx)
 	if err != nil {
+		// Cancellation is not an outage either: a shutdown or an expired
+		// boot budget surfaces the engine's context error, never a fake
+		// "unreachable" warning — the same policy as every other branch.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		r.log.Warn("engine unreachable, retrying on the next sweep", "engine", name, "error", err)
 		return nil
 	}

@@ -734,3 +734,41 @@ func TestRunSweepCancellationIsNotAWarn(t *testing.T) {
 		t.Errorf("shutdown was logged as a sweep failure: %q", logs.String())
 	}
 }
+
+// Cancellation is not an outage anywhere in the sweep, including the
+// engine listing: a cancelled context surfaces its own error and logs no
+// "unreachable" warning, while a live context's listing failure still
+// warns and changes no state.
+func TestCancelledListIsNotUnreachable(t *testing.T) {
+	tasks := newFakeTasks()
+
+	logBuffer := &strings.Builder{}
+	reg := engine.NewRegistry()
+	reg.Register(&fakeEngine{name: engine.NameAria2, listErr: engine.ErrUnavailable})
+	r := engine.NewReconciler(reg, tasks, time.Hour,
+		slog.New(slog.NewTextHandler(logBuffer, nil)))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	// A cancelled context over a failing List: the context error surfaces,
+	// no warning is logged.
+	if err := r.Boot(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Boot: %v, want context.Canceled", err)
+	}
+	if strings.Contains(logBuffer.String(), "engine unreachable") {
+		t.Errorf("cancellation was logged as an outage: %q", logBuffer.String())
+	}
+
+	// A live context over the same failing List: a warning, no state
+	// change, and no Boot failure — the unreachable-engine policy.
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v, want nil — an unreachable engine is a warning", err)
+	}
+	if !strings.Contains(logBuffer.String(), "engine unreachable") {
+		t.Errorf("live-context listing failure was not warned: %q", logBuffer.String())
+	}
+	if len(tasks.progress) != 0 || len(tasks.transitions) != 0 {
+		t.Errorf("task state changed under an unreachable engine")
+	}
+}
