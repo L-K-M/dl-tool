@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
@@ -123,19 +124,22 @@ WHERE id = ?`,
 	return nil
 }
 
-// EngineByID resolves one row by id across the (at most three) engines
-// rows. ErrNotFound means the id addresses no known engine.
+// queryEngineByID shares ListEngines' explicit column list over the
+// primary key, so secret_enc can never ride along here either.
+const queryEngineByID = `SELECT id, kind, name, enabled, url, version, last_seen_at, last_error
+FROM engines WHERE id = ?`
+
+// EngineByID resolves one row by id. ErrNotFound means the id addresses
+// no known engine.
 func (s *SettingsStore) EngineByID(ctx context.Context, id string) (Engine, error) {
-	engines, err := s.ListEngines(ctx)
+	var e Engine
+	err := s.db.GetContext(ctx, &e, queryEngineByID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Engine{}, fmt.Errorf("store: engine %s: %w", id, ErrNotFound)
+	}
 	if err != nil {
-		return Engine{}, err
+		return Engine{}, fmt.Errorf("store: engine %s: %w", id, err)
 	}
 
-	for _, e := range engines {
-		if e.ID == id {
-			return e, nil
-		}
-	}
-
-	return Engine{}, fmt.Errorf("engine %s: %w", id, ErrNotFound)
+	return e, nil
 }

@@ -165,8 +165,12 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/api	44.190s
+ok  	github.com/L-K-M/dl-tool/internal/api	44.748s
 ```
+
+(after the review round: the boot probe runs under one `bootSweepBudget`
+deadline and `EngineByID` is a primary-key lookup; the numbers above are
+the final tree's)
 
 `TestListEngines` and `TestTestEngineFailureIs200` both ran and passed (with
 `TestTestEngineUnknownID` and `TestNewServerWiresConfiguredAria2`, the composition-root case):

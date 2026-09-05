@@ -410,7 +410,12 @@ func connectEngine(
 		return
 	}
 
-	if err := e.Connect(ctx); err != nil {
+	// One budget covers Connect and the follow-up Health, so a black-holed
+	// daemon can hold the boot for at most one sweep budget, not one per RPC.
+	probeCtx, cancel := context.WithTimeout(ctx, bootSweepBudget)
+	defer cancel()
+
+	if err := e.Connect(probeCtx); err != nil {
 		log.Warn("engine unreachable",
 			slog.String("event_code", eventEngineUnreachable),
 			slog.String("engine", kind),
@@ -423,7 +428,7 @@ func connectEngine(
 
 	// Connect discarded the version; one more Health call resolves it for
 	// engines.version (docs/17-operations-and-runbook.md section 1).
-	version, healthErr := e.Health(ctx)
+	version, healthErr := e.Health(probeCtx)
 	touchEngineOutcome(ctx, settings, store.EngineIDPrefix+kind, version, healthErr, log)
 }
 
