@@ -364,9 +364,14 @@ func (h *TaskHandlers) resumeAction(
 		return actionFailure(task.ID, SlugInternal, detailActionFailed)
 	}
 
-	outcome := h.transitionAction(ctx, task, target, code, message)
-	if !outcome.Ok {
-		return outcome
+	// The nil guard above aside, an already-queued task needs no store
+	// write — same-state resume is the idempotent success applyAction
+	// documents — it only needs the headroom answer.
+	if task.State != target {
+		outcome := h.transitionAction(ctx, task, target, code, message)
+		if !outcome.Ok {
+			return outcome
+		}
 	}
 
 	if blocked, detail := snap.limits.Blocked(snap.counts, task.Engine); blocked {
