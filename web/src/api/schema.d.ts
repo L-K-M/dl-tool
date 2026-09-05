@@ -84,6 +84,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/engines": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List engines and their connection state
+     * @description Every configured engine with its declared capabilities, last probe outcome and resolved version. The list never probes: a dead engine cannot slow the page down, so connected reflects the last recorded probe, not a live dial.
+     */
+    get: operations["list-engines"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/engines/{id}/test": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Probe one engine
+     * @description Runs a bounded Health call against the engine and records the outcome. A failed probe is still 200 with ok false and the transport error in error; only an unknown engine id is 404.
+     */
+    post: operations["test-engine"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/events": {
     parameters: {
       query?: never;
@@ -340,6 +380,30 @@ export interface components {
       };
       tasks_removed: string[] | null;
     };
+    EngineDTO: {
+      /** @description The declared set of the engine's adapter, never a guess */
+      capabilities: string[] | null;
+      /** @description True when the last recorded probe succeeded and its engine is registered */
+      connected: boolean;
+      enabled: boolean;
+      /** @description eng_ aria2 | eng_qbittorrent | eng_ytdlp */
+      id: string;
+      /**
+       * @description aria2 | qbittorrent | ytdlp
+       * @enum {string}
+       */
+      kind: "aria2" | "qbittorrent" | "ytdlp";
+      last_error: string | null;
+      /**
+       * Format: date-time
+       * @description RFC 3339 UTC of the last successful probe
+       */
+      last_seen_at: string | null;
+      name: string;
+      /** @description The engine's RPC or base URL; null for yt-dlp */
+      url: string | null;
+      version: string | null;
+    };
     ErrorDetail: {
       /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
       location?: string;
@@ -386,6 +450,9 @@ export interface components {
       username: string;
     };
     HeartbeatEvent: Record<string, never>;
+    ListEnginesOutputBody: {
+      engines: components["schemas"]["EngineDTO"][] | null;
+    };
     ListTaskEventsOutputBody: {
       /** @description Event rows, newest first */
       items: components["schemas"]["TaskEventDTO"][] | null;
@@ -558,6 +625,17 @@ export interface components {
       /** @description Human-readable fallback for the code */
       message: string;
     };
+    TestEngineOutputBody: {
+      /**
+       * Format: int64
+       * @description Probe duration in milliseconds; at least 1
+       */
+      elapsed_ms: number;
+      /** @description The transport error when the probe failed */
+      error: string | null;
+      ok: boolean;
+      version: string | null;
+    };
     UserBody: {
       /**
        * Format: date-time
@@ -702,6 +780,67 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AuthEnvelope"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-engines": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListEnginesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "test-engine": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The eng_ id of the engine */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TestEngineOutputBody"];
         };
       };
       /** @description Error */

@@ -48,6 +48,14 @@ const (
 	// later (docs/17 section 1.6: a boot must not be locked out of its UI
 	// by an engine that is down).
 	bootSweepBudget = 10 * time.Second
+
+	// aria2CallTimeout bounds every aria2 JSON-RPC call of the process-wide
+	// adapter, including the boot Connect and the /engines probe.
+	aria2CallTimeout = 10 * time.Second
+
+	// eventEngineUnreachable is the event code of the boot warn emitted when
+	// an engine's Connect fails (docs/17-operations-and-runbook.md section 1).
+	eventEngineUnreachable = "engine_unreachable"
 )
 
 // Version is the build version the spec and the system-info placeholder
@@ -85,6 +93,10 @@ type Server struct {
 
 	// tasks owns the /tasks collection operations.
 	tasks *TaskHandlers
+
+	// settings owns the engines operations of doc 05 section 11.3, and the
+	// /settings operations T092 adds to the same handlers.
+	settings *SettingsHandlers
 
 	// SSE owns the live-update endpoints: GET /events and GET /sync, and
 	// the hub they read from. It is exported for the composition root in
@@ -163,11 +175,26 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// absent or down, not for operator mistakes.
 	engines := engine.NewRegistry()
 	if cfg.Aria2URL != "" {
-		aria2Engine, err := aria2.New(aria2.Config{URL: cfg.Aria2URL, Secret: cfg.Aria2Secret.Reveal()}, nil)
+		aria2Engine, err := aria2.New(
+			aria2.Config{URL: cfg.Aria2URL, Secret: cfg.Aria2Secret.Reveal(), Timeout: aria2CallTimeout},
+			nil,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("build aria2 engine: %w", err)
 		}
 		engines.Register(aria2Engine)
+
+		// The engines row and the boot probe are the wiring of
+		// docs/17-operations-and-runbook.md section 1: the row carries the
+		// identity and URL the environment owns, and the Connect probe seeds
+		// its outcome for GET /engines. Both stay behind the nil-db guard:
+		// the openapi subcommand builds the server without a store, and its
+		// stdout must stay a pure document. An unreachable daemon is a warn,
+		// never a construction error — a boot must not be locked out of its
+		// UI by an engine that is down.
+		if db != nil {
+			connectEngine(store.NewSettingsStore(db), aria2Engine, engine.NameAria2, cfg.Aria2URL, log)
+		}
 	}
 
 	// The sync hub fans task deltas to SSE subscribers at 1 Hz and answers
@@ -189,16 +216,17 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	}
 
 	server := &Server{
-		Router:  root,
-		Base:    base,
-		V1:      v1,
-		API:     humachi.New(v1, humaConfig),
-		db:      db,
-		Health:  health,
-		auth:    auth,
-		Engines: engines,
-		tasks:   NewTaskHandlers(db, engines, cfg.DataRoots),
-		SSE:     sseHandlers,
+		Router:   root,
+		Base:     base,
+		V1:       v1,
+		API:      humachi.New(v1, humaConfig),
+		db:       db,
+		Health:   health,
+		auth:     auth,
+		Engines:  engines,
+		tasks:    NewTaskHandlers(db, engines, cfg.DataRoots),
+		settings: NewSettingsHandlers(db, engines),
+		SSE:      sseHandlers,
 	}
 	// The two credentials of docs/05-api-contract.md section 1.2, so the
 	// generated document tells clients how the API is protected. Individual
@@ -283,6 +311,7 @@ func (s *Server) Spec() ([]byte, error) {
 func (s *Server) registerOperations() {
 	s.auth.registerOperations(s.API)
 	s.tasks.registerOperations(s.API)
+	s.settings.registerOperations(s.API)
 	s.SSE.RegisterOperations(s.API)
 
 	// The bulk-action and patch operations of docs/05-api-contract.md
@@ -352,6 +381,83 @@ type systemInfoInput struct{}
 type systemInfoOutput struct {
 	Body struct {
 		Version string `json:"version" doc:"Build version of the dl-tool process"`
+	}
+}
+
+// connectEngine performs the boot wiring of one configured engine: it
+// creates the engines row the environment owns, runs the Connect probe of
+// docs/06-download-engines.md section 1 and records the outcome for
+// GET /engines. A failure logs engine_unreachable at warn and returns —
+// never a construction error, so a down engine cannot lock the boot out of
+// its UI. Connect and Health are one RPC each in the aria2 adapter
+// (Connect is Health with the version discarded); both are called so the
+// row records the resolved version doc 17 section 1 asks for, at the cost
+// of one extra RPC per boot.
+func connectEngine(
+	settings *store.SettingsStore,
+	e engine.Engine,
+	kind, url string,
+	log *slog.Logger,
+) {
+	ctx := context.Background()
+	at := time.Now().UnixMilli()
+
+	// The row id is fixed per kind, so the probe below has a row to write
+	// its outcome to even on a first boot with a dead daemon.
+	if err := settings.EnsureEngine(ctx, store.EngineIDPrefix+kind, kind, e.Name(), url, at); err != nil {
+		log.Error("engine row sync failed", slog.String("engine", kind), slog.String("err", err.Error()))
+
+		return
+	}
+
+	// One budget covers Connect and the follow-up Health, so a black-holed
+	// daemon can hold the boot for at most one sweep budget, not one per RPC.
+	probeCtx, cancel := context.WithTimeout(ctx, bootSweepBudget)
+	defer cancel()
+
+	if err := e.Connect(probeCtx); err != nil {
+		log.Warn("engine unreachable",
+			slog.String("event_code", eventEngineUnreachable),
+			slog.String("engine", kind),
+			slog.String("err", err.Error()),
+		)
+		touchEngineOutcome(ctx, settings, store.EngineIDPrefix+kind, "", err, log)
+
+		return
+	}
+
+	// Connect discarded the version; one more Health call resolves it for
+	// engines.version (docs/17-operations-and-runbook.md section 1).
+	version, healthErr := e.Health(probeCtx)
+	touchEngineOutcome(ctx, settings, store.EngineIDPrefix+kind, version, healthErr, log)
+}
+
+// touchEngineOutcome records one probe outcome in the engine's row: a nil
+// error is a success (last_seen_at stamped, version stored when resolved);
+// anything else is last_error. A TouchEngine failure is logged and
+// swallowed: the probe itself already answered, and the next probe
+// rewrites the row.
+func touchEngineOutcome(
+	ctx context.Context,
+	settings *store.SettingsStore,
+	engineID string,
+	version string,
+	healthErr error,
+	log *slog.Logger,
+) {
+	var versionArg, lastErr *string
+	if healthErr != nil {
+		message := healthErr.Error()
+		lastErr = &message
+	} else if version != "" {
+		versionArg = &version
+	}
+
+	if err := settings.TouchEngine(ctx, engineID, versionArg, lastErr, time.Now().UnixMilli()); err != nil {
+		log.Warn("engine probe outcome not recorded",
+			slog.String("engine", engineID),
+			slog.String("err", err.Error()),
+		)
 	}
 }
 
