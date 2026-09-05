@@ -409,6 +409,53 @@ func TestDatabaseAndSidecarPermissions(t *testing.T) {
 	require.NoError(t, existingDB.Close())
 }
 
+func TestDatabasePathIsLiteral(t *testing.T) {
+	for _, name := range []string{"state?.db", "state#history.db", "state%3f.db", "state%2fother.db", "state?mode=memory", "stäte 1.db"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := filepath.Join(root, name)
+			backupDir := filepath.Join(root, "backups?")
+			db, err := Open(t.Context(), dbPath, backupDir)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+			var openedPath string
+			require.NoError(t, db.GetContext(t.Context(), &openedPath, "SELECT file FROM pragma_database_list WHERE name = 'main'"))
+			require.Equal(t, dbPath, openedPath)
+			require.Equal(t, databaseFileMode, fileMode(t, openedPath))
+
+			backup, err := preMigrationBackup(t.Context(), db, dbPath, backupDir,
+				initialSchemaVersion, initialSchemaVersion+1, time.Now().UTC(), slog.Default())
+			require.NoError(t, err)
+			require.NoError(t, checkDatabaseFileIntegrity(t.Context(), backup))
+			entries, err := os.ReadDir(backupDir)
+			require.NoError(t, err)
+			require.Len(t, entries, 1, "integrity checks must not create alternate files")
+		})
+	}
+}
+
+func TestDatabasePathLeadingSlashes(t *testing.T) {
+	for _, prefix := range []string{"/", "///"} {
+		dbPath, backupDir := testStorePaths(t)
+		dbPath = prefix + dbPath
+		db, err := Open(t.Context(), dbPath, backupDir)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+		var openedPath string
+		require.NoError(t, db.GetContext(t.Context(), &openedPath, "SELECT file FROM pragma_database_list WHERE name = 'main'"))
+		require.Equal(t, filepath.Clean(dbPath), openedPath)
+		require.NoError(t, checkDatabaseFileIntegrity(t.Context(), dbPath))
+	}
+}
+
+func TestBackupIntegrityChecksLiteralPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corrupt?name.db")
+	require.NoError(t, os.WriteFile(path, []byte("not a database"), databaseFileMode))
+	require.Error(t, checkDatabaseFileIntegrity(t.Context(), path))
+}
+
 func TestUnsafeDatabasePathRefused(t *testing.T) {
 	t.Run("symlink", func(t *testing.T) {
 		dbPath, backupDir := testStorePaths(t)

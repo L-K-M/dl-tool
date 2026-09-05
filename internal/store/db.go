@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,7 +155,7 @@ func openDatabase(ctx context.Context, dbPath string) (*sqlx.DB, error) {
 		return nil, err
 	}
 
-	dsn := fmt.Sprintf(databaseDSNFormat, dbPath)
+	dsn := fmt.Sprintf(databaseDSNFormat, escapedDatabasePath(dbPath))
 	db, err := sqlx.Open(sqliteDriver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open database %q: %w", dbPath, err)
@@ -173,6 +174,15 @@ func openDatabase(ctx context.Context, dbPath string) (*sqlx.DB, error) {
 	}
 
 	return db, nil
+}
+
+// escapedDatabasePath keeps filename punctuation out of SQLite URI options.
+func escapedDatabasePath(dbPath string) string {
+	// Linux treats leading slashes alike; SQLite interprets // as an authority.
+	if strings.HasPrefix(dbPath, "//") {
+		dbPath = "/" + strings.TrimLeft(dbPath, "/")
+	}
+	return (&url.URL{Path: dbPath}).EscapedPath()
 }
 
 func createDatabaseFileIfMissing(dbPath string) error {
@@ -458,7 +468,7 @@ func createMigrationBackup(
 }
 
 func checkDatabaseFileIntegrity(ctx context.Context, dbPath string) error {
-	db, err := sqlx.Open(sqliteDriver, "file:"+dbPath+"?mode=ro")
+	db, err := sqlx.Open(sqliteDriver, "file:"+escapedDatabasePath(dbPath)+"?mode=ro")
 	if err != nil {
 		return fmt.Errorf("store: open migration backup %q: %w", dbPath, err)
 	}
