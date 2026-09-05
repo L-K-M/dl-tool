@@ -12,10 +12,13 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 )
@@ -33,10 +36,18 @@ type recordedCall struct {
 	Params []any
 }
 
+// wsUpgrader answers the notification dial. The fake is not a browser
+// origin, so every origin is accepted.
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin: func(*http.Request) bool { return true },
+}
+
 // fakeServer is an httptest JSON-RPC endpoint. It asserts that the first
 // positional parameter of every request — single or batch element — is
 // token:<secret>, records every call, and answers from the injected
-// responder. A nil result with a nil fault answers "OK".
+// responder. A nil result with a nil fault answers "OK". A WebSocket
+// upgrade is answered with 101 and held open, so tests can push the six
+// notifications of docs/06-download-engines.md §4.5 through notify.
 type fakeServer struct {
 	t *testing.T
 
@@ -45,6 +56,9 @@ type fakeServer struct {
 	respond func(method string) (any, *rpcFault)
 	isBatch bool // whether the last request body was a batch array
 	srv     *httptest.Server
+
+	wsMu   sync.Mutex
+	wsConn *websocket.Conn // the current notification connection, if any
 }
 
 // newTestClient starts a fakeServer and returns a client pointed at it.
@@ -74,6 +88,14 @@ func okResponder(results map[string]any) func(string) (any, *rpcFault) {
 
 func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.t.Helper()
+
+	// A WebSocket dial is the notification transport (§4.5): an Upgrade
+	// GET that carries no JSON-RPC call — no token, no body — so it branches
+	// before the POST-only assertions below.
+	if websocket.IsWebSocketUpgrade(r) {
+		f.serveNotifications(w, r)
+		return
+	}
 
 	if r.Method != http.MethodPost {
 		f.t.Errorf("rpc request method = %q, want POST", r.Method)
@@ -131,6 +153,71 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(f.t, w, replyFor(requests[0], f.respond))
+}
+
+// serveNotifications answers the dial with 101 and holds the connection
+// open, draining until the client drops it. Notifications are
+// unidirectional (§4.5), so the only legal client frame is the close the
+// read loop exits on — that exit, not an error, is the normal end.
+func (f *fakeServer) serveNotifications(w http.ResponseWriter, r *http.Request) {
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		f.t.Errorf("upgrade notification websocket: %v", err)
+		return
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			f.t.Logf("close notification websocket: %v", err)
+		}
+	}()
+
+	f.wsMu.Lock()
+	f.wsConn = conn
+	f.wsMu.Unlock()
+
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+	}
+}
+
+// wsNotificationFrame pins the wire shape aria2 actually sends (§4.5,
+// WebSocketSessionMan.cc of release-1.37.0): a params array whose single
+// element is an object carrying the gid. Deliberately independent of the
+// production rpcNotification type, so a decoder regression cannot silently
+// co-vary with the fake.
+type wsNotificationFrame struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  []struct {
+		GID string `json:"gid"`
+	} `json:"params"`
+}
+
+// notify pushes one aria2 notification frame over the upgraded connection,
+// waiting for the dial if the client has not connected yet.
+func (f *fakeServer) notify(method, gid string) {
+	f.t.Helper()
+
+	var conn *websocket.Conn
+	require.Eventually(f.t, func() bool {
+		f.wsMu.Lock()
+		defer f.wsMu.Unlock()
+		conn = f.wsConn
+		return conn != nil
+	}, 2*time.Second, time.Millisecond)
+
+	frame := wsNotificationFrame{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params: []struct {
+			GID string `json:"gid"`
+		}{{GID: gid}},
+	}
+	if err := conn.WriteJSON(frame); err != nil {
+		f.t.Errorf("write notification %s: %v", method, err)
+	}
 }
 
 // wireReply is one JSON-RPC reply, result or fault.
@@ -899,6 +986,175 @@ func TestEventsEmitsProgress(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatal("channel not closed after cancellation")
+		}
+	}
+}
+
+// The six aria2 WebSocket notifications map onto their event kinds with a
+// namespaced task id (§4.5). okResponder answers tellActive with a string,
+// which cannot decode as a status list, so the poll stays silent and every
+// event on the channel is a pushed notification.
+func TestEventsMapsWebSocketNotifications(t *testing.T) {
+	c, f := newTestClient(t, okResponder(nil))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	events, err := c.Events(ctx)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	for _, want := range []struct {
+		method string
+		kind   engine.EventKind
+	}{
+		{notifyDownloadStart, engine.EventStarted},
+		{notifyDownloadPause, engine.EventPaused},
+		{notifyDownloadStop, engine.EventRemoved},
+		{notifyDownloadComplete, engine.EventCompleted},
+		{notifyDownloadError, engine.EventError},
+		{notifyBtDownloadComplete, engine.EventProgress},
+	} {
+		f.notify(want.method, testGID)
+		select {
+		case ev := <-events:
+			if ev.TaskID != engine.NameAria2+":"+testGID {
+				t.Errorf("notification %s: task id = %q, want %q", want.method, ev.TaskID, engine.NameAria2+":"+testGID)
+			}
+			if ev.Kind != want.kind {
+				t.Errorf("notification %s: kind = %q, want %q", want.method, ev.Kind, want.kind)
+			}
+		case <-ctx.Done():
+			t.Fatalf("no event for notification %s", want.method)
+		}
+	}
+}
+
+// A silent peer — a partition, a NAT timeout, a middlebox that drops
+// instead of closing — never answers a ping, so the read deadline ends the
+// dead connection and the backoff ladder redials instead of hanging the
+// transport forever (§4.5).
+func TestEventsReconnectsPastSilentPeer(t *testing.T) {
+	// Shortened per client, not through package state, so no other client's
+	// goroutines race the override.
+	const testReadIdle = 150 * time.Millisecond
+
+	var upgrades atomic.Int32
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !websocket.IsWebSocketUpgrade(r) {
+			http.Error(w, "rpc not served here", http.StatusBadRequest)
+			return
+		}
+		conn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		upgrades.Add(1)
+		// Go silent: never read the client's pings and never write, so the
+		// read deadline is the only thing that can end this connection.
+		<-release
+		// Nothing to assert on teardown — the client may already have closed
+		// its side — and no testing.T method may run in a goroutine that can
+		// outlive the test, so the close error is dropped silently.
+		_ = conn.Close()
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(Config{URL: srv.URL, Secret: testSecret, Timeout: time.Second}, srv.Client())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c.readIdle = testReadIdle
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Logf("close client: %v", err)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	events, err := c.Events(ctx)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	// The first dial plus at least one reconnect prove the deadline ended
+	// the silent connection and the transport dialed again.
+	require.Eventually(t, func() bool { return upgrades.Load() >= 2 },
+		4*time.Second, 10*time.Millisecond,
+		"no reconnect past a silent peer (upgrades=%d)", upgrades.Load())
+
+	// Cancelling the context closes the channel; the silent peer sent
+	// nothing, so the drain meets the close immediately.
+	cancel()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, open := <-events:
+			if !open {
+				return
+			}
+		case <-deadline:
+			t.Fatal("channel not closed after cancellation")
+		}
+	}
+}
+
+// Client.Close aborts a dial stuck in a silent handshake: without the
+// dial-side cancellation the Events channel would stay open for the full
+// handshake timeout after Close.
+func TestCloseAbortsInFlightDial(t *testing.T) {
+	stall := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if websocket.IsWebSocketUpgrade(r) {
+			// Receive the upgrade request and never answer it, the way a
+			// host that accepts TCP but dies mid-handshake behaves.
+			<-stall
+			return
+		}
+		http.Error(w, "rpc not served here", http.StatusBadRequest)
+	}))
+	// Cleanup is LIFO: this order releases the stalled handler before the
+	// server waits for its handlers to drain, or the two deadlock.
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(stall) })
+
+	c, err := New(Config{URL: srv.URL, Secret: testSecret, Timeout: time.Second}, srv.Client())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// A context far longer than the handshake timeout, so only Close can
+	// end the dial inside the assertion window.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	events, err := c.Events(ctx)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	// Give the dial time to reach the silent handshake, then close.
+	time.Sleep(100 * time.Millisecond)
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, open := <-events:
+			if !open {
+				return // closed well inside the handshake timeout
+			}
+		case <-deadline:
+			t.Fatal("Events channel still open 2s after Close; the dial was not aborted")
 		}
 	}
 }

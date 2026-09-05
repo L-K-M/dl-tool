@@ -27,6 +27,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/engine/aria2"
 	"github.com/L-K-M/dl-tool/internal/obs"
+	"github.com/L-K-M/dl-tool/internal/store"
 	"github.com/L-K-M/dl-tool/internal/sync"
 )
 
@@ -35,6 +36,18 @@ const (
 	apiV1Path        = "/api/v1"
 	problemMediaType = "application/problem+json"
 	redactedValue    = "__redacted__"
+
+	// reconcilerPollInterval is the reconciliation sweep cadence of
+	// docs/17-operations-and-runbook.md section 1.6: once at boot, then 1 Hz.
+	reconcilerPollInterval = time.Second
+
+	// bootSweepBudget bounds the boot sweep inside NewServer: an engine
+	// that black-holes packets would otherwise hold startup — and so the
+	// listener and the UI — for its full per-call RPC timeout, serially per
+	// engine. Whatever the sweep misses, the 1 Hz poll picks up seconds
+	// later (docs/17 section 1.6: a boot must not be locked out of its UI
+	// by an engine that is down).
+	bootSweepBudget = 10 * time.Second
 )
 
 // Version is the build version the spec and the system-info placeholder
@@ -213,6 +226,32 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// which belongs to the metrics listener alone (doc 05 section 1.1).
 	for _, reserved := range []string{"/api", "/api/*", "/metrics", "/metrics/*", "/healthz/*", "/readyz/*"} {
 		base.Handle(reserved, http.HandlerFunc(notFound))
+	}
+
+	// The reconciler keeps the tasks table in step with the engines: one
+	// full sweep here — stage S10 of docs/17-operations-and-runbook.md
+	// section 1, before main opens the listener, so a server built by
+	// NewServer has reconciled once before it accepts its first request —
+	// then the 1 Hz poll loop beside the hub's. A failed sweep is a warning,
+	// never a construction error: a boot must not be locked out of its UI
+	// by an engine that is down (doc 17 section 1.6). The loop's context is
+	// the process lifetime, like the hub loop above — no request context
+	// could own it; Run stops with that context and the process exits with
+	// the server. A nil db (the openapi subcommand, router-only tests) has
+	// no tasks to reconcile and skips both.
+	if db != nil {
+		reconciler := engine.NewReconciler(engines, store.NewTaskStore(db), reconcilerPollInterval, log)
+		bootCtx, cancelBoot := context.WithTimeout(context.Background(), bootSweepBudget)
+		if err := reconciler.Boot(bootCtx); err != nil {
+			log.Warn("boot reconciliation failed; retrying on the poll loop",
+				slog.String("err", err.Error()))
+		}
+		cancelBoot()
+		go func() {
+			if err := reconciler.Run(context.Background()); err != nil {
+				log.Error("reconciler stopped", slog.String("err", err.Error()))
+			}
+		}()
 	}
 
 	// The SPA mounts last, on the base catch-all, so /api/v1, /healthz and

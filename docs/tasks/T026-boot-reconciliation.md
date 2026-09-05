@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T026 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T019, T024, T025 |
 | **Blocks** | T030, T098 |
 | **Parallel-safe** | no — it also edits the shared files `internal/engine/aria2/client.go`, `internal/store/tasks.go` and `internal/api/server.go` |
@@ -33,6 +33,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/aria2/client.go` | modify | Swap the polling `Events` for the WebSocket notification transport. |
 | `internal/store/tasks.go` | modify | Add `ListNonTerminalByEngine` and `SetEngineRef`. |
 | `internal/api/server.go` | modify | Construct the reconciler, run `Boot` before the listener opens and start `Run`. |
+| `internal/engine/aria2/client_test.go` | modify | Teach `fakeServer` the WebSocket upgrade (answer 101 and push notifications) so the notification transport is testable. |
 
 No other file may be modified.
 
@@ -165,7 +166,189 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint` — exit 0, no findings:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+cd web && npm run lint
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+```
+
+`make test PKG=./internal/engine/...` — exit 0, both packages `ok`:
+
+```
+$ make test PKG=./internal/engine/...
+go test -race -count=1 ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.486s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.194s
+```
+
+(re-run at the final tree, `fb2f8ba`; the named tests all pass there too.)
+
+Every named test, plus the two Events tests of the aria2 package:
+
+```
+$ go test -race -count=1 -v -run 'TestBootWritesKnownHandles|TestForeignTransferIsIgnored|TestVanishedHandleErrors|TestRunStopsWithContext' ./internal/engine/
+=== RUN   TestBootWritesKnownHandles
+--- PASS: TestBootWritesKnownHandles (0.00s)
+=== RUN   TestForeignTransferIsIgnored
+--- PASS: TestForeignTransferIsIgnored (0.00s)
+=== RUN   TestVanishedHandleErrors
+--- PASS: TestVanishedHandleErrors (0.00s)
+=== RUN   TestRunStopsWithContext
+--- PASS: TestRunStopsWithContext (0.07s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.125s
+=== RUN   TestEventsEmitsProgress
+--- PASS: TestEventsEmitsProgress (1.01s)
+=== RUN   TestEventsMapsWebSocketNotifications
+--- PASS: TestEventsMapsWebSocketNotifications (0.01s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.062s
+```
+
+Scope check over the task's whole diff (the working tree is clean at the
+final commit, so `git status` lists nothing; this is the same check over
+`origin/main..HEAD`):
+
+```
+$ git diff --name-only origin/main..HEAD -- . ':(exclude)docs' | sort
+go.mod
+internal/api/server.go
+internal/engine/aria2/client.go
+internal/engine/aria2/client_test.go
+internal/engine/reconcile.go
+internal/engine/reconcile_test.go
+internal/store/tasks.go
+```
+
+The six paths are the (amended) Files table; `go.mod` is the docs/13 §7.1
+implicit addition — first import of the pinned `github.com/gorilla/websocket
+v1.5.0`, whose only delta is the loss of the `// indirect` marker
+(`go.sum` unchanged, no version changed). Full-repo `make test` is green:
+
+```
+$ make test | grep -E '^(ok|FAIL)'
+ok  	github.com/L-K-M/dl-tool/internal/api	42.724s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.116s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.527s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.385s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.456s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.168s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.301s
+ok  	github.com/L-K-M/dl-tool/internal/store	63.568s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.356s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.030s
+```
+
+After the review round, the same gates — `make lint` clean, full-repo
+`make test` green — and the named tests plus the two new ones:
+
+```
+$ go test -race -count=1 -v -run 'TestBootWritesKnownHandles|TestForeignTransferIsIgnored|TestVanishedHandleErrors|TestRunStopsWithContext|TestEvents|TestSweepSurvives' ./internal/engine/...
+--- PASS: TestBootWritesKnownHandles (0.00s)
+--- PASS: TestForeignTransferIsIgnored (0.00s)
+--- PASS: TestVanishedHandleErrors (0.00s)
+--- PASS: TestRunStopsWithContext (0.02s)
+--- PASS: TestSweepSurvivesWriteBackFailure (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.078s
+--- PASS: TestEventsEmitsProgress (1.01s)
+--- PASS: TestEventsMapsWebSocketNotifications (0.01s)
+--- PASS: TestEventsReconnectsPastSilentPeer (0.66s)
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.733s
+```
+
+The harness amendment also exposed one real defect step 9 had hidden: with
+the WebSocket actually connected, a blocked `ReadMessage` observes neither a
+cancelled context nor a closed client, so the `Events` channel never closed —
+an acceptance criterion. `notifyEvents` now hands each connection to a
+`closeOnDone` watchdog that owns `conn.Close()` on all three exits and is
+waited on before the loop continues, so cancellation closes the channel
+promptly and no goroutine outlives the loop.
+
+### Review round
+
+The GLM review's one critical finding — that real aria2 sends the gid as a
+bare string `params:["<gid>"]` — is wrong, verified against the pinned
+daemon's own source: `WebSocketSessionMan::addNotification` in
+release-1.37.0 puts a `Dict` holding `gid` into the params list, i.e.
+`params:[{"gid":"…"}]`, exactly what the manual documents and this
+decoder expects. The wire shape stands; the fake now pins it through an
+independent test-local type so a decoder regression cannot co-vary. The
+adopted findings: sweep failure logs at warn (not debug), a per-task
+write-back or re-submission failure no longer aborts the sweep, an
+`AppendEvent` failure after the committed `SetEngineRef` is a warning, the
+notification connection carries a read deadline and client pings so a
+silent peer reconnects instead of hanging, the boot sweep inside
+`NewServer` is bounded by a 10 s budget, and the two flaky-deadline test
+loops were fixed. Rejected with evidence: adopt-orphan re-submission
+(the task forbids an adopt mode; ADR-0017), progress change-detection
+(the rules table writes counters on every report), duplicate-`engine_ref`
+guarding (`idx_tasks_engine_ref` is a partial UNIQUE index, so the
+duplicate is unrepresentable).
+
+The follow-up round flagged two minors in the new test code, both taken:
+the silent-peer handler no longer calls a testing.T method from a goroutine
+that can outlive the test, and the read-idle window became a per-client
+field snapshotted per connection (`c.readIdle`) instead of mutable package
+state. Stability pinned with `go test -race -count=5 -run TestEvents`
+(10 packages `ok` across the full `make test`).
+
+Round 3 sharpened the Add/SetEngineRef window, both taken: a caller-side
+cancellation (the boot budget expiring) is no longer read as an engine
+refusal — the sweep aborts with the context error and no task is errored
+(`TestCancelledReconcileDoesNotErrorTasks`) — and a successful `Add` whose
+`SetEngineRef` fails now compensates by removing the transfer the sweep
+itself just created (its own Add receipt, not a foreign one, so ADR-0017
+holds) on a cancellation-proof context, so a store blip costs one Add per
+sweep instead of one untouchable duplicate per sweep
+(`TestFailedSetEngineRefCompensatesByRemoving`). Full gates re-run after
+the round: `make lint` clean, `make test` green in all 10 packages.
+
+Round 4 bounded the compensating removal with its own 10 s budget —
+`WithoutCancel` also drops the deadline a Boot ran under, so nothing else
+bounded it.
+
+One window stays open by design: an `Add` that fails because the caller's
+context died may already have reached the engine, and with no returned gid
+the sweep cannot compensate. The retry re-adds, and any transfer the
+cancelled call left behind is foreign under ADR-0017 — the operator
+removes stray handles by hand (docs/17-operations-and-runbook.md section
+5.4's foreign-task row: ignore it).
+
+Round 10 closed the loop on the leak: the reconciler takes its logger from
+the composition root (`NewReconciler` gained a `*slog.Logger` parameter,
+nil falling back to `slog.Default()` — a fourth documented deviation from
+the contract sketch, after `Reconcilable`'s home, `TaskWriter`'s
+`AppendEvent` and the ticker-first `Run`), the outliving fake daemon no
+longer calls a testing.T method, and the TempDir comment states the real
+lifetime.
+
+Round 5's minor — `Close` cannot abort an in-flight dial — turned on a
+claim that is false for the pinned library: gorilla v1.5.0 watches the
+dial context only through the TCP connect (`client.go` sets the connection
+deadline from the context and then blocks in `http.ReadResponse` with no
+context watch), so the suggested context-cancel cannot abort a handshake
+read hung against a silent host — observed: the channel stayed open past a
+2 s deadline, and the goroutine retired only at the 10 s handshake
+timeout. The fix that does work ships instead: the dialer dials through
+`NetDialContext` with connections tracked by the client, and `Close`
+force-closes them (`TestCloseAbortsInFlightDial`), beside the context
+cancel for the TCP phase.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+None. An earlier session stopped here because
+`internal/engine/aria2/client_test.go` was missing from the Files table:
+step 8's WebSocket dial is an HTTP GET with Upgrade headers (RFC 6455
+§1.3), which `fakeServer` rejected with its POST-only assertion, so no
+implementation of step 8 could pass the suite. The amendment it proposed
+is the `internal/engine/aria2/client_test.go` row above; the task then
+proceeded with no other scope change — the upgrade branch in `fakeServer`,
+the six-notification mapping test it makes possible, and the `closeOnDone`
+watchdog that test forced (see Evidence).

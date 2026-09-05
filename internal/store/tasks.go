@@ -173,6 +173,18 @@ ORDER BY file_index`
 WHERE queue_position IS NOT NULL
 ORDER BY queue_position, id`
 
+	// The non-terminal candidates of the boot sweep (docs/17-operations-and-
+	// runbook.md section 1.6): one row per task that still owns an engine
+	// handle. engine_ref IS NOT NULL keeps tasks the admission pass has not
+	// handed to an engine out of the sweep — their start is T098's, not the
+	// reconciler's — and the state filter keeps terminal tasks out (the
+	// only three that end a transfer for dl-tool's purposes), so a
+	// completed or removed row is never a candidate whatever the engine
+	// reports.
+	queryListNonTerminalByEngine = `SELECT id, engine_ref, state, source_uri, infohash_v1, destination
+FROM tasks
+WHERE engine = ? AND engine_ref IS NOT NULL AND state NOT IN ('completed', 'removed', 'error')`
+
 	querySetQueuePosition = `UPDATE tasks
 SET queue_position = ?, updated_at = ?
 WHERE id = ?`
@@ -292,6 +304,40 @@ func (s *TaskStore) Get(ctx context.Context, id string) (Task, error) {
 	}
 
 	return task, nil
+}
+
+// Reconcilable is the non-terminal task a reconciliation sweep needs
+// (T026): enough to write engine-reported state back through UpdateProgress
+// and Transition, and — when the engine no longer knows the handle — to
+// re-submit the transfer from its stored source with resume semantics. It
+// is a projection of the tasks row, not the row itself: the sweep never
+// needs the display or patch columns.
+type Reconcilable struct {
+	ID          string  `db:"id"`
+	EngineRef   string  `db:"engine_ref"` // the map key of ListNonTerminalByEngine
+	State       string  `db:"state"`      // never completed, removed or error
+	SourceURI   *string `db:"source_uri"`
+	InfohashV1  *string `db:"infohash_v1"`
+	Destination string  `db:"destination"`
+}
+
+// ListNonTerminalByEngine returns engine_ref -> Reconcilable for one
+// engine's tasks, skipping the terminal states and the tasks that hold no
+// engine handle yet. It is the join input of the reconciliation sweep: the
+// reconciler matches the engine's live list against these handles, and a
+// handle the map does not carry is foreign and ignored (ADR-0017).
+func (s *TaskStore) ListNonTerminalByEngine(ctx context.Context, engineName string) (map[string]Reconcilable, error) {
+	var rows []Reconcilable
+	if err := s.db.SelectContext(ctx, &rows, queryListNonTerminalByEngine, engineName); err != nil {
+		return nil, fmt.Errorf("store: list non-terminal tasks of engine %q: %w", engineName, err)
+	}
+
+	byRef := make(map[string]Reconcilable, len(rows))
+	for _, row := range rows {
+		byRef[row.EngineRef] = row
+	}
+
+	return byRef, nil
 }
 
 // UpdateProgress replaces the transfer counters of a task and bumps

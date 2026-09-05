@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -20,6 +21,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 )
@@ -37,10 +40,22 @@ const (
 	// loop on a slow consumer.
 	eventsBuffer = 64
 
-	// eventsPollInterval is the tellActive cadence of the polling Events
-	// loop; it keeps rates moving between notifications. The WebSocket
-	// notification transport is added by T026.
+	// eventsPollInterval is the tellActive cadence that keeps rates moving
+	// between WebSocket notifications (docs/06-download-engines.md §4.5).
 	eventsPollInterval = time.Second
+
+	// WebSocket reconnect backoff (§4.5): half a second to start, doubling
+	// per consecutive failure, capped at half a minute. A successful
+	// connection resets the ladder, so a daemon that flaps recovers at full
+	// speed.
+	wsBackoffInitial = 500 * time.Millisecond
+	wsBackoffMax     = 30 * time.Second
+
+	// wsHandshakeTimeout bounds a WebSocket dial against a silent host.
+	wsHandshakeTimeout = 10 * time.Second
+
+	// wsPingWriteTimeout bounds one ping frame write against a stuck socket.
+	wsPingWriteTimeout = 5 * time.Second
 
 	// listCount requests all retained records in the required single batch.
 	// aria2 parses the count as a signed 64-bit integer.
@@ -50,6 +65,17 @@ const (
 	// stall a caller forever.
 	defaultCallTimeout = 30 * time.Second
 )
+
+// wsReadIdle is the default read-idle window of a notification
+// connection: a half-open connection — a partition, a NAT timeout, a
+// middlebox that drops silently — never delivers a close frame, so without
+// a deadline the blocked read would hang the transport until TCP gives up.
+// A ping at a third of the window keeps a healthy connection alive and
+// turns a dead peer into a read error the reconnect ladder answers (§4.5).
+// Per client, snapshotted once per connection: package-level mutable state
+// here would be a latent data race between a test's override and the
+// production goroutines of every other client in the package.
+const wsReadIdle = 90 * time.Second
 
 // JSON-RPC method names dl-tool calls (docs/06-download-engines.md §4.3).
 const (
@@ -68,6 +94,29 @@ const (
 	methodChangeOption         = "aria2.changeOption"
 	methodChangeGlobalOption   = "aria2.changeGlobalOption"
 )
+
+// WebSocket notification methods and the TaskEvent kind each maps to
+// (docs/06-download-engines.md §4.5).
+const (
+	notifyDownloadStart      = "aria2.onDownloadStart"
+	notifyDownloadPause      = "aria2.onDownloadPause"
+	notifyDownloadStop       = "aria2.onDownloadStop"
+	notifyDownloadComplete   = "aria2.onDownloadComplete"
+	notifyDownloadError      = "aria2.onDownloadError"
+	notifyBtDownloadComplete = "aria2.onBtDownloadComplete"
+)
+
+// notificationKinds is the six-row table of docs/06-download-engines.md
+// §4.5. A message whose method is absent from this map is not one of
+// aria2's notifications and is dropped.
+var notificationKinds = map[string]engine.EventKind{
+	notifyDownloadStart:      engine.EventStarted,
+	notifyDownloadPause:      engine.EventPaused,
+	notifyDownloadStop:       engine.EventRemoved,
+	notifyDownloadComplete:   engine.EventCompleted,
+	notifyDownloadError:      engine.EventError,
+	notifyBtDownloadComplete: engine.EventProgress,
+}
 
 // Option keys: the long option name without the leading --, every value a
 // string (docs/06-download-engines.md §4.2).
@@ -119,6 +168,19 @@ type Client struct {
 	timeout time.Duration
 	hc      *http.Client
 
+	// readIdle is the notification connection's read-idle window, snapshotted
+	// per connection from wsReadIdle; the reconnect test shortens it on the
+	// instance it owns, never through package state.
+	readIdle time.Duration
+
+	// dialMu and dialConns track the connections opened for WebSocket
+	// handshakes still in flight. gorilla v1.5.0 watches the dial context
+	// only until the TCP connect completes — a handshake response read
+	// blocked against a silent host is bounded by nothing but the deadline —
+	// so Close forces the socket, the one thing that aborts that read.
+	dialMu    sync.Mutex
+	dialConns map[net.Conn]struct{}
+
 	nextID    atomic.Uint64
 	done      chan struct{}
 	closeOnce sync.Once
@@ -157,11 +219,12 @@ func New(cfg Config, hc *http.Client) (*Client, error) {
 	}
 
 	return &Client{
-		url:     cfg.URL,
-		secret:  cfg.Secret,
-		timeout: timeout,
-		hc:      hc,
-		done:    make(chan struct{}),
+		url:      cfg.URL,
+		secret:   cfg.Secret,
+		timeout:  timeout,
+		hc:       hc,
+		readIdle: wsReadIdle,
+		done:     make(chan struct{}),
 	}, nil
 }
 
@@ -198,9 +261,14 @@ func (c *Client) Connect(ctx context.Context) error {
 	return err
 }
 
-// Close stops the Events polling loop. In-flight calls are unaffected.
+// Close stops the Events polling loop, aborting a WebSocket dial still in
+// flight — including one hung against a silent host, whose handshake read
+// no context can interrupt (v1.5.0). In-flight calls are unaffected.
 func (c *Client) Close() error {
-	c.closeOnce.Do(func() { close(c.done) })
+	c.closeOnce.Do(func() {
+		close(c.done)
+		c.closeDials()
+	})
 	return nil
 }
 
@@ -270,9 +338,14 @@ func (c *Client) addMetalink(ctx context.Context, req engine.AddRequest) (string
 }
 
 // addOptions encodes the add-time options from an AddRequest: long names,
-// string values, absent when unset (§4.2).
+// string values, absent when unset (§4.2). Extra keys ride along verbatim —
+// the engine-specific escape hatch AddRequest documents — with the typed
+// fields winning on a collision.
 func addOptions(req engine.AddRequest) map[string]string {
-	opts := make(map[string]string)
+	opts := make(map[string]string, len(req.Extra)+4)
+	for key, value := range req.Extra {
+		opts[key] = value
+	}
 	if req.SaveDir != "" {
 		opts[optDir] = req.SaveDir
 	}
@@ -516,18 +589,278 @@ func (c *Client) SetShareLimits(ctx context.Context, id string, ratio *float64, 
 	return engine.ErrNotSupported
 }
 
-// Events runs the 1 Hz tellActive poll, emitting one progress event per
-// active transfer so rates keep moving between notifications. The WebSocket
-// notification transport is added by T026; this channel shape stays.
+// Events opens the WebSocket notification transport and keeps the 1 Hz
+// tellActive progress batch beside it. Notifications carry the state
+// changes (§4.5); the poll keeps rates moving between them. The channel
+// closes when ctx is cancelled or the client is closed, after both loops
+// have stopped — one closer, owned by the supervisor below.
 func (c *Client) Events(ctx context.Context) (<-chan engine.TaskEvent, error) {
 	events := make(chan engine.TaskEvent, eventsBuffer)
-	go c.pollEvents(ctx, events)
+
+	var loops sync.WaitGroup
+	loops.Add(2)
+	go func() { defer loops.Done(); c.pollEvents(ctx, events) }()
+	go func() { defer loops.Done(); c.notifyEvents(ctx, events) }()
+	go func() { loops.Wait(); close(events) }()
+
 	return events, nil
 }
 
-func (c *Client) pollEvents(ctx context.Context, events chan<- engine.TaskEvent) {
-	defer close(events)
+// trackDial remembers a connection opened for a WebSocket handshake and
+// returns it wrapped so it unregisters itself when gorilla closes it. The
+// map holds each dial connection until gorilla closes it — including past
+// a successful handshake, so Close's force-close also reaches an
+// established events connection whose read may be blocked.
+func (c *Client) trackDial(conn net.Conn) net.Conn {
+	c.dialMu.Lock()
+	if c.dialConns == nil {
+		c.dialConns = make(map[net.Conn]struct{})
+	}
+	c.dialConns[conn] = struct{}{}
+	c.dialMu.Unlock()
 
+	// Close may already have snapshotted dialConns between the TCP connect
+	// completing and this registration — close(done) happens before
+	// closeDials, so a closed done means the snapshot may have missed this
+	// conn. Force it, or the handshake read would hang for the full
+	// HandshakeTimeout past Close.
+	select {
+	case <-c.done:
+		if err := conn.Close(); err != nil {
+			slog.Debug("aria2: close late-dialed connection", "engine", engine.NameAria2, "error", err)
+		}
+	default:
+	}
+
+	return &trackedConn{Conn: conn, client: c}
+}
+
+func (c *Client) untrackDial(conn net.Conn) {
+	c.dialMu.Lock()
+	delete(c.dialConns, conn)
+	c.dialMu.Unlock()
+}
+
+// closeDials force-closes every in-flight handshake connection, the only
+// way to abort a handshake response read blocked against a silent host.
+func (c *Client) closeDials() {
+	c.dialMu.Lock()
+	conns := make([]net.Conn, 0, len(c.dialConns))
+	for conn := range c.dialConns {
+		conns = append(conns, conn)
+	}
+	c.dialMu.Unlock()
+
+	for _, conn := range conns {
+		if err := conn.Close(); err != nil {
+			slog.Debug("aria2: close dialing connection", "engine", engine.NameAria2, "error", err)
+		}
+	}
+}
+
+// trackedConn forwards a dial connection and untracks it on close.
+type trackedConn struct {
+	net.Conn
+	client *Client
+}
+
+func (t *trackedConn) Close() error {
+	t.client.untrackDial(t.Conn)
+	return t.Conn.Close()
+}
+
+// notifyEvents maintains the WebSocket connection on the same host and path
+// as the RPC endpoint, reconnecting with exponential backoff on every drop.
+// It returns only when ctx is cancelled or the client is closed; a daemon
+// that stays down costs one dial per backoff step, nothing more.
+func (c *Client) notifyEvents(ctx context.Context, events chan<- engine.TaskEvent) {
+	// A dial honours its context only through the TCP connect (v1.5.0), so
+	// derive one the client's own Close can cancel for that phase, and let
+	// trackDial force the socket for the handshake read beyond it.
+	dialCtx, cancelDial := context.WithCancel(ctx)
+	defer cancelDial()
+	go func() {
+		select {
+		case <-c.done:
+			cancelDial()
+		case <-dialCtx.Done():
+		}
+	}()
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: wsHandshakeTimeout,
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var d net.Dialer
+			conn, err := d.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return c.trackDial(conn), nil
+		},
+	}
+	backoff := wsBackoffInitial
+
+	for {
+		conn, _, err := dialer.DialContext(dialCtx, c.wsURL(), nil)
+		if err == nil {
+			backoff = wsBackoffInitial
+			stop := c.closeOnDone(ctx, conn)
+			readErr := c.readNotifications(ctx, conn, events)
+			stop()
+			if ctx.Err() != nil {
+				return
+			}
+			// Debug, not warn: a flapping daemon drops the socket often, and
+			// the reconnect below is the designed answer (§4.5).
+			slog.Debug("aria2: websocket dropped, reconnecting",
+				"engine", engine.NameAria2, "error", readErr)
+		} else if ctx.Err() != nil {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.done:
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, wsBackoffMax)
+	}
+}
+
+// closeOnDone hands one connection's lifetime to a watchdog: a blocked
+// ReadMessage observes neither a cancelled context nor a closed client, so
+// closing the socket is the only way to unblock the read loop. The
+// watchdog owns conn.Close() on all three exits — cancelled, closed, or
+// read loop returned on its own — and the returned stop ends it and waits,
+// so no goroutine outlives notifyEvents.
+func (c *Client) closeOnDone(ctx context.Context, conn *websocket.Conn) (stop func()) {
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		select {
+		case <-ctx.Done():
+		case <-c.done:
+		case <-done:
+		}
+		if err := conn.Close(); err != nil {
+			slog.Debug("aria2: close websocket", "engine", engine.NameAria2, "error", err)
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+	}
+}
+
+// readNotifications consumes one WebSocket connection until it drops: each
+// of the six notifications maps to its TaskEvent kind and is emitted with
+// the namespaced id. A notification is unidirectional — it carries no id,
+// and the client must not respond to it (§4.5) — so this loop never writes
+// a data frame; its only writes are ping control frames, which gorilla
+// permits concurrently with reads.
+func (c *Client) readNotifications(ctx context.Context, conn *websocket.Conn, events chan<- engine.TaskEvent) error {
+	readIdle := c.readIdle
+	resetDeadline := func() {
+		if err := conn.SetReadDeadline(time.Now().Add(readIdle)); err != nil {
+			slog.Debug("aria2: set websocket read deadline", "engine", engine.NameAria2, "error", err)
+		}
+	}
+	resetDeadline()
+	// A healthy peer answers every ping with a pong, and any pong — this
+	// client sends no identifiable pings of its own — proves liveness.
+	conn.SetPongHandler(func(string) error { resetDeadline(); return nil })
+
+	ping := time.NewTicker(readIdle / 3)
+	stopPing := make(chan struct{})
+	pingDone := make(chan struct{})
+	go func() {
+		defer close(pingDone)
+		for {
+			select {
+			case <-ping.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsPingWriteTimeout)); err != nil {
+					return
+				}
+			case <-stopPing:
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(stopPing)
+		ping.Stop()
+		<-pingDone
+	}()
+
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		resetDeadline()
+
+		kind, gid, ok := decodeNotification(data)
+		if !ok {
+			continue
+		}
+		event := engine.TaskEvent{TaskID: engine.NameAria2 + ":" + gid, Kind: kind}
+		select {
+		case events <- event:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.done:
+			return nil
+		}
+	}
+}
+
+// rpcNotification is one aria2 WebSocket notification: a method name and a
+// single-element params array whose struct carries the gid (§4.5). The id
+// key is deliberately absent — notifications never carry one.
+type rpcNotification struct {
+	Method string `json:"method"`
+	Params []struct {
+		GID string `json:"gid"`
+	} `json:"params"`
+}
+
+// decodeNotification maps one message onto its event kind and gid. ok is
+// false for anything that is not one of the six notifications with a gid:
+// an unknown method, a malformed frame or a stray reply.
+func decodeNotification(data []byte) (kind engine.EventKind, gid string, ok bool) {
+	var n rpcNotification
+	if err := json.Unmarshal(data, &n); err != nil {
+		return "", "", false
+	}
+	if len(n.Params) == 0 || n.Params[0].GID == "" {
+		return "", "", false
+	}
+
+	kind, known := notificationKinds[n.Method]
+	if !known {
+		return "", "", false
+	}
+
+	return kind, n.Params[0].GID, true
+}
+
+// wsURL derives the WebSocket endpoint from the configured RPC URL: the
+// same host and path with the scheme swapped, http→ws and https→wss, the
+// way aria2 serves the notification transport on its RPC path.
+func (c *Client) wsURL() string {
+	switch {
+	case strings.HasPrefix(c.url, "https://"):
+		return "wss://" + strings.TrimPrefix(c.url, "https://")
+	case strings.HasPrefix(c.url, "http://"):
+		return "ws://" + strings.TrimPrefix(c.url, "http://")
+	default:
+		return c.url
+	}
+}
+
+func (c *Client) pollEvents(ctx context.Context, events chan<- engine.TaskEvent) {
 	ticker := time.NewTicker(eventsPollInterval)
 	defer ticker.Stop()
 
