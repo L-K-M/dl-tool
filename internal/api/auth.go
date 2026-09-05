@@ -685,13 +685,14 @@ type authEnvelope struct {
 // on the Huma API; Server.registerOperations is the call site.
 func (a *authService) registerOperations(hapi huma.API) {
 	huma.Register(hapi, huma.Operation{
-		OperationID: "post-auth-setup",
-		Method:      http.MethodPost,
-		Path:        "/auth/setup",
-		Summary:     "Create the operator account with the one-time setup token",
-		Description: "Callable only while the operator account does not exist. Every other endpoint answers 401 /problems/setup-required until it succeeds.",
-		Tags:        []string{"auth"},
-		Security:    []map[string][]string{},
+		OperationID:   "post-auth-setup",
+		Method:        http.MethodPost,
+		Path:          "/auth/setup",
+		DefaultStatus: http.StatusCreated,
+		Summary:       "Create the operator account with the one-time setup token",
+		Description:   "Callable only while the operator account does not exist. Every other endpoint answers 401 /problems/setup-required until it succeeds.",
+		Tags:          []string{"auth"},
+		Security:      []map[string][]string{},
 	}, a.handleSetup)
 
 	huma.Register(hapi, huma.Operation{
