@@ -500,18 +500,15 @@ func TestNewServerReconcilesBeforeServing(t *testing.T) {
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
+		out := any(replies)
 		if single {
-			if err := json.NewEncoder(w).Encode(replies[0]); err != nil {
-				// This fake deliberately outlives the test (see the note below);
-				// a testing.T method here would panic if the leaked reconciler's
-				// poll hits an encode error after completion. The test's own
-				// reconciliation assertions catch genuinely broken replies.
-				return
-			}
-			return
+			out = replies[0]
 		}
-		if err := json.NewEncoder(w).Encode(replies); err != nil {
-			// Same note as above.
+		if err := json.NewEncoder(w).Encode(out); err != nil {
+			// This fake deliberately outlives the test (see the note below);
+			// a testing.T method here would panic if the leaked reconciler's
+			// poll hits an encode error after completion. The test's own
+			// reconciliation assertions catch genuinely broken replies.
 			return
 		}
 	}))

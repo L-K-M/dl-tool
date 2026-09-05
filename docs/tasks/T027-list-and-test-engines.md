@@ -235,7 +235,8 @@ internal/store/settings.go
 
 Exactly the Files table plus the two artefacts docs/13 §7.1 adds implicitly for a task that registers Huma operations (`make gen`, committed).
 
-`make test` over every package is **not** green — see Blocked.
+`make test` over every package is green; the earlier failure and its fix are recorded
+under [`## Blocked`](#blocked) below.
 
 ## Blocked
 
