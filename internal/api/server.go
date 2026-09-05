@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +54,11 @@ const (
 	// aria2CallTimeout bounds every aria2 JSON-RPC call of the process-wide
 	// adapter, including the boot Connect and the /engines probe.
 	aria2CallTimeout = 10 * time.Second
+
+	// admissionPollInterval is the admission pass cadence: the same 1 Hz
+	// as the reconciler's poll, so a freed slot or returned disk space
+	// reaches a queued task within a second of the store reflecting it.
+	admissionPollInterval = time.Second
 
 	// eventEngineUnreachable is the event code of the boot warn emitted when
 	// an engine's Connect fails (docs/17-operations-and-runbook.md section 1).
@@ -280,6 +287,20 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 				log.Error("reconciler stopped", slog.String("err", err.Error()))
 			}
 		}()
+
+		// The admission controller runs beside the reconciler's loop
+		// (docs/03-architecture.md section 6.4): it is the only writer that
+		// hands a queued task to an engine, under the concurrency limits and
+		// the disk-space reservation of FR-047. The same process-lifetime
+		// context and the same nil-db guard as the reconciler above; the
+		// openapi subcommand builds the server without a store and its
+		// stdout must stay a pure document.
+		admitter := engine.NewAdmitter(engines, store.NewTaskStore(db), admissionPollInterval, log)
+		go func() {
+			if err := admitter.Run(context.Background(), admissionPolicyLoader(db, cfg.DataRoots)); err != nil {
+				log.Error("admission loop stopped", slog.String("err", err.Error()))
+			}
+		}()
 	}
 
 	// The SPA mounts last, on the base catch-all, so /api/v1, /healthz and
@@ -382,6 +403,110 @@ type systemInfoOutput struct {
 	Body struct {
 		Version string `json:"version" doc:"Build version of the dl-tool process"`
 	}
+}
+
+// settingMinFreeSpace is the third settings row of the admission policy:
+// a sparse map of data-root path to floor bytes
+// (docs/11-config-reference.md section 5).
+const settingMinFreeSpace = "min_free_space"
+
+// queryAdmissionSettings reads the three settings rows the admission pass
+// consults each tick.
+const queryAdmissionSettings = `SELECT key, value_json FROM settings WHERE key IN (?, ?, ?)`
+
+// admissionPolicyLoader builds the Admitter.Run load closure over the
+// settings rows: max_active_total, max_active_per_engine and
+// min_free_space, folded with the configured data roots into one
+// engine.Policy. It runs every tick because PATCH /settings changes the
+// rows at runtime and the pass must not cache them. A missing row keeps
+// the default of docs/11-config-reference.md section 5; a malformed value
+// is an error the loop logs and retries on the next tick — never a cached
+// guess and never a wedged queue.
+func admissionPolicyLoader(db *sqlx.DB, roots []string) func(context.Context) (engine.Policy, error) {
+	// One canonical form: the roots and the floor keys must spell a root
+	// identically or the floor lookup silently misses and the default
+	// applies. Trailing slashes are the spelling an operator is most
+	// likely to type.
+	canonicalRoots := make([]string, 0, len(roots))
+	for _, root := range roots {
+		canonicalRoots = append(canonicalRoots, filepath.Clean(root))
+	}
+
+	return func(ctx context.Context) (engine.Policy, error) {
+		var rows []settingRow
+		err := db.SelectContext(ctx, &rows, queryAdmissionSettings,
+			settingMaxActiveTotal, settingMaxActivePerEngine, settingMinFreeSpace)
+		if err != nil {
+			return engine.Policy{}, fmt.Errorf("read admission settings: %w", err)
+		}
+
+		policy := engine.Policy{
+			Limits: engine.Limits{
+				MaxActiveTotal:     defaultMaxActiveTotal,
+				MaxActivePerEngine: defaultMaxActivePerEngine,
+			},
+			MinFree: map[string]int64{},
+			Roots:   canonicalRoots,
+		}
+		for _, row := range rows {
+			switch row.Key {
+			case settingMaxActiveTotal:
+				value, err := parseNonNegativeSettingInt(row.Key, row.ValueJSON)
+				if err != nil {
+					return engine.Policy{}, fmt.Errorf("read admission settings: %w", err)
+				}
+				policy.Limits.MaxActiveTotal = value
+			case settingMaxActivePerEngine:
+				value, err := parseNonNegativeSettingInt(row.Key, row.ValueJSON)
+				if err != nil {
+					return engine.Policy{}, fmt.Errorf("read admission settings: %w", err)
+				}
+				policy.Limits.MaxActivePerEngine = value
+			case settingMinFreeSpace:
+				var value map[string]int64
+				if err := json.Unmarshal([]byte(row.ValueJSON), &value); err != nil {
+					// The key and the wanted shape lead: an operator reading the
+					// 1 Hz retry line must see which setting is broken before the
+					// driver's parse text.
+					return engine.Policy{}, fmt.Errorf("read admission settings: key %s: want an object of root path to bytes: %w", row.Key, err)
+				}
+				// A JSON null normalises to an empty map, the same shape a
+				// missing row leaves: every root then resolves to the default
+				// floor instead of a nil lookups table.
+				if value == nil {
+					value = map[string]int64{}
+				}
+				for root, floor := range value {
+					if floor < 0 {
+						return engine.Policy{}, fmt.Errorf("read admission settings: key %s: root %q carries a negative floor %d", row.Key, root, floor)
+					}
+					// Two raw keys may clean to the same root — "/data" beside
+					// "/data/" — and map iteration order must not decide whose
+					// floor wins: differing values error, equal values are one.
+					canonical := filepath.Clean(root)
+					if previous, seen := policy.MinFree[canonical]; seen && previous != floor {
+						return engine.Policy{}, fmt.Errorf("read admission settings: key %s: root %s set twice with different floors (%d and %d)", row.Key, canonical, previous, floor)
+					}
+					policy.MinFree[canonical] = floor
+				}
+			}
+		}
+
+		return policy, nil
+	}
+}
+
+// parseNonNegativeSettingInt decodes one integer settings value. A
+// negative limit would silently mean unlimited everywhere else; the write
+// side rejects it, so the read side must too — the same rule
+// loadConcurrencySnapshot applies to the resume answer.
+func parseNonNegativeSettingInt(key, valueJSON string) (int, error) {
+	value, err := strconv.Atoi(valueJSON)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("key %s: want a non-negative integer, got %q", key, valueJSON)
+	}
+
+	return value, nil
 }
 
 // connectEngine performs the boot wiring of one configured engine: it
