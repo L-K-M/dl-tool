@@ -148,7 +148,75 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/api/...` (the Verification block, run at the final tree):
+
+```
+$ make lint && make test PKG=./internal/api/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/api	44.190s
+```
+
+`TestListEngines` and `TestTestEngineFailureIs200` both ran and passed (with
+`TestTestEngineUnknownID` and `TestNewServerWiresConfiguredAria2`, the composition-root case):
+
+```
+$ go test ./internal/api/... -run 'TestListEngines|TestTestEngineFailureIs200|TestTestEngineUnknownID|TestNewServerWiresConfiguredAria2' -v
+=== RUN   TestListEngines
+--- PASS: TestListEngines (0.06s)
+=== RUN   TestTestEngineFailureIs200
+--- PASS: TestTestEngineFailureIs200 (0.03s)
+=== RUN   TestTestEngineUnknownID
+--- PASS: TestTestEngineUnknownID (0.03s)
+=== RUN   TestNewServerWiresConfiguredAria2
+--- PASS: TestNewServerWiresConfiguredAria2 (0.03s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.163s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/server.go
+internal/api/settings.go
+internal/api/settings_test.go
+internal/store/settings.go
+web/src/api/schema.d.ts
+```
+
+Exactly the Files table plus the two artefacts docs/13 §7.1 adds implicitly for a task that registers Huma operations (`make gen`, committed).
+
+`make test` over every package is **not** green — see Blocked.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+The implementation is complete and its own Verification block passes, but
+step 8's boot `Connect` inside `NewServer` breaks an M1 test that lives
+outside this task's Files table, so `make test` cannot go green without an
+out-of-scope edit:
+
+- Step 8 and [docs/17-operations-and-runbook.md §1](../17-operations-and-runbook.md) mandate that `NewServer`, with `DLTOOL_ARIA2_URL` set, calls the engine's `Connect` and records the outcome in the `engines` row. The aria2 client sends a single-object JSON-RPC request (`aria2.getVersion`) for that probe.
+- T026's `TestNewServerReconcilesBeforeServing` (`internal/engine/reconcile_test.go`, ~line 434) fakes the aria2 daemon with a handler that decodes every request body as a **batch array** and calls `t.Errorf` on anything else. The reconciler's sweep is batched, so the fixture passed until this task added the single-object boot probe.
+
+Observed on this branch (green on `main` before the change):
+
+```
+$ go test ./internal/engine/ -run TestNewServerReconcilesBeforeServing
+--- FAIL: TestNewServerReconcilesBeforeServing (0.44s)
+    reconcile_test.go:457: decode rpc batch: json: cannot unmarshal object into Go value of type []struct { ID string "json:\"id\""; Method string "json:\"method\"" }
+FAIL
+```
+
+The fixture pinned an implementation detail — "NewServer's only boot-time aria2 traffic is the reconciler's batched List" — that the plan's own T027 contradicts. The resolution is a ~10-line fix to that one test fixture (decode object-or-array and answer `aria2.getVersion` with a version string), which is outside this task's Files table, so it is not done here. Alternatives considered and rejected: dropping the boot `Connect` (contradicts step 8 and doc 17 §1), and moving the probe to `cmd/dl-tool/main.go` (also outside the Files table, and step 8 names `internal/api/server.go`).
