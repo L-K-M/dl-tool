@@ -1104,3 +1104,57 @@ func TestEventsReconnectsPastSilentPeer(t *testing.T) {
 		}
 	}
 }
+
+// Client.Close aborts a dial stuck in a silent handshake: without the
+// dial-side cancellation the Events channel would stay open for the full
+// handshake timeout after Close.
+func TestCloseAbortsInFlightDial(t *testing.T) {
+	stall := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if websocket.IsWebSocketUpgrade(r) {
+			// Receive the upgrade request and never answer it, the way a
+			// host that accepts TCP but dies mid-handshake behaves.
+			<-stall
+			return
+		}
+		http.Error(w, "rpc not served here", http.StatusBadRequest)
+	}))
+	// Cleanup is LIFO: this order releases the stalled handler before the
+	// server waits for its handlers to drain, or the two deadlock.
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(stall) })
+
+	c, err := New(Config{URL: srv.URL, Secret: testSecret, Timeout: time.Second}, srv.Client())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// A context far longer than the handshake timeout, so only Close can
+	// end the dial inside the assertion window.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	events, err := c.Events(ctx)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	// Give the dial time to reach the silent handshake, then close.
+	time.Sleep(100 * time.Millisecond)
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, open := <-events:
+			if !open {
+				return // closed well inside the handshake timeout
+			}
+		case <-deadline:
+			t.Fatal("Events channel still open 2s after Close; the dial was not aborted")
+		}
+	}
+}

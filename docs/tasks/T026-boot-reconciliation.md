@@ -319,6 +319,18 @@ cancelled call left behind is foreign under ADR-0017 — the operator
 removes stray handles by hand (docs/17-operations-and-runbook.md section
 5.4's foreign-task row: ignore it).
 
+Round 5's minor — `Close` cannot abort an in-flight dial — turned on a
+claim that is false for the pinned library: gorilla v1.5.0 watches the
+dial context only through the TCP connect (`client.go` sets the connection
+deadline from the context and then blocks in `http.ReadResponse` with no
+context watch), so the suggested context-cancel cannot abort a handshake
+read hung against a silent host — observed: the channel stayed open past a
+2 s deadline, and the goroutine retired only at the 10 s handshake
+timeout. The fix that does work ships instead: the dialer dials through
+`NetDialContext` with connections tracked by the client, and `Close`
+force-closes them (`TestCloseAbortsInFlightDial`), beside the context
+cancel for the TCP phase.
+
 ## Blocked
 
 None. An earlier session stopped here because

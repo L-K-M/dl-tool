@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -172,6 +173,14 @@ type Client struct {
 	// instance it owns, never through package state.
 	readIdle time.Duration
 
+	// dialMu and dialConns track the connections opened for WebSocket
+	// handshakes still in flight. gorilla v1.5.0 watches the dial context
+	// only until the TCP connect completes — a handshake response read
+	// blocked against a silent host is bounded by nothing but the deadline —
+	// so Close forces the socket, the one thing that aborts that read.
+	dialMu    sync.Mutex
+	dialConns map[net.Conn]struct{}
+
 	nextID    atomic.Uint64
 	done      chan struct{}
 	closeOnce sync.Once
@@ -252,9 +261,14 @@ func (c *Client) Connect(ctx context.Context) error {
 	return err
 }
 
-// Close stops the Events polling loop. In-flight calls are unaffected.
+// Close stops the Events polling loop, aborting a WebSocket dial still in
+// flight — including one hung against a silent host, whose handshake read
+// no context can interrupt (v1.5.0). In-flight calls are unaffected.
 func (c *Client) Close() error {
-	c.closeOnce.Do(func() { close(c.done) })
+	c.closeOnce.Do(func() {
+		close(c.done)
+		c.closeDials()
+	})
 	return nil
 }
 
@@ -592,16 +606,86 @@ func (c *Client) Events(ctx context.Context) (<-chan engine.TaskEvent, error) {
 	return events, nil
 }
 
+// trackDial remembers a connection opened for a WebSocket handshake and
+// returns it wrapped so it unregisters itself when gorilla closes it; the
+// map therefore holds exactly the live dial connections.
+func (c *Client) trackDial(conn net.Conn) net.Conn {
+	c.dialMu.Lock()
+	if c.dialConns == nil {
+		c.dialConns = make(map[net.Conn]struct{})
+	}
+	c.dialConns[conn] = struct{}{}
+	c.dialMu.Unlock()
+
+	return &trackedConn{Conn: conn, client: c}
+}
+
+func (c *Client) untrackDial(conn net.Conn) {
+	c.dialMu.Lock()
+	delete(c.dialConns, conn)
+	c.dialMu.Unlock()
+}
+
+// closeDials force-closes every in-flight handshake connection, the only
+// way to abort a handshake response read blocked against a silent host.
+func (c *Client) closeDials() {
+	c.dialMu.Lock()
+	conns := make([]net.Conn, 0, len(c.dialConns))
+	for conn := range c.dialConns {
+		conns = append(conns, conn)
+	}
+	c.dialMu.Unlock()
+
+	for _, conn := range conns {
+		if err := conn.Close(); err != nil {
+			slog.Debug("aria2: close dialing connection", "engine", engine.NameAria2, "error", err)
+		}
+	}
+}
+
+// trackedConn forwards a dial connection and untracks it on close.
+type trackedConn struct {
+	net.Conn
+	client *Client
+}
+
+func (t *trackedConn) Close() error {
+	t.client.untrackDial(t.Conn)
+	return t.Conn.Close()
+}
+
 // notifyEvents maintains the WebSocket connection on the same host and path
 // as the RPC endpoint, reconnecting with exponential backoff on every drop.
 // It returns only when ctx is cancelled or the client is closed; a daemon
 // that stays down costs one dial per backoff step, nothing more.
 func (c *Client) notifyEvents(ctx context.Context, events chan<- engine.TaskEvent) {
-	dialer := &websocket.Dialer{HandshakeTimeout: wsHandshakeTimeout}
+	// A dial honours its context only through the TCP connect (v1.5.0), so
+	// derive one the client's own Close can cancel for that phase, and let
+	// trackDial force the socket for the handshake read beyond it.
+	dialCtx, cancelDial := context.WithCancel(ctx)
+	defer cancelDial()
+	go func() {
+		select {
+		case <-c.done:
+			cancelDial()
+		case <-dialCtx.Done():
+		}
+	}()
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: wsHandshakeTimeout,
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var d net.Dialer
+			conn, err := d.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return c.trackDial(conn), nil
+		},
+	}
 	backoff := wsBackoffInitial
 
 	for {
-		conn, _, err := dialer.DialContext(ctx, c.wsURL(), nil)
+		conn, _, err := dialer.DialContext(dialCtx, c.wsURL(), nil)
 		if err == nil {
 			backoff = wsBackoffInitial
 			stop := c.closeOnDone(ctx, conn)
