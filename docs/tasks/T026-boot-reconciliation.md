@@ -33,6 +33,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/aria2/client.go` | modify | Swap the polling `Events` for the WebSocket notification transport. |
 | `internal/store/tasks.go` | modify | Add `ListNonTerminalByEngine` and `SetEngineRef`. |
 | `internal/api/server.go` | modify | Construct the reconciler, run `Boot` before the listener opens and start `Run`. |
+| `internal/engine/aria2/client_test.go` | modify | Teach `fakeServer` the WebSocket upgrade (answer 101 and push notifications) so the notification transport is testable. |
 
 No other file may be modified.
 
