@@ -109,6 +109,12 @@ func (r *Reconciler) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			if err := r.Boot(ctx); err != nil {
+				// A cancelled context is the owner shutting the loop down, not
+				// an outage: the warn below is reserved for sweeps that fail
+				// on a live context.
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				r.log.Warn("reconciliation sweep failed; retrying on the next tick", "error", err)
 			}
 		}
