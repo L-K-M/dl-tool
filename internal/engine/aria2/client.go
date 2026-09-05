@@ -607,8 +607,10 @@ func (c *Client) Events(ctx context.Context) (<-chan engine.TaskEvent, error) {
 }
 
 // trackDial remembers a connection opened for a WebSocket handshake and
-// returns it wrapped so it unregisters itself when gorilla closes it; the
-// map therefore holds exactly the live dial connections.
+// returns it wrapped so it unregisters itself when gorilla closes it. The
+// map holds each dial connection until gorilla closes it — including past
+// a successful handshake, so Close's force-close also reaches an
+// established events connection whose read may be blocked.
 func (c *Client) trackDial(conn net.Conn) net.Conn {
 	c.dialMu.Lock()
 	if c.dialConns == nil {
@@ -616,6 +618,19 @@ func (c *Client) trackDial(conn net.Conn) net.Conn {
 	}
 	c.dialConns[conn] = struct{}{}
 	c.dialMu.Unlock()
+
+	// Close may already have snapshotted dialConns between the TCP connect
+	// completing and this registration — close(done) happens before
+	// closeDials, so a closed done means the snapshot may have missed this
+	// conn. Force it, or the handshake read would hang for the full
+	// HandshakeTimeout past Close.
+	select {
+	case <-c.done:
+		if err := conn.Close(); err != nil {
+			slog.Debug("aria2: close late-dialed connection", "engine", engine.NameAria2, "error", err)
+		}
+	default:
+	}
 
 	return &trackedConn{Conn: conn, client: c}
 }
