@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -323,6 +325,134 @@ func TestListSendsOneBatch(t *testing.T) {
 	if diff := cmp.Diff(wantIDs, gotIDs); diff != "" {
 		t.Errorf("List ids mismatch (-want +got):\n%s", diff)
 	}
+}
+
+func TestListIncludesQueuesBeyondOneThousand(t *testing.T) {
+	const transfersPerQueue int64 = 1001
+	c := newListTestClient(t, func(requests []rpcRequest) []wireReply {
+		replies := make([]wireReply, len(requests))
+		for queue, request := range requests {
+			count := int64(1)
+			if request.Method != methodTellActive {
+				var err error
+				count, err = request.Params[2].(json.Number).Int64()
+				if err != nil {
+					t.Errorf("decode count: %v", err)
+					return nil
+				}
+				count = min(count, transfersPerQueue)
+			}
+			entries := make([]statusResult, count)
+			for index := range entries {
+				entries[index] = statusResult{
+					GID: fmt.Sprintf("%016x", int64(queue)*transfersPerQueue+int64(index)+1), Status: statusWaiting,
+				}
+			}
+			replies[queue] = wireReply{JSONRPC: request.JSONRPC, ID: request.ID, Result: entries}
+		}
+		return replies
+	})
+
+	infos, err := c.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = 1 + 2*transfersPerQueue
+	if int64(len(infos)) != want {
+		t.Fatalf("listed %d transfers, want %d", len(infos), want)
+	}
+	ids := make(map[string]struct{}, len(infos))
+	for _, info := range infos {
+		ids[info.ID] = struct{}{}
+	}
+	if len(ids) != len(infos) {
+		t.Fatal("list duplicated transfers")
+	}
+}
+
+func TestListMatchesReplyIDs(t *testing.T) {
+	const repliesPerList = 3
+	for _, test := range []struct {
+		name      string
+		transform func([]wireReply) []wireReply
+		wantError bool
+	}{
+		{"reversed", func(replies []wireReply) []wireReply { slices.Reverse(replies); return replies }, false},
+		{"duplicate", func(replies []wireReply) []wireReply { replies[0].ID = replies[1].ID; return replies }, true},
+		{"unknown", func(replies []wireReply) []wireReply { replies[0].ID = "unknown"; return replies }, true},
+		{"missing", func(replies []wireReply) []wireReply { return replies[:len(replies)-1] }, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := newListTestClient(t, func(requests []rpcRequest) []wireReply {
+				replies := make([]wireReply, len(requests))
+				for index, request := range requests {
+					replies[index] = wireReply{JSONRPC: request.JSONRPC, ID: request.ID,
+						Result: []statusResult{{GID: fmt.Sprintf("%016x", index+1), Status: statusWaiting}},
+					}
+				}
+				return test.transform(replies)
+			})
+			infos, err := c.List(t.Context())
+			if test.wantError {
+				if err == nil {
+					t.Fatal("malformed reply IDs were accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(infos) != repliesPerList {
+				t.Fatalf("got %d results, want %d", len(infos), repliesPerList)
+			}
+			for index, info := range infos {
+				if want := fmt.Sprintf("%s:%016x", engine.NameAria2, index+1); info.ID != want {
+					t.Errorf("result %d ID = %s, want %s", index, info.ID, want)
+				}
+			}
+		})
+	}
+}
+
+// newListTestClient enforces a single authenticated batch and preserves int64 counts.
+func newListTestClient(t *testing.T, respond func([]rpcRequest) []wireReply) *Client {
+	t.Helper()
+	seen := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case seen <- struct{}{}:
+		default:
+			t.Error("List sent more than one HTTP request")
+		}
+		var requests []rpcRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.UseNumber()
+		if err := decoder.Decode(&requests); err != nil {
+			t.Errorf("decode batch: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		methods := []string{methodTellActive, methodTellWaiting, methodTellStopped}
+		if len(requests) != len(methods) {
+			t.Errorf("batch has %d requests, want %d", len(requests), len(methods))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for index, request := range requests {
+			if request.Method != methods[index] || len(request.Params) == 0 || request.Params[0] != "token:"+testSecret {
+				t.Errorf("unexpected batch request: %+v", request)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		}
+		writeJSON(t, w, respond(requests))
+	}))
+	t.Cleanup(server.Close)
+	client, err := New(Config{URL: server.URL, Secret: testSecret}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
 }
 
 func TestGet(t *testing.T) {

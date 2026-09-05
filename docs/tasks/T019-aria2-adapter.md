@@ -236,5 +236,28 @@ two-parameter form in this task's contract block contradicts both and cannot
 satisfy the interface (Go has no method overloading). The `aria2.remove` +
 `aria2.removeDownloadResult` behaviour is as specified. This spec conflict is
 recorded here under Evidence until the contract block is fixed.
+
+Audit regressions cover queues beyond the former page cap and unordered JSON-RPC replies,
+including duplicate, unknown and missing IDs. A real aria2 1.37.0 probe with 1001 paused
+transfers returned 1000 at the old count and 1001 at the signed-int64 maximum.
+
+```text
+$ make lint && make test PKG=./internal/engine/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.030s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.406s
+```
+
 ## Blocked
 None — the agent did not stop. The `Remove` signature discrepancy in this file's contract block is a docs typo; the shipped adapter implements the committed one-parameter `engine.Engine` interface (see the note under Evidence).
