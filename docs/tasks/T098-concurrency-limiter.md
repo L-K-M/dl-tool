@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T098 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T017, T019, T020, T024, T026 |
 | **Blocks** | T099 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/tasks_actions.go`, `internal/store/tasks.go` |
@@ -152,7 +152,121 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/...` (the Verification block, run at the
+final tree):
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	45.270s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.108s
+ok  	github.com/L-K-M/dl-tool/internal/engine	5.312s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.137s
+?   	github.com/L-K-M/dl-tool/internal/fsx	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.320s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.191s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.222s
+ok  	github.com/L-K-M/dl-tool/internal/store	63.229s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.354s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.021s
+```
+
+The three named tests ran and passed (with the five companion cases:
+unlimited zeros, creation order, the resume path, the vanished-handle
+re-add, the refusal and the unregistered engine):
+
+```
+$ go test -race -count=1 -run 'TestPassRespectsTotalAndPerEngine|TestSeedingIsNotCounted|TestHeldTaskCarriesConcurrencyLimit' -v ./internal/engine/
+=== RUN   TestPassRespectsTotalAndPerEngine
+--- PASS: TestPassRespectsTotalAndPerEngine (0.45s)
+=== RUN   TestSeedingIsNotCounted
+--- PASS: TestSeedingIsNotCounted (0.32s)
+=== RUN   TestHeldTaskCarriesConcurrencyLimit
+--- PASS: TestHeldTaskCarriesConcurrencyLimit (0.34s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine	2.169s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/api/tasks_actions.go
+internal/engine/admission.go
+internal/engine/admission_test.go
+internal/store/tasks.go
+```
+
+Exactly the four paths of the Files table. No Huma operation or schema
+changed, so `make gen` was not needed; no dependency was first-imported, so
+`go.mod`/`go.sum` are untouched.
+
+Review round 1 (PR [#91](https://github.com/L-K-M/dl-tool/pull/91)) — accepted:
+a resume batch now consumes headroom per `ok:true` id
+(`ActiveCounts.Reserve`), a failed stamp clear after a successful release
+is a warning instead of routing the healthy task into `releaseFailed`,
+failures of the pass's own writes (`storeWriteError`) stay queued instead
+of being mislabeled `engine.rejected`, the staying-queued branches drop a
+stale `concurrency_limit` stamp, `candidatesUnbounded` is `math.MaxInt`, a
+negative settings value is rejected on read, `SetErrorCode` with an empty
+code clears the message too, `resumeAction` guards its nil snapshot, and
+the round-trip test pins the handle convention (Add returns the
+namespaced id, the row stores the bare ref, Resume gets the namespaced
+form again). Rejected, with the code as evidence: Resume already receives
+the namespaced id (`internal/engine/aria2/client.go` returns it from `Add`
+and `ref` strips both forms), the already-queued resume keeps its
+idempotent success inside `transitionAction`'s own same-state early
+return, and the deferred-transaction lock concern is already mitigated
+store-wide by `_txlock=immediate` in the `store.Open` DSN. Re-run at the
+final tree:
+
+```
+$ make lint && make test PKG=./internal/...
+... (lint silent; golangci-lint: 0 issues; eslint and prettier clean)
+ok  	github.com/L-K-M/dl-tool/internal/api	44.479s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.110s
+ok  	github.com/L-K-M/dl-tool/internal/engine	6.132s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.156s
+?   	github.com/L-K-M/dl-tool/internal/fsx	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.682s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.166s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.150s
+ok  	github.com/L-K-M/dl-tool/internal/store	68.700s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.361s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.024s
+```
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+The task did not stop, but one rule of [`docs/14-conventions.md`
+§8.3](../14-conventions.md#83-wire-a-long-lived-component) could not be
+satisfied: `Admitter.Run` has **no composition-root call site**, because
+neither `internal/api/server.go` nor `cmd/dl-tool/main.go` is in this task's
+Files table (“No other file may be modified”). Until a call site lands,
+`Pass` is complete and correct — and the resume action answers headroom
+from the same counts and limits — but nothing drives the pass on a ticker,
+so a queued task still never reaches an engine and the M1 exit checkpoint
+stays unreachable. The contract's `load func(context.Context) (Limits,
+error)` parameter is the likely reason the wiring was left out: no
+settings-key reader exists yet (`internal/store/settings.go` defers the
+settings rows to T092), so the composition root has nothing to build
+`load` from. T099 — the disk-space gate that joins this same `Pass` —
+needs the same reader and is the natural carrier of both; if it does not
+own them, this file's Files table needs `internal/api/server.go` added
+and a follow-up that constructs the Admitter, builds `load` over the
+settings rows and starts `Run` beside the reconciler's loop. The debt is
+tracked structurally as a row of the task index's deferral register
+(“M1 exit: the admission pass's ticker”), whose Carried-by cell binds the
+wiring to T099 — including the Files-table amendment it needs — not only
+to this paragraph.

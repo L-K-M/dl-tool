@@ -16,6 +16,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jmoiron/sqlx"
+	"strconv"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -71,6 +72,16 @@ const (
 	emptyNameDetail     = "the display name cannot be empty"
 	patchFailedDetail   = "the patch holds values that failed validation"
 	negativeLimitDetail = "the limit cannot be negative; 0 means unlimited"
+
+	// The two settings keys of the concurrency limits and their defaults
+	// (docs/11-config-reference.md section 5). The initial migration seeds
+	// both keys, so a missing row is a fresh or hand-edited database.
+	settingMaxActiveTotal     = "max_active_total"
+	settingMaxActivePerEngine = "max_active_per_engine"
+	defaultMaxActiveTotal     = 5
+	defaultMaxActivePerEngine = 3
+
+	queryConcurrencySettings = `SELECT key, value_json FROM settings WHERE key IN (?, ?)`
 )
 
 // taskActions is the action vocabulary actionEnum spells out.
@@ -179,6 +190,18 @@ func (h *TaskHandlers) Actions(ctx context.Context, in *ActionsInput) (*ActionsO
 		return h.queueActions(ctx, in.Body.IDs, tasks, move)
 	}
 
+	// One concurrency snapshot serves a whole resume batch: the action
+	// requeues and the admission pass (T098) releases, so the per-id
+	// headroom answer is advisory and one read is exact enough for every
+	// id of the request.
+	var snap *concurrencySnapshot
+	if in.Body.Action == actionResume {
+		snap, err = h.loadConcurrencySnapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	results := make([]ActionResult, 0, len(in.Body.IDs))
 	for _, id := range in.Body.IDs {
 		task, ok := tasks[id]
@@ -187,7 +210,7 @@ func (h *TaskHandlers) Actions(ctx context.Context, in *ActionsInput) (*ActionsO
 
 			continue
 		}
-		results = append(results, h.applyAction(ctx, task, in.Body.Action))
+		results = append(results, h.applyAction(ctx, task, in.Body.Action, snap))
 	}
 
 	output := &ActionsOutput{}
@@ -277,8 +300,14 @@ func (h *TaskHandlers) queueActions(
 // transition through the store, which writes the action's task event. A
 // task already in the action's target state is an idempotent success: the
 // action's "any → paused" includes the task that is paused, and a non-move
-// needs neither an engine round-trip nor an event.
-func (h *TaskHandlers) applyAction(ctx context.Context, task actionTask, action string) ActionResult {
+// needs neither an engine round-trip nor an event. snap carries the
+// concurrency snapshot of a resume batch and is nil for every other action.
+func (h *TaskHandlers) applyAction(
+	ctx context.Context,
+	task actionTask,
+	action string,
+	snap *concurrencySnapshot,
+) ActionResult {
 	// recheck rides the optional capability interface instead of the base
 	// Engine interface, and its transition happens only once an engine
 	// that can re-verify accepted the request.
@@ -287,6 +316,13 @@ func (h *TaskHandlers) applyAction(ctx context.Context, task actionTask, action 
 	}
 
 	target, code, message := actionOutcome(action)
+
+	// Resume requeues the task whatever the headroom, then answers from
+	// the snapshot; it never contacts an engine (doc 05 section 5.7).
+	if action == actionResume {
+		return h.resumeAction(ctx, task, target, code, message, snap)
+	}
+
 	if task.State == target {
 		return ActionResult{ID: task.ID, Ok: true}
 	}
@@ -305,6 +341,105 @@ func (h *TaskHandlers) applyAction(ctx context.Context, task actionTask, action 
 	}
 
 	return h.transitionAction(ctx, task, target, code, message)
+}
+
+// resumeAction requeues one task and reports whether a slot is free now:
+// the admission pass (T098) owns Engine.Resume for a queued task, so the
+// action itself contacts no engine. The requeue happens whatever the
+// headroom — with no slot free the task stays queued and starts on its
+// own once one frees, and the per-id outcome is ok:false
+// /problems/concurrency-limit so the client knows it will not start now
+// (docs/05-api-contract.md sections 5.7 and 5.11).
+func (h *TaskHandlers) resumeAction(
+	ctx context.Context,
+	task actionTask,
+	target, code, message string,
+	snap *concurrencySnapshot,
+) ActionResult {
+	// Actions loads the snapshot for every resume batch, so a nil one is
+	// a wiring bug in this file — fail the id rather than panic.
+	if snap == nil {
+		logFromContext(ctx).Error("resume action without a concurrency snapshot", slog.String("task_id", task.ID))
+
+		return actionFailure(task.ID, SlugInternal, detailActionFailed)
+	}
+
+	// The nil guard above aside, an already-queued task needs no store
+	// write — same-state resume is the idempotent success applyAction
+	// documents — it only needs the headroom answer.
+	if task.State != target {
+		outcome := h.transitionAction(ctx, task, target, code, message)
+		if !outcome.Ok {
+			return outcome
+		}
+	}
+
+	if blocked, detail := snap.limits.Blocked(snap.counts, task.Engine); blocked {
+		return actionFailure(task.ID, SlugConcurrencyLimit, detail)
+	}
+
+	// This id's ok:true has promised one slot of the batch's headroom:
+	// consume it so the later ids of the same request see it spent. The
+	// admission pass re-derives the truth; the snapshot only has to be
+	// self-consistent within the batch.
+	snap.counts.Reserve(task.Engine)
+
+	return ActionResult{ID: task.ID, Ok: true}
+}
+
+// concurrencySnapshot is one read of the counted set and the two limit
+// settings — the headroom answer of a resume batch.
+type concurrencySnapshot struct {
+	counts engine.ActiveCounts
+	limits engine.Limits
+}
+
+// settingRow is one (key, value_json) pair of the settings table.
+type settingRow struct {
+	Key       string `db:"key"`
+	ValueJSON string `db:"value_json"`
+}
+
+// loadConcurrencySnapshot reads the counted set and the two concurrency
+// settings keys. The defaults of docs/11-config-reference.md section 5
+// cover a missing row; a value that is not an integer is a corrupt row
+// and fails the request rather than guessing a limit.
+func (h *TaskHandlers) loadConcurrencySnapshot(ctx context.Context) (*concurrencySnapshot, error) {
+	counts, err := h.tasks.CountActive(ctx)
+	if err != nil {
+		return nil, internalFailure(ctx, "count active tasks", err)
+	}
+
+	query, args, err := sqlx.In(queryConcurrencySettings, settingMaxActiveTotal, settingMaxActivePerEngine)
+	if err != nil {
+		return nil, internalFailure(ctx, "read concurrency settings", err)
+	}
+	var rows []settingRow
+	if err := h.db.SelectContext(ctx, &rows, query, args...); err != nil {
+		return nil, internalFailure(ctx, "read concurrency settings", err)
+	}
+
+	limits := engine.Limits{
+		MaxActiveTotal:     defaultMaxActiveTotal,
+		MaxActivePerEngine: defaultMaxActivePerEngine,
+	}
+	for _, row := range rows {
+		value, err := strconv.Atoi(row.ValueJSON)
+		if err != nil || value < 0 {
+			// A negative limit would silently mean unlimited everywhere
+			// else; the write side rejects it, so the read side must too.
+			return nil, internalFailure(ctx, "read concurrency settings",
+				fmt.Errorf("key %s: want a non-negative integer, got %q", row.Key, row.ValueJSON))
+		}
+		switch row.Key {
+		case settingMaxActiveTotal:
+			limits.MaxActiveTotal = value
+		case settingMaxActivePerEngine:
+			limits.MaxActivePerEngine = value
+		}
+	}
+
+	return &concurrencySnapshot{counts: counts, limits: limits}, nil
 }
 
 // actionOutcome maps an action onto its target state and the task event
