@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -353,20 +354,28 @@ func (c *Client) List(ctx context.Context) ([]engine.TaskInfo, error) {
 
 // Get returns one task's normalised status.
 func (c *Client) Get(ctx context.Context, id string) (engine.TaskInfo, error) {
-	raw, err := c.call(ctx, methodTellStatus, ref(id), any(statusKeys))
+	result, err := c.getStatus(ctx, id, statusKeys)
 	if err != nil {
 		return engine.TaskInfo{}, err
-	}
-
-	// tellStatus returns one object, unlike the tell* list methods.
-	var result statusResult
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return engine.TaskInfo{}, fmt.Errorf("aria2: decode tellStatus: %w", err)
 	}
 	return toTaskInfo(result), nil
 }
 
-// Files returns the task's files, 0-based, priorities nil.
+// getStatus shares decoding while allowing metadata-only queries.
+func (c *Client) getStatus(ctx context.Context, id string, keys []string) (statusResult, error) {
+	raw, err := c.call(ctx, methodTellStatus, ref(id), keys)
+	if err != nil {
+		return statusResult{}, err
+	}
+
+	var result statusResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return statusResult{}, fmt.Errorf("aria2: decode tellStatus: %w", err)
+	}
+	return result, nil
+}
+
+// Files returns SaveDir-relative paths, 0-based indices and nil priorities.
 func (c *Client) Files(ctx context.Context, id string) ([]engine.FileEntry, error) {
 	raw, err := c.call(ctx, methodGetFiles, ref(id))
 	if err != nil {
@@ -376,6 +385,28 @@ func (c *Client) Files(ctx context.Context, id string) ([]engine.FileEntry, erro
 	var entries []fileEntry
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, fmt.Errorf("aria2: decode getFiles: %w", err)
+	}
+	if len(entries) == 0 {
+		return toFileEntries(entries), nil
+	}
+
+	// getFiles supplies absolute paths, but Engine.FileEntry requires relative ones.
+	status, err := c.getStatus(ctx, id, []string{optDir})
+	if err != nil {
+		return nil, err
+	}
+	for index, entry := range entries {
+		if entry.Path == "" {
+			continue // Metadata may not have resolved a filename yet.
+		}
+		relative, err := filepath.Rel(status.Dir, entry.Path)
+		if err != nil {
+			return nil, fmt.Errorf("aria2: make file path relative: %w", err)
+		}
+		if !filepath.IsLocal(relative) {
+			return nil, errors.New("aria2: file path escapes download directory")
+		}
+		entries[index].Path = filepath.ToSlash(relative)
 	}
 	return toFileEntries(entries), nil
 }

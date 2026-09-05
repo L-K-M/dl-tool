@@ -259,5 +259,27 @@ ok  	github.com/L-K-M/dl-tool/internal/engine	1.030s
 ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.406s
 ```
 
+Audit regression: `getFiles` returns absolute paths; a `tellStatus` query requesting only
+`dir` supplies the base needed by the existing `Engine.FileEntry` contract. Tests cover
+nested/root files, unresolved names, escaped paths and lookup failure.
+
+```text
+$ make lint && make test PKG=./internal/engine/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.031s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	2.438s
+```
+
 ## Blocked
 None — the agent did not stop. The `Remove` signature discrepancy in this file's contract block is a docs typo; the shipped adapter implements the committed one-parameter `engine.Engine` interface (see the note under Evidence).
