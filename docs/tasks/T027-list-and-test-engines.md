@@ -287,13 +287,14 @@ non-blocking notes — the boot probe's shared deadline can record a reachable
 engine as errored when only the follow-up `Health` misses the budget
 (`internal/api/server.go:432`), and `last_seen_at` is documented as the last
 successful probe but is stamped by every probe (`internal/api/settings.go:42`)
-— quoted from the surviving bot summary on PR #89; neither note was applied or
-declined before the merge. There was no infrastructure deadlock to justify
-proceeding.
+— summarised from the [surviving bot summary][r4summary] on PR #89; neither note
+was applied or declined before the merge. There was no infrastructure deadlock
+to justify proceeding.
 
 [r1]: https://github.com/L-K-M/dl-tool/actions/runs/33951358999
 [r2]: https://github.com/L-K-M/dl-tool/actions/runs/33952359385
 [r2note]: https://github.com/L-K-M/dl-tool/pull/89#issuecomment-5550336871
+[r4summary]: https://github.com/L-K-M/dl-tool/pull/89#issuecomment-5550230728
 [r3]: https://github.com/L-K-M/dl-tool/actions/runs/33953641244
 [r4]: https://github.com/L-K-M/dl-tool/actions/runs/33954093267
 
