@@ -239,5 +239,21 @@ ok  	github.com/L-K-M/dl-tool/internal/api	42.075s
 API_OK
 ```
 
+Audit regression: Huma's CDN-backed documentation UI is disabled; the local specification
+and generated artifacts remain unchanged.
+
+```text
+$ make gen && (cd web && ./node_modules/.bin/prettier --check src/api/schema.d.ts) && make test PKG=./internal/api/... && echo API_OK
+./scripts/gen.sh
+✨ openapi-typescript 7.13.0
+🚀 ../api/openapi.json → src/api/schema.d.ts [70.9ms]
+src/api/schema.d.ts 136ms
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/api	41.986s
+API_OK
+```
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

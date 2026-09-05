@@ -133,6 +133,8 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	}
 
 	humaConfig := huma.DefaultConfig(apiTitle, Version)
+	// Huma's UI fetches CDN assets; serve the local specification without it.
+	humaConfig.DocsPath = ""
 	humaConfig.Servers = []*huma.Server{{URL: cfg.BasePath + apiV1Path}}
 	// The default create hook installs the schema-link transformer, which would
 	// inject a $schema member into every response; docs/05-api-contract.md
