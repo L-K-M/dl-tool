@@ -138,6 +138,39 @@ func TestFatalValidation(t *testing.T) {
 	}
 }
 
+func TestBasePathIsAStaticLocalMount(t *testing.T) {
+	for _, value := range []string{"//other.invalid/app", "/app?query", "/app#fragment", "/app/../other", "/app//nested", "/app%2fother", "/app\\other", "/{prefix}", "/app/*"} {
+		t.Run(value, func(t *testing.T) {
+			configureLoad(t, t.TempDir())
+			t.Setenv(envBasePath, value)
+			_, err := Load(t.Context())
+			requireFatal(t, err, errorCodeMalformed, envBasePath)
+		})
+	}
+	for _, value := range []string{"", "/dl-tool", "/nested/app", "/ümlaut"} {
+		t.Run("valid="+value, func(t *testing.T) {
+			configureLoad(t, t.TempDir())
+			t.Setenv(envBasePath, value)
+			if got := mustLoad(t).BasePath; got != value {
+				t.Fatalf("base path = %q, want %q", got, value)
+			}
+		})
+	}
+}
+
+func TestConfigDirectoryStaysPrivateWithExternalDatabase(t *testing.T) {
+	directory := configureLoad(t, t.TempDir())
+	requireNoError(t, os.Chmod(directory, 0o777))
+	t.Setenv(envDBPath, filepath.Join(t.TempDir(), "state.db"))
+	mustLoad(t)
+
+	info, err := os.Stat(directory)
+	requireNoError(t, err)
+	if got := info.Mode().Perm(); got != privateDirectoryMode {
+		t.Fatalf("config directory mode = %o, want %o", got, privateDirectoryMode)
+	}
+}
+
 func TestSecretsAreDistinctPerInstance(t *testing.T) {
 	var keys [2]string
 	for index := range keys {
