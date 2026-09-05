@@ -141,7 +141,10 @@ func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) err
 		// boot budget surfaces the engine's context error, never a fake
 		// "unreachable" warning — the same policy as every other branch.
 		if ctx.Err() != nil {
-			return ctx.Err()
+			// Attribution over a bare ctx.Err(): Boot sweeps several engines,
+			// and a boot-budget expiry must name the engine that consumed it;
+			// %w keeps errors.Is(err, context.Canceled) true.
+			return fmt.Errorf("engine %q: %w: %v", name, ctx.Err(), err)
 		}
 		r.log.Warn("engine unreachable, retrying on the next sweep", "engine", name, "error", err)
 		return nil
