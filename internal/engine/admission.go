@@ -280,8 +280,10 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 // (docs/05-api-contract.md section 5.11). The release is complete once
 // the transition lands: a failed stamp clear is a warning, never an error
 // handed back — a returned error would route the healthy downloading task
-// into releaseFailed and mislabel it as refused. The stamp then survives
-// until the next pass clears it.
+// into releaseFailed and mislabel it as refused. Nothing else clears the
+// stamp afterwards: the pass selects only queued candidates, so it never
+// revisits a downloading row — the residual code rides the row until the
+// task queues again or an operator acts.
 func (a *Admitter) markReleased(ctx context.Context, id string) error {
 	if err := a.tasks.Transition(ctx, id, string(StateDownloading), store.CodeTaskResumed, "released by the admission pass"); err != nil {
 		return err

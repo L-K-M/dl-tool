@@ -654,6 +654,14 @@ func TestActiveCountsReserve(t *testing.T) {
 	if counts.Total != 2 {
 		t.Errorf("total = %d, want 2", counts.Total)
 	}
+
+	// A zero-value snapshot has no map; Reserve must build one instead of
+	// panicking, so a hand-built ActiveCounts is as safe as CountActive's.
+	var zero engine.ActiveCounts
+	zero.Reserve(engine.NameAria2)
+	if zero.Total != 1 || zero.ByEngine[engine.NameAria2] != 1 {
+		t.Errorf("zero-value reserve = %d/%v, want 1 and one aria2 slot", zero.Total, zero.ByEngine)
+	}
 }
 
 // Run stops with its context and drives one pass per tick.

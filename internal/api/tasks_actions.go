@@ -424,7 +424,7 @@ func (h *TaskHandlers) loadConcurrencySnapshot(ctx context.Context) (*concurrenc
 			// A negative limit would silently mean unlimited everywhere
 			// else; the write side rejects it, so the read side must too.
 			return nil, internalFailure(ctx, "read concurrency settings",
-				fmt.Errorf("key %s: invalid non-negative integer %q", row.Key, row.ValueJSON))
+				fmt.Errorf("key %s: want a non-negative integer, got %q", row.Key, row.ValueJSON))
 		}
 		switch row.Key {
 		case settingMaxActiveTotal:

@@ -407,6 +407,11 @@ type activeCountRow struct {
 // batch.
 func (c *ActiveCounts) Reserve(engineName string) {
 	c.Total++
+	// A zero-value ActiveCounts carries no map; CountActive always
+	// returns one, but Reserve must not panic on a hand-built snapshot.
+	if c.ByEngine == nil {
+		c.ByEngine = make(map[string]int)
+	}
 	c.ByEngine[engineName]++
 }
 
