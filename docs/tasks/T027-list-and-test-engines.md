@@ -270,12 +270,20 @@ the shared `engineColumns` const. The full `make test` is green.
 would have deadlocked the loop on infrastructure, not feedback". That claim is
 false. All four `GLM 5.3 PR Review` runs on the branch completed successfully —
 [33951358999][r1] (35f83fe), [33952359385][r2] (0fc8f07),
-[33953641244][r3] (92d2e57), [33954093267][r4] (b3366d2). Round 3 posted two
-minor findings — collapse the fake daemon's duplicated single/batch reply
-encoding into one `Encode` call (`internal/engine/reconcile_test.go:501`), and
-update the Evidence section's stale "`make test` … not green" line — which
-b3366d2 applies. The final run reported "Actionable suggestions identified: 0".
-There was no infrastructure deadlock to justify proceeding.
+[33953641244][r3] (92d2e57), [33954093267][r4] (b3366d2). The bot updates a
+single PR comment per round, so only the last round's summary survives; earlier
+rounds survive as inline comments. Round 1 left three inline findings — bound
+the boot probe with one deadline, make the engines lookup a primary-key query,
+and drop a null from the generated schema — of which two were applied in
+0fc8f07 and the third declined in the PR thread as `make gen` output. Round 2
+left no inline findings; the implementer's PR note of 07:37:54Z records it
+clean. Round 3 posted two minor findings — collapse the fake daemon's
+duplicated single/batch reply encoding into one `Encode` call
+(`internal/engine/reconcile_test.go:501`), and update the Evidence section's
+stale "`make test` … not green" line — which b3366d2 applies. Round 4, the
+final run, reported "Actionable suggestions identified: 0" with two
+non-blocking notes. There was no infrastructure deadlock to justify
+proceeding.
 
 [r1]: https://github.com/L-K-M/dl-tool/actions/runs/33951358999
 [r2]: https://github.com/L-K-M/dl-tool/actions/runs/33952359385
