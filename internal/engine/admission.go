@@ -3,10 +3,12 @@
 // queue, so the engines' own limits are raised out of the way
 // (docs/06-download-engines.md section 9.4) and this pass decides alone
 // which queued task reaches an engine: it counts the started tasks in
-// total and per engine, walks the queue in creation order, and releases a
-// task only while every applicable limit still has headroom. A task held
-// by a limit is never rejected — it stays queued carrying
-// concurrency_limit and starts on its own once a slot frees
+// total and per engine, walks the queue in creation order, consults the
+// two concurrency limits and the disk-space reservation of FR-047, and
+// releases a task only while every applicable gate still has headroom. A
+// task held by a limit is never rejected — it stays queued carrying
+// concurrency_limit, a task held by space carries disk_full, and both
+// start on their own once the hold lifts
 // (docs/05-api-contract.md section 5.11).
 
 package engine
@@ -17,8 +19,11 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/L-K-M/dl-tool/internal/fsx"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
@@ -27,6 +32,14 @@ import (
 // POST /tasks accepts the task, the pass stamps the code on whatever it
 // cannot release, and the stamp is cleared the moment a slot frees.
 const ErrorCodeConcurrencyLimit = "concurrency_limit"
+
+// ErrorCodeDiskFull is the tasks.error_code of a task the disk could not
+// hold: a write that failed with ENOSPC (FR-048, paused) or a candidate
+// the reservation will not admit (FR-047, held in queued). The aria2
+// mapping produces the same value from aria2 errorCode 9, so an
+// engine-reported disk failure and dl-tool's own reservation speak one
+// vocabulary.
+const ErrorCodeDiskFull = "disk_full"
 
 // candidatesUnbounded is the candidate limit the pass selects: every
 // queued task, because a held task must carry concurrency_limit wherever
@@ -41,6 +54,26 @@ const candidatesUnbounded = math.MaxInt
 type Limits struct {
 	MaxActiveTotal     int
 	MaxActivePerEngine int
+}
+
+// Policy is one tick's admission policy: the concurrency limits plus the
+// disk-reservation settings the space gate consults (FR-047). Run's load
+// closure re-reads all of it every tick because PATCH /settings may change
+// any of it at runtime.
+type Policy struct {
+	Limits Limits
+	// MinFree maps a data-root path to its min_free_space floor in bytes.
+	// Readers must use the two-value lookup — floor, ok := MinFree[root]:
+	// !ok resolves to fsx.DefaultMinFreeBytes, an explicit stored 0
+	// disables the floor for that root. A plain MinFree[root] read returns
+	// 0 for an absent root and would silently disable its floor; fsx.Floor
+	// is the one lookup the gate uses.
+	MinFree map[string]int64
+	// Roots are the configured data roots (DLTOOL_DATA_ROOTS): the floor
+	// of a candidate is the floor of the longest root that owns its
+	// destination as a separator-bounded path prefix — /data does not own
+	// /database. A destination no root owns resolves to the default floor.
+	Roots []string
 }
 
 // ActiveCounts is one snapshot of the counted set: tasks in state
@@ -61,11 +94,33 @@ type Candidate = store.Candidate
 // above.
 type AdmissionStore interface {
 	CountActive(ctx context.Context) (ActiveCounts, error)
-	// SelectQueuedCandidates returns queued tasks in process_order, oldest
-	// added_at first.
+	// SelectQueuedCandidates returns queued tasks and paused tasks carrying
+	// disk_full in process_order, oldest added_at first — one ordering over
+	// both, so a parked task never starves behind newer queued ones. The
+	// paused rows are meant to be only pauses the guard itself landed; an
+	// operator pause must clear the stamp (T127's action-layer takeover)
+	// so the pass can never mistake a deliberate pause for a parked one.
 	SelectQueuedCandidates(ctx context.Context, limit int) ([]Candidate, error)
+	// SumRemainingByDestination returns the committed-but-unwritten bytes
+	// per destination over the counted active states.
+	SumRemainingByDestination(ctx context.Context) (map[string]int64, error)
+	// PauseWithCode lands the disk-full pause atomically: state, stamp and
+	// event in one transaction.
+	PauseWithCode(ctx context.Context, id string, pause store.CodedPause) error
+	// ClearHoldCode clears a hold stamp unless the task is paused, and
+	// only ever a hold stamp — a paused row or a real failure's own code
+	// survives; a missing id is the store's not-found error.
+	ClearHoldCode(ctx context.Context, id string) error
+	// Get returns the task identified by id, or the store's not-found
+	// error for an unknown id — never a zero Task with a nil error.
+	Get(ctx context.Context, id string) (store.Task, error)
 	Transition(ctx context.Context, id, next, code, message string) error
-	SetErrorCode(ctx context.Context, id, errorCode, message string) error
+	// SetErrorCodeIfState stamps tasks.error_code only while the row is
+	// still in the state the caller's snapshot read — a compare-and-set, so
+	// a hold stamp can never mint the paused+disk_full resume token on a
+	// row the operator moved after selection. A declined write reports
+	// success; a missing id is the store's not-found error.
+	SetErrorCodeIfState(ctx context.Context, id, expectedState, errorCode, message string) error
 	SetEngineRef(ctx context.Context, id, engineRef string) error
 }
 
@@ -88,15 +143,18 @@ type Admitter struct {
 // interval; a non-positive one is a composition bug and panics here, at
 // construction, rather than inside the loop goroutine where
 // time.NewTicker's generic panic would land far from the misconfigured
-// call site. The loop logs through slog.Default(); the composition root's
-// own logger can be installed when Run gains its call site (T099 wires the
-// pass with the disk-space gate that shares it).
-func NewAdmitter(reg *Registry, ts AdmissionStore, tick time.Duration) *Admitter {
+// call site. log is the loop's logger — the composition root passes its
+// own, so passes never bypass it through slog.Default(); nil falls back to
+// the default for direct constructions such as tests.
+func NewAdmitter(reg *Registry, ts AdmissionStore, tick time.Duration, log *slog.Logger) *Admitter {
 	if tick <= 0 {
 		panic(fmt.Sprintf("engine: admission tick must be positive, got %s", tick))
 	}
+	if log == nil {
+		log = slog.Default()
+	}
 
-	return &Admitter{registry: reg, tasks: ts, tick: tick, log: slog.Default()}
+	return &Admitter{registry: reg, tasks: ts, tick: tick, log: log}
 }
 
 // Blocked reports whether one more task on engineName would exceed a
@@ -120,9 +178,13 @@ func (l Limits) Blocked(c ActiveCounts, engineName string) (bool, string) {
 // store's guarded updates decide every write, so a candidate the
 // reconciler moved underneath the pass simply fails its transition and
 // stays for the next tick. The counts are read once and incremented
-// in memory after each release, so one pass cannot admit past a limit the
-// database does not reflect yet.
-func (a *Admitter) Pass(ctx context.Context, l Limits) ([]string, error) {
+// in memory after each release, and the reservations are read once and
+// committed in memory after each release, so one pass can admit past
+// neither a limit nor a reservation the database does not reflect yet.
+// A paused disk_full candidate (FR-048) is released the same way — the
+// space gate first, the limits second — so its partial data is resumed,
+// never restarted.
+func (a *Admitter) Pass(ctx context.Context, p Policy) ([]string, error) {
 	counts, err := a.tasks.CountActive(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("admission pass: %w", err)
@@ -133,20 +195,68 @@ func (a *Admitter) Pass(ctx context.Context, l Limits) ([]string, error) {
 		return nil, fmt.Errorf("admission pass: %w", err)
 	}
 
+	// One reservation pool per filesystem, built before the walk (FR-047).
+	// A store failure aborts the pass — the next tick retries. A stat
+	// failure fails open for queued candidates (`holds`: a queue must not
+	// wedge on a transient filesystem answer) but closed for parked ones
+	// (`holdsParked`: the stamp stays and the task stays paused, so a
+	// parked transfer is never resumed against an unreadable filesystem).
+	gate, err := a.spaceGate(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("admission pass: %w", err)
+	}
+
 	released := make([]string, 0, len(candidates))
 	for _, cand := range candidates {
 		if ctx.Err() != nil {
 			return released, ctx.Err()
 		}
 
-		if held, message := l.Blocked(counts, cand.Engine); held {
-			// The stamp is the only write a held task gets: the state
-			// stays queued and the guarded SetErrorCode keeps a re-stamp
-			// of the same sentence silent.
-			if err := a.tasks.SetErrorCode(ctx, cand.ID, ErrorCodeConcurrencyLimit, message); err != nil && !errors.Is(err, store.ErrNotFound) {
-				a.log.Warn("admission pass could not stamp a held task", "task_id", cand.ID, "error", err)
+		if cand.State == string(StatePaused) {
+			// A task the disk-space guard parked. The stamp is the whole
+			// attribution: an operator pause landing on an already-parked row
+			// is an idempotent no-op that keeps the stamp, and this pass
+			// would resume what the operator parked. Clearing the stamp on an
+			// operator pause is the action layer's takeover — T127's, not
+			// this pass's. Space comes first, and it
+			// fails closed: while the filesystem does not admit — or cannot
+			// be read at all — the stamp stays and the task stays paused.
+			// Resuming on an unreadable answer would ping-pong the transfer
+			// against ENOSPC every tick, and a parked task loses nothing by
+			// waiting one more tick. A limit that also blocks leaves it
+			// exactly as it is — disk_full is why it is paused, and a slot is
+			// only the second thing it will need. The release below resumes
+			// the parked transfer through its stored handle (Engine.Resume
+			// is aria2's unpause); Add is reached only when the engine lost
+			// the handle, and then with resume semantics — never a duplicate.
+			if held, message := gate.holdsParked(cand); held {
+				a.stampHeld(ctx, cand, ErrorCodeDiskFull, message)
+				continue
 			}
-			continue
+			if held, message := p.Limits.Blocked(counts, cand.Engine); held {
+				// Space came back but the slot did not. The row keeps its
+				// disk_full stamp — paused+disk_full is the selection token,
+				// so re-stamping concurrency_limit would orphan the task
+				// from the candidate query and it would never be re-examined
+				// — and stays parked: un-pausing into a held slot would only
+				// re-park it, so an operator chasing the stamp deserves the
+				// real reason in the log.
+				a.log.Debug("admission pass: disk space recovered; parked task now waits on a concurrency slot",
+					"task_id", cand.ID, "engine", cand.Engine, "hold", message)
+				continue
+			}
+		} else {
+			if held, message := p.Limits.Blocked(counts, cand.Engine); held {
+				// The stamp is the only write a held task gets: the state
+				// stays queued and the guarded SetErrorCode keeps a re-stamp
+				// of the same sentence silent.
+				a.stampHeld(ctx, cand, ErrorCodeConcurrencyLimit, message)
+				continue
+			}
+			if held, message := gate.holds(cand); held {
+				a.stampHeld(ctx, cand, ErrorCodeDiskFull, message)
+				continue
+			}
 		}
 
 		if err := a.release(ctx, cand); err != nil {
@@ -157,8 +267,12 @@ func (a *Admitter) Pass(ctx context.Context, l Limits) ([]string, error) {
 			continue
 		}
 
+		// The release has promised both a slot and the candidate's remaining
+		// bytes; spend each in memory so the later candidates of this same
+		// pass see both gone.
 		counts.Total++
 		counts.ByEngine[cand.Engine]++
+		gate.commit(cand)
 		released = append(released, cand.ID)
 	}
 
@@ -166,12 +280,12 @@ func (a *Admitter) Pass(ctx context.Context, l Limits) ([]string, error) {
 }
 
 // Run drives Pass on a ticker until ctx is cancelled. load reads the
-// limits each tick — settings change at runtime, so the pass must not
+// policy each tick — settings change at runtime, so the pass must not
 // cache them — and a failing load is a warning and a retry, never the
 // loop's end: an admission outage must not outlive its cause. The loop is
 // ticker-first, like the reconciler's, so constructing an Admitter never
 // implies a pass.
-func (a *Admitter) Run(ctx context.Context, load func(context.Context) (Limits, error)) error {
+func (a *Admitter) Run(ctx context.Context, load func(context.Context) (Policy, error)) error {
 	ticker := time.NewTicker(a.tick)
 	defer ticker.Stop()
 
@@ -180,15 +294,15 @@ func (a *Admitter) Run(ctx context.Context, load func(context.Context) (Limits, 
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			limits, err := load(ctx)
+			policy, err := load(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				a.log.Warn("admission pass could not load the limits; retrying on the next tick", "error", err)
+				a.log.Warn("admission pass could not load the policy; retrying on the next tick", "error", err)
 				continue
 			}
-			if _, err := a.Pass(ctx, limits); err != nil {
+			if _, err := a.Pass(ctx, policy); err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
@@ -202,9 +316,418 @@ func (a *Admitter) Run(ctx context.Context, load func(context.Context) (Limits, 
 // source URI nor an infohash, so no Engine.Add request can be built.
 var errNoSubmission = errors.New("engine: queued task has no submission source")
 
-// storeWriteError wraps a failure of the pass's own writes after the
-// engine call — recording the handle, moving the state, clearing a
-// stamp. Its cause is dl-tool's storage, never an engine decision, so
+// spaceGate is the pass's disk-reservation table (FR-047): one pool of
+// committed-but-unwritten bytes per filesystem, shared by every
+// destination on that mount, beside the live statfs answer of each
+// filesystem the walk touches.
+type spaceGate struct {
+	policy  Policy
+	commits map[string]int64     // filesystem id -> committed bytes of the counted active tasks
+	ids     map[string]string    // destination -> filesystem id, resolved once per pass
+	spaces  map[string]fsx.Space // filesystem id -> statfs answer, read once per pass
+	// filesystem ids whose statfs failed this pass: a failure is cached
+	// like a success, so one broken mount costs one statfs per pass, not
+	// one per candidate on it.
+	unreadable map[string]bool
+	warned     map[string]bool // filesystem ids whose read failure was logged this pass
+	log        *slog.Logger
+}
+
+// spaceGate builds the pass's reservation table: the store's
+// per-destination sums folded into one pool per filesystem. A destination
+// whose filesystem cannot be identified is skipped with a warn — its bytes
+// go uncounted, the honest cost of never wedging the queue on a stat
+// failure.
+func (a *Admitter) spaceGate(ctx context.Context, p Policy) (*spaceGate, error) {
+	perDestination, err := a.tasks.SumRemainingByDestination(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	gate := &spaceGate{policy: p, commits: make(map[string]int64, len(perDestination)), ids: make(map[string]string, len(perDestination)), spaces: make(map[string]fsx.Space), unreadable: make(map[string]bool), warned: make(map[string]bool), log: a.log}
+	for destination, remaining := range perDestination {
+		fsID, ok := gate.filesystemOf(destination)
+		if !ok {
+			continue
+		}
+		gate.commits[fsID] += remaining
+	}
+
+	return gate, nil
+}
+
+// filesystemOf resolves a destination to its filesystem id once per pass —
+// the ancestor climb is not cheap, and a destination shared by k
+// candidates is climbed once, not k times. A destination whose filesystem
+// cannot be identified warns once per pass and caches the miss (the empty
+// sentinel), so a persistently broken mount costs one climb per
+// destination per pass, not one per candidate; its bytes go uncounted,
+// the honest cost of never wedging the queue on a stat failure.
+func (g *spaceGate) filesystemOf(destination string) (string, bool) {
+	if fsID, cached := g.ids[destination]; cached {
+		return fsID, fsID != ""
+	}
+
+	fsID, err := fsx.FilesystemID(destination)
+	if err != nil {
+		// One key for every identification failure: the climb reaches "/",
+		// so a failure means no destination in the process can be identified
+		// — one warn per pass, not one per destination.
+		g.warnOnce("unidentified", destination, err)
+		// The one-warn key assumes the failure is process-wide; a failure
+		// scoped to a single path would still be silently uncounted, so
+		// every failing destination after the first is at least visible at
+		// debug.
+		g.log.Debug("admission pass cannot identify a destination's filesystem",
+			"destination", destination, "error", err)
+		g.ids[destination] = ""
+		return "", false
+	}
+	g.ids[destination] = fsID
+
+	return fsID, true
+}
+
+// holdMessage is the error_message a queued space hold carries. It is a
+// fixed sentence on purpose: SetErrorCodeIfState dedupes on the exact (code,
+// message) pair, so a message carrying the live free/committed/floor
+// numbers would be new on every tick and re-stamp the row — and feed the
+// sync deltas — once per second per held task. The numbers go to the
+// debug log instead, where a tick's worth of detail costs nothing. A
+// parked task is stamped with diskFullMessage instead — the same sentence
+// PauseDiskFull writes — so the pass and the pause never alternate two
+// sentences on one row.
+const holdMessage = "not enough free space beside the committed bytes and the floor; the task starts once space returns"
+
+// holds reports whether the candidate's filesystem refuses its remaining
+// bytes (FR-047). A filesystem that cannot be identified or read fails
+// OPEN — a queued task must not be held hostage by a transient stat
+// failure — and the numbers land in the debug log for the operator who
+// is asking why nothing starts.
+func (g *spaceGate) holds(cand store.Candidate) (bool, string) {
+	reservation, ok := g.reservation(cand.Destination)
+	if !ok {
+		return false, ""
+	}
+
+	remaining := remainingBytes(cand)
+	if reservation.Admits(remaining) {
+		return false, ""
+	}
+
+	g.log.Debug("space gate held a candidate",
+		"task_id", cand.ID, "destination", cand.Destination,
+		"remaining_bytes", remaining, "free_bytes", reservation.FreeBytes,
+		"committed_bytes", reservation.CommittedBytes, "min_free_bytes", reservation.MinFreeBytes)
+
+	return true, holdMessage
+}
+
+// holdsParked is holds for a paused disk_full candidate, and it fails
+// CLOSED: an unreadable filesystem holds the parked task one more tick
+// instead of resuming it into the ENOSPC it was parked for.
+func (g *spaceGate) holdsParked(cand store.Candidate) (bool, string) {
+	reservation, ok := g.reservation(cand.Destination)
+	remaining := remainingBytes(cand)
+	if !ok {
+		g.log.Debug("space gate cannot read a parked task's filesystem; holding it one more tick",
+			"task_id", cand.ID, "destination", cand.Destination)
+
+		return true, diskFullMessage
+	}
+
+	if reservation.Admits(remaining) {
+		return false, ""
+	}
+
+	g.log.Debug("space gate keeps holding a parked task",
+		"task_id", cand.ID, "destination", cand.Destination,
+		"remaining_bytes", remaining, "free_bytes", reservation.FreeBytes,
+		"committed_bytes", reservation.CommittedBytes, "min_free_bytes", reservation.MinFreeBytes)
+
+	return true, diskFullMessage
+}
+
+// commit spends one released candidate's remaining bytes on its
+// filesystem's pool, so the later candidates of the same pass see them
+// promised — one pass cannot over-commit a filesystem the database does
+// not reflect yet. A destination whose filesystem cannot be identified
+// commits nothing: the release already happened, and the next pass
+// re-derives the pool from the store, where the task now counts as active.
+func (g *spaceGate) commit(cand store.Candidate) {
+	fsID, ok := g.filesystemOf(cand.Destination)
+	if !ok {
+		return
+	}
+	g.commits[fsID] += remainingBytes(cand)
+}
+
+// warnOnce reports a filesystem read failure at most once per pass per
+// filesystem, however many candidates sit on it: a persistently broken
+// mount must not turn the 1 Hz pass into a per-candidate warn flood —
+// the same tick-churn discipline the fixed hold sentence keeps.
+func (g *spaceGate) warnOnce(fsID, destination string, err error) {
+	if g.warned[fsID] {
+		return
+	}
+	g.warned[fsID] = true
+	g.log.Warn("admission pass cannot read a destination's filesystem", "destination", destination, "error", err)
+}
+
+// reservation returns the candidate's filesystem's reservation, with the
+// floor of the root that owns the destination — a candidate under a root
+// the min_free_space map does not name gets the 2 GiB default. ok is false
+// when the filesystem cannot be identified or read.
+func (g *spaceGate) reservation(destination string) (fsx.Reservation, bool) {
+	fsID, ok := g.filesystemOf(destination)
+	if !ok {
+		return fsx.Reservation{}, false
+	}
+
+	if g.unreadable[fsID] {
+		return fsx.Reservation{}, false
+	}
+
+	space, ok := g.spaces[fsID]
+	if !ok {
+		var err error
+		space, err = fsx.FreeSpace(destination)
+		if err != nil {
+			g.warnOnce("space:"+fsID, destination, err)
+			g.unreadable[fsID] = true
+			return fsx.Reservation{}, false
+		}
+		g.spaces[fsID] = space
+	}
+
+	return fsx.Reservation{
+		FilesystemID:   fsID,
+		FreeBytes:      space.FreeBytes,
+		CommittedBytes: g.commits[fsID],
+		MinFreeBytes:   fsx.Floor(g.policy.MinFree, rootOf(g.policy.Roots, destination)),
+	}, true
+}
+
+// remainingBytes is the candidate's committed-but-unwritten share: 0
+// while the total is unknown, never negative.
+func remainingBytes(cand store.Candidate) int64 {
+	if cand.TotalBytes == nil {
+		return 0
+	}
+	if remaining := *cand.TotalBytes - cand.CompletedBytes; remaining > 0 {
+		return remaining
+	}
+
+	return 0
+}
+
+// rootOf returns the configured data root that owns destination — the
+// longest matching root, so nested roots resolve to the innermost — or ""
+// when destination lies under no configured root, in which case
+// fsx.Floor's 2 GiB default applies: an unrouted destination is never
+// promised the whole disk. A trailing slash in the configured spelling
+// is trimmed so the match cannot silently fail; the policy loader
+// normalises Roots and MinFree keys to the same clean form, so the
+// trimmed answer is also the map's key. The root "/" keeps its spelling
+// — a whole-filesystem root owns every absolute destination.
+func rootOf(roots []string, destination string) string {
+	best := ""
+	for _, root := range roots {
+		// Every trailing slash, not just one: a root spelled "/data//"
+		// must still own "/data/x" — only its spelling differs.
+		trimmed := strings.TrimRight(root, "/")
+		if trimmed == "" {
+			trimmed = "/"
+		}
+		if len(trimmed) > len(best) && withinRoot(destination, trimmed) {
+			best = trimmed
+		}
+	}
+
+	return best
+}
+
+// withinRoot reports whether path is root itself or a path under it — a
+// segment-wise comparison, so /database is not under /data and everything
+// absolute is under "/".
+func withinRoot(path, root string) bool {
+	if root == "/" {
+		return strings.HasPrefix(path, "/")
+	}
+
+	return path == root || strings.HasPrefix(path, root+"/")
+}
+
+// stampHeld writes one hold code on a candidate the pass cannot release.
+// The candidate is a snapshot from the start of the pass, so the write is
+// a compare-and-set on that state: an operator action that moved the row
+// after selection declines the stamp silently — a paused row stamped
+// disk_full is exactly the pair the next pass resumes guard-parked tasks
+// by, and minting it on a user-paused row would un-pause what the user
+// parked (the same attribution limit T127 takes over at the action
+// layer). A vanished task is expected mid-pass; anything else is a warn
+// the next pass repeats. The pair guard keeps a re-stamp of the same
+// sentence silent, so a 1 Hz pass neither churns the row nor feeds the
+// sync deltas.
+func (a *Admitter) stampHeld(ctx context.Context, cand store.Candidate, code, message string) {
+	if err := a.tasks.SetErrorCodeIfState(ctx, cand.ID, cand.State, code, message); err != nil && !errors.Is(err, store.ErrNotFound) {
+		a.log.Warn("admission pass could not stamp a held task", "task_id", cand.ID, "error", err)
+	}
+}
+
+// diskFullMessage is the error_message every disk_full stamp carries — a
+// fixed sentence, like holdMessage, so the guarded SetErrorCodeIfState's
+// identical-pair no-op holds across repeats. The failing write's own text
+// goes to the log beside the pause, not onto the row.
+const diskFullMessage = "no space left on device; the task resumes once space returns"
+
+// pauseDiskFullEventMessage is the one task_events row a disk-full pause
+// writes, beside its transition.
+const pauseDiskFullEventMessage = "paused by the disk-space guard: no space left on device"
+
+// PauseDiskFull reacts to ENOSPC on a running task (FR-048): the transfer
+// is paused engine-side, and the row lands paused carrying disk_full with
+// exactly one task_events row — state, stamp and event commit in one
+// transaction, so no concurrent hold-code clear can split the pause from
+// its stamp. Nothing is unlinked: every partially downloaded byte stays
+// on disk, so the next admission pass resumes the same file rather than
+// restarting it. The write paths that can observe a raw ENOSPC call this
+// with the failing error; fsx.IsENOSPC decides which errors qualify.
+// Only the counted active states may pause, and the atomic write
+// re-checks them, so a task that moved on between the caller's read and
+// the landing is left untouched. A task already parked carrying disk_full
+// only refreshes its stamp; a task parked for any other reason — an
+// operator pause — is refused, because the admission pass would later
+// read the stamp as its own and silently un-pause what the user parked.
+func (a *Admitter) PauseDiskFull(ctx context.Context, id string, cause error) error {
+	task, err := a.tasks.Get(ctx, id)
+	if err != nil {
+		// A vanished task is nothing left to pause — the same
+		// vanish-tolerance the branches below keep.
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+
+		return fmt.Errorf("pause disk-full task %q: %w", id, err)
+	}
+
+	switch {
+	case task.State == string(StatePaused) && task.ErrorCode != nil && *task.ErrorCode == ErrorCodeDiskFull:
+		// Already parked by the guard — an engine that reports disk_full
+		// twice, or a write path racing the first pause. The guarded
+		// SetErrorCodeIfState keeps a repeat silent, and a task that vanished
+		// mid-pause is nothing left to stamp or stop.
+		// The engine-side stop runs first, like the fresh path below: a
+		// store failure must not leave the transfer writing against a disk
+		// that just reported ENOSPC.
+		if cause != nil {
+			// A repeat can carry different information than the first
+			// report — a different mount, a quota error — so it is logged
+			// with the same message the fresh path uses, greppable together.
+			a.log.Warn("pausing task after a write failed with ENOSPC",
+				"task_id", id, "engine", task.Engine, "error", cause)
+		}
+		a.pauseEngineSide(ctx, id, task)
+
+		if err := a.tasks.SetErrorCodeIfState(ctx, id, string(StatePaused), ErrorCodeDiskFull, diskFullMessage); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return nil
+			}
+
+			return fmt.Errorf("pause disk-full task %q: %w", id, err)
+		}
+
+		return nil
+	case task.State == string(StatePaused):
+		return fmt.Errorf("pause disk-full task %q: the task is paused without %q; an operator pause must not gain the stamp",
+			id, ErrorCodeDiskFull)
+	case slices.Contains(diskFullPauseSources(), task.State):
+		// The counted active states: a transfer whose write path can fail
+		// with ENOSPC. Everything else — queued, seeding, error, completed,
+		// removed — has no write to park.
+	default:
+		// A queued row can briefly own a live engine transfer — the pass
+		// resumes or submits it engine-side before it lands the active
+		// transition — so stop the writes even when the row-level pause is
+		// refused: a disk-full report's first duty is that the daemon stops
+		// writing bytes the disk just rejected.
+		if task.State == string(StateQueued) {
+			if cause != nil {
+				// The row-level pause is refused, so this stop is the whole
+				// visible reaction — it gets the cause the other branches log.
+				a.log.Warn("pausing the engine-side transfer of a queued task after ENOSPC; the row-level pause is refused until the task turns active",
+					"task_id", id, "engine", task.Engine, "error", cause)
+			}
+			a.pauseEngineSide(ctx, id, task)
+		}
+
+		return fmt.Errorf("pause disk-full task %q: a task in state %q cannot pause", id, task.State)
+	}
+
+	if cause != nil {
+		a.log.Warn("pausing task after a write failed with ENOSPC",
+			"task_id", id, "engine", task.Engine, "error", cause)
+	}
+
+	// Pause the transfer engine-side first, so the daemon stops writing
+	// bytes dl-tool has just decided the disk cannot hold. The handle is
+	// the engine-namespaced form — "aria2:<gid>", the TaskInfo.ID shape
+	// the API actions pass (docs/04-data-model.md section 3.3); the
+	// adapter strips its own namespace again.
+	a.pauseEngineSide(ctx, id, task)
+
+	// A vanished task is nothing left to pause, the same vanish-tolerance
+	// the already-parked branch above keeps: the row is gone, so there is
+	// no stamp to land and no transfer to stop.
+	if err := a.tasks.PauseWithCode(ctx, id, store.CodedPause{
+		EventCode:    store.CodeTaskPaused,
+		EventMessage: pauseDiskFullEventMessage,
+		ErrorCode:    ErrorCodeDiskFull,
+		ErrorMessage: diskFullMessage,
+		FromStates:   diskFullPauseSources(),
+	}); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("pause disk-full task %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// pauseEngineSide stops the transfer at its engine after ENOSPC. A
+// failure is a warning, never a reason to keep the row active: the
+// engine-side transfer will surface its own error and the reconciler
+// records it.
+func (a *Admitter) pauseEngineSide(ctx context.Context, id string, task store.Task) {
+	if task.EngineRef == nil {
+		return
+	}
+
+	e, ok := a.registry.Get(task.Engine)
+	if !ok {
+		// No engine to contact — the row-level pause is the whole reaction,
+		// and the next sweep records the engine's absence.
+		a.log.Warn("engine of a disk-full task is not registered",
+			"task_id", id, "engine", task.Engine)
+		return
+	}
+
+	if err := e.Pause(ctx, namespacedHandle(task.Engine, *task.EngineRef)); err != nil {
+		a.log.Warn("could not pause the engine-side transfer after ENOSPC",
+			"task_id", id, "engine", task.Engine, "error", err)
+	}
+}
+
+// diskFullPauseSources returns the states a disk-full pause may land
+// from — the counted active states. The read-side switch above consumes
+// the list and the atomic write re-checks it, so the two can never drift
+// apart, and a task that moved on in between is left untouched. A fresh
+// slice per call keeps the shared set immutable — no caller can append to
+// or zero the one list both gates read.
+func diskFullPauseSources() []string {
+	return []string{
+		string(StateDownloading), string(StateChecking), string(StateExtracting), string(StateMoving),
+	}
+}
+
 // releaseFailed must not report it as a refusal.
 type storeWriteError struct{ cause error }
 
@@ -226,7 +749,7 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 	}
 
 	if cand.EngineRef != nil {
-		err := e.Resume(ctx, cand.Engine+":"+*cand.EngineRef)
+		err := e.Resume(ctx, namespacedHandle(cand.Engine, *cand.EngineRef))
 		switch {
 		case err == nil:
 			if err := a.markReleased(ctx, cand.ID); err != nil {
@@ -281,26 +804,50 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 	return nil
 }
 
+// clearHoldCode clears one task's hold stamp, warning with consequence
+// when the clear fails — the shared body of markReleased's and
+// clearStaleStamp's cleanups. A vanished task is expected mid-pass;
+// anything else is a warn naming what the leftover stamp means.
+func (a *Admitter) clearHoldCode(ctx context.Context, id, consequence string) {
+	if err := a.tasks.ClearHoldCode(ctx, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+		a.log.Warn(consequence, "task_id", id, "error", err)
+	}
+}
+
 // markReleased moves the released task to downloading — the task.resumed
-// event of the release — and clears any stale concurrency_limit, so a
-// started task never carries the code that held it
-// (docs/05-api-contract.md section 5.11). The release is complete once
-// the transition lands: a failed stamp clear is a warning, never an error
-// handed back — a returned error would route the healthy downloading task
-// into releaseFailed and mislabel it as refused. Nothing else clears the
-// stamp afterwards: the pass selects only queued candidates, so it never
-// revisits a downloading row — the residual code rides the row until the
-// task queues again or an operator acts.
+// event of the release — and clears any stale hold code, so a started task
+// never carries the code that held it (docs/05-api-contract.md section
+// 5.11). The clear is guarded on the row not being paused: a concurrent
+// disk-full pause may have parked the task between the two writes, and
+// wiping its stamp would strand it outside the pass's selection (FR-048).
+// The release is complete once the transition lands: a failed stamp clear
+// is a warning, never an error handed back — a returned error would route
+// the healthy downloading task into releaseFailed and mislabel it as
+// refused. Nothing else clears the stamp afterwards: the pass selects
+// only queued and disk_full-paused candidates, so it never revisits a
+// downloading row — the residual code rides the row until the task queues
+// again or an operator acts.
 func (a *Admitter) markReleased(ctx context.Context, id string) error {
 	if err := a.tasks.Transition(ctx, id, string(StateDownloading), store.CodeTaskResumed, "released by the admission pass"); err != nil {
 		return err
 	}
 
-	if err := a.tasks.SetErrorCode(ctx, id, "", ""); err != nil && !errors.Is(err, store.ErrNotFound) {
-		a.log.Warn("released but could not clear the stale concurrency_limit stamp", "task_id", id, "error", err)
-	}
+	a.clearHoldCode(ctx, id, "released but could not clear the stale hold stamp; it stays on the downloading row until requeue or operator action")
 
 	return nil
+}
+
+// namespacedHandle renders the engine task id from the stored bare ref —
+// the TaskInfo.ID shape, "aria2:<gid>" (docs/04-data-model.md section
+// 3.3). It is the one home for the join inside this package: the pass's
+// resume and the disk-full pause share it. The API action layer renders
+// the same shape at its own call site (internal/api/tasks_actions.go);
+// the shape is pinned by the adapter, which strips its own namespace
+// again, and routing that call site through this helper belongs to the
+// task that owns the file (T127), not to a cross-package export made
+// speculatively.
+func namespacedHandle(engineName, ref string) string {
+	return engineName + ":" + ref
 }
 
 // releaseFailed records one release the pass could not complete. An
@@ -314,9 +861,9 @@ func (a *Admitter) markReleased(ctx context.Context, id string) error {
 // task_events vocabulary's engine.rejected moment
 // (internal/store/events.go): the task moves to error carrying the
 // refusal, and error -> queued remains the retry path. The three
-// staying-queued branches also drop a stale concurrency_limit stamp: the
-// limit no longer holds this task, and an operator reading a held code
-// would chase slots instead of the down engine or the failing write.
+// staying-queued branches also drop a stale hold stamp: the hold no
+// longer applies to this task, and an operator reading a held code would
+// chase slots instead of the down engine or the failing write.
 func (a *Admitter) releaseFailed(ctx context.Context, cand store.Candidate, cause error) {
 	var storeWrite storeWriteError
 	switch {
@@ -344,14 +891,12 @@ func (a *Admitter) releaseFailed(ctx context.Context, cand store.Candidate, caus
 	}
 }
 
-// clearStaleStamp drops a concurrency_limit stamp a held task no longer
-// deserves — its release failed for a reason that is not the limit. Best
-// effort: a vanished task is expected mid-pass, anything else is a warn
-// the next pass repeats.
+// clearStaleStamp drops a hold stamp a candidate no longer deserves — its
+// release failed for a reason that is not the hold. Best effort: a
+// vanished task is expected mid-pass, anything else is a warn the next
+// pass repeats.
 func (a *Admitter) clearStaleStamp(ctx context.Context, id string) {
-	if err := a.tasks.SetErrorCode(ctx, id, "", ""); err != nil && !errors.Is(err, store.ErrNotFound) {
-		a.log.Warn("could not clear a stale concurrency_limit stamp", "task_id", id, "error", err)
-	}
+	a.clearHoldCode(ctx, id, "could not clear a stale hold stamp; the next pass repeats the clear")
 }
 
 // admissionRequest rebuilds the engine submission from the stored

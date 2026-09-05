@@ -1,18 +1,37 @@
 package engine_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
+	"github.com/L-K-M/dl-tool/internal/fsx"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
+
+// seedDestinationRoot is the destination every seedTask carries unless a
+// test overrides it: a path that always exists, so the filesystem identity
+// needs no ancestor climb. The floor policy below pins its floor to 0 so
+// the space gate never holds a test task on the host's own free space.
+var seedDestinationRoot = os.TempDir()
+
+// unlimitedFloor wraps the limits in the policy the pre-T099 tests run
+// under: the seed root's floor is 0, so only the concurrency limits can
+// hold a task and the assertions of T098 keep their meaning.
+func unlimitedFloor(l engine.Limits) engine.Policy {
+	return engine.Policy{Limits: l, Roots: []string{seedDestinationRoot}, MinFree: map[string]int64{seedDestinationRoot: 0}}
+}
 
 // admitEngine is the admission tests' Engine stand-in: Add mints a
 // namespaced handle per submission, Resume records its calls, and
@@ -21,12 +40,15 @@ import (
 type admitEngine struct {
 	name string
 
-	mu        sync.Mutex
-	next      int
-	adds      []string // the URIs of every accepted submission
-	resumes   []string // the engine task ids every Resume saw
-	addErr    error
-	resumeErr error
+	mu         sync.Mutex
+	next       int
+	adds       []string // the URIs of every accepted submission
+	resumes    []string // the engine task ids every Resume saw
+	pauses     []string // the engine task ids every Pause saw
+	removes    []string // the engine task ids every Remove saw
+	addErr     error
+	resumeErr  error
+	pauseFails int // Pause calls that fail before the first recorded one
 }
 
 func newAdmitEngine(name string) *admitEngine {
@@ -67,7 +89,28 @@ func (e *admitEngine) Resume(_ context.Context, id string) error {
 	return nil
 }
 
-func (e *admitEngine) Remove(context.Context, string) error { return nil }
+// Remove records the id, so the FR-048 tests can pin that no pause path
+// ever removes a transfer's data.
+func (e *admitEngine) Remove(_ context.Context, id string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.removes = append(e.removes, id)
+
+	return nil
+}
+
+func (e *admitEngine) Pause(_ context.Context, id string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.pauseFails > 0 {
+		e.pauseFails--
+		return errors.New("pause: injected failure")
+	}
+	e.pauses = append(e.pauses, id)
+
+	return nil
+}
 
 func (e *admitEngine) recordedAdds() []string {
 	e.mu.Lock()
@@ -83,6 +126,20 @@ func (e *admitEngine) recordedResumes() []string {
 	return append([]string(nil), e.resumes...)
 }
 
+func (e *admitEngine) recordedPauses() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return append([]string(nil), e.pauses...)
+}
+
+func (e *admitEngine) recordedRemoves() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return append([]string(nil), e.removes...)
+}
+
 func (e *admitEngine) List(context.Context) ([]engine.TaskInfo, error) { panic("not called") }
 func (e *admitEngine) Get(context.Context, string) (engine.TaskInfo, error) {
 	panic("not called")
@@ -90,7 +147,6 @@ func (e *admitEngine) Get(context.Context, string) (engine.TaskInfo, error) {
 func (e *admitEngine) Files(context.Context, string) ([]engine.FileEntry, error) {
 	panic("not called")
 }
-func (e *admitEngine) Pause(context.Context, string) error { panic("not called") }
 func (e *admitEngine) SetFiles(context.Context, string, []int, map[int]int) error {
 	panic("not called")
 }
@@ -109,9 +165,9 @@ func (e *admitEngine) Events(context.Context) (<-chan engine.TaskEvent, error) {
 
 // admitEnv is one real migrated store plus the two recording stand-ins:
 // the pass's writes go through the real TaskStore — CountActive,
-// SelectQueuedCandidates, SetErrorCode, Transition and SetEngineRef are
-// the pass's collaborators, and a fake store would test nothing but the
-// fake.
+// SelectQueuedCandidates, SetErrorCodeIfState, Transition and SetEngineRef
+// are the pass's collaborators, and a fake store would test nothing but
+// the fake.
 type admitEnv struct {
 	tasks *store.TaskStore
 	aria2 *admitEngine
@@ -145,7 +201,7 @@ func newAdmitEnv(t *testing.T) *admitEnv {
 		tasks: tasks,
 		aria2: aria2,
 		qbt:   qbt,
-		admit: engine.NewAdmitter(registry, tasks, time.Second),
+		admit: engine.NewAdmitter(registry, tasks, time.Second, nil),
 	}
 }
 
@@ -161,7 +217,7 @@ func (e *admitEnv) seedTask(t *testing.T, engineName, name string, mutate func(*
 		SourceURI:   &source,
 		Name:        name,
 		State:       "queued",
-		Destination: "/data",
+		Destination: seedDestinationRoot,
 	}
 	if mutate != nil {
 		mutate(&task)
@@ -227,7 +283,7 @@ func TestPassRespectsTotalAndPerEngine(t *testing.T) {
 	}
 
 	limits := engine.Limits{MaxActiveTotal: 2, MaxActivePerEngine: 1}
-	released, err := env.admit.Pass(t.Context(), limits)
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(limits))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -290,7 +346,7 @@ func TestPassZeroMeansUnlimited(t *testing.T) {
 		env.seedTask(t, engineName, name, nil)
 	}
 
-	released, err := env.admit.Pass(t.Context(), engine.Limits{})
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -315,7 +371,7 @@ func TestPassReleasesInCreationOrder(t *testing.T) {
 	nextAddedAt()
 	env.seedTask(t, engine.NameAria2, "newest", nil)
 
-	released, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 1})
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 1}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -340,7 +396,7 @@ func TestSeedingIsNotCounted(t *testing.T) {
 
 	download := env.seedTask(t, engine.NameAria2, "download", nil)
 
-	released, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 2})
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 2}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -377,7 +433,7 @@ func TestHeldTaskCarriesConcurrencyLimit(t *testing.T) {
 		}))
 	}
 
-	released, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 1})
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 1}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -417,7 +473,7 @@ func TestPassResumesHandleHolder(t *testing.T) {
 		task.EngineRef = &ref
 	})
 
-	released, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 5})
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -457,7 +513,7 @@ func TestPassReAddsVanishedHandle(t *testing.T) {
 		task.EngineRef = &ref
 	})
 
-	released, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 5})
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -490,7 +546,7 @@ func TestEngineRefusalErrorsTask(t *testing.T) {
 
 	id := env.seedTask(t, engine.NameAria2, "refused", nil)
 
-	released, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 5})
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -527,7 +583,7 @@ func TestUnregisteredEngineStaysQueued(t *testing.T) {
 		task.ErrorMessage = ptr("1 of 1 slots in use")
 	})
 
-	released, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 5})
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -551,7 +607,7 @@ func TestPassRoundTripsTheHandle(t *testing.T) {
 
 	id := env.seedTask(t, engine.NameAria2, "round-trip", nil)
 
-	if _, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 5}); err != nil {
+	if _, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5})); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
 
@@ -563,7 +619,7 @@ func TestPassRoundTripsTheHandle(t *testing.T) {
 		}
 	}
 
-	if _, err := env.admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 5}); err != nil {
+	if _, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5})); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
 
@@ -587,20 +643,15 @@ func TestPassRoundTripsTheHandle(t *testing.T) {
 	}
 }
 
-// flakyClearStore fails every stamp-clearing SetErrorCode (empty code),
-// so a test can pin that a failed clear after a successful release never
-// routes the healthy downloading task into releaseFailed's refusal
-// branch.
+// flakyClearStore fails every hold-code clear (ClearHoldCode), so a test
+// can pin that a failed clear after a successful release never routes the
+// healthy downloading task into releaseFailed's refusal branch.
 type flakyClearStore struct {
 	engine.AdmissionStore
 }
 
-func (s flakyClearStore) SetErrorCode(ctx context.Context, id, errorCode, message string) error {
-	if errorCode == "" {
-		return errors.New("injected: stamp clear failed")
-	}
-
-	return s.AdmissionStore.SetErrorCode(ctx, id, errorCode, message)
+func (s flakyClearStore) ClearHoldCode(ctx context.Context, id string) error {
+	return errors.New("injected: stamp clear failed")
 }
 
 // A failed stamp clear after the release's transition is a warning, not
@@ -612,14 +663,14 @@ func TestFailedStampClearKeepsTheRelease(t *testing.T) {
 
 	registry := engine.NewRegistry()
 	registry.Register(env.aria2)
-	admit := engine.NewAdmitter(registry, flakyClearStore{AdmissionStore: env.tasks}, time.Second)
+	admit := engine.NewAdmitter(registry, flakyClearStore{AdmissionStore: env.tasks}, time.Second, nil)
 
 	id := env.seedTask(t, engine.NameAria2, "held-then-freed", func(task *store.Task) {
 		task.ErrorCode = ptr(engine.ErrorCodeConcurrencyLimit)
 		task.ErrorMessage = ptr("1 of 1 slots in use")
 	})
 
-	released, err := admit.Pass(t.Context(), engine.Limits{MaxActiveTotal: 1})
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 1}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -672,7 +723,7 @@ func TestNewAdmitterRejectsNonPositiveTick(t *testing.T) {
 	env := newAdmitEnv(t)
 	for _, tick := range []time.Duration{0, -time.Second} {
 		tick := tick
-		deferredPanic(t, "admission tick", func() { engine.NewAdmitter(engine.NewRegistry(), env.tasks, tick) })
+		deferredPanic(t, "admission tick", func() { engine.NewAdmitter(engine.NewRegistry(), env.tasks, tick, nil) })
 	}
 }
 
@@ -701,13 +752,14 @@ func TestAdmitterRunStopsWithContext(t *testing.T) {
 		engine.NewRegistry(),
 		env.tasks,
 		time.Millisecond,
+		nil,
 	)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- admit.Run(ctx, func(context.Context) (engine.Limits, error) {
-			return engine.Limits{}, nil
+		done <- admit.Run(ctx, func(context.Context) (engine.Policy, error) {
+			return engine.Policy{}, nil
 		})
 	}()
 
@@ -721,5 +773,957 @@ func TestAdmitterRunStopsWithContext(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not stop after its context was cancelled")
+	}
+}
+
+// mib is the byte unit the disk-space tests commit and request head-room
+// in: large enough that a statfs tick between the test's read and the
+// pass's read cannot flip an admission, small enough for any temp dir.
+// These tests read the live free space and must not run in parallel with
+// anything that writes tens of MiB to the temp filesystem: keep them off
+// t.Parallel(), and remember `go test ./...` runs other packages' test
+// binaries against the same temp filesystem — that concurrent traffic is
+// what the decisive MiB-scale margins exist to absorb.
+const mib = int64(1 << 20)
+
+// admitterOver builds an admitter over a wrapped store with this env's
+// aria2 engine — the scaffolding the pause-race tests share, so a
+// signature change lands in one place.
+func (e *admitEnv) admitterOver(store engine.AdmissionStore) *engine.Admitter {
+	registry := engine.NewRegistry()
+	registry.Register(e.aria2)
+
+	return engine.NewAdmitter(registry, store, time.Second, nil)
+}
+
+// floorLeaving returns a min_free_space floor that leaves exactly headRoom
+// bytes of unreserved space on root's filesystem, computed from the live
+// statfs answer — a "small root" without needing a privileged tmpfs. A
+// negative headRoom (as TestENOSPCPausesAndKeepsData passes) instead sets
+// the floor above the live free bytes — an unconditionally full disk. A
+// negative floor means the temp filesystem is smaller than the test's
+// commitment; that is an environment failure, not a skip.
+func floorLeaving(t *testing.T, root string, headRoom int64) int64 {
+	t.Helper()
+
+	space, err := fsx.FreeSpace(root)
+	if err != nil {
+		t.Fatalf("read free space of %s: %v", root, err)
+	}
+
+	floor := space.FreeBytes - headRoom
+	if floor < 0 {
+		t.Fatalf("temp filesystem has only %d free bytes; test needs %d of head-room", space.FreeBytes, headRoom)
+	}
+
+	return floor
+}
+
+// policyOver returns the pass policy for root with the given floor and
+// unlimited concurrency, so only the space gate can hold a task.
+func policyOver(root string, floor int64) engine.Policy {
+	return engine.Policy{Roots: []string{root}, MinFree: map[string]int64{root: floor}}
+}
+
+// TestThirdTaskStaysQueued is FR-047's scenario: two downloading tasks
+// whose remaining bytes already commit the root, a third submitted task
+// stays queued carrying disk_full instead of starting and failing, and it
+// starts once the first two complete and their commitment lifts.
+func TestThirdTaskStaysQueued(t *testing.T) {
+	env := newAdmitEnv(t)
+	root := t.TempDir()
+
+	downloading := func(total, completed int64) func(*store.Task) {
+		return func(task *store.Task) {
+			task.State = string(engine.StateDownloading)
+			task.Destination = root
+			task.TotalBytes = &total
+			task.CompletedBytes = completed
+		}
+	}
+
+	// The seeds are hundreds of MiB so both margins — the hold-side deficit and
+	// the release-side surplus — clear 128 MiB: sibling test binaries share
+	// the temp filesystem under `go test ./...`, and their traffic must not
+	// flip either side.
+	first := env.seedTask(t, engine.NameAria2, "first", downloading(400*mib, 40*mib))
+	nextAddedAt()
+	second := env.seedTask(t, engine.NameAria2, "second", downloading(200*mib, 0))
+	nextAddedAt()
+
+	third := env.seedTask(t, engine.NameAria2, "third", func(task *store.Task) {
+		task.Destination = root
+		total := 20 * mib
+		task.TotalBytes = &total
+	})
+
+	// The floor leaves the third task decisively short of what it needs
+	// beside the first two's commitment — a gap free-space jitter cannot
+	// flip.
+	committed := (400-40)*mib + 200*mib // first: 400 MiB seeded total - 40 MiB done; second: all 200 MiB remaining
+	shortfall := 128 * mib
+	// One head-room drives both passes: the hold side and the release side
+	// must encode the same margin against live statfs answers, so a future
+	// edit cannot silently change one pass and not the other.
+	headRoom := committed + 20*mib - shortfall
+	holding := policyOver(root, floorLeaving(t, root, headRoom))
+
+	released, err := env.admit.Pass(t.Context(), holding)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none: the filesystem is fully committed", released)
+	}
+	if state := env.taskState(t, third); state != string(engine.StateQueued) {
+		t.Errorf("third task state = %q, want queued", state)
+	}
+	if code := env.taskErrorCode(t, third); code != engine.ErrorCodeDiskFull {
+		t.Errorf("third task error_code = %q, want %q", code, engine.ErrorCodeDiskFull)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 0 {
+		t.Errorf("aria2 adds = %v, want none while the disk holds the task", adds)
+	}
+
+	// The first two complete: their commitment lifts and the floor now
+	// leaves room for the third.
+	for _, id := range []string{first, second} {
+		if err := env.tasks.Transition(t.Context(), id, string(engine.StateCompleted), "test", "completed"); err != nil {
+			t.Fatalf("complete %s: %v", id, err)
+		}
+	}
+
+	// The second pass re-reads free space first, so the release-side
+	// margin is measured from now, not from before the first pass — the
+	// shared temp filesystem may have moved underneath the stale floor.
+	released, err = env.admit.Pass(t.Context(), policyOver(root, floorLeaving(t, root, headRoom)))
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != third {
+		t.Fatalf("released = %v, want exactly the third task %s", released, third)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 1 {
+		t.Errorf("aria2 adds = %v, want exactly the third task's submission once the disk admits", adds)
+	}
+	if state := env.taskState(t, third); state != string(engine.StateDownloading) {
+		t.Errorf("third task state = %q, want downloading", state)
+	}
+	if code := env.taskErrorCode(t, third); code != "" {
+		t.Errorf("third task error_code = %q, want the hold cleared on release", code)
+	}
+}
+
+// TestENOSPCPausesAndKeepsData is FR-048: a write that fails with ENOSPC
+// pauses the task carrying disk_full, unlinks nothing — the partial file
+// is byte-for-byte unchanged — and the next admission pass resumes the
+// same transfer once the filesystem admits again.
+func TestENOSPCPausesAndKeepsData(t *testing.T) {
+	env := newAdmitEnv(t)
+	root := t.TempDir()
+
+	partial := filepath.Join(root, "file.bin")
+	want := []byte("partial download bytes, byte-for-byte precious")
+	if err := os.WriteFile(partial, want, 0o600); err != nil {
+		t.Fatalf("write partial file: %v", err)
+	}
+
+	ref := "gid001"
+	id := env.seedTask(t, engine.NameAria2, "filling", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.EngineRef = &ref
+		task.Destination = root
+	})
+
+	cause := fmt.Errorf("write %s: %w", partial, syscall.ENOSPC)
+	if err := env.admit.PauseDiskFull(t.Context(), id, cause); err != nil {
+		t.Fatalf("pause disk-full: %v", err)
+	}
+
+	if pauses := env.aria2.recordedPauses(); len(pauses) != 1 || pauses[0] != engine.NameAria2+":"+ref {
+		t.Errorf("aria2 pauses = %v, want exactly the stored handle", pauses)
+	}
+	if state := env.taskState(t, id); state != string(engine.StatePaused) {
+		t.Fatalf("state = %q, want paused", state)
+	}
+	if code := env.taskErrorCode(t, id); code != engine.ErrorCodeDiskFull {
+		t.Fatalf("error_code = %q, want %q", code, engine.ErrorCodeDiskFull)
+	}
+
+	// Exactly one task.paused row explains the pause.
+	pausedEvents := func() int {
+		events, _, _, err := env.tasks.ListEvents(t.Context(), id, 50, "")
+		if err != nil {
+			t.Fatalf("list events: %v", err)
+		}
+		n := 0
+		for _, event := range events {
+			if event.Code == store.CodeTaskPaused {
+				n++
+			}
+		}
+		return n
+	}
+	if n := pausedEvents(); n != 1 {
+		t.Errorf("task.paused events = %d, want exactly one", n)
+	}
+
+	// Nothing was unlinked or rewritten: the partial data survives intact.
+	got, err := os.ReadFile(partial)
+	if err != nil {
+		t.Fatalf("partial file vanished: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("partial file changed on ENOSPC: %q", got)
+	}
+
+	// While the filesystem does not admit — free below its floor — the
+	// pass leaves the task paused; the partial data is never restarted.
+	// A floor 1 GiB above the free answer holds everything decisively: no
+	// concurrent free on the shared temp filesystem can outpace it, and a
+	// hold-side floor commits no bytes of its own.
+	full := policyOver(root, floorLeaving(t, root, -1024*mib))
+	released, err := env.admit.Pass(t.Context(), full)
+	if err != nil {
+		t.Fatalf("pass on a full filesystem: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none below the floor", released)
+	}
+	if state := env.taskState(t, id); state != string(engine.StatePaused) {
+		t.Fatalf("state = %q, want still paused while the disk is full", state)
+	}
+	if code := env.taskErrorCode(t, id); code != engine.ErrorCodeDiskFull {
+		t.Fatalf("error_code = %q, want %q retained while the disk is full", code, engine.ErrorCodeDiskFull)
+	}
+
+	// The holding pass wrote no second pause: a held candidate gets its
+	// stamp refreshed at most, never another transition.
+	if n := pausedEvents(); n != 1 {
+		t.Errorf("task.paused events = %d after the holding pass, want still exactly one", n)
+	}
+
+	// Space returns: the pass resumes the stored handle — the same
+	// transfer, never a second Add — and clears the hold.
+	room := policyOver(root, 0)
+	released, err = env.admit.Pass(t.Context(), room)
+	if err != nil {
+		t.Fatalf("pass with room: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want exactly %s", released, id)
+	}
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 1 || resumes[0] != engine.NameAria2+":"+ref {
+		t.Errorf("aria2 resumes = %v, want exactly the stored handle", resumes)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 0 {
+		t.Errorf("aria2 adds = %v, want none: the partial data is continued, not restarted", adds)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading", state)
+	}
+	if code := env.taskErrorCode(t, id); code != "" {
+		t.Errorf("error_code = %q, want the hold cleared on resume", code)
+	}
+	if n := pausedEvents(); n != 1 {
+		t.Errorf("task.paused events = %d after the resume, want still exactly one", n)
+	}
+	if removes := env.aria2.recordedRemoves(); len(removes) != 0 {
+		t.Errorf("aria2 removes = %v, want none: the partial data is never unlinked", removes)
+	}
+}
+
+// Two destinations on one mount share one reservation pool (FR-047): the
+// bytes an active task committed on one destination hold a candidate on
+// the other.
+func TestTwoDestinationsShareOnePool(t *testing.T) {
+	env := newAdmitEnv(t)
+	root := t.TempDir()
+	other := filepath.Join(root, "other")
+	// The second destination exists on disk, so the scenario is honest
+	// about pooling two real destinations rather than leaning on the
+	// ancestor climb.
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatalf("mkdir second destination: %v", err)
+	}
+
+	env.seedTask(t, engine.NameAria2, "active", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.Destination = root
+		total := 100 * mib
+		task.TotalBytes = &total
+	})
+
+	candidate := env.seedTask(t, engine.NameAria2, "candidate", func(task *store.Task) {
+		task.Destination = other
+		total := 10 * mib
+		task.TotalBytes = &total
+	})
+
+	// Fifty MiB short of the 110 MiB the two tasks need together: the
+	// candidate is held by bytes committed on the *other* destination — a
+	// decisive gap, so a small fluctuation of the live free-space answer
+	// cannot flip the hold.
+	holding := policyOver(root, floorLeaving(t, root, 110*mib-50*mib))
+	released, err := env.admit.Pass(t.Context(), holding)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none: the shared pool is committed", released)
+	}
+	if state := env.taskState(t, candidate); state != string(engine.StateQueued) {
+		t.Errorf("candidate state = %q, want queued", state)
+	}
+	if code := env.taskErrorCode(t, candidate); code != engine.ErrorCodeDiskFull {
+		t.Errorf("candidate error_code = %q, want %q", code, engine.ErrorCodeDiskFull)
+	}
+
+	// 128 MiB past the 110 MiB both need: the same pool now admits
+	// the candidate — the hold was the shared commitment, not its own
+	// destination's emptiness. The margin is as decisive on the admit side
+	// as the hold-side gap, so concurrent consumers of the temp filesystem
+	// cannot flip the release.
+	fitting := policyOver(root, floorLeaving(t, root, 110*mib+128*mib))
+	released, err = env.admit.Pass(t.Context(), fitting)
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != candidate {
+		t.Fatalf("released = %v, want exactly the candidate %s", released, candidate)
+	}
+	if state := env.taskState(t, candidate); state != string(engine.StateDownloading) {
+		t.Errorf("candidate state = %q, want downloading once admitted", state)
+	}
+	if code := env.taskErrorCode(t, candidate); code != "" {
+		t.Errorf("candidate error_code = %q, want the hold cleared on release", code)
+	}
+}
+
+// One pass cannot over-commit a filesystem: the bytes a release just
+// promised are spent from the in-memory reservation before the next
+// candidate of the same pass is judged, exactly as a slot is.
+func TestPassCommitsReleasedBytesInMemory(t *testing.T) {
+	env := newAdmitEnv(t)
+	root := t.TempDir()
+
+	first := env.seedTask(t, engine.NameAria2, "first", func(task *store.Task) {
+		task.Destination = root
+		total := 60 * mib
+		task.TotalBytes = &total
+	})
+	nextAddedAt()
+	second := env.seedTask(t, engine.NameAria2, "second", func(task *store.Task) {
+		task.Destination = root
+		total := 90 * mib
+		task.TotalBytes = &total
+	})
+
+	// Head-room for 100 MiB: the first task's 60 MiB fit, and its
+	// commitment leaves 40 MiB — 50 MiB short of the second's 90, the
+	// decisive gap free-space jitter cannot flip.
+	policy := policyOver(root, floorLeaving(t, root, 100*mib))
+
+	released, err := env.admit.Pass(t.Context(), policy)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != first {
+		t.Fatalf("released = %v, want exactly the older task %s", released, first)
+	}
+	if state := env.taskState(t, second); state != string(engine.StateQueued) {
+		t.Errorf("second task state = %q, want queued: one pass must not over-commit", state)
+	}
+	if code := env.taskErrorCode(t, second); code != engine.ErrorCodeDiskFull {
+		t.Errorf("second task error_code = %q, want %q", code, engine.ErrorCodeDiskFull)
+	}
+}
+
+// A task whose total_bytes is NULL reserves nothing, whatever progress it
+// already reports: its completed bytes must not enter the pool as a
+// negative commitment that under-counts the destination's other active
+// tasks (FR-047's unknown-size rule).
+func TestUnknownTotalReservesNothing(t *testing.T) {
+	env := newAdmitEnv(t)
+	root := t.TempDir()
+
+	known := env.seedTask(t, engine.NameAria2, "known", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.Destination = root
+		total := 500 * mib
+		task.TotalBytes = &total
+	})
+	env.seedTask(t, engine.NameAria2, "unknown", func(task *store.Task) {
+		// Metadata unresolved, 100 MiB already on disk: TotalBytes stays
+		// nil and the contribution must be 0 — not -100 MiB.
+		task.State = string(engine.StateDownloading)
+		task.Destination = root
+		task.CompletedBytes = 100 * mib
+	})
+	env.seedTask(t, engine.NameAria2, "drift", func(task *store.Task) {
+		// Engine accounting drift — completed reported past total — must
+		// cancel none of the neighbours' reservations either.
+		task.State = string(engine.StateDownloading)
+		task.Destination = root
+		total := int64(1000)
+		task.TotalBytes = &total
+		task.CompletedBytes = 1500
+	})
+
+	remaining, err := env.tasks.SumRemainingByDestination(t.Context())
+	if err != nil {
+		t.Fatalf("sum remaining by destination: %v", err)
+	}
+	if got := remaining[root]; got != 500*mib {
+		t.Errorf("committed at %s = %d, want the known task's %d alone", root, got, 500*mib)
+	}
+
+	// And the pass sees the same honesty: head-room computed against the
+	// 500 MiB commitment holds a 100 MiB candidate that a -100 MiB
+	// under-count would wrongly admit.
+	candidate := env.seedTask(t, engine.NameAria2, "candidate", func(task *store.Task) {
+		task.Destination = root
+		total := 100 * mib
+		task.TotalBytes = &total
+	})
+
+	holding := policyOver(root, floorLeaving(t, root, 500*mib+50*mib))
+	released, err := env.admit.Pass(t.Context(), holding)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none: an unknown total must not buy head-room", released)
+	}
+	if code := env.taskErrorCode(t, candidate); code != engine.ErrorCodeDiskFull {
+		t.Errorf("candidate error_code = %q, want %q", code, engine.ErrorCodeDiskFull)
+	}
+
+	// The known task leaving the counted set lifts the whole commitment:
+	// the candidate is admitted even beside the unknown-total task.
+	if err := env.tasks.Transition(t.Context(), known, string(engine.StateSeeding), "test", "moved on"); err != nil {
+		t.Fatalf("move the known task out of the counted set: %v", err)
+	}
+
+	// Pin the store math directly: seeding leaves the counted set, so the
+	// commitment the second pass judges against must read zero — a store
+	// regression here must fail here, not as an opaque empty release.
+	remaining, err = env.tasks.SumRemainingByDestination(t.Context())
+	if err != nil {
+		t.Fatalf("re-sum remaining by destination: %v", err)
+	}
+	if got := remaining[root]; got != 0 {
+		t.Fatalf("committed at %s after the seeding transition = %d, want 0", root, got)
+	}
+
+	released, err = env.admit.Pass(t.Context(), holding)
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != candidate {
+		t.Fatalf("released = %v, want exactly the candidate %s", released, candidate)
+	}
+	if state := env.taskState(t, candidate); state != string(engine.StateDownloading) {
+		t.Errorf("candidate state = %q, want downloading once admitted", state)
+	}
+	if code := env.taskErrorCode(t, candidate); code != "" {
+		t.Errorf("candidate error_code = %q, want the hold cleared on release", code)
+	}
+}
+
+// An operator-paused task is not a candidate: the pass's paused intake is
+// exactly the tasks carrying disk_full, so a task the user parked is never
+// silently un-paused by an admission tick (the filter lives in the store's
+// query; this pins it).
+func TestOperatorPausedTaskIsNotACandidate(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	parked := env.seedTask(t, engine.NameAria2, "user-paused", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.EngineRef = ptr("user-handle")
+	})
+
+	// A disk_full pause, by contrast, is exactly what the pass re-examines.
+	seeded := env.seedTask(t, engine.NameAria2, "disk-paused", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr("no space left on device")
+	})
+
+	candidates, err := env.tasks.SelectQueuedCandidates(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("select candidates: %v", err)
+	}
+	for _, cand := range candidates {
+		if cand.ID == parked {
+			t.Fatal("an operator-paused task reached the admission pass; only disk_full pauses may")
+		}
+	}
+
+	found := false
+	for _, cand := range candidates {
+		if cand.ID == seeded {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a disk_full-paused task did not reach the admission pass; it must be re-examined each tick")
+	}
+}
+
+// flakyPauseStore fails every atomic pause landing (PauseWithCode), so a
+// test can pin that a store failure inside PauseDiskFull leaves the row
+// untouched — never half-paused, never paused without the disk_full code
+// the pass selects on.
+type flakyPauseStore struct {
+	engine.AdmissionStore
+}
+
+func (s flakyPauseStore) PauseWithCode(ctx context.Context, id string, pause store.CodedPause) error {
+	return errors.New("injected: pause write failed")
+}
+
+// A store failure inside PauseDiskFull is all-or-nothing: the atomic
+// landing leaves the row downloading with no stamp — the state the next
+// ENOSPC report revisits — and the retry completes the pause.
+func TestPauseDiskFullFailureLeavesTheRowUntouched(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	flaky := env.admitterOver(flakyPauseStore{AdmissionStore: env.tasks})
+
+	ref := "gid002"
+	id := env.seedTask(t, engine.NameAria2, "mid-write-failure", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.EngineRef = &ref
+	})
+
+	err := flaky.PauseDiskFull(t.Context(), id, errors.New("write: no space left on device"))
+	if err == nil {
+		t.Fatal("PauseDiskFull with a failing store returned nil, want the store error")
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Fatalf("state = %q after the failed pause, want downloading: the atomic landing must leave nothing behind", state)
+	}
+	if code := env.taskErrorCode(t, id); code != "" {
+		t.Fatalf("error_code = %q, want empty: the atomic landing wrote nothing", code)
+	}
+	events, _, _, err := env.tasks.ListEvents(t.Context(), id, 10, "")
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	for _, event := range events {
+		if event.Code == store.CodeTaskPaused {
+			t.Fatal("a pause event survived the failed pause; the landing must write nothing")
+		}
+	}
+
+	// The store heals; the retry lands the whole pause at once.
+	if err := env.admit.PauseDiskFull(t.Context(), id, errors.New("write: no space left on device")); err != nil {
+		t.Fatalf("retry pause disk-full: %v", err)
+	}
+	if state := env.taskState(t, id); state != string(engine.StatePaused) {
+		t.Fatalf("state = %q after the retry, want paused", state)
+	}
+	if code := env.taskErrorCode(t, id); code != engine.ErrorCodeDiskFull {
+		t.Errorf("error_code = %q, want %q", code, engine.ErrorCodeDiskFull)
+	}
+	// The retry also stopped the transfer: the first attempt's engine
+	// pause plus the retry's, both of this task's handle — the row-level
+	// landing alone is not the whole pause.
+	pauses := env.aria2.recordedPauses()
+	if len(pauses) != 2 || pauses[0] != "aria2:"+ref || pauses[1] != "aria2:"+ref {
+		t.Errorf("pauses = %v, want the failed attempt's stop and the retry's stop of aria2:%s", pauses, ref)
+	}
+}
+
+// vanishedStampStore reports every stamp write as not-found, so a test
+// can pin that a task removed mid-pause is nothing left to stamp or stop.
+type vanishedStampStore struct {
+	engine.AdmissionStore
+}
+
+func (s vanishedStampStore) SetErrorCodeIfState(context.Context, string, string, string, string) error {
+	return store.ErrNotFound
+}
+
+func (s vanishedStampStore) PauseWithCode(context.Context, string, store.CodedPause) error {
+	return store.ErrNotFound
+}
+
+// A task removed between the read and the stamp refresh of a repeat
+// disk-full report is gone — there is nothing left to stamp or stop, and
+// the pause reports success, the same vanish-tolerance the pass's own
+// stamp path keeps.
+func TestPauseDiskFullToleratesAVanishedTask(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	admit := env.admitterOver(vanishedStampStore{AdmissionStore: env.tasks})
+
+	id := env.seedTask(t, engine.NameAria2, "gone-mid-pause", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr("no space left on device")
+		// A handle makes the engine side observable: the stop is attempted
+		// from the snapshot before the vanished write short-circuits.
+		ref := "gid-gone"
+		task.EngineRef = &ref
+	})
+
+	if err := admit.PauseDiskFull(t.Context(), id, errors.New("write: no space left on device")); err != nil {
+		t.Fatalf("pause disk-full of a vanished task: %v, want nil — nothing left to stamp or stop", err)
+	}
+	// The engine-side stop runs before the stamp write (the round-16
+	// ordering), so exactly one stop was attempted from the snapshot; the
+	// vanished write then ends the pause without a second attempt.
+	if pauses := env.aria2.recordedPauses(); len(pauses) != 1 || pauses[0] != "aria2:gid-gone" {
+		t.Errorf("pauses = %v, want exactly the one snapshot-driven stop of aria2:gid-gone", pauses)
+	}
+}
+
+// A task removed between the snapshot read and the atomic landing is the
+// fresh path's vanish race: the engine stop is attempted from the
+// snapshot, the vanished landing reports success, and no partial state
+// survives — the same tolerance the refresh path keeps above.
+func TestPauseDiskFullToleratesAVanishedActiveTask(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	admit := env.admitterOver(vanishedStampStore{AdmissionStore: env.tasks})
+
+	ref := "gid-gone-active"
+	id := env.seedTask(t, engine.NameAria2, "gone-mid-landing", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.EngineRef = &ref
+	})
+
+	if err := admit.PauseDiskFull(t.Context(), id, errors.New("write: no space left on device")); err != nil {
+		t.Fatalf("pause disk-full of a vanished active task: %v, want nil — nothing left to stamp or stop", err)
+	}
+	if pauses := env.aria2.recordedPauses(); len(pauses) != 1 || pauses[0] != "aria2:"+ref {
+		t.Errorf("pauses = %v, want exactly the one snapshot-driven stop of aria2:%s", pauses, ref)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q after the vanished landing, want the seeded downloading untouched", state)
+	}
+	if code := env.taskErrorCode(t, id); code != "" {
+		t.Errorf("error_code = %q after the vanished landing, want none", code)
+	}
+}
+
+// operatorPauseStore lands an operator pause on one queued task at the
+// moment the pass selects it, so the stamp write that follows reads a
+// snapshot the operator action has already overtaken — the race a
+// compare-and-set stamp must survive.
+type operatorPauseStore struct {
+	engine.AdmissionStore
+	pause string
+}
+
+func (s operatorPauseStore) SelectQueuedCandidates(ctx context.Context, limit int) ([]store.Candidate, error) {
+	cands, err := s.AdmissionStore.SelectQueuedCandidates(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, cand := range cands {
+		if cand.ID != s.pause {
+			continue
+		}
+
+		if err := s.Transition(ctx, cand.ID, string(engine.StatePaused), "task.paused", "paused by user request"); err != nil {
+			return nil, err
+		}
+	}
+
+	return cands, nil
+}
+
+// A hold stamp is a compare-and-set on the candidate's state: an
+// operator pause landing between the pass's selection and its stamp
+// write must not mint the paused+disk_full pair — the membership token
+// the next pass resumes guard-parked tasks by. The stamp declines
+// instead, and the row stays operator-paused with no hold code, so the
+// pass never resumes it.
+func TestHoldStampDeclinesOnAnOperatorPauseMidPass(t *testing.T) {
+	env := newAdmitEnv(t)
+	root := t.TempDir()
+
+	id := env.seedTask(t, engine.NameAria2, "paused-mid-pass", func(task *store.Task) {
+		task.Destination = root
+		total := 10 * mib
+		task.TotalBytes = &total
+	})
+
+	admit := env.admitterOver(operatorPauseStore{AdmissionStore: env.tasks, pause: id})
+
+	// The disk holds every candidate decisively, so the pass reaches the
+	// queued branch's stamp against its stale queued snapshot.
+	holding := policyOver(root, floorLeaving(t, root, -1024*mib))
+	if _, err := admit.Pass(t.Context(), holding); err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+
+	if state := env.taskState(t, id); state != string(engine.StatePaused) {
+		t.Fatalf("state = %q, want the operator's paused", state)
+	}
+	if code := env.taskErrorCode(t, id); code != "" {
+		t.Fatalf("error_code = %q, want none: a stamp must not land on a row the operator paused mid-pass", code)
+	}
+
+	// With room and a free slot the row is no candidate — it carries no
+	// disk_full stamp to be selected by — and the engine sees nothing.
+	room := policyOver(root, 0)
+	released, err := admit.Pass(t.Context(), room)
+	if err != nil {
+		t.Fatalf("pass with room: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none: a user-paused row is never a resume candidate", released)
+	}
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 0 {
+		t.Fatalf("aria2 resumes = %v, want none", resumes)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 0 {
+		t.Fatalf("aria2 adds = %v, want none", adds)
+	}
+}
+
+// A repeat disk-full report on an already-parked task retries the
+// engine-side pause: the first attempt's failure was only a warning, and
+// the transfer must not keep writing to the full disk meanwhile.
+func TestPauseDiskFullRetriesTheEnginePauseOnARepeatReport(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.aria2.pauseFails = 1
+
+	ref := "gid007"
+	id := env.seedTask(t, engine.NameAria2, "retry", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.EngineRef = &ref
+	})
+
+	// The first report parks the row while its engine-side pause warns.
+	if err := env.admit.PauseDiskFull(t.Context(), id, errors.New("write: no space left on device")); err != nil {
+		t.Fatalf("first pause disk-full: %v", err)
+	}
+	if pauses := env.aria2.recordedPauses(); len(pauses) != 0 {
+		t.Fatalf("pauses = %v, want none: the injected failure swallowed the first attempt", pauses)
+	}
+
+	// The repeat report is the second chance: the engine pause lands.
+	if err := env.admit.PauseDiskFull(t.Context(), id, errors.New("write: no space left on device")); err != nil {
+		t.Fatalf("repeat pause disk-full: %v", err)
+	}
+	if pauses := env.aria2.recordedPauses(); len(pauses) != 1 || pauses[0] != "aria2:"+ref {
+		t.Errorf("pauses = %v, want the retried pause of the parked task's handle", pauses)
+	}
+}
+
+// Only the counted active states may take a disk-full pause — they are
+// the only ones whose write paths can observe ENOSPC. Everything else is
+// refused untouched, and an already-paused task only refreshes its stamp
+// without writing a second event.
+func TestPauseDiskFullStateAllowList(t *testing.T) {
+	active := map[string]bool{
+		string(engine.StateDownloading): true,
+		string(engine.StateChecking):    true,
+		string(engine.StateExtracting):  true,
+		string(engine.StateMoving):      true,
+	}
+	refused := []string{
+		string(engine.StateQueued), string(engine.StateSeeding),
+		string(engine.StateError), string(engine.StateCompleted), string(engine.StateRemoved),
+	}
+
+	states := slices.Clone(refused)
+	for state := range active {
+		states = append(states, state)
+	}
+	states = append(states, string(engine.StatePaused))
+	sort.Strings(states)
+
+	for _, state := range states {
+		t.Run(state, func(t *testing.T) {
+			env := newAdmitEnv(t)
+			ref := "gid-" + state
+			id := env.seedTask(t, engine.NameAria2, state, func(task *store.Task) {
+				task.State = state
+				task.EngineRef = &ref
+				if state == string(engine.StatePaused) {
+					// Only a row the guard itself parked carries the stamp; the
+					// operator-pause shape (no code) is covered below the table.
+					task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+					task.ErrorMessage = ptr("no space left on device")
+				}
+			})
+
+			// A task already parked by the guard only refreshes its stamp: the
+			// state is unchanged and no second pause event is written.
+			if state == string(engine.StatePaused) {
+				if err := env.admit.PauseDiskFull(t.Context(), id, nil); err != nil {
+					t.Fatalf("refresh a paused task's stamp: %v", err)
+				}
+				if got := env.taskState(t, id); got != string(engine.StatePaused) {
+					t.Errorf("state = %q, want it to stay paused", got)
+				}
+				if code := env.taskErrorCode(t, id); code != engine.ErrorCodeDiskFull {
+					t.Errorf("error_code = %q, want the refreshed %q", code, engine.ErrorCodeDiskFull)
+				}
+				events, _, _, err := env.tasks.ListEvents(t.Context(), id, 10, "")
+				if err != nil {
+					t.Fatalf("list events: %v", err)
+				}
+				for _, event := range events {
+					if event.Code == store.CodeTaskPaused {
+						t.Error("the paused refresh wrote a second pause event")
+					}
+				}
+				return
+			}
+
+			err := env.admit.PauseDiskFull(t.Context(), id, nil)
+			if active[state] {
+				if err != nil {
+					t.Fatalf("pause an active %s task: %v", state, err)
+				}
+				if got := env.taskState(t, id); got != string(engine.StatePaused) {
+					t.Errorf("state = %q, want paused", got)
+				}
+				if code := env.taskErrorCode(t, id); code != engine.ErrorCodeDiskFull {
+					t.Errorf("error_code = %q, want %q", code, engine.ErrorCodeDiskFull)
+				}
+				pauses := env.aria2.recordedPauses()
+				if len(pauses) != 1 || pauses[0] != "aria2:"+ref {
+					t.Errorf("pauses = %v, want one engine-side stop of the %s transfer", pauses, state)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("pausing a %s task returned nil, want a refusal", state)
+			}
+			if got := env.taskState(t, id); got != state {
+				t.Errorf("state = %q after the refusal, want it untouched at %q", got, state)
+			}
+			if code := env.taskErrorCode(t, id); code != "" {
+				t.Errorf("error_code = %q after the refusal, want none", code)
+			}
+			// A queued row can briefly own a live engine transfer — the
+			// release window — so its refusal still stops the writes
+			// engine-side; every other refused state has no transfer to stop.
+			pauses := env.aria2.recordedPauses()
+			if state == string(engine.StateQueued) {
+				if len(pauses) != 1 || pauses[0] != "aria2:"+ref {
+					t.Errorf("pauses = %v, want the queued refusal to still stop the transfer", pauses)
+				}
+			} else if len(pauses) != 0 {
+				t.Errorf("pauses = %v, want none: a %s task has no transfer to stop", pauses, state)
+			}
+		})
+	}
+}
+
+// The release cleanup's hold-code clear is guarded on the row not being
+// paused: a disk-full pause that lands between a release's transition and
+// its clear must keep its stamp, or the pass would never select the row
+// again (FR-048) — the clear loses the race on purpose.
+func TestClearHoldCodeNeverWipesAPausedStamp(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	paused := env.seedTask(t, engine.NameAria2, "parked", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr("no space left on device")
+	})
+	running := env.seedTask(t, engine.NameAria2, "running", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.ErrorCode = ptr(engine.ErrorCodeConcurrencyLimit)
+		task.ErrorMessage = ptr("1 of 1 slots in use")
+	})
+
+	if err := env.tasks.ClearHoldCode(t.Context(), paused); err != nil {
+		t.Fatalf("clear hold code of a paused task: %v", err)
+	}
+	if code := env.taskErrorCode(t, paused); code != engine.ErrorCodeDiskFull {
+		t.Errorf("paused task error_code = %q, want the disk_full stamp the guard kept", code)
+	}
+
+	// A row the release owns — downloading — still clears.
+	if err := env.tasks.ClearHoldCode(t.Context(), running); err != nil {
+		t.Fatalf("clear hold code of a running task: %v", err)
+	}
+	if code := env.taskErrorCode(t, running); code != "" {
+		t.Errorf("running task error_code = %q, want it cleared", code)
+	}
+
+	// A row that moved on to a real failure keeps its own code: the clear
+	// only ever lifts the two admission hold stamps.
+	failed := env.seedTask(t, engine.NameAria2, "failed", func(task *store.Task) {
+		task.State = string(engine.StateError)
+		task.ErrorCode = ptr("engine_unavailable")
+		task.ErrorMessage = ptr("connection refused")
+	})
+	if err := env.tasks.ClearHoldCode(t.Context(), failed); err != nil {
+		t.Fatalf("clear hold code of a failed task: %v", err)
+	}
+	if code := env.taskErrorCode(t, failed); code != "engine_unavailable" {
+		t.Errorf("failed task error_code = %q, want the real failure code kept", code)
+	}
+}
+
+// The paused disk_full candidates share the queued candidates' single
+// ordering: an older parked task is walked before a newer queued one, so
+// sustained queuing cannot starve the task whose partial data is already
+// on disk.
+func TestParkedTaskKeepsItsPlaceInTheOrder(t *testing.T) {
+	env := newAdmitEnv(t)
+	root := t.TempDir()
+
+	parked := env.seedTask(t, engine.NameAria2, "older-parked", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr("no space left on device")
+		task.Destination = root
+		// Partial data already on disk — the row the resume must continue,
+		// never restart, matching the scenario the comment narrates.
+		task.CompletedBytes = 4 * mib
+	})
+	nextAddedAt()
+	env.seedTask(t, engine.NameAria2, "newer-queued", func(task *store.Task) {
+		task.Destination = root
+	})
+
+	candidates, err := env.tasks.SelectQueuedCandidates(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("select candidates: %v", err)
+	}
+	if len(candidates) != 2 || candidates[0].ID != parked {
+		var order []string
+		for _, cand := range candidates {
+			order = append(order, cand.ID)
+		}
+		t.Fatalf("candidate order = %v, want the older parked task %s first", order, parked)
+	}
+}
+
+// An operator-paused task — paused without disk_full — must never gain the
+// stamp: the admission pass selects paused rows by that code, so a stamp
+// gained here would let a later tick silently un-pause what the user
+// parked.
+func TestPauseDiskFullRefusesAnOperatorPause(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	id := env.seedTask(t, engine.NameAria2, "user-parked", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		ref := "user-handle"
+		task.EngineRef = &ref
+	})
+
+	if err := env.admit.PauseDiskFull(t.Context(), id, nil); err == nil {
+		t.Fatal("pausing an operator-paused task returned nil, want a refusal")
+	}
+	if got := env.taskState(t, id); got != string(engine.StatePaused) {
+		t.Errorf("state = %q, want it to stay paused", got)
+	}
+	if code := env.taskErrorCode(t, id); code != "" {
+		t.Errorf("error_code = %q, want none: an operator pause must not gain the stamp", code)
 	}
 }

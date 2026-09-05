@@ -90,7 +90,9 @@ URI normalisation, the Engine interface, the aria2 adapter, the queue and the ev
 | [T026](T026-boot-reconciliation.md) | Reconcile tasks with the engines at boot and on every poll | T019, T024, T025 | done |
 | [T027](T027-list-and-test-engines.md) | List engines and test connectivity | T019, T020 | done |
 | [T098](T098-concurrency-limiter.md) | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | done |
-| [T099](T099-disk-space-reservation.md) | Reserve disk space and keep a free-space floor | T020, T024, T098 | todo |
+| [T099](T099-disk-space-reservation.md) | Reserve disk space and keep a free-space floor | T020, T024, T098 | done |
+| [T126](T126-disk-full-pause-routing.md) | Route an engine disk-full report into the pause | T026, T099 | todo |
+| [T127](T127-operator-pause-of-a-parked-task.md) | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099 | todo |
 
 ## M2 — BitTorrent
 
@@ -230,7 +232,8 @@ reason and the task that will carry it.
 |---|---|---|---|
 | M0 exit: a rendered login page | brief §8 | T013 embeds a placeholder `index.html`; the login screen is a React route. | T040 |
 | M0 exit: the `integration` CI job green | brief §8 | `make test-integration` has no adapter to exercise until M1/M2. | T028 |
-| M1 exit: the admission pass's ticker (`Admitter.Run` has no composition-root call site) | [T098](T098-concurrency-limiter.md) | T098's Files table omits the composition root (`internal/api/server.go`, `cmd/dl-tool/main.go`) and conventions §8.3 forbids wiring outside it; the `load func(ctx) (Limits, error)` closure also needs a settings-key reader no M1 task has built yet. Until it lands, `Pass` and the resume headroom answer are correct but nothing drives them on a ticker, so a queued task never reaches an engine. | T099 — it owns the wiring: it already needs the same settings reader for `min_free_space` and joins the same `Pass`, so it must add the composition root (`internal/api/server.go`) to its Files table, build `load` over the settings rows and start `Admitter.Run` beside the reconciler's loop |
+| An aria2 disk-full report (errorCode 9) pauses the task instead of erroring it | [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) | `writeBack` in `internal/engine/reconcile.go` adopts the engine's `error` state; the `disk_full` mapping and `Admitter.PauseDiskFull` exist (T099) but nothing routes the report into them. | T126 |
+| An operator pause on a disk-full-parked task stays parked instead of being auto-resumed by the admission pass | [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) | The pass attributes a paused row to the guard by `error_code` alone (T099); the operator pause keeps the stamp in both directions — landing on an already-parked row is an idempotent no-op that keeps it, and on a queued row carrying a `disk_full` hold the stamp survives the transition (round 14's compare-and-set closed only the stamp-after-pause direction). Clearing it needs the action layer (`internal/api/tasks_actions.go`), outside T099's Files table — round-10 review of PR #92, widened round 15. | T127 |
 | Populating row 3 of the routing table, so a yt-dlp URL reaches the media lane | [FR-002](../02-requirements.md#fr-002-route-each-uri-to-an-engine-by-scheme) | The mechanism T088 assumed does not exist in yt-dlp, and 284 of its 1702 patterns do not compile with Go `regexp` ([`06-download-engines.md`](../06-download-engines.md#72-routing-check) §7.2). T016 still ships the routing table and its `mediaMatch` hook; only the hook's data source is deferred, and a nil hook routes such a URL to aria2 rather than mis-routing it. Needs an ADR. | T088, after the ADR |
 | M3 exit: the eight remaining settings sections | brief §8 | T053 ships the settings shell with General and Connection and lists the rest in `IMPLEMENTED`; each remaining section needs endpoints that do not exist in M3. | T116, T117, T118, T119, T120, T121 |
 
@@ -295,7 +298,9 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T026 | Reconcile tasks with the engines at boot and on every poll | T019, T024, T025 | no | done | [T026](T026-boot-reconciliation.md) |
 | T027 | List engines and test connectivity | T019, T020 | yes | done | [T027](T027-list-and-test-engines.md) |
 | T098 | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | no | done | [T098](T098-concurrency-limiter.md) |
-| T099 | Reserve disk space and keep a free-space floor | T020, T024, T098 | yes | todo | [T099](T099-disk-space-reservation.md) |
+| T099 | Reserve disk space and keep a free-space floor | T020, T024, T098 | no | done | [T099](T099-disk-space-reservation.md) |
+| T126 | Route an engine disk-full report into the pause | T026, T099 | yes | todo | [T126](T126-disk-full-pause-routing.md) |
+| T127 | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099 | yes | todo | [T127](T127-operator-pause-of-a-parked-task.md) |
 
 ### M2
 
