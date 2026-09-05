@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -446,42 +447,71 @@ func TestUnreachableEngineLogsAndChangesNoState(t *testing.T) {
 func TestNewServerReconcilesBeforeServing(t *testing.T) {
 	const gid = "2089b05ecca3d829"
 
-	// A minimal aria2 JSON-RPC endpoint that answers the List batch with
-	// one active transfer dl-tool owns.
+	// A minimal aria2 JSON-RPC endpoint. The reconciler's sweep arrives as
+	// a batch array, the boot probe (T027) as one single-object
+	// aria2.getVersion call, so the fake decodes either shape and mirrors
+	// it in its reply — the client decodes the shape it sent.
 	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var requests []struct {
+		type fakeRPC struct {
 			ID     string `json:"id"`
 			Method string `json:"method"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&requests); err != nil {
-			t.Errorf("decode rpc batch: %v", err)
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read rpc body: %v", err)
+			http.Error(w, "read error", http.StatusBadRequest)
+			return
+		}
+
+		var requests []fakeRPC
+		single := !bytes.HasPrefix(bytes.TrimSpace(body), []byte("["))
+		if single {
+			var req fakeRPC
+			err = json.Unmarshal(body, &req)
+			requests = append(requests, req)
+		} else {
+			err = json.Unmarshal(body, &requests)
+		}
+		if err != nil {
+			t.Errorf("decode rpc request: %v", err)
 			http.Error(w, "decode error", http.StatusBadRequest)
 			return
 		}
 
 		replies := make([]map[string]any, 0, len(requests))
 		for _, req := range requests {
-			result := []any{}
-			if req.Method == "aria2.tellActive" {
-				result = append(result, map[string]any{
+			result := any([]any{})
+			switch req.Method {
+			case "aria2.tellActive":
+				result = []any{map[string]any{
 					"gid":             gid,
 					"status":          "active",
 					"totalLength":     "1000",
 					"completedLength": "100",
 					"downloadSpeed":   "1234",
 					"dir":             "/data",
-				})
+				}}
+			case "aria2.getVersion":
+				result = map[string]any{"version": "1.37.0"}
 			}
 			replies = append(replies, map[string]any{
 				"jsonrpc": "2.0", "id": req.ID, "result": result,
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if single {
+			if err := json.NewEncoder(w).Encode(replies[0]); err != nil {
+				// This fake deliberately outlives the test (see the note below);
+				// a testing.T method here would panic if the leaked reconciler's
+				// poll hits an encode error after completion. The test's own
+				// reconciliation assertions catch genuinely broken replies.
+				return
+			}
+			return
+		}
 		if err := json.NewEncoder(w).Encode(replies); err != nil {
-			// This fake deliberately outlives the test (see the note below);
-			// a testing.T method here would panic if the leaked reconciler's
-			// poll hits an encode error after completion. The test's own
-			// reconciliation assertions catch genuinely broken replies.
+			// Same note as above.
 			return
 		}
 	}))

@@ -48,10 +48,14 @@ func NewSettingsStore(db *sqlx.DB) *SettingsStore {
 	return &SettingsStore{db: db}
 }
 
-// queryListEngines names its columns so secret_enc and username can never
-// ride along on a SELECT * widening. kind order is aria2, qbittorrent,
-// ytdlp — the stable order the API example uses.
-const queryListEngines = `SELECT id, kind, name, enabled, url, version, last_seen_at, last_error
+// engineColumns is the explicit column list every engines SELECT shares,
+// so secret_enc and username can never ride along on a widening of one
+// query and the list and detail reads cannot drift apart.
+const engineColumns = `id, kind, name, enabled, url, version, last_seen_at, last_error`
+
+// queryListEngines: kind order is aria2, qbittorrent, ytdlp — the stable
+// order the API example uses.
+const queryListEngines = `SELECT ` + engineColumns + `
 FROM engines ORDER BY kind`
 
 // ListEngines returns every engines row, ordered by kind.
@@ -124,9 +128,9 @@ WHERE id = ?`,
 	return nil
 }
 
-// queryEngineByID shares ListEngines' explicit column list over the
-// primary key, so secret_enc can never ride along here either.
-const queryEngineByID = `SELECT id, kind, name, enabled, url, version, last_seen_at, last_error
+// queryEngineByID reads the same column list as ListEngines over the
+// primary key.
+const queryEngineByID = `SELECT ` + engineColumns + `
 FROM engines WHERE id = ?`
 
 // EngineByID resolves one row by id. ErrNotFound means the id addresses

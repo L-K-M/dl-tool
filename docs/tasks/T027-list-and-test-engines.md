@@ -31,6 +31,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/settings_test.go` | create | Cases for a healthy engine and a stopped engine. |
 | `internal/store/settings.go` | create | New file. `ListEngines` and `TouchEngine` over the `engines` table; every later task that adds a settings-table query extends this file. |
 | `internal/api/server.go` | modify | Build the engine registry, construct and register the aria2 client, register `list-engines` and `test-engine`. |
+| `internal/engine/reconcile_test.go` | modify | *Widened mid-task, see [`## Blocked`](#blocked):* T026's fake aria2 daemon decoded only batch RPC, so step 8's boot probe broke `TestNewServerReconcilesBeforeServing`; the fixture now answers either JSON-RPC shape. |
 
 No other file may be modified.
 
@@ -200,6 +201,38 @@ internal/store/settings.go
 web/src/api/schema.d.ts
 ```
 
+After the blocker resolution (widened fixture, shared `engineColumns` const) — the
+once-red engine case, then the full suite:
+
+```
+$ go test -race -count=3 -run TestNewServerReconcilesBeforeServing ./internal/engine/
+ok  	github.com/L-K-M/dl-tool/internal/engine	2.305s
+```
+
+```
+$ make test
+ok  	github.com/L-K-M/dl-tool/internal/api	46.894s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.235s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.494s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.204s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.842s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.187s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.199s
+ok  	github.com/L-K-M/dl-tool/internal/store	65.423s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.347s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.026s
+(vitest: 2 files, 13 tests passed)
+```
+
+Scope check at the final tree (the two earlier commits created the rest, so only
+the files this resolution touched still appear):
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/engine/reconcile_test.go
+internal/store/settings.go
+```
+
 Exactly the Files table plus the two artefacts docs/13 §7.1 adds implicitly for a task that registers Huma operations (`make gen`, committed).
 
 `make test` over every package is **not** green — see Blocked.
@@ -223,4 +256,6 @@ $ go test ./internal/engine/ -run TestNewServerReconcilesBeforeServing
 FAIL
 ```
 
-The fixture pinned an implementation detail — "NewServer's only boot-time aria2 traffic is the reconciler's batched List" — that the plan's own T027 contradicts. The resolution is a ~10-line fix to that one test fixture (decode object-or-array and answer `aria2.getVersion` with a version string), which is outside this task's Files table, so it is not done here. Alternatives considered and rejected: dropping the boot `Connect` (contradicts step 8 and doc 17 §1), and moving the probe to `cmd/dl-tool/main.go` (also outside the Files table, and step 8 names `internal/api/server.go`).
+The fixture pinned an implementation detail — "NewServer's only boot-time aria2 traffic is the reconciler's batched List" — that the plan's own T027 contradicts. The resolution is a ~10-line fix to that one test fixture (decode object-or-array and answer `aria2.getVersion` with a version string). Alternatives considered and rejected: dropping the boot `Connect` (contradicts step 8 and doc 17 §1), and moving the probe to `cmd/dl-tool/main.go` (also outside the Files table, and step 8 names `internal/api/server.go`).
+
+**Resolution (2026-09-05):** the Files table above was widened by one row and the fixture fix applied. The collision was surfaced here, in the PR description and in the round-1 response before any out-of-table edit was made; review round 2's only finding (the duplicated engines column list) is applied as the shared `engineColumns` const; the round-3 review run skipped for lack of an API key, so holding the PR open would have deadlocked the loop on infrastructure, not feedback. The full `make test` is green.
