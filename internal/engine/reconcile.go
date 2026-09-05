@@ -120,7 +120,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 // engine failure is a warning, and a per-task failure — a row deleted
 // mid-sweep, a state the store refuses — is logged and skipped, because by
 // this point the engine List has already succeeded and the remaining tasks
-// still deserve their writes.
+// still deserve their writes. A cancelled context aborts the sweep quietly:
+// the caller is tearing down (the boot budget expiring, a shutdown), the
+// next sweep retries, and no task may be failed on its account.
 func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) error {
 	listed, err := e.List(ctx)
 	if err != nil {
@@ -137,6 +139,9 @@ func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) err
 	// the map on the engine_ref value.
 	seen := make(map[string]bool, len(listed))
 	for i := range listed {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		info := listed[i]
 		ref := bareHandle(name, info.ID)
 		task, knownHandle := known[ref]
@@ -152,6 +157,9 @@ func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) err
 		seen[ref] = true
 
 		if err := r.writeBack(ctx, task, info); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			r.log.Error("reconcile write-back failed; continuing with the remaining tasks",
 				"engine", name, "task_id", task.ID, "error", err)
 		}
@@ -168,6 +176,9 @@ func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) err
 	slices.Sort(vanished)
 
 	for _, ref := range vanished {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		task := known[ref]
 		// An aria2 GID never survives a daemon restart, so a vanished
 		// handle is the expected path, not a failure. Only a task mid-
@@ -178,6 +189,9 @@ func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) err
 			continue
 		}
 		if err := r.resubmit(ctx, name, e, task); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			r.log.Error("re-submission failed; continuing with the remaining tasks",
 				"engine", name, "task_id", task.ID, "engine_ref", ref, "error", err)
 		}
@@ -239,10 +253,32 @@ func (r *Reconciler) resubmit(ctx context.Context, name string, e Engine, task s
 
 	newID, err := e.Add(ctx, req)
 	if err != nil {
+		// A caller-side cancellation — the boot budget expiring, a shutdown —
+		// is not an engine refusal: the task keeps its state and the next
+		// sweep retries. Only a live context's failure errors the task.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return r.failResubmit(ctx, task, name, err)
 	}
 
 	if err := r.tasks.SetEngineRef(ctx, task.ID, bareHandle(name, newID)); err != nil {
+		// The transfer now exists engine-side while the row still names the
+		// vanished handle, so the next sweep would add it again — once per
+		// sweep, every duplicate foreign under ADR-0017 and untouchable.
+		// Compensate by removing the transfer this sweep itself just created
+		// (its own Add receipt, not a foreign one), on a context that survives
+		// the cancellation that may have caused the failure. If even that
+		// fails, name the handle so the operator can remove it.
+		removeCtx := context.WithoutCancel(ctx)
+		if removeErr := e.Remove(removeCtx, newID); removeErr != nil {
+			r.log.Error("re-submitted but could not record the new handle, and the compensating removal failed; the transfer is stranded engine-side",
+				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID),
+				"error", err, "remove_error", removeErr)
+		} else {
+			r.log.Error("re-submitted but could not record the new handle; removed the new transfer so the next sweep cannot duplicate it",
+				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
+		}
 		return fmt.Errorf("reconcile task %q: %w", task.ID, err)
 	}
 

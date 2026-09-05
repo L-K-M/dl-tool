@@ -297,6 +297,17 @@ field snapshotted per connection (`c.readIdle`) instead of mutable package
 state. Stability pinned with `go test -race -count=5 -run TestEvents`
 (10 packages `ok` across the full `make test`).
 
+Round 3 sharpened the Add/SetEngineRef window, both taken: a caller-side
+cancellation (the boot budget expiring) is no longer read as an engine
+refusal — the sweep aborts with the context error and no task is errored
+(`TestCancelledReconcileDoesNotErrorTasks`) — and a successful `Add` whose
+`SetEngineRef` fails now compensates by removing the transfer the sweep
+itself just created (its own Add receipt, not a foreign one, so ADR-0017
+holds) on a cancellation-proof context, so a store blip costs one Add per
+sweep instead of one untouchable duplicate per sweep
+(`TestFailedSetEngineRefCompensatesByRemoving`). Full gates re-run after
+the round: `make lint` clean, `make test` green in all 10 packages.
+
 ## Blocked
 
 None. An earlier session stopped here because

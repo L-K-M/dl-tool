@@ -27,14 +27,21 @@ import (
 // injected fields, and every method the sweep never calls stays a panic so
 // an unexpected call fails the test loudly.
 type fakeEngine struct {
-	name    string
-	infos   []engine.TaskInfo
-	listErr error
-	addID   string
-	addErr  error
+	name      string
+	infos     []engine.TaskInfo
+	listErr   error
+	addID     string
+	addErr    error
+	removeErr error
 
-	mu       sync.Mutex
-	addCalls []engine.AddRequest
+	// onAdd, when set, runs under Add's call — the hook a test uses to
+	// cancel the caller's context mid-submission, the way a real engine
+	// call dies when its context does.
+	onAdd func(ctx context.Context)
+
+	mu          sync.Mutex
+	addCalls    []engine.AddRequest
+	removeCalls []string
 }
 
 func (f *fakeEngine) Name() string                      { return f.name }
@@ -48,10 +55,19 @@ func (f *fakeEngine) Health(context.Context) (string, error) {
 	panic("not called by the reconciler")
 }
 
-func (f *fakeEngine) Add(_ context.Context, req engine.AddRequest) (string, error) {
+func (f *fakeEngine) Add(ctx context.Context, req engine.AddRequest) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.addCalls = append(f.addCalls, req)
+	hook := f.onAdd
+	hookCtx := ctx
+	f.mu.Unlock()
+
+	if hook != nil {
+		hook(hookCtx)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if f.addErr != nil {
 		return "", f.addErr
 	}
@@ -70,7 +86,12 @@ func (f *fakeEngine) Files(context.Context, string) ([]engine.FileEntry, error) 
 }
 func (f *fakeEngine) Pause(context.Context, string) error  { panic("not called") }
 func (f *fakeEngine) Resume(context.Context, string) error { panic("not called") }
-func (f *fakeEngine) Remove(context.Context, string) error { panic("not called") }
+func (f *fakeEngine) Remove(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removeCalls = append(f.removeCalls, id)
+	return f.removeErr
+}
 func (f *fakeEngine) SetFiles(context.Context, string, []int, map[int]int) error {
 	panic("not called")
 }
@@ -105,6 +126,11 @@ type fakeTasks struct {
 	// failProgress names tasks whose UpdateProgress fails, to exercise the
 	// per-task isolation of a sweep.
 	failProgress map[string]error
+
+	// failSetEngineRef makes the first N SetEngineRef calls fail, to
+	// exercise the compensating removal of a transfer whose handle could
+	// not be recorded.
+	failSetEngineRef int
 }
 
 type transitionRecord struct {
@@ -144,6 +170,10 @@ func (f *fakeTasks) UpdateProgress(_ context.Context, id string, p store.Progres
 func (f *fakeTasks) SetEngineRef(_ context.Context, id, engineRef string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failSetEngineRef > 0 {
+		f.failSetEngineRef--
+		return errors.New("store: write failed")
+	}
 	f.engineRefs[id] = engineRef
 	return nil
 }
@@ -583,5 +613,79 @@ func TestSweepSurvivesWriteBackFailure(t *testing.T) {
 	}
 	if ref, ok := tasks.engineRefs["tsk_ok"]; ok {
 		t.Errorf("engine_ref for tsk_ok = %q, want none — its handle is still known", ref)
+	}
+}
+
+// A caller-side cancellation mid-Add — the boot budget expiring, a shutdown —
+// is not an engine refusal: no task moves to error, no engine.unavailable
+// event is written, and Boot returns the context error for the caller to warn
+// about once.
+func TestCancelledReconcileDoesNotErrorTasks(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameAria2, map[string]store.Reconcilable{
+		"g1": {ID: "tsk_1", EngineRef: "g1", State: "downloading", SourceURI: source("https://example.org/one")},
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	e := &fakeEngine{
+		name:  engine.NameAria2,
+		addID: engine.NameAria2 + ":newgid",
+		onAdd: func(context.Context) { cancel() },
+	}
+	r := newSweep(t, e, tasks)
+
+	if err := r.Boot(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Boot: %v, want context.Canceled", err)
+	}
+	if len(tasks.transitions) != 0 {
+		t.Errorf("transitions = %+v, want none — cancellation is not a refusal", tasks.transitions)
+	}
+	if len(tasks.events) != 0 {
+		t.Errorf("events = %+v, want none", tasks.events)
+	}
+}
+
+// A successful Add whose SetEngineRef fails must not leave the transfer
+// engine-side unnamed: the next sweep would re-add it, and every duplicate
+// would be foreign under ADR-0017 — untouchable. The reconciler removes the
+// transfer it just created, so a retrying store blip costs one Add per
+// sweep, not one duplicate per sweep.
+func TestFailedSetEngineRefCompensatesByRemoving(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameAria2, map[string]store.Reconcilable{
+		"g1": {ID: "tsk_1", EngineRef: "g1", State: "downloading", SourceURI: source("https://example.org/one")},
+	})
+	tasks.failSetEngineRef = 1
+
+	e := &fakeEngine{name: engine.NameAria2, addID: engine.NameAria2 + ":newgid"}
+	r := newSweep(t, e, tasks)
+
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v, want nil — the per-task failure is logged, not surfaced", err)
+	}
+	e.mu.Lock()
+	removes := append([]string(nil), e.removeCalls...)
+	e.mu.Unlock()
+	if len(removes) != 1 || removes[0] != engine.NameAria2+":newgid" {
+		t.Fatalf("Remove calls = %v, want exactly one for the just-added handle", removes)
+	}
+
+	// The retry records the next handle, so exactly one Add ran per sweep.
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("second Boot: %v", err)
+	}
+	e.mu.Lock()
+	adds := len(e.addCalls)
+	totalRemoves := len(e.removeCalls)
+	e.mu.Unlock()
+	if adds != 2 {
+		t.Errorf("Add calls = %d, want 2 (one per sweep, no duplicates)", adds)
+	}
+	if totalRemoves != 1 {
+		t.Errorf("Remove calls = %d, want the single compensation of the first sweep", totalRemoves)
+	}
+
+	tasks.mu.Lock()
+	defer tasks.mu.Unlock()
+	if ref := tasks.engineRefs["tsk_1"]; ref != "newgid" {
+		t.Errorf("engine_ref = %q, want newgid after the retry", ref)
 	}
 }
