@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sync"
@@ -482,6 +483,70 @@ func TestGet(t *testing.T) {
 	}
 	if info.TotalBytes == nil || *info.TotalBytes != 34896138 {
 		t.Errorf("Get TotalBytes = %v, want 34896138", info.TotalBytes)
+	}
+}
+
+func TestFilesPathsAreRelativeToSaveDir(t *testing.T) {
+	directory := t.TempDir()
+	for _, test := range []struct {
+		name, path, want string
+		wantError        bool
+	}{
+		{"nested", filepath.Join(directory, "collection", "payload.iso"), "collection/payload.iso", false},
+		{"root", filepath.Join(directory, "payload.iso"), "payload.iso", false},
+		{"unknown", "", "", false},
+		{"parent", filepath.Join(directory, "..", "payload.iso"), "", true},
+		{"sibling", directory + "-sibling/payload.iso", "", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c, f := newTestClient(t, okResponder(map[string]any{
+				methodGetFiles:   []fileEntry{{Index: "1", Path: test.path, Selected: aria2True}},
+				methodTellStatus: statusResult{Dir: directory},
+			}))
+			entries, err := c.Files(t.Context(), engine.NameAria2+":"+testGID)
+			if test.wantError {
+				if err == nil {
+					t.Fatal("accepted a path outside SaveDir")
+				}
+				return
+			}
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("Files = %+v, error %v", entries, err)
+			}
+			if entries[0].Path != test.want || entries[0].Index != 0 || !entries[0].Selected || entries[0].Priority != nil {
+				t.Fatalf("file = %+v, want relative path %q, zero index and no priority", entries[0], test.want)
+			}
+			for _, call := range f.recorded() {
+				if call.Method != methodTellStatus {
+					continue
+				}
+				want := []any{"token:" + testSecret, testGID, []any{optDir}}
+				if diff := cmp.Diff(want, call.Params); diff != "" {
+					t.Errorf("directory lookup parameters (-want +got):\n%s", diff)
+				}
+			}
+		})
+	}
+}
+
+func TestFilesPropagatesDirectoryLookupFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payload.iso")
+	c, _ := newTestClient(t, func(method string) (any, *rpcFault) {
+		if method == methodGetFiles {
+			return []fileEntry{{Index: "1", Path: path}}, nil
+		}
+		return nil, &rpcFault{Code: 1, Message: "GID " + testGID + " is not found"}
+	})
+	if _, err := c.Files(t.Context(), engine.NameAria2+":"+testGID); !errors.Is(err, engine.ErrNotFound) {
+		t.Fatalf("Files error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFilesEmptyNeedsNoDirectoryLookup(t *testing.T) {
+	c, f := newTestClient(t, okResponder(map[string]any{methodGetFiles: []fileEntry{}}))
+	entries, err := c.Files(t.Context(), engine.NameAria2+":"+testGID)
+	if err != nil || len(entries) != 0 || len(f.recorded()) != 1 {
+		t.Fatalf("empty Files = %+v, error %v, calls %+v", entries, err, f.recorded())
 	}
 }
 
