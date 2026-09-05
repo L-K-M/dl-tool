@@ -205,7 +205,7 @@ func newSweep(t *testing.T, e engine.Engine, tasks engine.TaskWriter) *engine.Re
 	reg := engine.NewRegistry()
 	reg.Register(e)
 
-	return engine.NewReconciler(reg, tasks, time.Hour)
+	return engine.NewReconciler(reg, tasks, time.Hour, nil)
 }
 
 func TestBootWritesKnownHandles(t *testing.T) {
@@ -478,7 +478,11 @@ func TestNewServerReconcilesBeforeServing(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(replies); err != nil {
-			t.Errorf("encode rpc replies: %v", err)
+			// This fake deliberately outlives the test (see the note below);
+			// a testing.T method here would panic if the leaked reconciler's
+			// poll hits an encode error after completion. The test's own
+			// reconciliation assertions catch genuinely broken replies.
+			return
 		}
 	}))
 	// The reconciler's Run loop starts inside NewServer under the process
@@ -486,7 +490,8 @@ func TestNewServerReconcilesBeforeServing(t *testing.T) {
 	// below deliberately outlive the test: closed, the loop would warn once
 	// a second through whatever slog.Default() then is — racing later
 	// tests' logger swaps — while healthy it sweeps silently forever. Both
-	// live in TempDir space the process reclaims at exit.
+	// live on unlinked TempDir files: t.TempDir removes the directory at
+	// cleanup, and the open handles keep the inodes usable until exit.
 
 	root := t.TempDir()
 	db, err := store.Open(t.Context(), filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
@@ -533,7 +538,7 @@ func TestRunStopsWithContext(t *testing.T) {
 	e := &fakeEngine{name: engine.NameAria2}
 	reg := engine.NewRegistry()
 	reg.Register(e)
-	r := engine.NewReconciler(reg, tasks, 10*time.Millisecond)
+	r := engine.NewReconciler(reg, tasks, 10*time.Millisecond, nil)
 
 	before := runtime.NumGoroutine()
 
@@ -698,12 +703,10 @@ func TestRunSweepCancellationIsNotAWarn(t *testing.T) {
 		"gone": {ID: "tsk_1", EngineRef: "gone", State: "downloading", SourceURI: source("https://example.org/one")},
 	})
 
-	// The reconciler logs through slog.Default; swap it for a buffer so the
-	// absent warning is observable, and restore it before the test ends.
+	// The reconciler logs through its own injected logger — none of the
+	// swap machinery — so the absent warning is observable without touching
+	// slog.Default().
 	logs := &strings.Builder{}
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
-	defer slog.SetDefault(previous)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	e := &fakeEngine{
@@ -713,7 +716,7 @@ func TestRunSweepCancellationIsNotAWarn(t *testing.T) {
 	}
 	reg := engine.NewRegistry()
 	reg.Register(e)
-	r := engine.NewReconciler(reg, tasks, 10*time.Millisecond)
+	r := engine.NewReconciler(reg, tasks, 10*time.Millisecond, slog.New(slog.NewTextHandler(logs, nil)))
 
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()

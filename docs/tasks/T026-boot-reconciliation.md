@@ -319,6 +319,14 @@ cancelled call left behind is foreign under ADR-0017 — the operator
 removes stray handles by hand (docs/17-operations-and-runbook.md section
 5.4's foreign-task row: ignore it).
 
+Round 10 closed the loop on the leak: the reconciler takes its logger from
+the composition root (`NewReconciler` gained a `*slog.Logger` parameter,
+nil falling back to `slog.Default()` — a fourth documented deviation from
+the contract sketch, after `Reconcilable`'s home, `TaskWriter`'s
+`AppendEvent` and the ticker-first `Run`), the outliving fake daemon no
+longer calls a testing.T method, and the TempDir comment states the real
+lifetime.
+
 Round 5's minor — `Close` cannot abort an in-flight dial — turned on a
 claim that is false for the pinned library: gorilla v1.5.0 watches the
 dial context only through the TCP connect (`client.go` sets the connection

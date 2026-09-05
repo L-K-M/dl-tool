@@ -240,7 +240,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// the server. A nil db (the openapi subcommand, router-only tests) has
 	// no tasks to reconcile and skips both.
 	if db != nil {
-		reconciler := engine.NewReconciler(engines, store.NewTaskStore(db), reconcilerPollInterval)
+		reconciler := engine.NewReconciler(engines, store.NewTaskStore(db), reconcilerPollInterval, log)
 		bootCtx, cancelBoot := context.WithTimeout(context.Background(), bootSweepBudget)
 		if err := reconciler.Boot(bootCtx); err != nil {
 			log.Warn("boot reconciliation failed; retrying on the poll loop",

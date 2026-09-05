@@ -61,9 +61,14 @@ type Reconciler struct {
 }
 
 // NewReconciler wires the registry to the task store. poll is the sweep
-// interval; 1s in production.
-func NewReconciler(reg *Registry, ts TaskWriter, poll time.Duration) *Reconciler {
-	return &Reconciler{registry: reg, tasks: ts, poll: poll, log: slog.Default()}
+// interval; 1s in production. log is the loop's logger — the composition
+// root passes its own, so sweeps never bypass it through slog.Default();
+// nil falls back to the default for direct constructions such as tests.
+func NewReconciler(reg *Registry, ts TaskWriter, poll time.Duration, log *slog.Logger) *Reconciler {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Reconciler{registry: reg, tasks: ts, poll: poll, log: log}
 }
 
 // Boot runs one full sweep before the HTTP listener opens, over the
