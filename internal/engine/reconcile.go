@@ -268,9 +268,12 @@ func (r *Reconciler) resubmit(ctx context.Context, name string, e Engine, task s
 		// sweep, every duplicate foreign under ADR-0017 and untouchable.
 		// Compensate by removing the transfer this sweep itself just created
 		// (its own Add receipt, not a foreign one), on a context that survives
-		// the cancellation that may have caused the failure. If even that
-		// fails, name the handle so the operator can remove it.
-		removeCtx := context.WithoutCancel(ctx)
+		// the cancellation that may have caused the failure — and carries its
+		// own deadline, because WithoutCancel also drops the budget a Boot
+		// was running under, and no engine is owed an unbounded wait. If even
+		// the removal fails, name the handle so the operator can remove it.
+		removeCtx, cancelRemove := context.WithTimeout(context.WithoutCancel(ctx), compensateRemoveBudget)
+		defer cancelRemove()
 		if removeErr := e.Remove(removeCtx, newID); removeErr != nil {
 			r.log.Error("re-submitted but could not record the new handle, and the compensating removal failed; the transfer is stranded engine-side",
 				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID),
@@ -329,6 +332,11 @@ func resubmitRequest(task store.Reconcilable) (AddRequest, bool) {
 func resumeExtra() map[string]string {
 	return map[string]string{"continue": "true"}
 }
+
+// compensateRemoveBudget bounds the compensating removal of a transfer
+// whose handle could not be recorded. It runs on a context that survives
+// the caller's cancellation, so nothing else bounds it.
+const compensateRemoveBudget = 10 * time.Second
 
 // resubmittable reports whether a vanished handle is re-submitted: only a
 // transfer the engine was actively holding. queued and paused tasks are left

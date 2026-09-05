@@ -308,6 +308,17 @@ sweep instead of one untouchable duplicate per sweep
 (`TestFailedSetEngineRefCompensatesByRemoving`). Full gates re-run after
 the round: `make lint` clean, `make test` green in all 10 packages.
 
+Round 4 bounded the compensating removal with its own 10 s budget —
+`WithoutCancel` also drops the deadline a Boot ran under, so nothing else
+bounded it.
+
+One window stays open by design: an `Add` that fails because the caller's
+context died may already have reached the engine, and with no returned gid
+the sweep cannot compensate. The retry re-adds, and any transfer the
+cancelled call left behind is foreign under ADR-0017 — the operator
+removes stray handles by hand (docs/17-operations-and-runbook.md section
+5.4's foreign-task row: ignore it).
+
 ## Blocked
 
 None. An earlier session stopped here because
