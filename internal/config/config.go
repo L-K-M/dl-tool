@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -233,7 +234,7 @@ func validateConfig(cfg *Config) *FatalError {
 		{cfg.LogFormat == defaultLogFormat || cfg.LogFormat == logFormatText, envLogFormat, cfg.LogFormat},
 		{validListenAddress(cfg.HTTPAddr), envHTTPAddr, cfg.HTTPAddr},
 		{cfg.MetricsAddr == metricsOff || validListenAddress(cfg.MetricsAddr), envMetricsAddr, cfg.MetricsAddr},
-		{cfg.BasePath == "" || strings.HasPrefix(cfg.BasePath, "/") && !strings.HasSuffix(cfg.BasePath, "/"), envBasePath, cfg.BasePath},
+		{validBasePath(cfg.BasePath), envBasePath, cfg.BasePath},
 	}
 	for _, check := range checks {
 		if !check.valid {
@@ -274,7 +275,24 @@ func validateConfig(cfg *Config) *FatalError {
 		}
 	}
 
+	// The database may live elsewhere; its opener cannot secure the secret directory.
+	if err := os.Chmod(cfg.ConfigDir, privateDirectoryMode); err != nil {
+		return pathUnwritable(envConfigDir, fmt.Errorf("secure directory: %w", err))
+	}
 	return nil
+}
+
+// validBasePath excludes URL authorities and router patterns from a static mount.
+func validBasePath(value string) bool {
+	if value == "" {
+		return true
+	}
+	if !strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") || strings.ContainsAny(value, `\{}*`) {
+		return false
+	}
+
+	parsed, err := url.Parse(value)
+	return err == nil && parsed.Host == "" && parsed.Path == value && path.Clean(value) == value
 }
 
 func validLogLevel(value string) bool {

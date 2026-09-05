@@ -190,5 +190,15 @@ internal/config/env.go
 internal/secure/secret.go
 ```
 
+Audit regressions cover static local mount prefixes and config-directory privacy when
+the database lives elsewhere.
+
+```text
+$ make test PKG=./internal/config/... && echo CONFIG_OK
+go test -race -count=1 ./internal/config/...
+ok  	github.com/L-K-M/dl-tool/internal/config	1.113s
+CONFIG_OK
+```
+
 ## Blocked
 None.
