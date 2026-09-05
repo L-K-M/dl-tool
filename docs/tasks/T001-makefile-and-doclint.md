@@ -148,5 +148,21 @@ Makefile
 scripts/doclint.sh
 ```
 
+Audit-note verification:
+
+```text
+$ make doclint && echo DOCLINT_OK
+./scripts/doclint.sh
+🔍 2327 Total (in 217ms) 🔗 542 Unique ✅ 2321 OK 🚫 0 Errors 👻 6 Excluded
+
+DOCLINT_OK
+```
+
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Audit: the [mandated setup recipe](../13-testing-and-verification.md#2-makefile) conflicts with that
+section's tool-version rule while [T003's dependency deferral](T003-web-build-scaffold.md) applies.
+With no installed Playwright package, CI resolved `playwright@1.63.0` from the registry and received a
+tarball 404; retry passed.
+
+Doc 13 §2 must reconcile bootstrap sequencing before the recipe or dependency can change.
+No replacement policy is chosen here.
