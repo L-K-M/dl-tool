@@ -238,7 +238,17 @@ func (a *Admitter) Pass(ctx context.Context, p Policy) ([]string, error) {
 				return released, ctx.Err()
 			}
 
-			return released, fmt.Errorf("admission pass: %w", err)
+			// One candidate's store error must not starve the candidates
+			// behind it on every tick: the selection order is stable, so an
+			// aborting pass would reselect the same row and die at it again
+			// while everything behind it waits forever — the head-of-line
+			// blocking the busy-skip above exists to avoid, back through
+			// the error path. Skip it, log it, reselect it later; context
+			// cancellation stays the only pass-aborting error.
+			a.log.Warn("admission pass: skipping candidate after a store error",
+				"task_id", cand.ID, "error", err)
+
+			continue
 		}
 		if !releasedThis {
 			continue

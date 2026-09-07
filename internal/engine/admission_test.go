@@ -2026,6 +2026,51 @@ func TestVanishedCandidateAbortsQuietly(t *testing.T) {
 	}
 }
 
+// brokenReadStore answers one id's Get with a persistent store error
+// that is not the not-found one — a row whose read keeps failing while
+// its neighbours are fine, the shape a corrupted row produces.
+type brokenReadStore struct {
+	engine.AdmissionStore
+	broken string
+}
+
+func (s brokenReadStore) Get(ctx context.Context, id string) (store.Task, error) {
+	if id == s.broken {
+		return store.Task{}, errors.New("injected: revalidation read failed")
+	}
+
+	return s.AdmissionStore.Get(ctx, id)
+}
+
+// One candidate's persistent store error must not starve the candidates
+// behind it: the pass logs the failure and walks on, so the same Pass
+// invocation still releases the healthy siblings — the same
+// head-of-line discipline the busy-skip keeps for the lease. Context
+// cancellation stays the only error that aborts the walk.
+func TestStoreErrorSkipsCandidateNotThePass(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	broken := env.seedTask(t, engine.NameAria2, "broken", nil)
+	nextAddedAt()
+	sibling := env.seedTask(t, engine.NameAria2, "healthy", nil)
+
+	admit := env.admitterOver(brokenReadStore{AdmissionStore: env.tasks, broken: broken})
+
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v, want no error: one candidate's store failure skips it, it does not abort the pass", err)
+	}
+	if len(released) != 1 || released[0] != sibling {
+		t.Fatalf("released = %v, want exactly the sibling %s: the broken row must not head-of-line block it", released, sibling)
+	}
+	if state := env.taskState(t, broken); state != string(engine.StateQueued) {
+		t.Errorf("broken task state = %q, want the seeded queued untouched", state)
+	}
+	if state := env.taskState(t, sibling); state != string(engine.StateDownloading) {
+		t.Errorf("sibling state = %q, want downloading", state)
+	}
+}
+
 // claimCountingStore counts the guarded claim at the store boundary, so
 // a test can pin which release shapes take it and which do not.
 type claimCountingStore struct {
