@@ -92,7 +92,8 @@ URI normalisation, the Engine interface, the aria2 adapter, the queue and the ev
 | [T098](T098-concurrency-limiter.md) | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | done |
 | [T099](T099-disk-space-reservation.md) | Reserve disk space and keep a free-space floor | T020, T024, T098 | done |
 | [T126](T126-disk-full-pause-routing.md) | Route an engine disk-full report into the pause | T026, T099 | done |
-| [T127](T127-operator-pause-of-a-parked-task.md) | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099 | todo |
+| [T127](T127-operator-pause-of-a-parked-task.md) | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099, T128 | todo |
+| [T128](T128-atomic-claim-of-a-parked-candidate.md) | Claim a parked candidate before the engine resumes it | T099, T126 | todo |
 
 ## M2 — BitTorrent
 
@@ -235,13 +236,14 @@ reason and the task that will carry it.
 | An operator pause on a disk-full-parked task stays parked instead of being auto-resumed by the admission pass | [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) | The pass attributes a paused row to the guard by `error_code` alone (T099); the operator pause keeps the stamp in both directions — landing on an already-parked row is an idempotent no-op that keeps it, and on a queued row carrying a `disk_full` hold the stamp survives the transition (round 14's compare-and-set closed only the stamp-after-pause direction). Clearing it needs the action layer (`internal/api/tasks_actions.go`), outside T099's Files table — round-10 review of PR #92, widened round 15. | T127 |
 | A backoff ladder or cycle counter for the routed disk-full resume→pause cycle | [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) | T126 routes the report at the pass rate, so an ENOSPC naming a volume no data root covers (an engine temp dir) cycles resume→pause — one `task.paused` row per landing plus the release's own `task.resumed` row, so up to ~172,800 rows/day per affected task at 1 Hz (a ceiling — the engine's fail-and-report turnaround can only lengthen the cycle) — operator-visible by design, since T024's served event log is the detection signal. Until T127 lands, a manual pause does not break the cycle: the pass resumes any row stamped `disk_full` regardless of who paused it (see the T127 row), so the operator lever is freeing space — or removing the task only once its partial data is preserved — not pausing it. Rate-limiting the cycle is a plan-level decision awaiting the owner; implementing one before that decision is outside T126's scope, and inventing a carrier task would decide it (the T088 class — T099 round-16 disposition). | Owner decision required — surfaced at the M1 exit review; no carrier task may be filed before it |
 | M1 exit: the owner decision on the disk-full cycle counter | [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) | The "backoff ladder or cycle counter" risk row defers rate-limiting the resume→pause cycle to an owner decision; this exit row — the same convention as the "M0 exit:" rows — puts that decision on the M1 exit review's agenda structurally, instead of relying on the review reading the register's carried-by cell (the report-after-milestone mechanism of IMPLEMENTING.md names no register walk). Until it lands, T127 (operator pause authority) is the only operator brake on the cycle; both are M1 tasks, so they land in the same milestone and the exit review verifies that sequencing. | M1 exit review; T127 as interim brake — no operator-facing release may ship T126's routing before T127 (or the owner-decided counter) lands |
+| The admission pass serialises a task's release with an operator pause and claims a parked candidate before it touches the engine | [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) | T127 needs its hold-stamp clear to precede a release or follow it through a bounded lease wait, never race the engine call or report false success. No shared task-operation lease or claim exists: `Admitter.release` calls `Engine.Resume` before its first guarded row write, and no store method reports whether `state = 'paused' AND error_code = 'disk_full'` still matches. The registry and pass files are outside T127's Files table; the claim also lands in `internal/store/tasks.go`, which T127 lists for its distinct clear, so T128 owns the claim write to keep the two changes separate (the T099→T126 pattern). | T127, T128 |
 | Populating row 3 of the routing table, so a yt-dlp URL reaches the media lane | [FR-002](../02-requirements.md#fr-002-route-each-uri-to-an-engine-by-scheme) | The mechanism T088 assumed does not exist in yt-dlp, and 284 of its 1702 patterns do not compile with Go `regexp` ([`06-download-engines.md`](../06-download-engines.md#72-routing-check) §7.2). T016 still ships the routing table and its `mediaMatch` hook; only the hook's data source is deferred, and a nil hook routes such a URL to aria2 rather than mis-routing it. Needs an ADR. | T088, after the ADR |
 | M3 exit: the eight remaining settings sections | brief §8 | T053 ships the settings shell with General and Connection and lists the rest in `IMPLEMENTED`; each remaining section needs endpoints that do not exist in M3. | T116, T117, T118, T119, T120, T121 |
 
 ## A note on identifier order
 
-Task identifiers **T098–T125** are overflow numbers allocated after the original ranges were set. They
-belong to earlier milestones than their number suggests — T098 and T099 are M1, T100 and T101 are M2,
+Task identifiers **T098–T128** are overflow numbers allocated after the original ranges were set. They
+belong to earlier milestones than their number suggests — T098, T099 and T126–T128 are M1, T100 and T101 are M2,
 T103 and T104 are M3, T105, T116, T122 and T123 are M4, T106–T111 and T117–T120 are M6,
 T113, T115 and T121 are M7, and T124 and T125 are M0. A dependency on a numerically higher identifier is
 therefore usually not a forward reference: work milestones in order and the dependency is already
@@ -301,7 +303,8 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T098 | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | no | done | [T098](T098-concurrency-limiter.md) |
 | T099 | Reserve disk space and keep a free-space floor | T020, T024, T098 | no | done | [T099](T099-disk-space-reservation.md) |
 | T126 | Route an engine disk-full report into the pause | T026, T099 | no | done | [T126](T126-disk-full-pause-routing.md) |
-| T127 | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099 | yes | todo | [T127](T127-operator-pause-of-a-parked-task.md) |
+| T127 | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099, T128 | yes | todo | [T127](T127-operator-pause-of-a-parked-task.md) |
+| T128 | Claim a parked candidate before the engine resumes it | T099, T126 | no | todo | [T128](T128-atomic-claim-of-a-parked-candidate.md) |
 
 ### M2
 
