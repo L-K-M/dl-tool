@@ -1775,7 +1775,7 @@ func (s *selectionClearStore) ClaimParkedDiskFull(ctx context.Context, id string
 	return s.AdmissionStore.ClaimParkedDiskFull(ctx, id)
 }
 
-func (s selectionClearStore) SelectQueuedCandidates(ctx context.Context, limit int) ([]store.Candidate, error) {
+func (s *selectionClearStore) SelectQueuedCandidates(ctx context.Context, limit int) ([]store.Candidate, error) {
 	cands, err := s.AdmissionStore.SelectQueuedCandidates(ctx, limit)
 	if err != nil {
 		return nil, err
