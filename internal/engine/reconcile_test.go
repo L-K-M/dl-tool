@@ -36,6 +36,9 @@ type fakeEngine struct {
 	addID     string
 	addErr    error
 	removeErr error
+	resumeErr error
+	getInfo   *engine.TaskInfo
+	getErr    error
 	// pauseErr is returned by every Pause: an engine rejecting the pause
 	// of a transfer that already stopped — aria2's answer to pausing a GID
 	// that errored with disk-full before the reconciler saw it.
@@ -51,6 +54,7 @@ type fakeEngine struct {
 	pauseCalls  []string
 	pauseTries  []string // every Pause attempt, the rejected ones included
 	resumeCalls []string
+	getCalls    []string
 	removeCalls []string
 }
 
@@ -107,7 +111,7 @@ func (f *fakeEngine) Resume(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resumeCalls = append(f.resumeCalls, id)
-	return nil
+	return f.resumeErr
 }
 
 func (f *fakeEngine) recordedPauses() []string {
@@ -128,6 +132,12 @@ func (f *fakeEngine) recordedResumes() []string {
 	return append([]string(nil), f.resumeCalls...)
 }
 
+func (f *fakeEngine) recordedGets() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.getCalls...)
+}
+
 func (f *fakeEngine) recordedRemoves() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -140,8 +150,18 @@ func (f *fakeEngine) recordedAdds() []engine.AddRequest {
 	return append([]engine.AddRequest(nil), f.addCalls...)
 }
 
-func (f *fakeEngine) Get(context.Context, string) (engine.TaskInfo, error) {
-	panic("not called by the reconciler")
+func (f *fakeEngine) Get(_ context.Context, id string) (engine.TaskInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.getCalls = append(f.getCalls, id)
+	if f.getInfo == nil && f.getErr == nil {
+		panic("not called by the reconciler")
+	}
+	if f.getErr != nil {
+		return engine.TaskInfo{}, f.getErr
+	}
+
+	return *f.getInfo, nil
 }
 func (f *fakeEngine) Files(context.Context, string) ([]engine.FileEntry, error) {
 	panic("not called by the reconciler")
@@ -854,9 +874,10 @@ type sweepEnv struct {
 	admit  *engine.Admitter
 	rec    *engine.Reconciler
 
-	ref     string // the task's stored engine_ref
-	dest    string // the task's destination, a real directory
-	partial string // the partial file inside dest
+	ref       string // the task's stored engine_ref
+	sourceURI string // the task's stored submission source
+	dest      string // the task's destination, a real directory
+	partial   string // the partial file inside dest
 }
 
 // newSweepEnv seeds one task in seedState whose handle the engine reports
@@ -884,11 +905,13 @@ func newSweepEnv(t *testing.T, seedState string, pauseErr error) (*sweepEnv, str
 		t.Fatalf("write partial file: %v", err)
 	}
 
-	const ref = "errdiskfull"
-	uri := "https://example.org/filling.iso"
+	const (
+		ref       = "errdiskfull"
+		sourceURI = "https://example.org/filling.iso"
+	)
 	tasks := store.NewTaskStore(db)
 	created, err := tasks.Create(t.Context(), store.Task{
-		Engine: engine.NameAria2, EngineRef: ptr(ref), SourceKind: "http", SourceURI: &uri,
+		Engine: engine.NameAria2, EngineRef: ptr(ref), SourceKind: "http", SourceURI: ptr(sourceURI),
 		Name: "filling.iso", State: seedState, Destination: dest,
 	})
 	if err != nil {
@@ -906,7 +929,10 @@ func newSweepEnv(t *testing.T, seedState string, pauseErr error) (*sweepEnv, str
 	}
 	reg := engine.NewRegistry()
 	reg.Register(e)
-	env := &sweepEnv{tasks: tasks, engine: e, reg: reg, ref: ref, dest: dest, partial: partial}
+	env := &sweepEnv{
+		tasks: tasks, engine: e, reg: reg,
+		ref: ref, sourceURI: sourceURI, dest: dest, partial: partial,
+	}
 	env.wire(tasks)
 
 	return env, created.ID
@@ -1025,13 +1051,20 @@ func TestDiskFullReportPausesThroughAdmission(t *testing.T) {
 	}
 }
 
-// TestDiskFullReportSurvivesRejectedEnginePause pins the best-effort
-// engine pause: the download already stopped with errorCode 9, so the
-// engine may reject the pause — the store-side landing must happen
-// regardless, so the row still reaches paused with the stamp and exactly
-// one task_events row.
+// TestDiskFullReportSurvivesRejectedEnginePause pins a stopped aria2
+// errorCode-9 result end to end. Both Pause and unpause reject the stopped
+// GID, but the store-side pause still lands; release confirms the result
+// through Get, re-submits once with resume semantics and adopts the new GID.
 func TestDiskFullReportSurvivesRejectedEnginePause(t *testing.T) {
-	env, id := newSweepEnv(t, "downloading", errors.New("GID cannot be paused now"))
+	const replacementRef = "recovereddiskfull"
+	wrongState := errors.New("GID#errdiskfull cannot be unpaused now")
+	env, id := newSweepEnv(t, "downloading", errors.New("GID#errdiskfull cannot be paused now"))
+	env.engine.resumeErr = wrongState
+	env.engine.getInfo = &engine.TaskInfo{
+		ID: engine.NameAria2 + ":" + env.ref, Engine: engine.NameAria2,
+		State: engine.StateError, ErrorCode: engine.ErrorCodeDiskFull,
+	}
+	env.engine.addID = engine.NameAria2 + ":" + replacementRef
 
 	if err := env.rec.Boot(t.Context()); err != nil {
 		t.Fatalf("Boot: %v", err)
@@ -1056,6 +1089,49 @@ func TestDiskFullReportSurvivesRejectedEnginePause(t *testing.T) {
 	}
 	if removes := env.engine.recordedRemoves(); len(removes) != 0 {
 		t.Errorf("remove calls = %v, want none — a rejected pause must not fall back to removal", removes)
+	}
+	assertPartialUntouched(t, env.partial)
+
+	released, err := env.admit.Pass(t.Context(), policyOver(env.dest, 0))
+	if err != nil {
+		t.Fatalf("admission pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want exactly %s", released, id)
+	}
+	oldHandle := engine.NameAria2 + ":" + env.ref
+	if resumes := env.engine.recordedResumes(); len(resumes) != 1 || resumes[0] != oldHandle {
+		t.Errorf("resumes = %v, want one attempt on %q", resumes, oldHandle)
+	}
+	if gets := env.engine.recordedGets(); len(gets) != 1 || gets[0] != oldHandle {
+		t.Errorf("gets = %v, want one confirmation of %q", gets, oldHandle)
+	}
+	adds := env.engine.recordedAdds()
+	if len(adds) != 1 {
+		t.Fatalf("add calls = %v, want one recovery submission", adds)
+	}
+	if !slices.Equal(adds[0].URIs, []string{env.sourceURI}) || adds[0].SaveDir != env.dest || adds[0].Extra["continue"] != "true" {
+		t.Errorf("recovery Add = %+v, want stored source and destination with continue=true", adds[0])
+	}
+
+	row := env.row(t, id)
+	if row.EngineRef == nil || *row.EngineRef != replacementRef {
+		t.Errorf("engine_ref = %v, want %q", row.EngineRef, replacementRef)
+	}
+	if row.State != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading after recovery", row.State)
+	}
+	if code := env.errorCode(t, id); code != "" {
+		t.Errorf("error_code = %q, want the hold cleared on recovery", code)
+	}
+	if events := env.events(t, id); len(events) != 3 ||
+		!slices.ContainsFunc(events, func(e store.TaskEvent) bool { return e.Code == store.CodeTaskPaused }) ||
+		!slices.ContainsFunc(events, func(e store.TaskEvent) bool { return e.Code == store.CodeEngineAccepted }) ||
+		!slices.ContainsFunc(events, func(e store.TaskEvent) bool { return e.Code == store.CodeTaskResumed }) {
+		t.Errorf("events = %+v, want one pause, replacement acceptance and resume", events)
+	}
+	if removes := env.engine.recordedRemoves(); len(removes) != 0 {
+		t.Errorf("remove calls = %v, want none during recovery", removes)
 	}
 	assertPartialUntouched(t, env.partial)
 }

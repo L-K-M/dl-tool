@@ -673,6 +673,11 @@ func TestAmbiguousFaultsStayGeneric(t *testing.T) {
 			func(c *Client) error { return c.Pause(context.Background(), engine.NameAria2+":"+testGID) },
 		},
 		{
+			"unpause of a stopped download",
+			"GID#2089b05ecca3d829 cannot be unpaused now",
+			func(c *Client) error { return c.Resume(context.Background(), engine.NameAria2+":"+testGID) },
+		},
+		{
 			"changeOption on a stopped download",
 			"Cannot change option for GID#2089b05ecca3d829",
 			func(c *Client) error {

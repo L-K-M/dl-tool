@@ -737,11 +737,12 @@ func (e storeWriteError) Unwrap() error { return e.cause }
 
 // release hands one candidate to its engine and records the release: Add
 // when the task has never been handed over, Resume when it holds a handle
-// — and Add again when the engine no longer knows that handle, the same
-// self-healing the reconciler applies to a handle that vanished
-// mid-transfer. The state move and the error-code clear are the release's
-// own writes; SetEngineRef writes the acceptance event in the same
-// transaction as the handle.
+// — and Add again when the engine lost that handle. A stopped disk-full
+// result also needs Add: aria2 cannot unpause it, so Get first proves the
+// owned result stopped for that condition before the same resume-safe
+// submission path replaces its handle. The state move and error-code clear
+// are the release's own writes; SetEngineRef writes the acceptance event in
+// the same transaction as the handle.
 func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 	e, ok := a.registry.Get(cand.Engine)
 	if !ok {
@@ -749,18 +750,31 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 	}
 
 	if cand.EngineRef != nil {
-		err := e.Resume(ctx, namespacedHandle(cand.Engine, *cand.EngineRef))
+		handle := namespacedHandle(cand.Engine, *cand.EngineRef)
+		resumeErr := e.Resume(ctx, handle)
 		switch {
-		case err == nil:
+		case resumeErr == nil:
 			if err := a.markReleased(ctx, cand.ID); err != nil {
 				return storeWriteError{cause: err}
 			}
 			return nil
-		case errors.Is(err, ErrNotFound):
+		case errors.Is(resumeErr, ErrNotFound):
 			// The engine lost the handle (an aria2 daemon restart, for
 			// example); fall through to Add with resume semantics.
+		case cand.State == string(StatePaused):
+			// aria2 keeps a stopped error result queryable but refuses to
+			// unpause it. Only the matching terminal status proves this is
+			// that recovery shape; every ambiguous wrong-state fault keeps
+			// the ordinary release-refusal path.
+			info, err := e.Get(ctx, handle)
+			if err != nil {
+				return fmt.Errorf("confirm stopped disk-full result %q: %w", handle, err)
+			}
+			if info.State != StateError || info.ErrorCode != ErrorCodeDiskFull {
+				return resumeErr
+			}
 		default:
-			return err
+			return resumeErr
 		}
 	}
 
