@@ -283,7 +283,23 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// the server. A nil db (the openapi subcommand, router-only tests) has
 	// no tasks to reconcile and skips both.
 	if db != nil {
-		reconciler := engine.NewReconciler(engines, store.NewTaskStore(db), reconcilerPollInterval, log)
+		// The admission controller runs beside the reconciler's loop
+		// (docs/03-architecture.md section 6.4): it is the only writer that
+		// hands a queued task to an engine, under the concurrency limits and
+		// the disk-space reservation of FR-047, and the landing of the
+		// disk-full report the reconciler routes (FR-048, T126). It is
+		// constructed before the reconciler for exactly that routing; its
+		// loop starts below, after the boot sweep, and under the same
+		// process-lifetime context and nil-db guard. The openapi subcommand
+		// builds the server without a store and its stdout must stay a pure
+		// document.
+		// The disk-full router and the admission controller share one store
+		// handle through one wrapper, so no per-instance state can ever
+		// diverge between the two loops.
+		taskStore := store.NewTaskStore(db)
+		admitter := engine.NewAdmitter(engines, taskStore, admissionPollInterval, log)
+
+		reconciler := engine.NewReconciler(engines, taskStore, admitter, reconcilerPollInterval, log)
 		bootCtx, cancelBoot := context.WithTimeout(context.Background(), bootSweepBudget)
 		if err := reconciler.Boot(bootCtx); err != nil {
 			log.Warn("boot reconciliation failed; retrying on the poll loop",
@@ -296,16 +312,8 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 			}
 		}()
 
-		// The admission controller runs beside the reconciler's loop
-		// (docs/03-architecture.md section 6.4): it is the only writer that
-		// hands a queued task to an engine, under the concurrency limits and
-		// the disk-space reservation of FR-047. The boot sweep above has
-		// already completed synchronously before this point, so admission
-		// never races the boot reconciliation. The same process-lifetime
-		// context and the same nil-db guard as the reconciler above; the
-		// openapi subcommand builds the server without a store and its
-		// stdout must stay a pure document.
-		admitter := engine.NewAdmitter(engines, store.NewTaskStore(db), admissionPollInterval, log)
+		// Admission starts only after the boot sweep above has completed
+		// synchronously, so it never races the boot reconciliation.
 		go func() {
 			if err := admitter.Run(context.Background(), admissionPolicyLoader(db, cfg.DataRoots)); err != nil {
 				// Admission halting means queued tasks never start while the
