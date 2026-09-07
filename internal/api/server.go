@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -52,6 +53,11 @@ const (
 	// aria2CallTimeout bounds every aria2 JSON-RPC call of the process-wide
 	// adapter, including the boot Connect and the /engines probe.
 	aria2CallTimeout = 10 * time.Second
+
+	// admissionPollInterval is the admission pass cadence: the same 1 Hz
+	// as the reconciler's poll, so a freed slot or returned disk space
+	// reaches a queued task within a second of the store reflecting it.
+	admissionPollInterval = time.Second
 
 	// eventEngineUnreachable is the event code of the boot warn emitted when
 	// an engine's Connect fails (docs/17-operations-and-runbook.md section 1).
@@ -256,6 +262,15 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		base.Handle(reserved, http.HandlerFunc(notFound))
 	}
 
+	// The SPA handler is built before the background loops start, so a
+	// construction failure returns without leaking a loop nobody can stop;
+	// it mounts last regardless, so /api/v1, /healthz and /readyz keep
+	// every route they claim (doc 10 section 7.3 rules 2 and 8).
+	spa, err := SPAHandler(cfg.BasePath)
+	if err != nil {
+		return nil, fmt.Errorf("build SPA handler: %w", err)
+	}
+
 	// The reconciler keeps the tasks table in step with the engines: one
 	// full sweep here — stage S10 of docs/17-operations-and-runbook.md
 	// section 1, before main opens the listener, so a server built by
@@ -280,16 +295,30 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 				log.Error("reconciler stopped", slog.String("err", err.Error()))
 			}
 		}()
+
+		// The admission controller runs beside the reconciler's loop
+		// (docs/03-architecture.md section 6.4): it is the only writer that
+		// hands a queued task to an engine, under the concurrency limits and
+		// the disk-space reservation of FR-047. The boot sweep above has
+		// already completed synchronously before this point, so admission
+		// never races the boot reconciliation. The same process-lifetime
+		// context and the same nil-db guard as the reconciler above; the
+		// openapi subcommand builds the server without a store and its
+		// stdout must stay a pure document.
+		admitter := engine.NewAdmitter(engines, store.NewTaskStore(db), admissionPollInterval, log)
+		go func() {
+			if err := admitter.Run(context.Background(), admissionPolicyLoader(db, cfg.DataRoots)); err != nil {
+				// Admission halting means queued tasks never start while the
+				// API keeps serving; say so in the one line an operator sees.
+				log.Error("admission loop stopped; queued tasks will no longer be admitted", slog.String("err", err.Error()))
+			}
+		}()
 	}
 
 	// The SPA mounts last, on the base catch-all, so /api/v1, /healthz and
-	// /readyz keep every route they claim (doc 10 section 7.3 rules 2 and 8).
-	// Nothing is registered outside the base: with BasePath=/dl-tool a request
-	// to /anything stays a 404.
-	spa, err := SPAHandler(cfg.BasePath)
-	if err != nil {
-		return nil, fmt.Errorf("build SPA handler: %w", err)
-	}
+	// /readyz keep every route they claim (doc 10 section 7.3 rules 2 and
+	// 8). Nothing is registered outside the base: with BasePath=/dl-tool a
+	// request to /anything stays a 404.
 	base.Handle("/*", spa)
 
 	return server, nil
@@ -382,6 +411,136 @@ type systemInfoOutput struct {
 	Body struct {
 		Version string `json:"version" doc:"Build version of the dl-tool process"`
 	}
+}
+
+// settingMinFreeSpace is the third settings row of the admission policy:
+// a sparse map of data-root path to floor bytes
+// (docs/11-config-reference.md section 5).
+const settingMinFreeSpace = "min_free_space"
+
+// queryAdmissionSettings reads the three settings rows the admission pass
+// consults each tick.
+const queryAdmissionSettings = `SELECT key, value_json FROM settings WHERE key IN (?, ?, ?)`
+
+// admissionPolicyLoader builds the Admitter.Run load closure over the
+// settings rows: max_active_total, max_active_per_engine and
+// min_free_space, folded with the configured data roots into one
+// engine.Policy. It runs every tick because PATCH /settings changes the
+// rows at runtime and the pass must not cache them. A missing row keeps
+// the default of docs/11-config-reference.md section 5; a malformed value
+// is an error the loop logs and retries on the next tick — never a cached
+// guess. A row that stays malformed fails every tick's load, so nothing
+// is admitted until it is fixed and the retry log is the operator's
+// signal: fail-closed is deliberate, because a default limit could
+// exceed what the operator intended.
+func admissionPolicyLoader(db *sqlx.DB, roots []string) func(context.Context) (engine.Policy, error) {
+	// One canonical form: the roots and the floor keys must spell a root
+	// identically or the floor lookup silently misses and the default
+	// applies. Trailing slashes are the spelling an operator is most
+	// likely to type. Spellings that clean to the same root — "/data"
+	// beside "/data/" — are one root; rootOf's longest match would make a
+	// duplicate harmless, but the policy should not carry it.
+	canonicalRoots := make([]string, 0, len(roots))
+	seenRoots := make(map[string]struct{}, len(roots))
+	for _, root := range roots {
+		if root == "" {
+			// Config rejects empty entries at load; the loader never trusts
+			// that alone, since filepath.Clean("") would mint the relative
+			// root ".".
+			continue
+		}
+		canonical := filepath.Clean(root)
+		if _, dup := seenRoots[canonical]; dup {
+			continue
+		}
+		seenRoots[canonical] = struct{}{}
+		canonicalRoots = append(canonicalRoots, canonical)
+	}
+
+	return func(ctx context.Context) (engine.Policy, error) {
+		var rows []settingRow
+		err := db.SelectContext(ctx, &rows, queryAdmissionSettings,
+			settingMaxActiveTotal, settingMaxActivePerEngine, settingMinFreeSpace)
+		if err != nil {
+			return engine.Policy{}, fmt.Errorf("read admission settings: %w", err)
+		}
+
+		policy := engine.Policy{
+			Limits: engine.Limits{
+				MaxActiveTotal:     defaultMaxActiveTotal,
+				MaxActivePerEngine: defaultMaxActivePerEngine,
+			},
+			MinFree: map[string]int64{},
+			Roots:   canonicalRoots,
+		}
+		for _, row := range rows {
+			switch row.Key {
+			case settingMaxActiveTotal:
+				value, err := parseNonNegativeSettingInt(row.Key, row.ValueJSON)
+				if err != nil {
+					return engine.Policy{}, fmt.Errorf("read admission settings: %w", err)
+				}
+				policy.Limits.MaxActiveTotal = value
+			case settingMaxActivePerEngine:
+				value, err := parseNonNegativeSettingInt(row.Key, row.ValueJSON)
+				if err != nil {
+					return engine.Policy{}, fmt.Errorf("read admission settings: %w", err)
+				}
+				policy.Limits.MaxActivePerEngine = value
+			case settingMinFreeSpace:
+				var value map[string]int64
+				if err := json.Unmarshal([]byte(row.ValueJSON), &value); err != nil {
+					// The key and the wanted shape lead: an operator reading the
+					// 1 Hz retry line must see which setting is broken before the
+					// driver's parse text.
+					return engine.Policy{}, fmt.Errorf("read admission settings: key %s: want an object of root path to bytes: %w", row.Key, err)
+				}
+				// A JSON null decodes to a nil map, which ranges zero
+				// times — the same shape a missing row leaves, so every
+				// root resolves to the default floor.
+				for root, floor := range value {
+					if root == "" {
+						return engine.Policy{}, fmt.Errorf("read admission settings: key %s: empty root path", row.Key)
+					}
+					if floor < 0 {
+						return engine.Policy{}, fmt.Errorf("read admission settings: key %s: root %q carries a negative floor %d", row.Key, root, floor)
+					}
+					// Two raw keys may clean to the same root — "/data" beside
+					// "/data/" — and map iteration order must not decide whose
+					// floor wins: differing values error, equal values are one.
+					canonical := filepath.Clean(root)
+					if previous, seen := policy.MinFree[canonical]; seen && previous != floor {
+						return engine.Policy{}, fmt.Errorf("read admission settings: key %s: root %s set twice with different floors (%d and %d)", row.Key, canonical, previous, floor)
+					}
+					policy.MinFree[canonical] = floor
+				}
+			}
+		}
+
+		return policy, nil
+	}
+}
+
+// parseNonNegativeSettingInt decodes one integer settings value stored
+// as a bare JSON number (`4`, not `"4"`). A negative limit would
+// silently mean unlimited everywhere else; the write side rejects it, so
+// the read side must too — the same rule loadConcurrencySnapshot applies
+// to the resume answer. The future PATCH /settings writer must share
+// this grammar so the stored shape cannot drift from what this reader
+// accepts.
+func parseNonNegativeSettingInt(key, valueJSON string) (int, error) {
+	// Decode through encoding/json so the accepted grammar is exactly a
+	// bare JSON integer: `4` passes; `"4"`, `+4`, `04`, `4.0` and `null`
+	// fail — the grammar the future PATCH writer must share.
+	var value *int
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return 0, fmt.Errorf("key %s: want a non-negative integer, got %q: %w", key, valueJSON, err)
+	}
+	if value == nil || *value < 0 {
+		return 0, fmt.Errorf("key %s: want a non-negative integer, got %q", key, valueJSON)
+	}
+
+	return *value, nil
 }
 
 // connectEngine performs the boot wiring of one configured engine: it

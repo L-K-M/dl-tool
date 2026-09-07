@@ -200,22 +200,75 @@ WHERE state IN ('downloading', 'checking', 'extracting', 'moving')
 GROUP BY engine`
 
 	// process_order is creation date (FR-095): oldest added_at first, the
-	// ULID id as the deterministic tiebreak of one shared millisecond.
-	querySelectQueuedCandidates = `SELECT id, engine, engine_ref, source_uri, infohash_v1, destination
+	// ULID id as the deterministic tiebreak of one shared millisecond. The
+	// state filter carries two shapes: every queued task, and the paused
+	// tasks holding error_code disk_full — the FR-048 tasks the admission
+	// pass re-examines each tick and resumes once their filesystem admits
+	// again. Any other paused task is the operator's, not the pass's. The
+	// literal below is engine.ErrorCodeDiskFull's storage form; SQL cannot
+	// reach the Go constant, so the two are pinned together by
+	// TestOperatorPausedTaskIsNotACandidate.
+	querySelectQueuedCandidates = `SELECT id, engine, engine_ref, source_uri, infohash_v1, destination,
+ state, total_bytes, COALESCE(completed_bytes, 0) AS completed_bytes
 FROM tasks
-WHERE state = 'queued'
+WHERE state = 'queued' OR (state = 'paused' AND error_code = 'disk_full')
 ORDER BY added_at ASC, id ASC`
+
+	// The disk-reservation twin of queryCountActive (T099, FR-047): the
+	// same four counted states, grouped by destination instead of engine,
+	// summing the committed-but-unwritten bytes. The sums cover only the
+	// active states, so a candidate the pass released earlier in the same
+	// tick is not in them yet: the pass must add each release's remaining
+	// bytes to its in-memory pool before judging the next candidate, or
+	// two releases can jointly over-commit a filesystem. Each task's
+	// contribution is clamped at 0 before the SUM: the COALESCE pair turns
+	// a NULL total_bytes — or a NULL completed_bytes, were the NOT NULL
+	// schema ever to drift — into a 0 progress, and SQLite's two-argument
+	// MAX keeps a task reporting completed past total from cancelling its
+	// neighbours' reservations on the same destination.
+	querySumRemainingByDestination = `SELECT destination, SUM(MAX(COALESCE(total_bytes, 0) - COALESCE(completed_bytes, 0), 0)) AS remaining
+FROM tasks
+WHERE state IN ('downloading', 'checking', 'extracting', 'moving')
+GROUP BY destination`
+
+	// The release cleanup's guard: a hold-code clear may never wipe a
+	// stamp off a paused row, and it only ever clears the two admission
+	// hold codes — a row that moved on to a real failure keeps its own
+	// code. The literals are engine.ErrorCodeDiskFull's and
+	// engine.ErrorCodeConcurrencyLimit's storage forms; SQL cannot reach
+	// the Go constants, so the three are pinned together by the admission
+	// tests through the real store. A row with no stamp at all is not
+	// written — a 1 Hz pass re-clearing an already-clean row must not bump
+	// updated_at for nothing.
+	queryClearTaskErrorCodeUnlessPaused = `UPDATE tasks
+SET error_code = NULL, error_message = NULL, updated_at = ?
+WHERE id = ? AND state <> 'paused' AND error_code IN ('disk_full', 'concurrency_limit')`
+
+	// The disk-full pause's atomic landing (FR-048): state, error_code and
+	// error_message commit as one row write, so no concurrent hold-code
+	// clear can split the pause from its stamp and strand a paused row
+	// without the code the admission pass selects on. The state guard is
+	// both a compare-and-swap and a source-state allow-list (FromStates):
+	// a task that moved on between the caller's read and this write must
+	// not be dragged back — universal rules would otherwise let almost any
+	// state move to paused.
+	queryPauseTaskWithCode = `UPDATE tasks
+SET state = 'paused', error_code = ?, error_message = ?, updated_at = ?
+WHERE id = ? AND state IN (?)`
 
 	// The guarded error-code write: a row already carrying exactly this
 	// pair writes nothing — not even updated_at — so a 1 Hz admission pass
 	// re-stamping the same held task every tick neither churns the row nor
-	// feeds the sync deltas. The same shape as querySetTaskEngineRef's
-	// handle guard; SQL `IS NOT` compares NULLs correctly on both sides.
-	querySetTaskErrorCode = `UPDATE tasks
+	// feeds the sync deltas. The state predicate is the compare-and-set the
+	// admission pass needs: a stamp lands only while the row is still in
+	// the state the caller's candidate snapshot read. The same shape as
+	// querySetTaskEngineRef's handle guard; SQL `IS NOT` compares NULLs
+	// correctly on both sides.
+	querySetTaskErrorCodeIfState = `UPDATE tasks
 SET error_code = ?, error_message = ?, updated_at = ?
-WHERE id = ? AND (error_code IS NOT ? OR error_message IS NOT ?)`
+WHERE id = ? AND state = ? AND (error_code IS NOT ? OR error_message IS NOT ?)`
 
-	queryTaskErrorCode = `SELECT error_code, error_message FROM tasks WHERE id = ?`
+	queryTaskErrorCode = `SELECT error_code, error_message, state FROM tasks WHERE id = ?`
 )
 
 // TaskStore persists tasks rows and enforces the task state machine.
@@ -379,10 +432,12 @@ type ActiveCounts struct {
 	ByEngine map[string]int
 }
 
-// Candidate is one queued task the admission pass (T098) considers for
-// release. The submission columns ride along because the pass itself
-// rebuilds the Engine.Add request from the stored identity — the same
-// projection the reconciler's Reconcilable makes for a re-submission.
+// Candidate is one task the admission pass (T098) considers for release.
+// The submission columns ride along because the pass itself rebuilds the
+// Engine.Add request from the stored identity — the same projection the
+// reconciler's Reconcilable makes for a re-submission — and the byte pair
+// rides along for the disk-space gate (T099): remaining = total -
+// completed is what a release would promise the filesystem.
 type Candidate struct {
 	ID          string  `db:"id"`
 	Engine      string  `db:"engine"`
@@ -390,6 +445,15 @@ type Candidate struct {
 	SourceURI   *string `db:"source_uri"`
 	InfohashV1  *string `db:"infohash_v1"`
 	Destination string  `db:"destination"`
+	// State is queued for a waiting candidate and paused for one the
+	// disk-space guard parked (FR-048); the pass releases both, resuming
+	// the paused one's partial data instead of restarting it.
+	State      string `db:"state"`
+	TotalBytes *int64 `db:"total_bytes"` // nil while metadata is unknown
+	// CompletedBytes reads COALESCE(completed_bytes, 0): a NULL row
+	// contributes 0 to its own task instead of failing the whole
+	// candidate scan.
+	CompletedBytes int64 `db:"completed_bytes"`
 }
 
 // activeCountRow is one grouped row of queryCountActive.
@@ -433,11 +497,13 @@ func (s *TaskStore) CountActive(ctx context.Context) (ActiveCounts, error) {
 	return counts, nil
 }
 
-// SelectQueuedCandidates returns the queued tasks in process order —
-// oldest added_at first (FR-095) — at most limit of them. limit <= 0 means
-// every queued task, which is what the admission pass asks for: a held
-// task must carry concurrency_limit wherever it sits in the queue, so the
-// pass cannot stop at the first candidate it cannot release.
+// SelectQueuedCandidates returns the pass's candidates in process order
+// — oldest added_at first (FR-095) — at most limit of them: every queued
+// task plus the paused tasks carrying error_code disk_full, which the
+// pass re-examines each tick (FR-048). limit <= 0 means every candidate,
+// which is what the admission pass asks for: a held task must carry its
+// hold code wherever it sits in the queue, so the pass cannot stop at the
+// first candidate it cannot release.
 func (s *TaskStore) SelectQueuedCandidates(ctx context.Context, limit int) ([]Candidate, error) {
 	query := querySelectQueuedCandidates
 	var args []any
@@ -454,14 +520,62 @@ func (s *TaskStore) SelectQueuedCandidates(ctx context.Context, limit int) ([]Ca
 	return candidates, nil
 }
 
-// SetErrorCode writes tasks.error_code and error_message, or clears both
-// when errorCode is empty (SQL NULL is the storage form of an absent
-// value; a cleared code never keeps its message). The update is guarded:
-// a row already carrying exactly this pair is a quiet no-op, so a caller
-// re-stamping a held task every tick writes nothing. No task_events row
-// is written — this is column bookkeeping; the event moments stay with
-// the transitions and stores that own them. A missing id is ErrNotFound.
-func (s *TaskStore) SetErrorCode(ctx context.Context, id, errorCode, message string) error {
+// destinationRemainingRow is one grouped row of
+// querySumRemainingByDestination.
+type destinationRemainingRow struct {
+	Destination string `db:"destination"`
+	Remaining   int64  `db:"remaining"`
+}
+
+// SumRemainingByDestination returns the committed-but-unwritten bytes
+// per destination path: SUM(total_bytes - completed_bytes) over the four
+// counted active states, the same set CountActive counts, with each
+// task's contribution clamped at 0. The admission pass folds these
+// per-destination sums into one pool per filesystem with
+// fsx.FilesystemID, so two destinations on one mount share one reservation
+// (FR-047). A task whose total_bytes is NULL reserves 0 — an unknown size
+// reserves no headroom and is re-checked when metadata resolves — and a
+// task reporting completed past its total cancels nothing.
+func (s *TaskStore) SumRemainingByDestination(ctx context.Context) (map[string]int64, error) {
+	var rows []destinationRemainingRow
+	if err := s.db.SelectContext(ctx, &rows, querySumRemainingByDestination); err != nil {
+		return nil, fmt.Errorf("store: sum remaining by destination: %w", err)
+	}
+
+	remaining := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		if row.Remaining > 0 {
+			remaining[row.Destination] = row.Remaining
+		}
+	}
+
+	return remaining, nil
+}
+
+// SetErrorCodeIfState writes tasks.error_code and error_message only
+// while the row is still in expectedState, or clears both when errorCode
+// is empty (SQL NULL is the storage form of an absent value; a cleared
+// code never keeps its message). The state predicate is the stamp-side
+// twin of PauseWithCode's FromStates: a hold stamp minted from a
+// candidate snapshot must not land on a row the operator moved meanwhile
+// — a paused row stamped disk_full is exactly the pair the admission pass
+// selects guard-parked tasks by, and stamping it would hand the next pass
+// a licence to resume what the user parked. A declined write (the row
+// left expectedState) reports success on purpose: a 1 Hz pass racing an
+// operator action must neither warn per tick nor retry. The pair guard is
+// the quiet no-op: a row already carrying exactly this pair writes
+// nothing, so a caller re-stamping a held task every tick is silent. No
+// task_events row is written — this is column bookkeeping; the event
+// moments stay with the transitions and stores that own them. A missing
+// id is ErrNotFound.
+func (s *TaskStore) SetErrorCodeIfState(ctx context.Context, id, expectedState, errorCode, message string) error {
+	// An empty expected state matches no row: failing it here names the
+	// caller bug instead of silently declining every write — the same
+	// tripwire PauseWithCode keeps for an empty FromStates allow-list.
+	if expectedState == "" {
+		return fmt.Errorf("store: set error code of task %q: an empty expected state can never match", id)
+	}
+
 	// A cleared code clears its message too: a row must never carry an
 	// error message about an error it no longer has.
 	if errorCode == "" {
@@ -481,12 +595,14 @@ func (s *TaskStore) SetErrorCode(ctx context.Context, id, errorCode, message str
 		}
 	}()
 
-	// The current pair read inside the transaction serves one purpose:
-	// telling a missing id (ErrNotFound) from the no-op re-stamp the
-	// guarded update below answers with zero affected rows.
+	// The current pair and state read inside the transaction serve one
+	// purpose: telling a missing id (ErrNotFound) from a declined write
+	// (the row moved on) and a no-op re-stamp, both of which the guarded
+	// update below answers with zero affected rows.
 	var current struct {
 		ErrorCode    *string `db:"error_code"`
 		ErrorMessage *string `db:"error_message"`
+		State        string  `db:"state"`
 	}
 	err = tx.GetContext(ctx, &current, queryTaskErrorCode, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -495,10 +611,13 @@ func (s *TaskStore) SetErrorCode(ctx context.Context, id, errorCode, message str
 	if err != nil {
 		return fmt.Errorf("store: set error code of task %q: read pair: %w", id, err)
 	}
+	if current.State != expectedState {
+		return nil
+	}
 
 	result, err := tx.ExecContext(
-		ctx, querySetTaskErrorCode,
-		codeValue, messageValue, time.Now().UnixMilli(), id, codeValue, messageValue,
+		ctx, querySetTaskErrorCodeIfState,
+		codeValue, messageValue, time.Now().UnixMilli(), id, expectedState, codeValue, messageValue,
 	)
 	if err != nil {
 		return fmt.Errorf("store: set error code of task %q: %w", id, err)
@@ -522,6 +641,173 @@ func (s *TaskStore) SetErrorCode(ctx context.Context, id, errorCode, message str
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: set error code of task %q: commit: %w", id, err)
+	}
+
+	return nil
+}
+
+// CodedPause is one atomic pause landing: the state move, its event, the
+// error-code pair the admission pass will select the row by, and the
+// source states the move is legal from. A struct keeps the values
+// name-bound instead of transposable across adjacent strings.
+type CodedPause struct {
+	EventCode    string
+	EventMessage string
+	ErrorCode    string
+	ErrorMessage string
+	FromStates   []string // the write applies only while the row is in one of these
+}
+
+// PauseWithCode moves a task to paused and stamps its error_code pair in
+// one transaction, with one task_events row — the disk-full pause's
+// atomic landing (FR-048). Atomicity is the whole point: the admission
+// pass's release cleanup clears hold codes concurrently, and a pause
+// landing as two writes could be split by that clear into a paused row
+// without the code the pass selects candidates by. FromStates closes the
+// read-to-write window: a task that left the writing states between the
+// caller's read and this transaction is left untouched instead of being
+// dragged back into paused by the universal rules. An empty ErrorCode is
+// a caller bug — the stamp is the reason this method exists. A missing id
+// is ErrNotFound; an illegal source is ErrIllegalTransition; a state that
+// changed underneath is ErrTransitionConflict.
+func (s *TaskStore) PauseWithCode(ctx context.Context, id string, p CodedPause) error {
+	if p.ErrorCode == "" {
+		return fmt.Errorf("store: pause task %q: an empty error code cannot land atomically", id)
+	}
+	if p.EventCode == "" {
+		return fmt.Errorf("store: pause task %q: an empty event code cannot land", id)
+	}
+	if len(p.FromStates) == 0 {
+		// An empty allow-list can match no row: failing it here names the
+		// caller bug instead of surfacing it as a confusing transition
+		// conflict on the first landing.
+		return fmt.Errorf("store: pause task %q: an empty FromStates allow-list can never land", id)
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: pause task %q: %w", id, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of coded pause failed", "task_id", id, "error", err)
+		}
+	}()
+
+	var current string
+	err = tx.GetContext(ctx, &current, queryTaskState, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: pause task %q: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("store: pause task %q: read state: %w", id, err)
+	}
+
+	if !slices.Contains(p.FromStates, current) {
+		// The row left the caller's allow-list between the snapshot and
+		// this write — pausable destination or terminal one, it changed
+		// underneath: the documented conflict answer, so a raced landing
+		// is never misread as the caller bug the refusal below names.
+		return fmt.Errorf("store: pause task %q from %q: %w", id, current, ErrTransitionConflict)
+	}
+	if !transitionLegal(current, "paused") {
+		return fmt.Errorf("store: pause task %q from %q: %w", id, current, ErrIllegalTransition)
+	}
+
+	// One clock answer for the row and its event: the pause and the
+	// task_events row it carries must read as the same instant.
+	now := time.Now().UnixMilli()
+	query, args, err := sqlx.In(queryPauseTaskWithCode,
+		nullableText(p.ErrorCode), nullableText(p.ErrorMessage), now, id, p.FromStates)
+	if err != nil {
+		return fmt.Errorf("store: pause task %q: %w", id, err)
+	}
+	// sqlx.In emits `?` placeholders — SQLite's bindvar, so Rebind is an
+	// identity here today; the canonical pairing keeps the statement
+	// correct were the store's bindvar ever to change.
+	query = tx.Rebind(query)
+
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("store: pause task %q: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: pause task %q: count rows: %w", id, err)
+	}
+	if affected == 0 {
+		return errTransitionConflict(id, current, "paused")
+	}
+
+	if err := insertTaskEvent(ctx, tx, id, "info", p.EventCode, p.EventMessage, nil, now); err != nil {
+		return fmt.Errorf("store: pause task %q: insert event: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: pause task %q: commit: %w", id, err)
+	}
+
+	return nil
+}
+
+// ClearHoldCode clears a hold stamp unless the task is paused, and only
+// ever a hold stamp: the write matches the two admission hold codes, so a
+// row that moved on to a real failure between the pass's read and this
+// clear keeps its own code. The admission pass's release cleanup uses it:
+// between the release's transition and its cleanup a concurrent disk-full
+// pause may have parked the task carrying disk_full, and wiping that stamp
+// would strand the row outside the pass's selection (FR-048). A missing id
+// is ErrNotFound; a paused row or a row carrying anything but a hold code
+// is left untouched and reports success — the clear lost the race on
+// purpose.
+func (s *TaskStore) ClearHoldCode(ctx context.Context, id string) error {
+	// One transaction for the guarded write and the existence probe, so a
+	// row that moves or vanishes between them cannot misattribute the
+	// outcome.
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: clear hold code of task %q: %w", id, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of hold-code clear failed", "task_id", id, "error", err)
+		}
+	}()
+
+	result, err := tx.ExecContext(ctx, queryClearTaskErrorCodeUnlessPaused, time.Now().UnixMilli(), id)
+	if err != nil {
+		return fmt.Errorf("store: clear hold code of task %q: %w", id, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: clear hold code of task %q: count rows: %w", id, err)
+	}
+	if affected > 0 {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("store: clear hold code of task %q: commit: %w", id, err)
+		}
+
+		return nil
+	}
+
+	// Zero rows: a missing id, or a row the guard protected — paused, or
+	// carrying a code that is no hold stamp. Only the missing id is an
+	// error.
+	var state string
+	if err := tx.GetContext(ctx, &state, queryTaskState, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("store: clear hold code of task %q: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("store: clear hold code of task %q: read state: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: clear hold code of task %q: commit: %w", id, err)
 	}
 
 	return nil
