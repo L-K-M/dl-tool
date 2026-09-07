@@ -146,12 +146,20 @@ Each criterion was re-verified against the merged `main` (c397892) —
 every one is asserted by a passing test — before ticking:
 
 ```
+$ awk '/^## Acceptance criteria/,/^## Verification/' docs/tasks/T126-disk-full-pause-routing.md | rg -c '^- \[x\]'
+8
 $ rg -c '^- \[x\]' docs/tasks/T126-disk-full-pause-routing.md
 8
-$ go test ./internal/engine/ ./internal/engine/aria2/ -run 'TestDiskFull|TestNewReconciler|TestAmbiguousFaults' -count=1
-ok  	github.com/L-K-M/dl-tool/internal/engine	0.220s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	0.016s
+$ rg -n '^- \[ \]' docs/tasks/T126-disk-full-pause-routing.md
+(no matches)
+$ go test ./internal/engine/ ./internal/engine/aria2/ -run 'TestDiskFull|TestAmbiguousFaults' -count=1
+ok  	github.com/L-K-M/dl-tool/internal/engine	0.197s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	0.019s
 ```
+
+Both counts printing `8` proves the eight ticked boxes are exactly the
+acceptance criteria — no checked box outside the section inflates the count —
+and the verifier's rejection command now matches nothing.
 
 Criterion → assertion map: 1, 3 — `TestDiskFullReportPausesThroughAdmission`
 (state/`error_code`, exactly one `task.paused` row); 2, 6 —
