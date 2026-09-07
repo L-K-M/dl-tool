@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T126 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Pending decision** | owner decision at M1 exit — bound the disk-full resume→pause cycle (deferral register; up to ~172,800 event rows/day at 1 Hz) |
 | **Depends on** | T026, T099 |
 | **Blocks** | — |
@@ -137,6 +137,69 @@ and docs and record both under Evidence.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+
+### Corrected stopped-result recovery
+
+The release regression failed before `internal/engine/admission.go` changed:
+
+```
+$ go test ./internal/engine/... -run 'TestDiskFullReportSurvivesRejectedEnginePause|TestAmbiguousFaultsStayGeneric' -count=1
+2026/09/07 17:25:54 OK   00001_init.sql (16.84ms)
+2026/09/07 17:25:54 goose: successfully migrated database to version: 1
+2026/09/07 17:25:54 WARN pausing task after a write failed with ENOSPC task_id=tsk_01M1YEFCWX7V1H2SZ0WNMAPBAT engine=aria2 error="engine aria2: disk_full: not enough space left on device"
+2026/09/07 17:25:54 WARN could not pause the engine-side transfer after ENOSPC task_id=tsk_01M1YEFCWX7V1H2SZ0WNMAPBAT engine=aria2 error="GID#errdiskfull cannot be paused now"
+--- FAIL: TestDiskFullReportSurvivesRejectedEnginePause (0.06s)
+    reconcile_test.go:1100: released = [], want exactly tsk_01M1YEFCWX7V1H2SZ0WNMAPBAT
+FAIL
+FAIL\tgithub.com/L-K-M/dl-tool/internal/engine\t0.074s
+ok  \tgithub.com/L-K-M/dl-tool/internal/engine/aria2\t0.016s
+FAIL
+```
+
+The required verification then passed: lint clean, every internal package
+`ok`, no `FAIL`.
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  \tgithub.com/L-K-M/dl-tool/internal/api\t44.660s
+ok  \tgithub.com/L-K-M/dl-tool/internal/config\t1.113s
+ok  \tgithub.com/L-K-M/dl-tool/internal/engine\t17.272s
+ok  \tgithub.com/L-K-M/dl-tool/internal/engine/aria2\t3.164s
+ok  \tgithub.com/L-K-M/dl-tool/internal/fsx\t1.040s
+ok  \tgithub.com/L-K-M/dl-tool/internal/jobs\t4.057s
+ok  \tgithub.com/L-K-M/dl-tool/internal/obs\t1.171s
+ok  \tgithub.com/L-K-M/dl-tool/internal/secure\t4.003s
+ok  \tgithub.com/L-K-M/dl-tool/internal/store\t64.009s
+ok  \tgithub.com/L-K-M/dl-tool/internal/sync\t4.362s
+ok  \tgithub.com/L-K-M/dl-tool/internal/uri\t1.041s
+```
+
+Committed scope is exactly the Files table on both sides:
+
+```
+$ git diff --name-only origin/main...HEAD -- . ':(exclude)docs' | sort
+internal/engine/admission.go
+internal/engine/aria2/client_test.go
+internal/engine/reconcile_test.go
+```
+
+```
+$ git diff --name-only origin/main...HEAD -- docs | sort
+docs/tasks/00-task-index.md
+docs/tasks/T126-disk-full-pause-routing.md
+```
 
 > **Superseded attempt:** PR #93's output below predates the stopped-result recovery criterion.
 > Its fake `Resume` always succeeded, so it is historical evidence only. The retry must paste
