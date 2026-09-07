@@ -937,3 +937,86 @@ func TestListTasksRejectsStaleCursor(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// seedParked seeds one task in state with error_code, returning the row
+// as created so a claim test can pin that the no-op write changed
+// nothing — not even updated_at.
+func seedParked(t *testing.T, tasks *TaskStore, state, errorCode string) Task {
+	t.Helper()
+
+	task := Task{
+		Engine: "aria2", SourceKind: "http",
+		Name: "parked-fixture", State: state, Destination: "/data",
+	}
+	if errorCode != "" {
+		task.ErrorCode = ptr(errorCode)
+		task.ErrorMessage = ptr("no space left on device; the task resumes once space returns")
+	}
+	created, err := tasks.Create(t.Context(), task)
+	require.NoError(t, err)
+
+	return created
+}
+
+// TestClaimParkedDiskFull pins the guarded claim's three answers. The
+// take case executes the exact UPDATE … RETURNING against the pinned
+// driver, so support for the statement is feature-tested, not trusted
+// from a copied version number; the decline and missing cases prove the
+// guard is answered without loosening it — a present-but-changed row is
+// a decline, only a missing id is ErrNotFound.
+func TestClaimParkedDiskFull(t *testing.T) {
+	t.Run("takes an unchanged parked row without writing it", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		created := seedParked(t, tasks, "paused", "disk_full")
+
+		taken, err := tasks.ClaimParkedDiskFull(t.Context(), created.ID)
+		require.NoError(t, err)
+		require.True(t, taken, "a paused+disk_full row must be claimed")
+
+		// The self-assignment changed no state, stamp, timestamp or event:
+		// the row reads back identical, and a claim writes no task_events
+		// row. The pair stays claimable, so the claim is idempotent and a
+		// crash after it needs no recovery write.
+		after, err := tasks.Get(t.Context(), created.ID)
+		require.NoError(t, err)
+		require.Equal(t, created, after)
+
+		taken, err = tasks.ClaimParkedDiskFull(t.Context(), created.ID)
+		require.NoError(t, err)
+		require.True(t, taken)
+
+		events, _, _, err := tasks.ListEvents(t.Context(), created.ID, 10, "")
+		require.NoError(t, err)
+		require.Empty(t, events, "a claim writes no event")
+	})
+
+	t.Run("declines a cleared or moved row", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		for name, seed := range map[string]Task{
+			"operator pause, no stamp": seedParked(t, tasks, "paused", ""),
+			"paused with another code": seedParked(t, tasks, "paused", "concurrency_limit"),
+			"moved to queued":          seedParked(t, tasks, "queued", "disk_full"),
+			"moved to downloading":     seedParked(t, tasks, "downloading", ""),
+		} {
+			taken, err := tasks.ClaimParkedDiskFull(t.Context(), seed.ID)
+			require.NoError(t, err, "%s: a decline is not an error", name)
+			require.False(t, taken, "%s: only the exact pair is claimable", name)
+
+			after, err := tasks.Get(t.Context(), seed.ID)
+			require.NoError(t, err)
+			require.Equal(t, seed, after, "%s: a declined claim writes nothing", name)
+		}
+	})
+
+	t.Run("reports a missing id as not found", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		_, err := tasks.ClaimParkedDiskFull(t.Context(), "tsk_missing")
+		require.ErrorIs(t, err, ErrNotFound)
+	})
+}
