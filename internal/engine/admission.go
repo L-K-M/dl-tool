@@ -121,6 +121,12 @@ type AdmissionStore interface {
 	// row the operator moved after selection. A declined write reports
 	// success; a missing id is the store's not-found error.
 	SetErrorCodeIfState(ctx context.Context, id, expectedState, errorCode, message string) error
+	// ClaimParkedDiskFull revalidates the persisted paused+disk_full pair
+	// with one guarded no-op write and reports whether it took the row —
+	// the pass's claim before a parked candidate's first engine call. A
+	// missing id is the store's not-found error; a declined write is an
+	// overtaken candidate, never an engine rejection.
+	ClaimParkedDiskFull(ctx context.Context, id string) (bool, error)
 	SetEngineRef(ctx context.Context, id, engineRef string) error
 }
 
@@ -212,58 +218,29 @@ func (a *Admitter) Pass(ctx context.Context, p Policy) ([]string, error) {
 			return released, ctx.Err()
 		}
 
-		if cand.State == string(StatePaused) {
-			// A task the disk-space guard parked. The stamp is the whole
-			// attribution: an operator pause landing on an already-parked row
-			// is an idempotent no-op that keeps the stamp, and this pass
-			// would resume what the operator parked. Clearing the stamp on an
-			// operator pause is the action layer's takeover — T127's, not
-			// this pass's. Space comes first, and it
-			// fails closed: while the filesystem does not admit — or cannot
-			// be read at all — the stamp stays and the task stays paused.
-			// Resuming on an unreadable answer would ping-pong the transfer
-			// against ENOSPC every tick, and a parked task loses nothing by
-			// waiting one more tick. A limit that also blocks leaves it
-			// exactly as it is — disk_full is why it is paused, and a slot is
-			// only the second thing it will need. The release below resumes
-			// the parked transfer through its stored handle (Engine.Resume
-			// is aria2's unpause); Add is reached only when the engine lost
-			// the handle, and then with resume semantics — never a duplicate.
-			if held, message := gate.holdsParked(cand); held {
-				a.stampHeld(ctx, cand, ErrorCodeDiskFull, message)
-				continue
-			}
-			if held, message := p.Limits.Blocked(counts, cand.Engine); held {
-				// Space came back but the slot did not. The row keeps its
-				// disk_full stamp — paused+disk_full is the selection token,
-				// so re-stamping concurrency_limit would orphan the task
-				// from the candidate query and it would never be re-examined
-				// — and stays parked: un-pausing into a held slot would only
-				// re-park it, so an operator chasing the stamp deserves the
-				// real reason in the log.
-				a.log.Debug("admission pass: disk space recovered; parked task now waits on a concurrency slot",
-					"task_id", cand.ID, "engine", cand.Engine, "hold", message)
-				continue
-			}
-		} else {
-			if held, message := p.Limits.Blocked(counts, cand.Engine); held {
-				// The stamp is the only write a held task gets: the state
-				// stays queued and the guarded SetErrorCode keeps a re-stamp
-				// of the same sentence silent.
-				a.stampHeld(ctx, cand, ErrorCodeConcurrencyLimit, message)
-				continue
-			}
-			if held, message := gate.holds(cand); held {
-				a.stampHeld(ctx, cand, ErrorCodeDiskFull, message)
-				continue
-			}
+		// The task-operation lease is taken without waiting, before either
+		// hold gate or stampHeld: a busy task — one an operator action is
+		// holding — is skipped quietly and reselected on a later pass, so
+		// one slow action cannot head-of-line block the tick and no slot or
+		// reservation is spent on it. Try can only answer the busy error,
+		// which is the skip, never a failure.
+		releaseLease, err := a.registry.AcquireTaskOp(ctx, cand.ID, TaskOpTry)
+		if err != nil {
+			continue
 		}
 
-		if err := a.release(ctx, cand); err != nil {
+		// One lease at a time: the holder of the candidate's iteration,
+		// released before the pass walks on.
+		releasedThis, err := a.processCandidate(ctx, cand, p, counts, gate)
+		releaseLease()
+		if err != nil {
 			if ctx.Err() != nil {
 				return released, ctx.Err()
 			}
-			a.releaseFailed(ctx, cand, err)
+
+			return released, fmt.Errorf("admission pass: %w", err)
+		}
+		if !releasedThis {
 			continue
 		}
 
@@ -277,6 +254,137 @@ func (a *Admitter) Pass(ctx context.Context, p Policy) ([]string, error) {
 	}
 
 	return released, nil
+}
+
+// processCandidate evaluates one selected candidate while the pass
+// holds its task-operation lease, and reports whether the pass released
+// it — the boolean the caller gates its in-memory slot and reservation
+// spend on. The lease spans the revalidation read, the hold gates and
+// stamp writes, the parked pair's claim, the engine calls, the release
+// writes and release-failure handling, so no second operation on this
+// task can interleave with any of them.
+//
+// The revalidation read is the first thing under the lease: the
+// candidate is a snapshot from the start of the pass, and the row must
+// still carry what selected it — queued for a queued snapshot,
+// paused+disk_full for a parked one. A row that moved, was cleared or
+// vanished is an overtaken candidate and aborts quietly: no engine
+// call, no row write, no event, and nothing spent. Queued snapshots
+// take the lease too, because an operator pause of a queued row (T127)
+// clears its hold stamp and moves it out of the pass's reach the same
+// way.
+func (a *Admitter) processCandidate(ctx context.Context, cand store.Candidate, p Policy, counts ActiveCounts, gate *spaceGate) (bool, error) {
+	current, err := a.tasks.Get(ctx, cand.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("revalidate %s: %w", cand.ID, err)
+	}
+	if !candidateStillCurrent(cand, current) {
+		return false, nil
+	}
+
+	if cand.State == string(StatePaused) {
+		// A task the disk-space guard parked. The stamp is the whole
+		// attribution: an operator pause landing on an already-parked row
+		// is an idempotent no-op that keeps the stamp, and this pass
+		// would resume what the operator parked. Clearing the stamp on an
+		// operator pause is the action layer's takeover — T127's, not
+		// this pass's. Space comes first, and it
+		// fails closed: while the filesystem does not admit — or cannot
+		// be read at all — the stamp stays and the task stays paused.
+		// Resuming on an unreadable answer would ping-pong the transfer
+		// against ENOSPC every tick, and a parked task loses nothing by
+		// waiting one more tick. A limit that also blocks leaves it
+		// exactly as it is — disk_full is why it is paused, and a slot is
+		// only the second thing it will need. The release below resumes
+		// the parked transfer through its stored handle (Engine.Resume
+		// is aria2's unpause); Add is reached only when the engine lost
+		// the handle, and then with resume semantics — never a duplicate.
+		if held, message := gate.holdsParked(cand); held {
+			a.stampHeld(ctx, cand, ErrorCodeDiskFull, message)
+
+			return false, nil
+		}
+		if held, message := p.Limits.Blocked(counts, cand.Engine); held {
+			// Space came back but the slot did not. The row keeps its
+			// disk_full stamp — paused+disk_full is the selection token,
+			// so re-stamping concurrency_limit would orphan the task
+			// from the candidate query and it would never be re-examined
+			// — and stays parked: un-pausing into a held slot would only
+			// re-park it, so an operator chasing the stamp deserves the
+			// real reason in the log.
+			a.log.Debug("admission pass: disk space recovered; parked task now waits on a concurrency slot",
+				"task_id", cand.ID, "engine", cand.Engine, "hold", message)
+
+			return false, nil
+		}
+	} else {
+		if held, message := p.Limits.Blocked(counts, cand.Engine); held {
+			// The stamp is the only write a held task gets: the state
+			// stays queued and the guarded SetErrorCode keeps a re-stamp
+			// of the same sentence silent.
+			a.stampHeld(ctx, cand, ErrorCodeConcurrencyLimit, message)
+
+			return false, nil
+		}
+		if held, message := gate.holds(cand); held {
+			a.stampHeld(ctx, cand, ErrorCodeDiskFull, message)
+
+			return false, nil
+		}
+	}
+
+	// A parked candidate is claimed immediately before its first engine
+	// call: one guarded no-op write over the exact paused+disk_full pair
+	// the candidate was selected by. Together with the lease this closes
+	// the selection-to-engine window — a clear that landed before the
+	// lease or between the read above and this write declines the claim,
+	// and one that comes after it waits on the lease until the engine
+	// call and the release writes are done. A declined or vanished pair
+	// is an overtaken candidate, not an engine rejection: (false, nil),
+	// no engine call, no row or event. The claim stores nothing, so a
+	// process exit after it and before the engine call needs no recovery.
+	// Queued candidates take no claim write: their release mechanics are
+	// unchanged.
+	if cand.State == string(StatePaused) {
+		taken, err := a.tasks.ClaimParkedDiskFull(ctx, cand.ID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return false, nil
+			}
+
+			return false, fmt.Errorf("claim %s: %w", cand.ID, err)
+		}
+		if !taken {
+			return false, nil
+		}
+	}
+
+	if err := a.release(ctx, cand); err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		a.releaseFailed(ctx, cand, err)
+
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// candidateStillCurrent reports whether the row still carries what the
+// candidate snapshot selected it by: the queued state for a queued
+// snapshot, the paused+disk_full pair for a parked one. Anything else —
+// moved, cleared, operator-paused — is an overtaken candidate.
+func candidateStillCurrent(cand store.Candidate, current store.Task) bool {
+	if cand.State == string(StatePaused) {
+		return current.State == string(StatePaused) && current.ErrorCode != nil && *current.ErrorCode == ErrorCodeDiskFull
+	}
+
+	return current.State == string(StateQueued)
 }
 
 // Run drives Pass on a ticker until ctx is cancelled. load reads the
