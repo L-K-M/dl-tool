@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -169,10 +170,11 @@ func (e *admitEngine) Events(context.Context) (<-chan engine.TaskEvent, error) {
 // are the pass's collaborators, and a fake store would test nothing but
 // the fake.
 type admitEnv struct {
-	tasks *store.TaskStore
-	aria2 *admitEngine
-	qbt   *admitEngine
-	admit *engine.Admitter
+	tasks    *store.TaskStore
+	aria2    *admitEngine
+	qbt      *admitEngine
+	registry *engine.Registry
+	admit    *engine.Admitter
 }
 
 func newAdmitEnv(t *testing.T) *admitEnv {
@@ -198,10 +200,11 @@ func newAdmitEnv(t *testing.T) *admitEnv {
 	tasks := store.NewTaskStore(db)
 
 	return &admitEnv{
-		tasks: tasks,
-		aria2: aria2,
-		qbt:   qbt,
-		admit: engine.NewAdmitter(registry, tasks, time.Second, nil),
+		tasks:    tasks,
+		aria2:    aria2,
+		qbt:      qbt,
+		registry: registry,
+		admit:    engine.NewAdmitter(registry, tasks, time.Second, nil),
 	}
 }
 
@@ -1725,5 +1728,450 @@ func TestPauseDiskFullRefusesAnOperatorPause(t *testing.T) {
 	}
 	if code := env.taskErrorCode(t, id); code != "" {
 		t.Errorf("error_code = %q, want none: an operator pause must not gain the stamp", code)
+	}
+}
+
+// taskEventCodes reads one task's whole event log's codes, newest first —
+// the quiet-abort tests assert the pass wrote nothing the seed did not.
+func (e *admitEnv) taskEventCodes(t *testing.T, id string) []string {
+	t.Helper()
+
+	events, _, _, err := e.tasks.ListEvents(t.Context(), id, 50, "")
+	if err != nil {
+		t.Fatalf("list events of %s: %v", id, err)
+	}
+	codes := make([]string, 0, len(events))
+	for _, event := range events {
+		codes = append(codes, event.Code)
+	}
+
+	return codes
+}
+
+// admitterOverBothEngines is admitterOver with both of the env's
+// engines registered, for tests whose sibling candidate rides
+// qbittorrent.
+func (e *admitEnv) admitterOverBothEngines(store engine.AdmissionStore) *engine.Admitter {
+	registry := engine.NewRegistry()
+	registry.Register(e.aria2)
+	registry.Register(e.qbt)
+
+	return engine.NewAdmitter(registry, store, time.Second, nil)
+}
+
+// selectionClearStore clears the parked pair's stamp the moment the
+// candidate selection returns — the operator takeover T127's action will
+// own, landing between the pass's selection and its under-lease
+// revalidation read.
+type selectionClearStore struct {
+	engine.AdmissionStore
+	clear  string
+	claims atomic.Int64
+}
+
+func (s *selectionClearStore) ClaimParkedDiskFull(ctx context.Context, id string) (bool, error) {
+	s.claims.Add(1)
+
+	return s.AdmissionStore.ClaimParkedDiskFull(ctx, id)
+}
+
+func (s *selectionClearStore) SelectQueuedCandidates(ctx context.Context, limit int) ([]store.Candidate, error) {
+	cands, err := s.AdmissionStore.SelectQueuedCandidates(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	for _, cand := range cands {
+		if cand.ID != s.clear {
+			continue
+		}
+		// The clear goes the way the future action will:
+		// SetErrorCodeIfState lands an empty code on a paused row;
+		// ClearHoldCode refuses paused rows by design.
+		if err := s.SetErrorCodeIfState(ctx, cand.ID, string(engine.StatePaused), "", ""); err != nil {
+			return nil, err
+		}
+	}
+
+	return cands, nil
+}
+
+// A clear that lands at selection time is caught by the under-lease
+// revalidation read: the parked row stays paused under the operator's
+// takeover, the engine sees nothing of it, no event is written, and no
+// slot is spent — the one available slot goes to the next candidate, so
+// a wrongly released parked task would hold the sibling back here.
+func TestSelectionTimeClearAbortsTheParkedRelease(t *testing.T) {
+	env := newAdmitEnv(t)
+	root := t.TempDir()
+
+	ref := "gid-selection-clear"
+	parked := env.seedTask(t, engine.NameAria2, "parked", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr(engine.ErrorCodeDiskFull)
+		task.EngineRef = &ref
+		task.Destination = root
+	})
+	nextAddedAt()
+	sibling := env.seedTask(t, engine.NameQBittorrent, "sibling", func(task *store.Task) {
+		task.Destination = root
+	})
+
+	clearing := &selectionClearStore{AdmissionStore: env.tasks, clear: parked}
+	admit := env.admitterOverBothEngines(clearing)
+
+	policy := policyOver(root, 0)
+	policy.Limits = engine.Limits{MaxActiveTotal: 1}
+	released, err := admit.Pass(t.Context(), policy)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != sibling {
+		t.Fatalf("released = %v, want exactly the sibling %s: the overtaken parked task spent nothing", released, sibling)
+	}
+	if state := env.taskState(t, parked); state != string(engine.StatePaused) {
+		t.Errorf("parked state = %q, want the operator's paused kept", state)
+	}
+	if code := env.taskErrorCode(t, parked); code != "" {
+		t.Errorf("parked error_code = %q, want the operator's clear kept", code)
+	}
+	if state := env.taskState(t, sibling); state != string(engine.StateDownloading) {
+		t.Errorf("sibling state = %q, want the freed slot spent on it", state)
+	}
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 0 {
+		t.Errorf("aria2 resumes = %v, want none: the clear aborted the release before any engine call", resumes)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 0 {
+		t.Errorf("aria2 adds = %v, want none", adds)
+	}
+	if codes := env.taskEventCodes(t, parked); len(codes) != 0 {
+		t.Errorf("parked events = %v, want none: the abort writes no row and no event", codes)
+	}
+	if got := clearing.claims.Load(); got != 0 {
+		t.Fatalf("claim writes = %d, want none: the under-lease re-read aborted the stale candidate before the claim was reached", got)
+	}
+}
+
+// claimClearStore clears the parked pair's stamp immediately before it
+// delegates the claim — the clear landing between the pass's
+// revalidation read and the guarded claim write, the window only the
+// claim can close.
+type claimClearStore struct {
+	engine.AdmissionStore
+	clear string
+}
+
+func (s claimClearStore) ClaimParkedDiskFull(ctx context.Context, id string) (bool, error) {
+	if id == s.clear {
+		if err := s.SetErrorCodeIfState(ctx, id, string(engine.StatePaused), "", ""); err != nil {
+			return false, err
+		}
+	}
+
+	return s.AdmissionStore.ClaimParkedDiskFull(ctx, id)
+}
+
+// A clear that lands between the revalidation read and the claim
+// declines the guarded write: the parked row stays paused under the
+// operator's takeover, the engine sees nothing, no event is written, and
+// no reservation is spent — the wrongly committed 1500 MiB would leave
+// the sibling short of the 700 MiB it needs here.
+func TestClaimTimeClearDeclinesTheGuardedClaim(t *testing.T) {
+	env := newAdmitEnv(t)
+	root := t.TempDir()
+
+	ref := "gid-claim-clear"
+	parked := env.seedTask(t, engine.NameAria2, "parked", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr(engine.ErrorCodeDiskFull)
+		task.EngineRef = &ref
+		task.Destination = root
+		total := 1500 * mib
+		task.TotalBytes = &total
+	})
+	nextAddedAt()
+	sibling := env.seedTask(t, engine.NameQBittorrent, "sibling", func(task *store.Task) {
+		task.Destination = root
+		total := 700 * mib
+		task.TotalBytes = &total
+	})
+
+	admit := env.admitterOverBothEngines(claimClearStore{AdmissionStore: env.tasks, clear: parked})
+
+	// 1900 MiB of head-room: decisively past the sibling's 700 MiB when
+	// nothing is wrongly committed, decisively short of it when the
+	// parked task's 1500 MiB are — both margins clear the 128 MiB the
+	// sibling test binaries' traffic on the shared temp filesystem needs.
+	policy := policyOver(root, floorLeaving(t, root, 1900*mib))
+	released, err := admit.Pass(t.Context(), policy)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != sibling {
+		t.Fatalf("released = %v, want exactly the sibling %s: a declined claim committed nothing", released, sibling)
+	}
+	if state := env.taskState(t, parked); state != string(engine.StatePaused) {
+		t.Errorf("parked state = %q, want the operator's paused kept", state)
+	}
+	if code := env.taskErrorCode(t, parked); code != "" {
+		t.Errorf("parked error_code = %q, want the operator's clear kept", code)
+	}
+	if state := env.taskState(t, sibling); state != string(engine.StateDownloading) {
+		t.Errorf("sibling state = %q, want downloading: the wrongly committed reservation would have held it queued", state)
+	}
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 0 {
+		t.Errorf("aria2 resumes = %v, want none: the declined claim gated every release shape", resumes)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 0 {
+		t.Errorf("aria2 adds = %v, want none", adds)
+	}
+	if codes := env.taskEventCodes(t, parked); len(codes) != 0 {
+		t.Errorf("parked events = %v, want none: the decline writes no row and no event", codes)
+	}
+}
+
+// A task whose operation lease another holder owns is skipped quietly:
+// the pass neither blocks its walk nor stamps the row, spends no
+// capacity on it, and reselects its current state on a later pass once
+// the holder lets go.
+func TestPassSkipsABusyTask(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	busy := env.seedTask(t, engine.NameAria2, "busy", nil)
+	nextAddedAt()
+	other := env.seedTask(t, engine.NameQBittorrent, "other", nil)
+
+	// Hold the lease the way a slow operator action would (T127's waiting
+	// acquisition is the production shape; the holder's mode is
+	// irrelevant to the pass).
+	release, err := env.registry.AcquireTaskOp(t.Context(), busy, engine.TaskOpTry)
+	if err != nil {
+		t.Fatalf("hold the lease: %v", err)
+	}
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != other {
+		t.Fatalf("released = %v, want exactly the unleased sibling: the busy task was skipped, not blocked on", released)
+	}
+	if state := env.taskState(t, busy); state != string(engine.StateQueued) {
+		t.Errorf("busy task state = %q, want queued", state)
+	}
+	if code := env.taskErrorCode(t, busy); code != "" {
+		t.Errorf("busy task error_code = %q, want none: a busy skip is quiet before any stamp write", code)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 0 {
+		t.Errorf("aria2 adds = %v, want none for the busy task", adds)
+	}
+
+	// The holder lets go: a later pass reselects the row and releases it.
+	release()
+
+	released, err = env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != busy {
+		t.Fatalf("released = %v, want exactly the formerly busy %s", released, busy)
+	}
+	if state := env.taskState(t, busy); state != string(engine.StateDownloading) {
+		t.Errorf("busy task state = %q after the holder released, want downloading", state)
+	}
+}
+
+// vanishedReadStore answers one id's Get with the store's not-found
+// error — a task removed between the pass's selection and its
+// under-lease revalidation read.
+type vanishedReadStore struct {
+	engine.AdmissionStore
+	vanished string
+}
+
+func (s vanishedReadStore) Get(ctx context.Context, id string) (store.Task, error) {
+	if id == s.vanished {
+		return store.Task{}, store.ErrNotFound
+	}
+
+	return s.AdmissionStore.Get(ctx, id)
+}
+
+// A vanished candidate aborts quietly: (false, nil) in the helper's
+// terms — no error surfaced by the pass, no engine call, no row write,
+// nothing spent.
+func TestVanishedCandidateAbortsQuietly(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	id := env.seedTask(t, engine.NameAria2, "gone", nil)
+
+	admit := env.admitterOver(vanishedReadStore{AdmissionStore: env.tasks, vanished: id})
+
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v, want no error: a vanished candidate is not an outage", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none", released)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 0 {
+		t.Errorf("aria2 adds = %v, want none: nothing is handed over for a vanished row", adds)
+	}
+	if codes := env.taskEventCodes(t, id); len(codes) != 0 {
+		t.Errorf("events = %v, want none", codes)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateQueued) {
+		t.Errorf("state = %q, want the seeded queued untouched", state)
+	}
+}
+
+// claimCountingStore counts the guarded claim at the store boundary, so
+// a test can pin which release shapes take it and which do not.
+type claimCountingStore struct {
+	engine.AdmissionStore
+	claims atomic.Int64
+}
+
+func (s *claimCountingStore) ClaimParkedDiskFull(ctx context.Context, id string) (bool, error) {
+	s.claims.Add(1)
+
+	return s.AdmissionStore.ClaimParkedDiskFull(ctx, id)
+}
+
+// An unchanged queued candidate is released with no claim write at all,
+// and its mechanics are the pre-T128 ones: one Add for a task without a
+// handle. A parked candidate's release takes exactly one claim,
+// immediately before its first engine call — the plain unpause shape
+// with one Resume and zero Adds behind it.
+func TestQueuedReleaseClaimsNothingAndParkedClaimsOnce(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	counting := &claimCountingStore{AdmissionStore: env.tasks}
+	registry := engine.NewRegistry()
+	registry.Register(env.aria2)
+	admit := engine.NewAdmitter(registry, counting, time.Second, nil)
+
+	fresh := env.seedTask(t, engine.NameAria2, "fresh", nil)
+
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != fresh {
+		t.Fatalf("released = %v, want the queued task", released)
+	}
+	if got := counting.claims.Load(); got != 0 {
+		t.Fatalf("claim writes for a queued release = %d, want none", got)
+	}
+
+	// Park the released transfer the way the guard does, then release it
+	// again through a paused snapshot.
+	if err := env.admit.PauseDiskFull(t.Context(), fresh, errors.New("write: no space left on device")); err != nil {
+		t.Fatalf("pause disk-full: %v", err)
+	}
+	env.aria2.resumes = nil
+
+	released, err = admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != fresh {
+		t.Fatalf("released = %v, want the parked task", released)
+	}
+	if got := counting.claims.Load(); got != 1 {
+		t.Fatalf("claim writes for a parked release = %d, want exactly one", got)
+	}
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 1 {
+		t.Errorf("aria2 resumes = %v, want exactly one: the claim precedes the plain unpause, it does not change it", resumes)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 1 {
+		t.Errorf("aria2 adds = %v, want the queued release's one Add only", adds)
+	}
+	if state := env.taskState(t, fresh); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading", state)
+	}
+}
+
+// midReleaseProbeStore probes the task-operation lease from inside the
+// release's own row writes, after the engine call: the probe's Try
+// acquisition must find the pass still holding the lease, so nothing —
+// an operator clear above all — can interleave between the claim and
+// the completed release.
+type midReleaseProbeStore struct {
+	engine.AdmissionStore
+	registry *engine.Registry
+	id       string
+	probes   chan error
+}
+
+func (s *midReleaseProbeStore) Transition(ctx context.Context, id, next, code, message string) error {
+	if id == s.id {
+		probeRelease, err := s.registry.AcquireTaskOp(ctx, id, engine.TaskOpTry)
+		if probeRelease != nil {
+			// The busy error is the expected answer; a success here would
+			// be the bug the test exists to catch, and leaking the acquired
+			// lease on top of it would blur every assertion after it.
+			probeRelease()
+		}
+		select {
+		case s.probes <- err:
+		default:
+		}
+	}
+
+	return s.AdmissionStore.Transition(ctx, id, next, code, message)
+}
+
+// The lease spans the engine call and the release writes behind it: a
+// Try from inside markReleased's transition — after Resume answered —
+// answers busy until the pass's iteration is done.
+func TestLeaseIsHeldThroughTheReleaseWrites(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	probes := make(chan error, 4)
+	counting := &midReleaseProbeStore{
+		AdmissionStore: env.tasks, registry: env.registry,
+		id: "", probes: probes,
+	}
+	// id is set after seeding; the struct literal above keeps the field
+	// layout explicit for the reader.
+	ref := "gid-probe"
+	id := env.seedTask(t, engine.NameAria2, "probe", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr(engine.ErrorCodeDiskFull)
+		task.EngineRef = &ref
+	})
+	counting.id = id
+
+	admit := engine.NewAdmitter(env.registry, counting, time.Second, nil)
+
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want the parked task released", released)
+	}
+
+	close(probes)
+	probed := 0
+	for probe := range probes {
+		probed++
+		if !errors.Is(probe, engine.ErrTaskOpBusy) {
+			t.Fatalf("probe inside the release writes = %v, want ErrTaskOpBusy: the pass holds the lease until the writes finish", probe)
+		}
+	}
+	if probed == 0 {
+		t.Fatalf("no probes recorded: the release never transitioned %s through the wrapped store, so the lease span went unobserved", id)
+	}
+
+	// The iteration finished: the lease is free again for the next
+	// operation on this task.
+	if release, err := env.registry.AcquireTaskOp(t.Context(), id, engine.TaskOpTry); err != nil {
+		t.Fatalf("Try after the completed iteration = %v, want the freed lease", err)
+	} else {
+		release()
 	}
 }

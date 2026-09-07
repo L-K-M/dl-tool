@@ -269,6 +269,20 @@ SET error_code = ?, error_message = ?, updated_at = ?
 WHERE id = ? AND state = ? AND (error_code IS NOT ? OR error_message IS NOT ?)`
 
 	queryTaskErrorCode = `SELECT error_code, error_message, state FROM tasks WHERE id = ?`
+
+	// The admission pass's guarded claim of one parked candidate (T128,
+	// FR-048): a no-op self-assignment under the exact paused+disk_full
+	// pair, so RETURNING identifies a matched row directly without
+	// changing state, stamp, timestamp or event — the schema has no
+	// update trigger, and the self-assignment writes nothing. The literal
+	// is engine.ErrorCodeDiskFull's storage form; SQL cannot reach the Go
+	// constant, so the two are pinned together by the admission tests
+	// through the real store, the same pin
+	// querySelectQueuedCandidates carries.
+	queryClaimParkedDiskFull = `UPDATE tasks
+SET error_code = error_code
+WHERE id = ? AND state = 'paused' AND error_code = 'disk_full'
+RETURNING id`
 )
 
 // TaskStore persists tasks rows and enforces the task state machine.
@@ -811,6 +825,70 @@ func (s *TaskStore) ClearHoldCode(ctx context.Context, id string) error {
 	}
 
 	return nil
+}
+
+// ClaimParkedDiskFull atomically revalidates the persisted
+// paused+disk_full pair: one guarded no-op write whose RETURNING row
+// reports whether the store still holds the pair the caller selected
+// the candidate by. It is the admission pass's claim before its first
+// engine call (T128): once taken, the pair stays untouched — a crash
+// between the claim and the engine call leaves the row exactly as
+// selectable as before and needs no recovery write, because no marker
+// was stored. Clearing the stamp as the claim would instead make that
+// crash indistinguishable from an operator takeover and strand the row
+// outside the candidate query. The registry's task-operation lease owns
+// in-process exclusion (ADR-0004's one process); this write owns the
+// persisted revalidation after selection. taken is false when the row
+// is present but the pair no longer matches — moved or cleared, an
+// overtaken candidate, never an engine rejection; a missing id is
+// ErrNotFound, distinguished from a decline by a read in the same
+// transaction. The update's guard is never loosened to tell the two
+// apart, and changed-row counts are never read: RETURNING answers
+// directly.
+func (s *TaskStore) ClaimParkedDiskFull(ctx context.Context, id string) (bool, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("store: claim parked disk-full task %q: %w", id, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of parked claim failed", "task_id", id, "error", err)
+		}
+	}()
+
+	var claimed string
+	err = tx.GetContext(ctx, &claimed, queryClaimParkedDiskFull, id)
+	switch {
+	case err == nil:
+		// The exact statement ran and matched: the pair is claimed as it
+		// stands — the no-op write changed nothing, so there is nothing
+		// beyond the commit to confirm.
+	case errors.Is(err, sql.ErrNoRows):
+		// The guard matched no row. A present-but-changed row is a
+		// decline; only a missing id is an error. Read by id inside the
+		// same transaction so a row moving between the two cannot
+		// misattribute the answer.
+		var state string
+		readErr := tx.GetContext(ctx, &state, queryTaskState, id)
+		if errors.Is(readErr, sql.ErrNoRows) {
+			return false, fmt.Errorf("store: claim parked disk-full task %q: %w", id, ErrNotFound)
+		}
+		if readErr != nil {
+			return false, fmt.Errorf("store: claim parked disk-full task %q: read state: %w", id, readErr)
+		}
+
+		return false, nil
+	default:
+		return false, fmt.Errorf("store: claim parked disk-full task %q: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("store: claim parked disk-full task %q: commit: %w", id, err)
+	}
+
+	return true, nil
 }
 
 // nullableText renders "" as SQL NULL — the storage form of an absent
