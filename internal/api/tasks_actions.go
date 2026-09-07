@@ -17,6 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jmoiron/sqlx"
 	"strconv"
+	"time"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -69,6 +70,12 @@ const (
 	detailNotInQueue        = "the task is not in the queue"
 	detailActionFailed      = "the action could not be applied"
 
+	// detailTaskOpBusy is the pause action's answer when its wait for the
+	// shared task-operation lease outlives pauseLeaseWait: contention, not
+	// failure — the per-id current-state failure type, never
+	// engine-unavailable.
+	detailTaskOpBusy = "another task operation is in progress; retry"
+
 	emptyNameDetail     = "the display name cannot be empty"
 	patchFailedDetail   = "the patch holds values that failed validation"
 	negativeLimitDetail = "the limit cannot be negative; 0 means unlimited"
@@ -83,6 +90,14 @@ const (
 
 	queryConcurrencySettings = `SELECT key, value_json FROM settings WHERE key IN (?, ?)`
 )
+
+// pauseLeaseWait is the operator-response budget a pause action spends
+// waiting for the shared task-operation lease (T128's registry table):
+// deliberately shorter than an adapter's worst-case RPC sequence, so a
+// slow healthy holder — an admission release mid-flight — makes the
+// action ask for a retry instead of holding the request open. The lease
+// wait runs under this timeout, never the request context alone.
+const pauseLeaseWait = 5 * time.Second
 
 // taskActions is the action vocabulary actionEnum spells out.
 var taskActions = strings.Split(actionEnum, ",")
@@ -315,6 +330,14 @@ func (h *TaskHandlers) applyAction(
 		return h.recheck(ctx, task)
 	}
 
+	// Pause takes its own path: the operator pause joins the admission
+	// pass's task-operation lease before it trusts its snapshot, because a
+	// task the disk-space guard parked must change hands — stamp and all —
+	// rather than be resumed by the next pass (T127).
+	if action == actionPause {
+		return h.pauseAction(ctx, task)
+	}
+
 	target, code, message := actionOutcome(action)
 
 	// Resume requeues the task whatever the headroom, then answers from
@@ -341,6 +364,98 @@ func (h *TaskHandlers) applyAction(
 	}
 
 	return h.transitionAction(ctx, task, target, code, message)
+}
+
+// pauseAction is the pause action's own path (T127). An operator pause
+// on a task the disk-space guard parked (paused + disk_full) takes
+// ownership of the row: without the takeover the admission pass selects
+// the row by its stamp alone and silently resumes what the operator
+// parked. The action therefore joins the shared task-operation lease in
+// waiting mode under a bounded budget — its clear lands before the
+// pass's guarded claim, follows a completed release, or fails clearly
+// when the budget expires — then reloads the row the holder left
+// behind and holds the lease through the engine call, the state write
+// and the hold-stamp clear. An already-paused row keeps its idempotent
+// shape: no engine round-trip, no second pause event, then the clear.
+// An active row keeps the engine-first behaviour and its one event,
+// then the clear wipes whatever hold stamp rode the row.
+func (h *TaskHandlers) pauseAction(ctx context.Context, task actionTask) ActionResult {
+	target, code, message := actionOutcome(actionPause)
+
+	// The lease wait runs under the named operator budget, never the
+	// request context alone: a wait that outlives it returns the retry
+	// outcome below with nothing touched — no engine call, no mutating
+	// store call.
+	waitCtx, cancelWait := context.WithTimeout(ctx, pauseLeaseWait)
+	defer cancelWait()
+
+	releaseLease, err := h.engines.AcquireTaskOp(waitCtx, task.ID, engine.TaskOpWait)
+	if err != nil {
+		return actionFailure(task.ID, SlugValidationFailed, detailTaskOpBusy)
+	}
+	defer releaseLease()
+
+	// The preloaded row predates the wait; reload under the lease so the
+	// decision below reads what the holder left behind — a released row
+	// goes through the ordinary engine pause, a still-parked one through
+	// the idempotent branch.
+	current, err := h.tasks.Get(ctx, task.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return actionFailure(task.ID, SlugNotFound, detailTaskNotFound)
+	}
+	if err != nil {
+		logFromContext(ctx).Error("pause action could not reload the task",
+			slog.String("task_id", task.ID), slog.Any("err", err))
+
+		return actionFailure(task.ID, SlugInternal, detailActionFailed)
+	}
+
+	reloaded := actionTask{
+		ID: current.ID, Engine: current.Engine, EngineRef: current.EngineRef, State: current.State,
+	}
+
+	if reloaded.State != target {
+		// The engine call the action's table row names, unchanged from the
+		// generic path: engine first, so an engine failure leaves the state
+		// untouched. A task no engine holds yet (no engine_ref) applies to
+		// dl-tool's row alone.
+		e, err := h.engineFor(ctx, reloaded)
+		if err == nil && e != nil {
+			err = e.Pause(ctx, engineTaskID(reloaded.Engine, reloaded.EngineRef))
+		}
+		if err != nil {
+			return engineFailure(ctx, task.ID, err)
+		}
+
+		outcome := h.transitionAction(ctx, reloaded, target, code, message)
+		if !outcome.Ok {
+			return outcome
+		}
+	}
+
+	// The takeover itself: wipe a hold stamp off the paused row so the
+	// admission pass — which selects candidates by the paused+disk_full
+	// pair — can never resume the task the operator parked. No
+	// task_events row belongs to the clear; the pause event (when one
+	// landed) is the whole story.
+	cleared, err := h.tasks.ClearPausedHoldCode(ctx, task.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return actionFailure(task.ID, SlugNotFound, detailTaskNotFound)
+	}
+	if err != nil {
+		// The pause landed but the takeover did not: report the failure so
+		// a retry — which finds the idempotent branch — tries the clear
+		// again. Until it lands the pass may still resume the row.
+		logFromContext(ctx).Error("pause landed but the hold-stamp clear failed; the admission pass may resume the task until a retry clears it",
+			slog.String("task_id", task.ID), slog.Any("err", err))
+
+		return actionFailure(task.ID, SlugInternal, detailActionFailed)
+	}
+	if cleared {
+		logFromContext(ctx).Info("operator pause took over a guard-parked task", slog.String("task_id", task.ID))
+	}
+
+	return ActionResult{ID: task.ID, Ok: true}
 }
 
 // resumeAction requeues one task and reports whether a slot is free now:

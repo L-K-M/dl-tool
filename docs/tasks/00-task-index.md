@@ -92,7 +92,7 @@ URI normalisation, the Engine interface, the aria2 adapter, the queue and the ev
 | [T098](T098-concurrency-limiter.md) | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | done |
 | [T099](T099-disk-space-reservation.md) | Reserve disk space and keep a free-space floor | T020, T024, T098 | done |
 | [T126](T126-disk-full-pause-routing.md) | Route an engine disk-full report into the pause | T026, T099 | done |
-| [T127](T127-operator-pause-of-a-parked-task.md) | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099, T128 | todo |
+| [T127](T127-operator-pause-of-a-parked-task.md) | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099, T128 | done |
 | [T128](T128-atomic-claim-of-a-parked-candidate.md) | Claim a parked candidate before the engine resumes it | T099, T126 | done |
 
 ## M2 — BitTorrent
@@ -303,7 +303,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T098 | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | no | done | [T098](T098-concurrency-limiter.md) |
 | T099 | Reserve disk space and keep a free-space floor | T020, T024, T098 | no | done | [T099](T099-disk-space-reservation.md) |
 | T126 | Route an engine disk-full report into the pause | T026, T099 | no | done | [T126](T126-disk-full-pause-routing.md) |
-| T127 | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099, T128 | yes | todo | [T127](T127-operator-pause-of-a-parked-task.md) |
+| T127 | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099, T128 | yes | done | [T127](T127-operator-pause-of-a-parked-task.md) |
 | T128 | Claim a parked candidate before the engine resumes it | T099, T126 | no | done | [T128](T128-atomic-claim-of-a-parked-candidate.md) |
 
 ### M2

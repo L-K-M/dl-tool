@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T127 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T022, T099, T128 |
 | **Blocks** | — |
 | **Parallel-safe** | yes — code edits stay in the action layer and store; plan edits stay in this task file and its two status cells in `00-task-index.md` |
@@ -86,20 +86,20 @@ No other file may be modified.
    status cells in [`00-task-index.md`](00-task-index.md). Commit them with the work.
 
 ## Acceptance criteria
-- [ ] An operator pause on a paused + `disk_full` row (the idempotent branch) clears the stamp
+- [x] An operator pause on a paused + `disk_full` row (the idempotent branch) clears the stamp
   and writes no pause event; a fresh pause on an active task still writes exactly one.
-- [ ] The admission pass does not select the row afterwards: state stays `paused` with space and
+- [x] The admission pass does not select the row afterwards: state stays `paused` with space and
   a slot available, and the engine sees no `Resume`.
-- [ ] The action and admission release use the same task-operation lease. An operator-first clear
+- [x] The action and admission release use the same task-operation lease. An operator-first clear
   aborts the release. After an admission-first success or `ErrUnavailable` inside the five-second
   budget, the action reloads current state and leaves the row paused with no hold stamp; it calls
   the engine only when the release succeeded.
-- [ ] A lease wait that reaches the named timeout returns a per-id `validation-failed` task-busy
+- [x] A lease wait that reaches the named timeout returns a per-id `validation-failed` task-busy
   outcome, mutates nothing, and succeeds on retry after the holder releases.
-- [ ] An operator pause on an active task keeps the existing engine-first behavior: state and one
+- [x] An operator pause on an active task keeps the existing engine-first behavior: state and one
   event land as before, and the hold stamp is cleared with the pause.
-- [ ] A paused row carrying a non-hold code (e.g. an operator message) keeps it.
-- [ ] An operator pause on a queued row carrying a hold stamp clears the stamp with the pause;
+- [x] A paused row carrying a non-hold code (e.g. an operator message) keeps it.
+- [x] An operator pause on a queued row carrying a hold stamp clears the stamp with the pause;
   admission's under-lease revalidation does not release the stale queued snapshot.
 
 ## Verification
@@ -129,33 +129,83 @@ are hidden by the `:(exclude)docs` pathspec.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Paste each Verification command, its full output and its exit status here before marking done.>
+
+`make lint && make test PKG=./internal/...` after the last code change — lint clean, every
+internal package `ok`, no `FAIL`, exit 0:
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier Code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	54.054s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.246s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.876s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.163s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.033s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.060s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.199s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.166s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.823s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.380s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.021s
+EXIT=0
+```
+
+The task's new tests, run verbosely (`-race -count=1`):
+
+```
+$ go test ./internal/api/ ./internal/store/ -run 'TestOperatorPause|TestStaleQueuedReleaseAbortsUnderTheLease|TestClearPausedHoldCode' -count=1 -race -v | grep -E '^(--- (PASS|FAIL)|ok |FAIL)'
+--- PASS: TestOperatorPauseTakesOverAParkedRow (0.40s)
+--- PASS: TestOperatorPauseKeepsANonHoldCode (0.39s)
+--- PASS: TestOperatorPauseOnAnActiveRowKeepsEngineFirst (0.39s)
+--- PASS: TestOperatorPauseClearsAQueuedRowHoldStamp (0.75s)
+--- PASS: TestOperatorPauseWaitsForTheAdmissionRelease (0.41s)
+--- PASS: TestOperatorPauseAfterAFailedRelease (0.47s)
+--- PASS: TestOperatorPauseTimesOutBehindTheLease (0.58s)
+--- PASS: TestStaleQueuedReleaseAbortsUnderTheLease (0.35s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.817s
+--- PASS: TestClearPausedHoldCode (1.47s)
+ok  	github.com/L-K-M/dl-tool/internal/store	2.513s
+```
+
+Mutation checks — each defence was disabled in turn and its test observed to FAIL before
+the feature was restored (every restoration verified by `go build ./...`):
+
+- Reload under the lease replaced with the preloaded snapshot →
+  `TestOperatorPauseWaitsForTheAdmissionRelease` FAIL (no operator `Pause` call, no
+  `task.paused` event, the row left `downloading`).
+- Lease acquisition switched from `TaskOpWait` to `TaskOpTry` →
+  `TestOperatorPauseWaitsForTheAdmissionRelease` and `TestOperatorPauseAfterAFailedRelease`
+  FAIL (the waiting action answered the retry outcome instead of joining the holder).
+- Hold-stamp clear dropped from the action → `TestOperatorPauseTakesOverAParkedRow` FAIL
+  (the stamp survived and the next pass released the row to `downloading`), plus
+  `TestOperatorPauseOnAnActiveRowKeepsEngineFirst` and both
+  `TestOperatorPauseClearsAQueuedRowHoldStamp` subtests FAIL (stamps survived).
+- Store guard loosened to `state = 'paused'` alone → `TestClearPausedHoldCode` FAIL
+  (the non-hold-code decline case wiped the row's own code).
+
+Scope check, run while every task change was still uncommitted:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | cut -c4- | sort
+internal/api/tasks_actions.go
+internal/api/tasks_actions_test.go
+internal/store/tasks.go
+internal/store/tasks_test.go
+```
+
+Exactly the four non-doc paths of the Files table; the docs side is this file and the two
+status cells of `00-task-index.md`.
 
 ## Blocked
-Stopped at step 2, before any code: the required mid-pass atomic claim does not exist, so the
-pre-rewrite step 2's STOP-and-register instruction was carried out — the claim is registered as
-[T128](T128-atomic-claim-of-a-parked-candidate.md), the task that owns the task-operation lease,
-the admission pass's files and the store's claim write; this row's `Depends on` now names it (the
-T099→T126 pattern).
-
-What was verified, at d3946ad (`internal/engine/admission.go`, `internal/store/tasks.go`):
-
-- `Admitter.release` calls `Engine.Resume` before its first guarded row write — `markReleased`
-  runs only after the engine call answered. Between `SelectQueuedCandidates` and the engine call
-  there is no row write at all: the space gate and the limit gate are read-only.
-- No store write both conditions on `state = 'paused' AND error_code = 'disk_full'` and reports
-  whether it took the row: `SetErrorCodeIfState` guards the state alone and answers every declined
-  write with success; `ClearHoldCode` matches `state <> 'paused'` and refuses paused rows (the
-  refusal this task's own step 1 preserves); `PauseWithCode` lands pauses, it does not claim;
-  `Transition` conditions on state legality alone.
-
-PR review then exposed that a bare stamp-clear claim closes only the selection-to-claim half of
-the race and creates a crash state indistinguishable from an operator pause. T128 therefore owns
-a task-operation lease and a no-op guarded claim that keeps the parked pair intact.
-
-The pre-rewrite criterion 3 was therefore uncheckable inside this task's Files table, and the
-clear without the shared lease and claim would close only the next-tick hole while the mid-pass
-race stayed open — a half-done task against the one-commit Definition of Done. No code was written;
-the edits are this file's dependency and blocker record, its Goal/Context/Files/Steps/criteria
-rewrite around T128, the new T128 task file, and the index registration and dependency cells,
-risk-register row, and overflow note.
+<Only if you had to stop. State the exact ambiguity and which file should answer it.>

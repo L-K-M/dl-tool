@@ -244,6 +244,27 @@ GROUP BY destination`
 SET error_code = NULL, error_message = NULL, updated_at = ?
 WHERE id = ? AND state <> 'paused' AND error_code IN ('disk_full', 'concurrency_limit')`
 
+	// The operator pause's takeover write (T127, FR-048): the mirror
+	// guard of queryClearTaskErrorCodeUnlessPaused — where that clear
+	// refuses paused rows so a release cleanup can never strand a parked
+	// row outside the candidate query, this one clears only a paused row,
+	// and only a hold stamp: an operator pausing a task the disk-space
+	// guard parked takes ownership of the row, and the admission pass —
+	// which selects candidates by the paused+disk_full pair alone — can
+	// no longer mistake the operator's pause for its own and silently
+	// resume it. A paused row carrying any other code (an operator
+	// message, a real failure) keeps it, and state is never touched: the
+	// task is paused already. The literals are engine.ErrorCodeDiskFull's
+	// and engine.ErrorCodeConcurrencyLimit's storage forms; SQL cannot
+	// reach the Go constants, so the three are pinned together by the
+	// admission tests through the real store, the same pin the queries
+	// above carry. concurrency_limit is inert once its row is paused but
+	// cleared anyway, so the row's message never names a hold the operator
+	// just took over.
+	queryClearPausedTaskHoldCode = `UPDATE tasks
+SET error_code = NULL, error_message = NULL, updated_at = ?
+WHERE id = ? AND state = 'paused' AND error_code IN ('disk_full', 'concurrency_limit')`
+
 	// The disk-full pause's atomic landing (FR-048): state, error_code and
 	// error_message commit as one row write, so no concurrent hold-code
 	// clear can split the pause from its stamp and strand a paused row
@@ -889,6 +910,69 @@ func (s *TaskStore) ClaimParkedDiskFull(ctx context.Context, id string) (bool, e
 	}
 
 	return true, nil
+}
+
+// ClearPausedHoldCode clears a hold stamp (disk_full or
+// concurrency_limit) off a paused row and reports whether it wiped one:
+// the operator pause's takeover (T127). Only a paused row carrying a
+// hold stamp matches, so the admission pass — which selects candidates
+// by the paused+disk_full pair — can never resume a task the operator
+// deliberately parked. A row in any other state, or a paused row
+// carrying any other code, is left untouched and reports false; a
+// missing id is ErrNotFound, distinguished from a declined clear by a
+// read in the same transaction. It never touches state: the task is
+// paused already, and only the stamp hands the row to the pass. Unlike
+// ClearHoldCode — the admission release's cleanup, which refuses paused
+// rows on purpose — this clear exists precisely for them.
+func (s *TaskStore) ClearPausedHoldCode(ctx context.Context, id string) (bool, error) {
+	// One transaction for the guarded write and the existence probe, so a
+	// row that moves or vanishes between them cannot misattribute the
+	// outcome — the same discipline ClearHoldCode keeps.
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("store: clear paused hold code of task %q: %w", id, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of paused hold-code clear failed", "task_id", id, "error", err)
+		}
+	}()
+
+	result, err := tx.ExecContext(ctx, queryClearPausedTaskHoldCode, time.Now().UnixMilli(), id)
+	if err != nil {
+		return false, fmt.Errorf("store: clear paused hold code of task %q: %w", id, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: clear paused hold code of task %q: count rows: %w", id, err)
+	}
+	if affected > 0 {
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("store: clear paused hold code of task %q: commit: %w", id, err)
+		}
+
+		return true, nil
+	}
+
+	// Zero rows: a missing id, or a row the guard declined — not paused,
+	// or carrying a code that is no hold stamp. Only the missing id is an
+	// error; the decline is the clear losing the row on purpose.
+	var state string
+	if err := tx.GetContext(ctx, &state, queryTaskState, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("store: clear paused hold code of task %q: %w", id, ErrNotFound)
+		}
+		return false, fmt.Errorf("store: clear paused hold code of task %q: read state: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("store: clear paused hold code of task %q: commit: %w", id, err)
+	}
+
+	return false, nil
 }
 
 // nullableText renders "" as SQL NULL — the storage form of an absent
