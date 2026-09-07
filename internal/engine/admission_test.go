@@ -1765,7 +1765,14 @@ func (e *admitEnv) admitterOverBothEngines(store engine.AdmissionStore) *engine.
 // revalidation read.
 type selectionClearStore struct {
 	engine.AdmissionStore
-	clear string
+	clear  string
+	claims atomic.Int64
+}
+
+func (s *selectionClearStore) ClaimParkedDiskFull(ctx context.Context, id string) (bool, error) {
+	s.claims.Add(1)
+
+	return s.AdmissionStore.ClaimParkedDiskFull(ctx, id)
 }
 
 func (s selectionClearStore) SelectQueuedCandidates(ctx context.Context, limit int) ([]store.Candidate, error) {
@@ -1810,7 +1817,8 @@ func TestSelectionTimeClearAbortsTheParkedRelease(t *testing.T) {
 		task.Destination = root
 	})
 
-	admit := env.admitterOverBothEngines(selectionClearStore{AdmissionStore: env.tasks, clear: parked})
+	clearing := &selectionClearStore{AdmissionStore: env.tasks, clear: parked}
+	admit := env.admitterOverBothEngines(clearing)
 
 	policy := policyOver(root, 0)
 	policy.Limits = engine.Limits{MaxActiveTotal: 1}
@@ -1838,6 +1846,9 @@ func TestSelectionTimeClearAbortsTheParkedRelease(t *testing.T) {
 	}
 	if codes := env.taskEventCodes(t, parked); len(codes) != 0 {
 		t.Errorf("parked events = %v, want none: the abort writes no row and no event", codes)
+	}
+	if got := clearing.claims.Load(); got != 0 {
+		t.Fatalf("claim writes = %d, want none: the under-lease re-read aborted the stale candidate before the claim was reached", got)
 	}
 }
 
