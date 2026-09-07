@@ -2071,6 +2071,89 @@ func TestStoreErrorSkipsCandidateNotThePass(t *testing.T) {
 	}
 }
 
+// brokenClaimStore fails the guarded claim for one id while reads
+// succeed — the write-side twin of brokenReadStore, pinning that a
+// claim failure skips the parked candidate without aborting the pass.
+type brokenClaimStore struct {
+	engine.AdmissionStore
+	broken string
+}
+
+func (s brokenClaimStore) ClaimParkedDiskFull(ctx context.Context, id string) (bool, error) {
+	if id == s.broken {
+		return false, errors.New("injected: claim write failed")
+	}
+
+	return s.AdmissionStore.ClaimParkedDiskFull(ctx, id)
+}
+
+// The skip branch also covers the guarded claim write, not only the
+// revalidation read: a parked candidate whose claim fails is skipped
+// with a warn and left parked carrying its stamp, while the queued
+// sibling behind it still releases in the same pass.
+func TestClaimErrorSkipsCandidateNotThePass(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	ref := "gid-broken-claim"
+	parked := env.seedTask(t, engine.NameAria2, "parked", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr(engine.ErrorCodeDiskFull)
+		task.EngineRef = &ref
+	})
+	nextAddedAt()
+	sibling := env.seedTask(t, engine.NameQBittorrent, "sibling", nil)
+
+	admit := env.admitterOverBothEngines(brokenClaimStore{AdmissionStore: env.tasks, broken: parked})
+
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v, want no error: a released sibling proves the pass walked past the broken claim", err)
+	}
+	if len(released) != 1 || released[0] != sibling {
+		t.Fatalf("released = %v, want exactly the sibling %s", released, sibling)
+	}
+	if state := env.taskState(t, parked); state != string(engine.StatePaused) {
+		t.Errorf("parked state = %q, want the seeded paused kept", state)
+	}
+	if code := env.taskErrorCode(t, parked); code != engine.ErrorCodeDiskFull {
+		t.Errorf("parked error_code = %q, want the disk_full stamp kept", code)
+	}
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 0 {
+		t.Errorf("aria2 resumes = %v, want none: the failed claim gates the engine call", resumes)
+	}
+}
+
+// A pass that skipped every candidate and released nothing reports an
+// error: a full store outage must not read as an idle queue. The
+// pass that skips some and releases others stays quiet — that is the
+// one-broken-row case the sibling test above pins.
+func TestAllCandidatesFailingReportsAnOutage(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	broken := env.seedTask(t, engine.NameAria2, "broken", nil)
+	nextAddedAt()
+	alsoBroken := env.seedTask(t, engine.NameQBittorrent, "also-broken", nil)
+
+	// brokenReadStore fails exactly one id per wrapper; stack two so both
+	// candidates read-fail.
+	admit := env.admitterOverBothEngines(brokenReadStore{AdmissionStore: brokenReadStore{AdmissionStore: env.tasks, broken: broken}, broken: alsoBroken})
+
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err == nil {
+		t.Fatalf("pass err = nil, want the store-outage error: an all-failing pass is not an idle queue")
+	}
+	if !strings.Contains(err.Error(), "skipped 2 candidate(s)") {
+		t.Errorf("pass err = %v, want it to count the skipped candidates", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none", released)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 0 {
+		t.Errorf("aria2 adds = %v, want none", adds)
+	}
+}
+
 // claimCountingStore counts the guarded claim at the store boundary, so
 // a test can pin which release shapes take it and which do not.
 type claimCountingStore struct {

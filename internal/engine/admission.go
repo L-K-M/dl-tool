@@ -213,6 +213,7 @@ func (a *Admitter) Pass(ctx context.Context, p Policy) ([]string, error) {
 	}
 
 	released := make([]string, 0, len(candidates))
+	storeErrs := 0
 	for _, cand := range candidates {
 		if ctx.Err() != nil {
 			return released, ctx.Err()
@@ -239,15 +240,17 @@ func (a *Admitter) Pass(ctx context.Context, p Policy) ([]string, error) {
 			}
 
 			// One candidate's store error must not starve the candidates
-			// behind it on every tick: the selection order is stable, so an
-			// aborting pass would reselect the same row and die at it again
-			// while everything behind it waits forever — the head-of-line
-			// blocking the busy-skip above exists to avoid, back through
-			// the error path. Skip it, log it, reselect it later; context
-			// cancellation stays the only pass-aborting error.
+			// behind it: selection order is stable, so a pass that aborts
+			// on error would reselect the same row and die on it again
+			// every tick while everything behind it waits forever — the
+			// same head-of-line blocking the busy-skip above prevents for
+			// busy candidates, now also prevented on the error path.
+			// Skip it, log it, retry it on a later pass; only context
+			// cancellation aborts the pass.
 			a.log.Warn("admission pass: skipping candidate after a store error",
 				"task_id", cand.ID, "error", err)
 
+			storeErrs++
 			continue
 		}
 		if !releasedThis {
@@ -261,6 +264,16 @@ func (a *Admitter) Pass(ctx context.Context, p Policy) ([]string, error) {
 		counts.ByEngine[cand.Engine]++
 		gate.commit(cand)
 		released = append(released, cand.ID)
+	}
+
+	// A pass that skipped candidates but released others is healthy
+	// enough — one broken row is the skip case above. A pass that skipped
+	// candidates and released nothing is indistinguishable from an idle
+	// queue without this error, and a full store outage must not read as
+	// one. Run logs it and retries on the next tick, as it does for the
+	// top-of-pass read failures.
+	if storeErrs > 0 && len(released) == 0 {
+		return released, fmt.Errorf("admission pass: skipped %d candidate(s) after store errors", storeErrs)
 	}
 
 	return released, nil
