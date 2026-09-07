@@ -2107,7 +2107,13 @@ type midReleaseProbeStore struct {
 
 func (s *midReleaseProbeStore) Transition(ctx context.Context, id, next, code, message string) error {
 	if id == s.id {
-		_, err := s.registry.AcquireTaskOp(ctx, id, engine.TaskOpTry)
+		probeRelease, err := s.registry.AcquireTaskOp(ctx, id, engine.TaskOpTry)
+		if probeRelease != nil {
+			// The busy error is the expected answer; a success here would
+			// be the bug the test exists to catch, and leaking the acquired
+			// lease on top of it would blur every assertion after it.
+			probeRelease()
+		}
 		select {
 		case s.probes <- err:
 		default:
@@ -2150,10 +2156,15 @@ func TestLeaseIsHeldThroughTheReleaseWrites(t *testing.T) {
 	}
 
 	close(probes)
+	probed := 0
 	for probe := range probes {
+		probed++
 		if !errors.Is(probe, engine.ErrTaskOpBusy) {
 			t.Fatalf("probe inside the release writes = %v, want ErrTaskOpBusy: the pass holds the lease until the writes finish", probe)
 		}
+	}
+	if probed == 0 {
+		t.Fatalf("no probes recorded: the release never transitioned %s through the wrapped store, so the lease span went unobserved", id)
 	}
 
 	// The iteration finished: the lease is free again for the next

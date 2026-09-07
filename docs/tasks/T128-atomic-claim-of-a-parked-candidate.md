@@ -261,5 +261,57 @@ internal/store/tasks_test.go
 Exactly the six non-doc paths of the Files table, nothing else; the docs side is this file and
 `docs/tasks/00-task-index.md`.
 
+### Review round 1 (commit 06eae21 → this one)
+
+Two inline comments, both on `TestLeaseIsHeldThroughTheReleaseWrites`, both applied:
+
+- **Assert at least one probe fired** — applied as a `probed` counter with a fatal on zero: an
+  empty channel made the busy-check loop pass vacuously. Verified to bite: pointing the wrapper
+  at a foreign id fails the test with `no probes recorded`.
+- **Release the probe's lease when acquired** — applied: the probe's Try now releases a successful
+  acquisition instead of discarding it, so an unexpected success (the bug the test hunts) cannot
+  also leak the lease and blur the assertions after it.
+
+`make lint && make test PKG=./internal/...` after the round-1 fixes — lint clean, every internal
+package `ok`, no `FAIL`, exit 0:
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier Code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	45.318s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.120s
+ok  	github.com/L-K-M/dl-tool/internal/engine	19.630s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.161s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.026s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.551s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.163s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.022s
+ok  	github.com/L-K-M/dl-tool/internal/store	64.473s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.376s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.042s
+EXIT=0
+```
+
+The mutation check for the vacuity guard (wrapper pointed at a foreign id, then restored):
+
+```
+$ go test ./internal/engine/ -run 'TestLeaseIsHeld' -count=1
+--- FAIL: TestLeaseIsHeldThroughTheReleaseWrites (0.03s)
+    admission_test.go:2167: no probes recorded: the release never transitioned tsk_01M1Z0M0Z5QDC49DTWTQ5D4M28 through the wrapped store, so the lease span went unobserved
+FAIL
+FAIL	github.com/L-K-M/dl-tool/internal/engine	0.031s
+```
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
