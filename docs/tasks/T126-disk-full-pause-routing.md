@@ -70,18 +70,18 @@ No other file may be modified.
    the work.
 
 ## Acceptance criteria
-- [ ] A `disk_full` engine report lands the row in `paused` with `error_code = disk_full`, not `error`.
-- [ ] An engine-side pause the engine rejects (the download already stopped) does not stop the
+- [x] A `disk_full` engine report lands the row in `paused` with `error_code = disk_full`, not `error`.
+- [x] An engine-side pause the engine rejects (the download already stopped) does not stop the
   store-side landing: the row still reaches `paused` + the stamp.
-- [ ] Exactly one `task_events` row is written for the pause.
-- [ ] No partial data is unlinked; the file is byte-for-byte unchanged through pause and release.
-- [ ] A genuinely paused handle is released with one `Engine.Resume` and zero `Engine.Add` calls.
-- [ ] A stopped aria2 errorCode-9 result that rejects unpause is confirmed through `Engine.Get`,
+- [x] Exactly one `task_events` row is written for the pause.
+- [x] No partial data is unlinked; the file is byte-for-byte unchanged through pause and release.
+- [x] A genuinely paused handle is released with one `Engine.Resume` and zero `Engine.Add` calls.
+- [x] A stopped aria2 errorCode-9 result that rejects unpause is confirmed through `Engine.Get`,
   re-submitted once with `continue=true`, assigned the replacement GID and returned to
   `downloading` without entering `error`.
-- [ ] The adapter keeps "cannot be unpaused now" generic; it is not `ErrNotFound` because the
+- [x] The adapter keeps "cannot be unpaused now" generic; it is not `ErrNotFound` because the
   stopped result still exists.
-- [ ] A `disk_full` report arriving on a row already `paused` — with or without a hold code —
+- [x] A `disk_full` report arriving on a row already `paused` — with or without a hold code —
   writes nothing; no re-stamp, no state change, no `task_events` row.
 
 ## Verification
@@ -137,6 +137,40 @@ and docs and record both under Evidence.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+
+### Checkbox repair (post-merge, fix/t126-acceptance-checkboxes)
+
+PR #95 merged with the eight acceptance checkboxes unticked, which the
+verifier rejected against `docs/13-testing-and-verification.md` rule 7.
+Each criterion was re-verified against the merged `main` (c397892) —
+every one is asserted by a passing test — before ticking:
+
+```
+$ awk '/^## Acceptance criteria/,/^## Verification/' docs/tasks/T126-disk-full-pause-routing.md | rg -c '^- \[x\]'
+8
+$ rg -c '^- \[x\]' docs/tasks/T126-disk-full-pause-routing.md
+8
+$ rg -n '^- \[ \]' docs/tasks/T126-disk-full-pause-routing.md
+(no matches)
+$ go test ./internal/engine/ ./internal/engine/aria2/ -run 'TestDiskFull|TestAmbiguousFaults' -count=1
+ok  	github.com/L-K-M/dl-tool/internal/engine	0.197s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	0.019s
+```
+
+Both counts printing `8` proves the eight ticked boxes are exactly the
+acceptance criteria — no checked box outside the section inflates the count —
+and the verifier's rejection command now matches nothing.
+
+Criterion → assertion map: 1, 3 — `TestDiskFullReportPausesThroughAdmission`
+(state/`error_code`, exactly one `task.paused` row); 2, 6 —
+`TestDiskFullReportSurvivesRejectedEnginePause` (rejected pause still lands
+paused+stamped; one `Get` confirm, one `Add` with `continue=true`, replacement
+GID, `downloading`); 4 — `assertPartialUntouched` + `recordedRemoves() == 0`
+in both; 5 — release half of `TestDiskFullReportPausesThroughAdmission`
+(one Resume, zero Add); 7 — `TestAmbiguousFaultsStayGeneric`
+(`!errors.Is(err, engine.ErrNotFound)`); 8 —
+`TestDiskFullReportOnAPausedRowWritesNothing`, both subtests (no re-stamp,
+no state change, no events, zero progress writes).
 
 ### Corrected stopped-result recovery
 
