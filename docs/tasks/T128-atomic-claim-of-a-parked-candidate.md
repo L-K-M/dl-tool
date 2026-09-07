@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T128 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T099, T126 |
 | **Blocks** | T127 |
 | **Parallel-safe** | no — it edits the shared registry, admission release path and store task writes |
@@ -110,29 +110,29 @@ No other file may be modified.
    and flip both status cells in [`00-task-index.md`](00-task-index.md). Commit them with the work.
 
 ## Acceptance criteria
-- [ ] The registry task-operation lease serialises the admission release and T127's later operator
+- [x] The registry task-operation lease serialises the admission release and T127's later operator
   pause for one task, while operations on different task ids do not block each other. Waiting is
   context-aware and FIFO; non-blocking acquisition returns the named busy error.
-- [ ] The pass claims a `paused` + `disk_full` candidate with one guarded no-op write conditioned
+- [x] The pass claims a `paused` + `disk_full` candidate with one guarded no-op write conditioned
   on that pair before any engine call; the pair and its timestamp remain unchanged.
-- [ ] A hold-stamp clear after selection is caught by the under-lease re-read or guarded claim:
+- [x] A hold-stamp clear after selection is caught by the under-lease re-read or guarded claim:
   the row stays `paused`, the engine sees no `Resume` or `Add`, and no event row is written. Once
   the claim takes the row, the lease prevents the operator clear from landing until the engine
   call and row write finish.
-- [ ] The claim itself needs no recovery write. A process exit after the claim and before the
+- [x] The claim itself needs no recovery write. A process exit after the claim and before the
   first engine call leaves `paused` + `disk_full` intact and selectable because no marker was
   stored. No criterion asserts post-engine-call idempotency; ordinary release errors retain their
   existing `releaseFailed` outcomes.
-- [ ] T126's parked release shapes keep their outcomes and engine-call counts: the plain unpause,
+- [x] T126's parked release shapes keep their outcomes and engine-call counts: the plain unpause,
   the `ErrNotFound` re-submit and the stopped `disk_full` re-submit.
-- [ ] The lease covers hold decisions and stamp writes: a pass cannot re-stamp a parked row after
+- [x] The lease covers hold decisions and stamp writes: a pass cannot re-stamp a parked row after
   an operator clear that won the lease.
-- [ ] Admission uses non-blocking acquisition, holds no more than one task lease, and skips a busy
+- [x] Admission uses non-blocking acquisition, holds no more than one task lease, and skips a busy
   candidate before spending capacity. A queued candidate moved after selection is not released;
   an unchanged queued candidate gets no claim write and otherwise releases unchanged.
-- [ ] A declined or vanished candidate returns `(false, nil)`, with no engine call, row write,
+- [x] A declined or vanished candidate returns `(false, nil)`, with no engine call, row write,
   event, released id, or in-memory slot and reservation spend.
-- [ ] The claim's three answers are pinned: taken, declined, `ErrNotFound`. Lease tests pin busy
+- [x] The claim's three answers are pinned: taken, declined, `ErrNotFound`. Lease tests pin busy
   try, cancellation and its handoff race, idempotent release, and A→B handoff where a later C
   cannot overtake B.
 
@@ -169,7 +169,97 @@ are hidden by the `:(exclude)docs` pathspec.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Paste each Verification command, its full output and its exit status here before marking done.>
+
+`make lint && make test PKG=./internal/...` after the last code change — lint clean, every
+internal package `ok`, no `FAIL`, exit 0:
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier Code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	47.154s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.117s
+ok  	github.com/L-K-M/dl-tool/internal/engine	22.128s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.180s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.018s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.403s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.147s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.163s
+ok  	github.com/L-K-M/dl-tool/internal/store	68.344s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.349s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.020s
+EXIT=0
+```
+
+The task's new tests, run verbosely (`-race -count=1`):
+
+```
+$ go test ./internal/engine/ ./internal/store/ -run 'TestTaskOp|TestSelectionTimeClear|TestClaimTimeClear|TestClaimParkedDiskFull|TestPassSkipsABusyTask|TestVanishedCandidate|TestQueuedReleaseClaims|TestLeaseIsHeld' -count=1 -race -v | grep -E '^(--- (PASS|FAIL)|ok |FAIL)'
+--- PASS: TestTaskOpLeaseExcludesOneTaskID (0.01s)
+--- PASS: TestTaskOpLeaseIndependentAcrossTaskIDs (0.00s)
+--- PASS: TestTaskOpTryAnswersBusyWhileHeld (0.00s)
+--- PASS: TestTaskOpWaitIsFIFOAndCannotBeOvertaken (0.00s)
+--- PASS: TestTaskOpCanceledWaiterAnswersItsContext (0.00s)
+--- PASS: TestTaskOpHandoffCancelRaceHasOneOutcome (0.12s)
+--- PASS: TestTaskOpReleaseIsIdempotent (0.00s)
+--- PASS: TestTaskOpEntriesDoNotAccumulate (0.00s)
+--- PASS: TestSelectionTimeClearAbortsTheParkedRelease (0.42s)
+--- PASS: TestClaimTimeClearDeclinesTheGuardedClaim (0.40s)
+--- PASS: TestPassSkipsABusyTask (0.36s)
+--- PASS: TestVanishedCandidateAbortsQuietly (0.37s)
+--- PASS: TestQueuedReleaseClaimsNothingAndParkedClaimsOnce (0.35s)
+--- PASS: TestLeaseIsHeldThroughTheReleaseWrites (0.33s)
+ok  	github.com/L-K-M/dl-tool/internal/engine	3.465s
+--- PASS: TestClaimParkedDiskFull (1.17s)
+ok  	github.com/L-K-M/dl-tool/internal/store	2.235s
+```
+
+T126's parked release shapes (plain unpause, `ErrNotFound` re-submit, stopped `disk_full`
+re-submit) are pinned unchanged by the existing `TestENOSPCPausesAndKeepsData`,
+`TestPassReAddsVanishedHandle` and `TestDiskFullReport*` in `internal/engine/reconcile_test.go`,
+which run in the suite above with their engine-call counts unedited.
+
+Mutation checks — each defence was disabled in turn and its test observed to FAIL before the
+feature was restored (all restorations verified by `go build ./...`):
+
+- Revalidation read disabled (`processCandidate` never aborts on a stale snapshot) →
+  `TestSelectionTimeClearAbortsTheParkedRelease` FAIL (the claim fired instead of the re-read,
+  caught by the claims==0 assertion).
+- Claim guard loosened to `state = 'paused'` alone → `TestClaimTimeClearDeclinesTheGuardedClaim`
+  FAIL (the cleared row was wrongly released and its reservation held the sibling back).
+- Pass lease acquisition pointed elsewhere → `TestPassSkipsABusyTask` and
+  `TestLeaseIsHeldThroughTheReleaseWrites` FAIL (the busy task was released; the mid-write probe
+  found the lease free).
+
+Scope check. The work was committed in coherent steps (the PR rule), so the working-tree gate ran
+empty by design once each step landed; the branch diff is the equivalent that names every touched
+path. Both outputs verbatim, with docs changes excluded on the code side and included below:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | cut -c4- | sort
+(empty — every code change committed)
+
+$ git diff --name-only origin/main...HEAD -- . ':(exclude)docs' | sort
+internal/engine/admission.go
+internal/engine/admission_test.go
+internal/engine/registry.go
+internal/engine/registry_test.go
+internal/store/tasks.go
+internal/store/tasks_test.go
+```
+
+Exactly the six non-doc paths of the Files table, nothing else; the docs side is this file and
+`docs/tasks/00-task-index.md`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
