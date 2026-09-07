@@ -9,11 +9,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +36,10 @@ type fakeEngine struct {
 	addID     string
 	addErr    error
 	removeErr error
+	// pauseErr is returned by every Pause: an engine rejecting the pause
+	// of a transfer that already stopped — aria2's answer to pausing a GID
+	// that errored with disk-full before the reconciler saw it.
+	pauseErr error
 
 	// onAdd, when set, runs under Add's call — the hook a test uses to
 	// cancel the caller's context mid-submission, the way a real engine
@@ -42,6 +48,9 @@ type fakeEngine struct {
 
 	mu          sync.Mutex
 	addCalls    []engine.AddRequest
+	pauseCalls  []string
+	pauseTries  []string // every Pause attempt, the rejected ones included
+	resumeCalls []string
 	removeCalls []string
 }
 
@@ -79,14 +88,64 @@ func (f *fakeEngine) List(context.Context) ([]engine.TaskInfo, error) {
 	return f.infos, f.listErr
 }
 
+// Pause and Resume record the engine task ids the disk-full routing and
+// the admission release hand over (T126). pauseTries names every attempt
+// — a rejected pause returns before pauseCalls records, so the rejected-
+// pause test can tell "attempted and rejected" from "never attempted".
+func (f *fakeEngine) Pause(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pauseTries = append(f.pauseTries, id)
+	if f.pauseErr != nil {
+		return f.pauseErr
+	}
+	f.pauseCalls = append(f.pauseCalls, id)
+	return nil
+}
+
+func (f *fakeEngine) Resume(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeCalls = append(f.resumeCalls, id)
+	return nil
+}
+
+func (f *fakeEngine) recordedPauses() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.pauseCalls...)
+}
+
+func (f *fakeEngine) recordedPauseAttempts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.pauseTries...)
+}
+
+func (f *fakeEngine) recordedResumes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.resumeCalls...)
+}
+
+func (f *fakeEngine) recordedRemoves() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.removeCalls...)
+}
+
+func (f *fakeEngine) recordedAdds() []engine.AddRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]engine.AddRequest(nil), f.addCalls...)
+}
+
 func (f *fakeEngine) Get(context.Context, string) (engine.TaskInfo, error) {
 	panic("not called by the reconciler")
 }
 func (f *fakeEngine) Files(context.Context, string) ([]engine.FileEntry, error) {
 	panic("not called by the reconciler")
 }
-func (f *fakeEngine) Pause(context.Context, string) error  { panic("not called") }
-func (f *fakeEngine) Resume(context.Context, string) error { panic("not called") }
 func (f *fakeEngine) Remove(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -193,20 +252,34 @@ func (f *fakeTasks) AppendEvent(_ context.Context, taskID, level, code, message 
 	return nil
 }
 
+// PauseDiskFull is fakeTasks' stand-in for engine.DiskFullPauser: the
+// reconciler built by newSweep needs one wired at construction. No sweep
+// test reports disk_full over the fake store — the routing tests run over
+// the real TaskStore (newSweepEnv) — so a call here is unexpected and
+// panics loudly, the same contract as fakeEngine's unused methods.
+func (f *fakeTasks) PauseDiskFull(context.Context, string, error) error {
+	panic("fakeTasks.PauseDiskFull: disk-full routing is tested over the real store (newSweepEnv), not the fake store")
+}
+
 func ptr(s string) *string { return &s }
 
 func source(uri string) *string { return &uri }
 
 // newSweep builds a registry with one engine and a reconciler over the
-// recording store. The reconciler logs through slog.Default, so the
+// recording store, with the fake store's PauseDiskFull as the disk-full
+// router's landing — the reconciler needs one wired at construction. The
+// routing tests run over the real store (newSweepEnv), so the landing
+// only records here. The reconciler logs through slog.Default, so the
 // log-asserting tests swap that for a buffered handler around the call.
-func newSweep(t *testing.T, e engine.Engine, tasks engine.TaskWriter) *engine.Reconciler {
+// Boot and Run share one sweep — Run's ticker calls Boot — so the
+// Boot-driven tests cover the loop's path too.
+func newSweep(t *testing.T, e engine.Engine, tasks *fakeTasks) *engine.Reconciler {
 	t.Helper()
 
 	reg := engine.NewRegistry()
 	reg.Register(e)
 
-	return engine.NewReconciler(reg, tasks, time.Hour, nil)
+	return engine.NewReconciler(reg, tasks, tasks, time.Hour, nil)
 }
 
 func TestBootWritesKnownHandles(t *testing.T) {
@@ -566,7 +639,7 @@ func TestRunStopsWithContext(t *testing.T) {
 	e := &fakeEngine{name: engine.NameAria2}
 	reg := engine.NewRegistry()
 	reg.Register(e)
-	r := engine.NewReconciler(reg, tasks, 10*time.Millisecond, nil)
+	r := engine.NewReconciler(reg, tasks, tasks, 10*time.Millisecond, nil)
 
 	before := runtime.NumGoroutine()
 
@@ -744,7 +817,8 @@ func TestRunSweepCancellationIsNotAWarn(t *testing.T) {
 	}
 	reg := engine.NewRegistry()
 	reg.Register(e)
-	r := engine.NewReconciler(reg, tasks, 10*time.Millisecond, slog.New(slog.NewTextHandler(logs, nil)))
+	r := engine.NewReconciler(reg, tasks, tasks,
+		10*time.Millisecond, slog.New(slog.NewTextHandler(logs, nil)))
 
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
@@ -762,6 +836,509 @@ func TestRunSweepCancellationIsNotAWarn(t *testing.T) {
 	}
 }
 
+// sweepEnv is the disk-full routing harness of T126's tests: one real
+// store, the fake engine reporting one handle errored with disk_full
+// (aria2 errorCode 9, mapped by T018), and the reconciler/admitter pair
+// the composition root builds over one registry — so the routed pause
+// lands through the real TaskStore and the next admission pass is the
+// real pass. A fake store would test nothing but the fake, the same
+// stance admission_test.go takes.
+// sweepPartialContent is the partial file every sweepEnv seeds; one
+// constant keeps the seed and the byte-for-byte comparators in lockstep.
+const sweepPartialContent = "partial download bytes, byte-for-byte precious"
+
+type sweepEnv struct {
+	tasks  *store.TaskStore
+	engine *fakeEngine
+	reg    *engine.Registry
+	admit  *engine.Admitter
+	rec    *engine.Reconciler
+
+	ref     string // the task's stored engine_ref
+	dest    string // the task's destination, a real directory
+	partial string // the partial file inside dest
+}
+
+// newSweepEnv seeds one task in seedState whose handle the engine reports
+// errored with disk_full, beside a partial file on disk whose bytes the
+// byte-for-byte check pins. pauseErr, when set, makes every engine-side
+// Pause fail — the engine's rejection of pausing a transfer that already
+// stopped.
+func newSweepEnv(t *testing.T, seedState string, pauseErr error) (*sweepEnv, string) {
+	t.Helper()
+
+	root := t.TempDir()
+	db, err := store.Open(t.Context(), filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	dest := t.TempDir()
+	partial := filepath.Join(dest, "file.bin")
+	if err := os.WriteFile(partial, []byte(sweepPartialContent), 0o600); err != nil {
+		t.Fatalf("write partial file: %v", err)
+	}
+
+	const ref = "errdiskfull"
+	uri := "https://example.org/filling.iso"
+	tasks := store.NewTaskStore(db)
+	created, err := tasks.Create(t.Context(), store.Task{
+		Engine: engine.NameAria2, EngineRef: ptr(ref), SourceKind: "http", SourceURI: &uri,
+		Name: "filling.iso", State: seedState, Destination: dest,
+	})
+	if err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	e := &fakeEngine{
+		name:     engine.NameAria2,
+		pauseErr: pauseErr,
+		infos: []engine.TaskInfo{{
+			ID: engine.NameAria2 + ":" + ref, Engine: engine.NameAria2,
+			State: engine.StateError, ErrorCode: engine.ErrorCodeDiskFull,
+			ErrorMessage: "not enough space left on device",
+		}},
+	}
+	reg := engine.NewRegistry()
+	reg.Register(e)
+	env := &sweepEnv{tasks: tasks, engine: e, reg: reg, ref: ref, dest: dest, partial: partial}
+	env.wire(tasks)
+
+	return env, created.ID
+}
+
+// wire rebuilds the admitter/reconciler pair over a (possibly wrapped)
+// store, so a wrapper test re-wires instead of carrying a stale pair
+// built over the raw store — reaching for the stale env.rec would run
+// the sweep past the wrapper and silently weaken the test.
+func (e *sweepEnv) wire(s sweepStore) {
+	e.admit = engine.NewAdmitter(e.reg, s, time.Second, nil)
+	e.rec = engine.NewReconciler(e.reg, s, e.admit, time.Hour, nil)
+}
+
+// row reads one task straight from the store.
+func (e *sweepEnv) row(t *testing.T, id string) store.Task {
+	t.Helper()
+	task, err := e.tasks.Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("read task: %v", err)
+	}
+	return task
+}
+
+// errorCode reads one task's error_code, "" when none is stored.
+func (e *sweepEnv) errorCode(t *testing.T, id string) string {
+	row := e.row(t, id)
+	if row.ErrorCode == nil {
+		return ""
+	}
+	return *row.ErrorCode
+}
+
+// events reads one task's whole event log; Create writes none, so the
+// count is exactly what the sweep under test added.
+func (e *sweepEnv) events(t *testing.T, id string) []store.TaskEvent {
+	t.Helper()
+	events, _, _, err := e.tasks.ListEvents(t.Context(), id, 500, "")
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	return events
+}
+
+// assertPartialUntouched pins the byte-for-byte survival of the seeded
+// partial file — the FR-048 property every disk-full routing test shares.
+func assertPartialUntouched(t *testing.T, path string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, []byte(sweepPartialContent)) {
+		t.Errorf("partial file changed or vanished: %q, %v", got, err)
+	}
+}
+
+// TestDiskFullReportPausesThroughAdmission is T126's main path: a disk_full
+// engine report on a downloading task lands the row paused with the stamp
+// and exactly one task_events row — not the generic error adoption — the
+// partial file is byte-for-byte unchanged, nothing is unlinked, and the
+// next admission pass resumes the stored handle without a second Add.
+func TestDiskFullReportPausesThroughAdmission(t *testing.T) {
+	env, id := newSweepEnv(t, "downloading", nil)
+
+	if err := env.rec.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	if state := env.row(t, id).State; state != string(engine.StatePaused) {
+		t.Fatalf("state = %q, want paused, not the adopted %q", state, engine.StateError)
+	}
+	if code := env.errorCode(t, id); code != engine.ErrorCodeDiskFull {
+		t.Fatalf("error_code = %q, want %q", code, engine.ErrorCodeDiskFull)
+	}
+
+	events := env.events(t, id)
+	if len(events) != 1 || events[0].Code != store.CodeTaskPaused {
+		t.Fatalf("events = %+v, want exactly one task.paused row", events)
+	}
+
+	// The transfer was stopped engine-side on the namespaced handle, and no
+	// removal ever ran: nothing is unlinked.
+	if pauses := env.engine.recordedPauses(); len(pauses) != 1 || pauses[0] != engine.NameAria2+":"+env.ref {
+		t.Errorf("pauses = %v, want exactly the stored handle", pauses)
+	}
+	if removes := env.engine.recordedRemoves(); len(removes) != 0 {
+		t.Errorf("remove calls = %v, want none", removes)
+	}
+
+	// The partial data survives intact.
+	assertPartialUntouched(t, env.partial)
+
+	// The next admission pass resumes the stored handle — one Resume, zero
+	// Adds — and clears the hold, so the partial file is continued.
+	released, err := env.admit.Pass(t.Context(), policyOver(env.dest, 0))
+	if err != nil {
+		t.Fatalf("admission pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want exactly %s", released, id)
+	}
+	if resumes := env.engine.recordedResumes(); len(resumes) != 1 || resumes[0] != engine.NameAria2+":"+env.ref {
+		t.Errorf("resumes = %v, want exactly the stored handle", resumes)
+	}
+	if adds := env.engine.recordedAdds(); len(adds) != 0 {
+		t.Errorf("add calls = %v, want none: the stored handle is resumed, never re-added", adds)
+	}
+	if state := env.row(t, id).State; state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading after the release", state)
+	}
+	if code := env.errorCode(t, id); code != "" {
+		t.Errorf("error_code = %q, want the hold cleared on release", code)
+	}
+	if events := env.events(t, id); len(events) != 2 ||
+		!slices.ContainsFunc(events, func(e store.TaskEvent) bool { return e.Code == store.CodeTaskPaused }) ||
+		!slices.ContainsFunc(events, func(e store.TaskEvent) bool { return e.Code == store.CodeTaskResumed }) {
+		t.Errorf("events = %+v, want the pause row and exactly one task.resumed row", events)
+	}
+}
+
+// TestDiskFullReportSurvivesRejectedEnginePause pins the best-effort
+// engine pause: the download already stopped with errorCode 9, so the
+// engine may reject the pause — the store-side landing must happen
+// regardless, so the row still reaches paused with the stamp and exactly
+// one task_events row.
+func TestDiskFullReportSurvivesRejectedEnginePause(t *testing.T) {
+	env, id := newSweepEnv(t, "downloading", errors.New("GID cannot be paused now"))
+
+	if err := env.rec.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	if state := env.row(t, id).State; state != string(engine.StatePaused) {
+		t.Fatalf("state = %q, want paused despite the rejected engine pause", state)
+	}
+	if code := env.errorCode(t, id); code != engine.ErrorCodeDiskFull {
+		t.Fatalf("error_code = %q, want %q", code, engine.ErrorCodeDiskFull)
+	}
+	if events := env.events(t, id); len(events) != 1 || events[0].Code != store.CodeTaskPaused {
+		t.Fatalf("events = %+v, want exactly one task.paused row", events)
+	}
+	// The engine pause was attempted once and rejected — not skipped: the
+	// store-side landing happens because the attempt ran, not instead of it.
+	if tries := env.engine.recordedPauseAttempts(); len(tries) != 1 || tries[0] != engine.NameAria2+":"+env.ref {
+		t.Errorf("pause attempts = %v, want exactly the stored handle tried once", tries)
+	}
+	if pauses := env.engine.recordedPauses(); len(pauses) != 0 {
+		t.Errorf("pauses = %v, want none recorded — every Pause was rejected", pauses)
+	}
+	if removes := env.engine.recordedRemoves(); len(removes) != 0 {
+		t.Errorf("remove calls = %v, want none — a rejected pause must not fall back to removal", removes)
+	}
+	assertPartialUntouched(t, env.partial)
+}
+
+// TestDiskFullReportOnAPausedRowWritesNothing covers both parked shapes a
+// paused row can carry: an operator park (no code — T127's row) and this
+// routing's own earlier landing (disk_full). Neither may be re-routed,
+// re-stamped or un-paused: no store write, no event, no engine call.
+func TestDiskFullReportOnAPausedRowWritesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// stamp decides whether the parked row carries the disk_full code.
+		stamp bool
+	}{{name: "operator-parked", stamp: false}, {name: "guard-parked", stamp: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, id := newSweepEnv(t, "paused", nil)
+
+			// Guard against a vacuous pass: the parked row must be in the
+			// sweep's snapshot, so "no writes" below means "refused", not
+			// "never seen".
+			rows, err := env.tasks.ListNonTerminalByEngine(t.Context(), engine.NameAria2)
+			if err != nil {
+				t.Fatalf("snapshot listing: %v", err)
+			}
+			if _, ok := rows[env.ref]; !ok {
+				t.Fatalf("parked row missing from the sweep snapshot (ref %q); the test would pass vacuously", env.ref)
+			}
+
+			wantCode := ""
+			if tc.stamp {
+				if err := env.tasks.SetErrorCodeIfState(t.Context(), id, string(engine.StatePaused),
+					engine.ErrorCodeDiskFull, "seeded stamp"); err != nil {
+					t.Fatalf("seed stamp: %v", err)
+				}
+				wantCode = engine.ErrorCodeDiskFull
+			}
+
+			// The sweep over a parked disk-full row must write nothing at
+			// all — the report is inert and the stopped transfer's counters
+			// are frozen, so even the progress write is skipped. The counting
+			// wrapper pins that at the store boundary, and wire() fronts both
+			// halves of the pair with it.
+			tasks := &progressCountingStore{sweepStore: env.tasks}
+			env.wire(tasks)
+			if err := env.rec.Boot(t.Context()); err != nil {
+				t.Fatalf("Boot: %v", err)
+			}
+			if n := tasks.progressWrites.Load(); n != 0 {
+				t.Errorf("progress writes = %d, want none — a parked disk-full row's counters are frozen", n)
+			}
+
+			row := env.row(t, id)
+			if row.State != string(engine.StatePaused) {
+				t.Errorf("state = %q, want still paused — the parked row is not un-paused", row.State)
+			}
+			if code := env.errorCode(t, id); code != wantCode {
+				t.Errorf("error_code = %q, want %q — no re-stamp", code, wantCode)
+			}
+			if events := env.events(t, id); len(events) != 0 {
+				t.Errorf("events = %+v, want none", events)
+			}
+			if calls := env.engine.recordedPauses(); len(calls) != 0 {
+				t.Errorf("pauses = %v, want none — the report is not routed", calls)
+			}
+			if removes := env.engine.recordedRemoves(); len(removes) != 0 {
+				t.Errorf("remove calls = %v, want none — a parked row is never unlinked", removes)
+			}
+			assertPartialUntouched(t, env.partial)
+		})
+	}
+}
+
+// TestDiskFullReportOnAQueuedRowIsDropped pins the refusal path: a queued
+// row is never eligible for the store-level pause, so PauseDiskFull stops
+// the engine-side transfer and refuses, and the reconciler drops the
+// report by choice — the row keeps its state and gains neither a stamp
+// nor an event, and the generic error adoption never runs.
+func TestDiskFullReportOnAQueuedRowIsDropped(t *testing.T) {
+	env, id := newSweepEnv(t, "queued", nil)
+
+	if err := env.rec.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	row := env.row(t, id)
+	if row.State != string(engine.StateQueued) {
+		t.Errorf("state = %q, want still queued — the report is dropped, not adopted", row.State)
+	}
+	if code := env.errorCode(t, id); code != "" {
+		t.Errorf("error_code = %q, want none", code)
+	}
+	if events := env.events(t, id); len(events) != 0 {
+		t.Errorf("events = %+v, want none", events)
+	}
+	// The queued row briefly owns a live transfer — the release window —
+	// so the stop is attempted; only the row-level pause is refused.
+	if pauses := env.engine.recordedPauses(); len(pauses) != 1 || pauses[0] != engine.NameAria2+":"+env.ref {
+		t.Errorf("pauses = %v, want exactly the stored handle stopped once", pauses)
+	}
+	// A dropped report never unlinks: no removal, and the partial data is
+	// byte-for-byte unchanged.
+	if removes := env.engine.recordedRemoves(); len(removes) != 0 {
+		t.Errorf("remove calls = %v, want none", removes)
+	}
+	assertPartialUntouched(t, env.partial)
+}
+
+// sweepStore is the union the disk-full routing needs of the
+// reconciler's and the admitter's store surfaces — one interface, so a
+// wrapper can embed it without the promoted methods going ambiguous.
+// *store.TaskStore satisfies it.
+type sweepStore interface {
+	engine.TaskWriter
+	engine.AdmissionStore
+}
+
+// progressCountingStore counts UpdateProgress calls at the store
+// boundary, so a sweep that must write nothing is pinned on the write
+// itself, not only on the absence of state and event changes.
+type progressCountingStore struct {
+	sweepStore
+	progressWrites atomic.Int64
+}
+
+func (s *progressCountingStore) UpdateProgress(ctx context.Context, id string, p store.Progress) error {
+	s.progressWrites.Add(1)
+	return s.sweepStore.UpdateProgress(ctx, id, p)
+}
+
+// snapshotPausingStore lands an operator pause at the exact moment the
+// sweep takes its snapshot — inside ListNonTerminalByEngine — so the
+// map the sweep walks still reads downloading while the row is already
+// paused when PauseDiskFull re-reads it. This is the T127 race window
+// the routed report crosses. The landing fires once: a second listing
+// (a retry, a re-sweep) would find the row already paused.
+type snapshotPausingStore struct {
+	sweepStore
+	id    string
+	ref   string
+	fired atomic.Bool
+	// snapshot records the state the firing listing saw for ref, so the
+	// test proves the one-shot landing fired on the sweep's snapshot —
+	// which must still read downloading — not on some other caller's
+	// listing.
+	snapshot string
+}
+
+func (s *snapshotPausingStore) ListNonTerminalByEngine(ctx context.Context, engineName string) (map[string]store.Reconcilable, error) {
+	rows, err := s.sweepStore.ListNonTerminalByEngine(ctx, engineName)
+	if err != nil {
+		return nil, err
+	}
+	if s.fired.CompareAndSwap(false, true) {
+		if row, ok := rows[s.ref]; ok {
+			s.snapshot = row.State
+		}
+		// The operator pause lands between the snapshot and the routing: the
+		// map the sweep walks still carries the pre-pause state.
+		if err := s.Transition(ctx, s.id, string(engine.StatePaused),
+			store.CodeTaskPaused, "paused by the operator"); err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
+}
+
+// diskFullSpy counts PauseDiskFull calls, so the race test can tell
+// "routed and refused" from "never routed" — the only observable that
+// separates them once the row is already paused when the call lands.
+type diskFullSpy struct {
+	inner engine.DiskFullPauser
+	calls atomic.Int64
+}
+
+func (s *diskFullSpy) PauseDiskFull(ctx context.Context, id string, cause error) error {
+	s.calls.Add(1)
+	return s.inner.PauseDiskFull(ctx, id, cause)
+}
+
+// TestDiskFullReportRacingAnOperatorPauseWritesNothing pins the race the
+// snapshot check cannot close: an operator pause landing between the
+// sweep's snapshot and PauseDiskFull's own read makes the pause refuse —
+// paused without disk_full must not gain the stamp — and the reconciler
+// drops the report: the row keeps the operator's pause, gains no stamp,
+// no event row and no engine call.
+func TestDiskFullReportRacingAnOperatorPauseWritesNothing(t *testing.T) {
+	env, id := newSweepEnv(t, "downloading", nil)
+
+	// The wrapper must front both halves of the pair — wire() rebuilds
+	// them over it — and the reconciler's pauser is the spy, so the test
+	// observes the routing itself, not only its aftermath.
+	tasks := &snapshotPausingStore{sweepStore: env.tasks, id: id, ref: env.ref}
+	env.wire(tasks)
+	spy := &diskFullSpy{inner: env.admit}
+	env.rec = engine.NewReconciler(env.reg, tasks, spy, time.Hour, nil)
+
+	// The one-shot landing must fire inside Boot's sweep, not on some
+	// earlier listing — a constructor that listed the store would consume
+	// it here and silently turn this into a plain paused-row test.
+	if tasks.fired.Load() {
+		t.Fatal("one-shot operator pause fired before Boot — a constructor listed the store, so the race window is not exercised")
+	}
+	if err := env.rec.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+	if tasks.snapshot != string(engine.StateDownloading) {
+		t.Fatalf("sweep snapshot saw %q, want downloading — the one-shot landing fired on the wrong listing", tasks.snapshot)
+	}
+	// The sweep must have routed the report before the refusal: without
+	// this count, a Boot refactor that lists the store before the sweep
+	// would leave every assertion below passing on a never-routed report.
+	if n := spy.calls.Load(); n != 1 {
+		t.Fatalf("PauseDiskFull calls = %d, want 1 — the sweep must route the report before the refusal", n)
+	}
+
+	row := env.row(t, id)
+	if row.State != string(engine.StatePaused) {
+		t.Errorf("state = %q, want the operator's pause kept", row.State)
+	}
+	if code := env.errorCode(t, id); code != "" {
+		t.Errorf("error_code = %q, want none — the operator pause must not gain the stamp", code)
+	}
+	if events := env.events(t, id); len(events) != 1 || events[0].Code != store.CodeTaskPaused {
+		t.Errorf("events = %+v, want exactly the operator pause's own row, nothing from the report", events)
+	}
+	if tries := env.engine.recordedPauseAttempts(); len(tries) != 0 {
+		t.Errorf("pause attempts = %v, want none — the refusal path stops nothing", tries)
+	}
+	// The refused report never unlinks either: no removal, and the partial
+	// data is byte-for-byte unchanged.
+	if removes := env.engine.recordedRemoves(); len(removes) != 0 {
+		t.Errorf("remove calls = %v, want none — the refused report never unlinks", removes)
+	}
+	assertPartialUntouched(t, env.partial)
+}
+
+// TestNewReconcilerRequiresItsDependencies pins the constructor's
+// contract: a nil registry, task store or admitter is a composition bug
+// that must fail at construction, not as a nil dereference inside the
+// loop goroutine. The panic message must name the missing dependency —
+// a panic for an unrelated reason is not the contract passing.
+func TestNewReconcilerRequiresItsDependencies(t *testing.T) {
+	tasks := newFakeTasks()
+	reg := engine.NewRegistry()
+
+	for _, tc := range []struct {
+		name  string
+		want  string
+		build func() *engine.Reconciler
+	}{
+		{"nil registry", "registry", func() *engine.Reconciler {
+			return engine.NewReconciler(nil, tasks, tasks, time.Hour, nil)
+		}},
+		{"nil task store", "task store", func() *engine.Reconciler {
+			return engine.NewReconciler(reg, nil, tasks, time.Hour, nil)
+		}},
+		{"nil admitter", "admitter", func() *engine.Reconciler {
+			return engine.NewReconciler(reg, tasks, nil, time.Hour, nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				switch r := recover().(type) {
+				case nil:
+					t.Error("NewReconciler did not panic")
+				case string:
+					if !strings.Contains(r, tc.want) {
+						t.Errorf("NewReconciler panicked without naming the missing dependency %q: %s", tc.want, r)
+					}
+				case error:
+					if !strings.Contains(r.Error(), tc.want) {
+						t.Errorf("NewReconciler panicked without naming the missing dependency %q: %v", tc.want, r)
+					}
+				default:
+					t.Errorf("NewReconciler panicked with an unexpected value (%T): %v", r, r)
+				}
+			}()
+
+			tc.build()
+		})
+	}
+}
+
 // Cancellation is not an outage anywhere in the sweep, including the
 // engine listing: a cancelled context surfaces its own error and logs no
 // "unreachable" warning, while a live context's listing failure still
@@ -772,7 +1349,10 @@ func TestCancelledListIsNotUnreachable(t *testing.T) {
 	logBuffer := &strings.Builder{}
 	reg := engine.NewRegistry()
 	reg.Register(&fakeEngine{name: engine.NameAria2, listErr: engine.ErrUnavailable})
-	r := engine.NewReconciler(reg, tasks, time.Hour,
+	// The one fake satisfies both of the reconciler's store-side roles —
+	// TaskWriter and DiskFullPauser — the test-side form of the production
+	// wiring, which passes the task store and the admitter built over it.
+	r := engine.NewReconciler(reg, tasks, tasks, time.Hour,
 		slog.New(slog.NewTextHandler(logBuffer, nil)))
 
 	ctx, cancel := context.WithCancel(t.Context())

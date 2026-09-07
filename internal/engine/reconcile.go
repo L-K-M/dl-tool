@@ -49,6 +49,27 @@ type TaskWriter interface {
 // comment: a signature drift in either package fails here at compile time.
 var _ TaskWriter = (*store.TaskStore)(nil)
 
+// DiskFullPauser is the admission surface the reconciler needs: the
+// landing of a routed disk-full report (FR-048, T126). The same pattern
+// as TaskWriter — the engine package owns the interface, and *Admitter
+// satisfies it — so the reconciler depends on the one method it calls,
+// and a test can stand in for the admitter without the whole admission
+// store.
+//
+// Contract: the reconciler calls PauseDiskFull from its sweep goroutine —
+// including the Boot sweep, which runs before the admitter's own Run loop
+// starts — so an implementation must be safe for concurrent use with the
+// admission loop and fully initialized by its constructor. *Admitter
+// qualifies: it holds no mutable in-memory state, every field is fixed at
+// construction and PauseDiskFull works through the store alone.
+type DiskFullPauser interface {
+	PauseDiskFull(ctx context.Context, taskID string, cause error) error
+}
+
+// The interface is satisfied by the concrete admitter, not by assertion
+// in a comment: a signature drift fails here at compile time.
+var _ DiskFullPauser = (*Admitter)(nil)
+
 // Reconciler keeps the tasks table in step with the engines dl-tool owns.
 // It is the only writer of engine-sourced task state: every counter, rate
 // and state change that originates in an engine lands through one of its
@@ -56,19 +77,33 @@ var _ TaskWriter = (*store.TaskStore)(nil)
 type Reconciler struct {
 	registry *Registry
 	tasks    TaskWriter
+	// admitter is the landing of a routed disk-full report (FR-048): the
+	// pause-keep-resume path lives there, so the reconciler must hold one
+	// to reach it.
+	admitter DiskFullPauser
 	poll     time.Duration
 	log      *slog.Logger
 }
 
-// NewReconciler wires the registry to the task store. poll is the sweep
-// interval; 1s in production. log is the loop's logger — the composition
-// root passes its own, so sweeps never bypass it through slog.Default();
-// nil falls back to the default for direct constructions such as tests.
-func NewReconciler(reg *Registry, ts TaskWriter, poll time.Duration, log *slog.Logger) *Reconciler {
+// NewReconciler wires the registry to the task store and the admission
+// controller. poll is the sweep interval; 1s in production. admitter is
+// the controller an engine-reported disk-full report is routed through
+// (FR-048, T126); the composition root builds both over one registry.
+// A nil registry, store or admitter is a composition bug — it panics
+// here, at construction, rather than inside the loop goroutine where the
+// first dereference would die far from the misconfigured call site
+// (NewAdmitter's tick check is the precedent). log is the loop's logger
+// — the composition root passes its own, so sweeps never bypass it
+// through slog.Default(); nil falls back to the default for direct
+// constructions such as tests.
+func NewReconciler(reg *Registry, ts TaskWriter, admitter DiskFullPauser, poll time.Duration, log *slog.Logger) *Reconciler {
+	if reg == nil || ts == nil || admitter == nil {
+		panic("engine: reconciler requires a registry, a task store and an admitter")
+	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Reconciler{registry: reg, tasks: ts, poll: poll, log: log}
+	return &Reconciler{registry: reg, tasks: ts, admitter: admitter, poll: poll, log: log}
 }
 
 // Boot runs one full sweep before the HTTP listener opens, over the
@@ -222,8 +257,21 @@ func (r *Reconciler) sweepEngine(ctx context.Context, name string, e Engine) err
 
 // writeBack adopts one engine-reported task: the counters always, the state
 // only when it differs, so an unchanged task produces no event and no delta
-// and a 1 Hz poll of a quiet queue writes nothing but progress.
+// and a 1 Hz poll of a quiet queue writes nothing but progress. A
+// disk-full report is the one state that is not adopted at all — it is a
+// condition to react to, routed into the admission controller's pause
+// (FR-048) before the generic adoption below can move the row to error.
 func (r *Reconciler) writeBack(ctx context.Context, task store.Reconcilable, info TaskInfo) error {
+	// A disk-full report on an already-paused row is inert — routeDiskFull
+	// drops it — and the engine-side transfer is stopped, so its counters
+	// are frozen: the progress write below would rewrite identical values
+	// once a sweep for the lifetime of the park (UpdateProgress has no
+	// equal-values early-out). Return before it; routeDiskFull's own paused
+	// check stays, as defense in depth for a caller that skipped this one.
+	if info.ErrorCode == ErrorCodeDiskFull && task.State == string(StatePaused) {
+		return nil
+	}
+
 	if err := r.tasks.UpdateProgress(ctx, task.ID, store.Progress{
 		TotalBytes:     info.TotalBytes,
 		CompletedBytes: info.CompletedBytes,
@@ -233,6 +281,14 @@ func (r *Reconciler) writeBack(ctx context.Context, task store.Reconcilable, inf
 		ETASeconds:     info.ETASeconds,
 	}); err != nil {
 		return fmt.Errorf("reconcile task %q: %w", task.ID, err)
+	}
+
+	// aria2 exposes errorCode only for stopped/completed downloads
+	// (engines doc §4.4), and every registered engine must uphold the
+	// same invariant — a live transfer never carries one — so the code
+	// alone identifies the report, no state guard needed.
+	if info.ErrorCode == ErrorCodeDiskFull {
+		return r.routeDiskFull(ctx, task, info)
 	}
 
 	if task.State == string(info.State) {
@@ -253,6 +309,41 @@ func (r *Reconciler) writeBack(ctx context.Context, task store.Reconcilable, inf
 	}
 
 	return err
+}
+
+// routeDiskFull answers an engine report whose write already failed with
+// ENOSPC (FR-048): aria2's errorCode 9, mapped to ErrorCodeDiskFull by
+// T018. Instead of adopting the engine's error state — which strands the
+// partial data outside the pause-keep-resume path — the row is paused
+// through Admitter.PauseDiskFull: state, disk_full stamp and exactly one
+// task_events row, nothing unlinked, so the next admission pass resumes
+// the same partial data once space returns. Two outcomes write nothing,
+// by choice: a row the sweep's snapshot already read as paused — an
+// operator park (T127) or this routing's own earlier landing — is never
+// re-routed, re-stamped or un-paused; and a refusal from PauseDiskFull —
+// the row moved between the snapshot and the call, or was never eligible
+// (queued, seeding, terminal) — drops the report rather than falling
+// through to the generic error adoption below. The parked-row protection
+// is this report's only: adopting any other engine state over a paused
+// row is T026's generic path, and the park's authority over it is T127's.
+func (r *Reconciler) routeDiskFull(ctx context.Context, task store.Reconcilable, info TaskInfo) error {
+	if task.State == string(StatePaused) {
+		return nil
+	}
+
+	// The cause names the reporting engine beside its code and message, so
+	// the pause's warn trail keeps the whole report; aria2 does not
+	// guarantee a message, so the separator only joins a non-empty one.
+	cause := fmt.Errorf("engine %s: %s", info.Engine, info.ErrorCode)
+	if msg := strings.TrimSpace(info.ErrorMessage); msg != "" {
+		cause = fmt.Errorf("%w: %s", cause, msg)
+	}
+	if err := r.admitter.PauseDiskFull(ctx, task.ID, cause); err != nil {
+		r.log.Warn("disk-full report could not pause the task; the report is dropped",
+			"task_id", task.ID, "engine", info.Engine, "snapshot_state", task.State, "cause", cause, "error", err)
+	}
+
+	return nil
 }
 
 // resubmit hands a vanished transfer back to its engine from the stored
