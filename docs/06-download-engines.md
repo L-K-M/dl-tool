@@ -578,6 +578,15 @@ object with `code` and `message`. In an options struct the key is the long optio
 `Rename` on an existing task, `SetCategory`, per-task `SetShareLimits` and per-file priorities all return
 `ErrNotSupported`.
 
+`Resume` is only an unpause. In release 1.37.0, `UnpauseRpcMethod` accepts a GID only while its group is
+waiting with `pauseRequested`; a stopped `error` result remains queryable but faults with
+`GID#… cannot be unpaused now`. That fault is not `ErrNotFound`: the result exists, and the same message
+covers other wrong states. When admission releases an owned `disk_full` pause, a failed `Resume` is followed
+by `Get`; only `StateError` plus `ErrorCode = "disk_full"` takes the existing re-submit path (`Add` from the
+stored source with `continue=true`, then replace `engine_ref`). Every other status keeps the ordinary
+release-failure path. This is the runtime counterpart of the re-submit-with-resume rule in
+[`17-operations-and-runbook.md` §1.6](17-operations-and-runbook.md#16-stage-s10--boot-reconciliation).
+
 ### 4.4 `tellStatus` keys dl-tool reads
 
 | Key | Documented meaning | Maps to |
@@ -1351,3 +1360,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-01 | Made the engine registry instance-injected so abstract and concrete packages remain acyclic. |
 | 2026-09-02 | The aria2 RPC secret is read from a mounted secret file by the entrypoint rather than passed as a container environment variable. |
 | 2026-09-02 | Review pass: corrected the `--progress-template` of §7.3, whose unguarded numerics render the literal `NA` and produce invalid JSON (measured 13 of 13 lines against yt-dlp 2026.08.19); recorded that §7.2's extractor-pattern enumeration does not exist and that 284 of 1702 `_VALID_URL` patterns do not compile with Go `regexp`, deferring T088; noted that `aria2.remove` errors on an already-stopped download and that every aria2 JSON-RPC fault is `code: 1`; raised the missing `ffmpeg` and the RAR-codec question as open. |
+| 2026-09-07 | Corrected disk-full recovery: aria2 cannot unpause a stopped error result, so admission confirms `error` + `disk_full`, re-submits with `continue=true` and replaces the GID. |

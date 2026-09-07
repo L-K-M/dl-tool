@@ -4,74 +4,83 @@
 |---|---|
 | **ID** | T126 |
 | **Milestone** | M1 |
-| **Status** | done |
+| **Status** | todo |
 | **Pending decision** | owner decision at M1 exit — bound the disk-full resume→pause cycle (deferral register; up to ~172,800 event rows/day at 1 Hz) |
 | **Depends on** | T026, T099 |
 | **Blocks** | — |
-| **Parallel-safe** | yes — code edits stay in `internal/engine` (reconciler + its test) plus the `internal/api/server.go` construction block (a shared store hoist and the admitter constructed before the reconciler), and this task's own row in `00-task-index.md` |
+| **Parallel-safe** | no — the remaining repair edits the shared admission release path and its reconciler test harness |
 | **Implements** | [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) |
 | **Decisions** | [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |
-| **Est. size** | 0 new files, ~60 LOC |
+| **Est. size** | 0 new files, ~100 LOC |
+
+## Recovery state
+PR #93 left the report routing and composition-root wiring on `main`, but its fake engine let
+`Resume` succeed for an aria2 result that had already stopped with errorCode 9. Real aria2 rejects
+that unpause; [`docs/06-download-engines.md` §4.3](../06-download-engines.md#43-methods-dl-tool-calls)
+defines the verified recovery rule. The task remains `todo` until the stopped-result path re-submits
+with resume semantics and adopts the replacement GID.
 
 ## Goal
 An aria2 disk-full report (errorCode 9, already mapped to `TaskInfo.ErrorCode = "disk_full"` by T018)
-pauses the task with `Admitter.PauseDiskFull` instead of adopting the engine's `error` state, so
-FR-048's pause-keep-resume path is reached by the report that observes the condition, not only by
-dl-tool's own write paths.
+pauses the task with `Admitter.PauseDiskFull` instead of adopting the engine's `error` state. Once
+space returns, a genuinely paused handle is unpaused, while an already-stopped error result is
+re-submitted with resume semantics, preserving every partial byte.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
-1. [`docs/02-requirements.md` FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills)
-2. [`docs/17-operations-and-runbook.md` §1.6 Boot reconciliation](../17-operations-and-runbook.md)
-3. [`docs/tasks/T099-disk-space-reservation.md`](T099-disk-space-reservation.md) — `PauseDiskFull`, its atomic landing and its tests
+1. [`docs/06-download-engines.md` §4.3 and §4.7](../06-download-engines.md#43-methods-dl-tool-calls) — aria2 unpause faults and the stopped-result recovery rule
+2. [`docs/02-requirements.md` FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills)
+3. [`docs/17-operations-and-runbook.md` §1.6 Boot reconciliation](../17-operations-and-runbook.md)
+4. [`docs/tasks/T099-disk-space-reservation.md`](T099-disk-space-reservation.md) — `PauseDiskFull`, its atomic landing and its tests
 
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
-| `internal/engine/reconcile.go` | modify | In `writeBack`, route a `disk_full` engine outcome into `PauseDiskFull` instead of the generic state adoption. |
-| `internal/engine/reconcile_test.go` | modify | A `disk_full` report pauses with the stamp and unlinks nothing; the release resumes the stored handle with zero re-Adds. |
-| `internal/api/server.go` | modify | Pass the `Admitter` to `NewReconciler` at the composition root. |
-| `docs/tasks/00-task-index.md` | modify | Flip this task's own status row to `done` (step 4); touch no other row. |
+| `internal/engine/admission.go` | modify | Re-submit an owned stopped `disk_full` result with resume semantics after its handle rejects unpause. |
+| `internal/engine/reconcile_test.go` | modify | Drive the routed, rejected-pause result through release and pin the replacement handle and preserved partial data. |
+| `internal/engine/aria2/client_test.go` | modify | Pin that aria2's wrong-state unpause fault remains a generic error, not `ErrNotFound`. |
+| `docs/tasks/00-task-index.md` | modify | Flip both T126 status cells to `done` after verification; touch no other task row. |
+| `docs/tasks/T126-disk-full-pause-routing.md` | modify | Paste fresh Evidence for the corrected implementation. |
 
 No other file may be modified.
 
 ## Steps
-1. In `Reconciler.writeBack`, before the generic `Transition` to the engine-reported state, detect
-   `info.ErrorCode == ErrorCodeDiskFull` (the adapter maps aria2 errorCode 9 to it already; the
-   constant lives in this same package, so no qualifier).
-2. Call `Admitter.PauseDiskFull(ctx, task.ID, err)` for that outcome, with `err` carrying the
-   engine-reported code/message so the warn trail keeps it. The reconciler and the admitter are
-   the same package (`internal/engine`), so no interface or import cycle stands in the way — but
-   `Reconciler` has no `Admitter` field today: add one, and its constructor call site
-   (`internal/api/server.go`, which builds both) is in this task's Files table. Only substitute
-   the store-level `TaskStore.PauseWithCode` if you can show it performs everything
-   `PauseDiskFull` does besides the store write (see T099: the engine-side pause, the warn
-   trail); otherwise step 3's resume criterion can fail silently. Note the engine download has
-   already stopped with errorCode 9 by the time `writeBack` sees it, so aria2 may reject the
-   engine-side pause as not active — `PauseDiskFull` treats that pause as best-effort (warn
-   only) and lands the store pause regardless; pin that with a fake engine whose `Pause`
-   fails, asserting the row still lands `paused` + the stamp. The row must land
-   `paused` + `error_code = disk_full` + exactly one `task_events` row. Before routing, read the
-   row's current stamp: if it is already `paused` — with or without a hold code — do NOT call
-   `PauseDiskFull` and do NOT fall through to the generic `Transition`: write nothing. Such a
-   row is operator-parked (`paused`, no code — see T127) or already guard-parked (`paused` +
-   `disk_full`); neither may be re-routed, re-stamped, or un-paused here. If `PauseDiskFull` itself
-   returns the allow-list refusal — whether the row moved between the read and the call or was
-   never eligible (queued, seeding, completed, error, removed) — the same rule holds; log it and
-   write nothing and do not fall through to the generic `Transition` on that path either, so a
-   non-downloading row's `disk_full` report is dropped by choice, not by accident.
-3. Assert in `reconcile_test.go`: a `disk_full` report on a downloading task leaves it paused with
-   the stamp, keeps the recorded partial file byte-for-byte unchanged, and the next admission pass
-   resumes the stored handle (one `Engine.Resume`, zero `Engine.Add`).
-4. Flip this row to `done` in [`00-task-index.md`](00-task-index.md) in the same commit as the work.
+1. Add the regressions first. Extend the rejected-pause reconciliation case through the next
+   admission pass with `Resume` returning aria2's generic wrong-state fault, and add that fault to
+   the adapter's ambiguous-fault table. Run the targeted test and observe the release case fail
+   before changing production code.
+2. Keep the routing already on `main`: `Reconciler.writeBack` sends `ErrorCodeDiskFull` to
+   `PauseDiskFull`, leaves an already-paused row untouched, and never falls through to generic
+   error adoption after a routing attempt. The store landing remains `paused` + `disk_full` + one
+   `task.paused` event even when the engine-side pause rejects the already-stopped GID.
+3. In `Admitter.release`, keep the existing `Resume` path for a handle the engine can unpause and
+   the existing re-submit path for `ErrNotFound`. For a paused candidate whose `Resume` instead
+   returns a generic error, read that same handle with `Engine.Get`. Only
+   `StateError` + `ErrorCodeDiskFull` proves the owned result stopped for this condition; send it
+   through the existing `admissionRequest`/`Add` path, whose aria2 request carries
+   `continue=true`, then store the replacement bare GID and mark the row released. Return a `Get`
+   failure and preserve the existing rejection behavior for every other reported state or code.
+   Do not map aria2's ambiguous "cannot be unpaused now" fault to `ErrNotFound`.
+4. Assert both release shapes. A successfully paused engine handle gets one `Resume` and zero
+   `Add` calls. A report whose engine-side pause and later unpause both reject gets one resume
+   attempt, one `Get` confirming `error` + `disk_full`, then one `Add` with `continue=true`; the
+   row stores the new handle, returns to `downloading`, clears the hold, keeps the partial file
+   byte-for-byte unchanged and calls no `Remove`.
+5. Flip both T126 cells to `done` in [`00-task-index.md`](00-task-index.md) in the same commit as
+   the work.
 
 ## Acceptance criteria
 - [ ] A `disk_full` engine report lands the row in `paused` with `error_code = disk_full`, not `error`.
 - [ ] An engine-side pause the engine rejects (the download already stopped) does not stop the
   store-side landing: the row still reaches `paused` + the stamp.
 - [ ] Exactly one `task_events` row is written for the pause.
-- [ ] No partial data is unlinked; the file is byte-for-byte unchanged.
-- [ ] The next admission pass resumes the stored handle; the engine sees no second `Add`.
+- [ ] No partial data is unlinked; the file is byte-for-byte unchanged through pause and release.
+- [ ] A genuinely paused handle is released with one `Engine.Resume` and zero `Engine.Add` calls.
+- [ ] A stopped aria2 errorCode-9 result that rejects unpause is confirmed through `Engine.Get`,
+  re-submitted once with `continue=true`, assigned the replacement GID and returned to
+  `downloading` without entering `error`.
+- [ ] The adapter keeps "cannot be unpaused now" generic; it is not `ErrNotFound` because the
+  stopped result still exists.
 - [ ] A `disk_full` report arriving on a row already `paused` — with or without a hold code —
   writes nothing; no re-stamp, no state change, no `task_events` row.
 
@@ -88,25 +97,27 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | cut -c4- | sort
 ```
-Expected: exactly the three code paths in the Files table (`internal/engine/reconcile.go`,
-`internal/engine/reconcile_test.go`, `internal/api/server.go`), and nothing else; the
-`docs/tasks/00-task-index.md` edit is hidden by the `:(exclude)docs` pathspec. That exclusion
-makes the code-side check structurally blind to out-of-scope docs edits, so the docs side gets
-its own gate:
+Expected: exactly the three code paths in the Files table (`internal/engine/admission.go`,
+`internal/engine/reconcile_test.go`, `internal/engine/aria2/client_test.go`), and nothing else;
+the docs edits are hidden by the `:(exclude)docs` pathspec. That exclusion makes the code-side
+check structurally blind to out-of-scope docs edits, so the docs side gets its own gate:
 ```bash
 git status --porcelain=v1 -uall -- docs | cut -c4- | sort
 ```
 Expected: exactly the two doc paths this task owns (`docs/tasks/00-task-index.md` and this
-file), and nothing else. The gates assume a task-private working tree — if parallel tasks share
-one, their doc edits appear here too; confirm each extra path belongs to another task's Files
-table before treating it as a scope violation. Both gates read the working tree, so run them
-before committing; once committed, use the branch-diff form recorded under Evidence
-(`git diff --name-only origin/main...HEAD -- docs`).
+file), and nothing else. The gates assume a task-private working tree. Both read the working
+tree, so run them before committing; once committed, run the equivalent branch diffs for code
+and docs and record both under Evidence.
 
 ## Out of scope — do NOT
-- Do NOT change `PauseDiskFull` or the admission pass; T099 owns them and they are done.
+- Do NOT change `PauseDiskFull` or any admission behavior beyond the stopped `disk_full`
+  release branch described above.
+- Do NOT classify an ambiguous aria2 wrong-state fault as `ErrNotFound`; confirm the stopped
+  result through `Engine.Get`.
 - Do NOT handle any other engine error code specially; every non-`disk_full` outcome keeps the
-  generic adoption path.
+  generic adoption or release-failure path.
+- Do NOT remove the old stopped result during recovery; ADR-0017 makes it foreign after the row
+  adopts the replacement GID, and `Remove` is unnecessary to continue the partial file.
 - Do NOT re-route rows already adopted as `error` by the pre-T126 path: `PauseDiskFull`'s state
   allow-list refuses `error` (T099), so a legacy errorCode-9 row stays `error` until an operator
   retries, and boot reconciliation (§1.6) is unchanged — record it so it is a choice, not a
@@ -126,6 +137,10 @@ before committing; once committed, use the branch-diff form recorded under Evide
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+
+> **Superseded attempt:** PR #93's output below predates the stopped-result recovery criterion.
+> Its fake `Resume` always succeeded, so it is historical evidence only. The retry must paste
+> fresh output above this note before changing the task to `done`.
 
 ### Review round 10 (commit 653cfba → this one)
 

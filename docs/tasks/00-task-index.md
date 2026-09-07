@@ -91,7 +91,7 @@ URI normalisation, the Engine interface, the aria2 adapter, the queue and the ev
 | [T027](T027-list-and-test-engines.md) | List engines and test connectivity | T019, T020 | done |
 | [T098](T098-concurrency-limiter.md) | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | done |
 | [T099](T099-disk-space-reservation.md) | Reserve disk space and keep a free-space floor | T020, T024, T098 | done |
-| [T126](T126-disk-full-pause-routing.md) | Route an engine disk-full report into the pause | T026, T099 | done |
+| [T126](T126-disk-full-pause-routing.md) | Route an engine disk-full report into the pause | T026, T099 | todo |
 | [T127](T127-operator-pause-of-a-parked-task.md) | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099 | todo |
 
 ## M2 — BitTorrent
@@ -300,7 +300,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T027 | List engines and test connectivity | T019, T020 | yes | done | [T027](T027-list-and-test-engines.md) |
 | T098 | Admit tasks under the concurrency limits | T017, T019, T020, T024, T026 | no | done | [T098](T098-concurrency-limiter.md) |
 | T099 | Reserve disk space and keep a free-space floor | T020, T024, T098 | no | done | [T099](T099-disk-space-reservation.md) |
-| T126 | Route an engine disk-full report into the pause | T026, T099 | yes | done | [T126](T126-disk-full-pause-routing.md) |
+| T126 | Route an engine disk-full report into the pause | T026, T099 | no | todo | [T126](T126-disk-full-pause-routing.md) |
 | T127 | Keep an operator pause authoritative over a disk-full auto-resume | T022, T099 | yes | todo | [T127](T127-operator-pause-of-a-parked-task.md) |
 
 ### M2
