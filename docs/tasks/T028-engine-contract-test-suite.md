@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T028 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T016, T019 |
 | **Blocks** | T038, T090, T101 |
 | **Parallel-safe** | yes — adds `internal/engine/enginetest/` and one aria2 test file |
@@ -31,6 +31,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/aria2/contract_test.go` | create | The aria2 call site plus its testcontainers fixture. |
 | `deploy/aria2/Dockerfile` | create | Two lines: `FROM alpine:3.22` and `RUN apk add --no-cache aria2`. Nothing else — T115 turns it into the published image. |
 | `internal/engine/aria2/client.go` | modify | *Widened mid-task, see [`## Blocked`](#blocked):* aria2 serves every JSON-RPC fault as HTTP 400 with the fault object in the body; `post` now decodes a 400 instead of reporting `ErrUnavailable`, so the fault→error mapping of §4.7 actually runs. |
+| `internal/engine/enginetest/contract_speedlimits_test.go` | create | *Added by the 2026-09-08 readback repair, see [Evidence](#evidence):* regression coverage for the exact-setting obligation — a daemon holding three quarters of the request fails, and so does an engine with no readback. |
 
 No other file may be modified.
 
@@ -59,6 +60,13 @@ func Fixture(t *testing.T) (url string, sha256hex string)
 // Has reports whether e declares c. Subtests use it to skip a capability the adapter does not have,
 // and to assert ErrNotSupported for every capability it does not declare.
 func Has(e engine.Engine, c engine.Capability) bool
+
+// DownloadLimitReadback is implemented by the engine a call site returns: SpeedLimitRoundTrips
+// reads the daemon's configured limit back through it and asserts the exact requested value,
+// per task and globally — the obligation "the daemon reports 1048576" made testable.
+type DownloadLimitReadback interface {
+	DaemonDownloadLimit(ctx context.Context, id string) (int64, error)
+}
 ```
 
 Subtest obligations, exactly these:
@@ -102,12 +110,12 @@ Subtest obligations, exactly these:
     matching the `Config.Secret` the test constructs, and call `enginetest.RunContract(t, newAria2)`.
 
 ## Acceptance criteria
-- [ ] `go test ./internal/engine/...` with no build tag compiles and runs without starting a container.
-- [ ] `make test-integration` runs all five subtests against a real aria2 container.
-- [ ] `UnsupportedCapabilityReturnsErrNotSupported` fails if an adapter silently succeeds on an undeclared
+- [x] `go test ./internal/engine/...` with no build tag compiles and runs without starting a container.
+- [x] `make test-integration` runs all five subtests against a real aria2 container.
+- [x] `UnsupportedCapabilityReturnsErrNotSupported` fails if an adapter silently succeeds on an undeclared
       capability, proved by a temporary local edit that is reverted before committing.
-- [ ] No subtest contacts a host outside the container network and the local `httptest` fixture.
-- [ ] Both files carry `//go:build integration` on their first line.
+- [x] No subtest contacts a host outside the container network and the local `httptest` fixture.
+- [x] Both files carry `//go:build integration` on their first line.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -140,6 +148,116 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+
+### Exact-setting readback repair (recorded 2026-09-08)
+
+History first. PR #101 merged the original task at c4b098d on 2026-09-08T04:29:10Z. Its
+`go.mod` change — promoting testify and testcontainers-go to direct requires — was **hand-edited, not
+produced by `go mod tidy`** (a full tidy at the time also dropped 86 lines of pre-pinned indirect
+requires for later tasks). `docs/13` §7.1 requires committing exactly what tidy produces. That is a
+procedural breach and it stands as one: the current `go mod tidy -diff` at this repair's commit is
+empty (verified below), which resolves the drift, not the breach.
+
+PR #102 (60195fb, merged 2026-09-08T04:58:37Z) added the elapsed-time ceiling to reject a
+daemon that applies a lower cap. An independent audit on 2026-09-08 proved it insufficient: against
+native aria2 1.37.0 asked for 1048576 B/s while the daemon was actually configured 786432 B/s
+(three quarters), both `SpeedLimitRoundTrips` phases still passed — 8 MiB at 786432 B/s takes
+~10.7 s, inside the [5.6 s, 14.4 s] window; only a cap below ~0.56× of the request trips the
+ceiling. The exact-setting obligation above ("the daemon reports 1048576 for that task") was never
+verified, and both repairs merged without renewed Astra verification. That rejection is what this
+repair resolves.
+
+What changed:
+
+- `SpeedLimitRoundTrips` now requires a `DownloadLimitReadback` from the call site's engine and
+  asserts the daemon's configured limit equals the request — per task and globally, read back while
+  the task is still parked, before any throttled byte moves.
+- The aria2 call site wraps its client in `readbackClient`, which queries `aria2.getOption` /
+  `aria2.getGlobalOption` itself; it rides the client's transport but decodes the answer on its
+  own, so the suite learns what the daemon is configured with, never what the adapter was asked to
+  set.
+- `internal/engine/enginetest/contract_speedlimits_test.go` pins the obligation with fakes that
+  need no daemon: an exact fake passes (and the suite's two consultations are recorded, per task
+  then global), while a three-quarters daemon and an engine without a readback each fail the
+  suite — asserted by re-executing the test binary against them, because a failure the suite
+  correctly records would also fail this test's own tree.
+- `TestAria2DaemonLimitReadback` (CI) pins the real readback to daemon truth: adapter-set 1048576
+  reads back exactly, and a wrong 786432 injected straight into the daemon through
+  `changeOption`/`changeGlobalOption` — bypassing the adapter — reads back as the injected value,
+  so the readback cannot be satisfied by echoing a request.
+
+Regression proof, observed locally in dependency order (this machine has no Docker; containers run
+in the CI `integration` job). The fakes against the **unrepaired** suite — all three cases red,
+which is the original defect reproduced:
+
+```
+$ go test -tags=integration -count=1 -v -run 'TestSpeedLimitsReadBackTheDaemonLimit' ./internal/engine/enginetest/
+=== RUN   TestSpeedLimitsReadBackTheDaemonLimit/exact_readback_passes_and_is_consulted
+        Error:  Not equal:
+        Messages: the suite must read both limits back from the daemon
+=== RUN   TestSpeedLimitsReadBackTheDaemonLimit/the_suite_rejects_the_fraction_engine
+        Error:  An error is expected but got nil.
+        Messages: SpeedLimitRoundTrips must fail the fraction engine, but it passed. Output:
+=== RUN   TestSpeedLimitsReadBackTheDaemonLimit/the_suite_rejects_the_no-readback_engine
+        Error:  An error is expected but got nil.
+        Messages: SpeedLimitRoundTrips must fail the no-readback engine, but it passed. Output:
+--- FAIL: TestSpeedLimitsReadBackTheDaemonLimit (53.74s)
+FAIL	github.com/L-K-M/dl-tool/internal/engine/enginetest
+```
+
+The same fakes against the repaired suite — green, both dishonest engines rejected by
+re-executed processes:
+
+```
+$ go test -tags=integration -count=1 -v -run 'TestSpeedLimitsReadBackTheDaemonLimit' ./internal/engine/enginetest/
+=== RUN   TestSpeedLimitsReadBackTheDaemonLimit/exact_readback_passes_and_is_consulted
+=== RUN   TestSpeedLimitsReadBackTheDaemonLimit/the_suite_rejects_the_fraction_engine
+=== RUN   TestSpeedLimitsReadBackTheDaemonLimit/the_suite_rejects_the_no-readback_engine
+--- PASS: TestSpeedLimitsReadBackTheDaemonLimit (16.16s)
+    --- PASS: .../exact_readback_passes_and_is_consulted (16.05s)
+    --- PASS: .../the_suite_rejects_the_fraction_engine (0.09s)
+    --- PASS: .../the_suite_rejects_the_no-readback_engine (0.03s)
+ok  	github.com/L-K-M/dl-tool/internal/engine/enginetest
+```
+
+Mutation check — the readback assertions stripped from the suite locally (restored before the
+commit; `git diff` afterwards shows only this repair's intended change), both reject cases fail:
+
+```
+$ go test -tags=integration -count=1 -run 'TestSpeedLimitsReadBackTheDaemonLimit' ./internal/engine/enginetest/
+    Error:  An error is expected but got nil.
+    Messages: SpeedLimitRoundTrips must fail the fraction engine, but it passed. Output: …
+    Error:  An error is expected but got nil.
+    Messages: SpeedLimitRoundTrips must fail the no-readback engine, but it passed. Output: …
+--- FAIL: TestSpeedLimitsReadBackTheDaemonLimit (53.73s)
+```
+
+Full local checks on the repaired tree: `gofmt -l` empty; `go vet ./...` and
+`go vet -tags=integration ./internal/...` clean; `golangci-lint run ./...` and
+`golangci-lint run --build-tags integration ./internal/engine/...` — `0 issues`; `make lint`,
+`make typecheck`, `make doclint` clean; `go mod tidy -diff` empty; race tests green:
+
+```
+$ go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	49.497s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.152s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.061s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.202s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.530s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.024s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.500s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.167s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.117s
+ok  	github.com/L-K-M/dl-tool/internal/store	66.629s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.363s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.032s
+```
+
+The Files table gained one row for `contract_speedlimits_test.go` in this repair — the same
+widening precedent as `client.go` below, recorded here because the regression coverage the
+rejection demanded has no home otherwise.
+
+#### Original task runs (historical — describe commit 91e6d24 and PR #101's CI, superseded above where the repair speaks)
 
 `make test-integration` needs a Docker daemon; this dev machine has none (no
 CLI, no socket), so the command ran on this branch's CI `integration` job
