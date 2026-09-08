@@ -257,6 +257,53 @@ The Files table gained one row for `contract_speedlimits_test.go` in this repair
 widening precedent as `client.go` below, recorded here because the regression coverage the
 rejection demanded has no home otherwise.
 
+Against **real aria2** — the audit's own scenario, replayed on the repaired code. A native aria2
+1.37.0 (the audit's binary) replaced the container through a temporary overlay harness (the
+audit's `audit_native_test.go`, given a `DaemonDownloadLimit` that queries `getOption` /
+`getGlobalOption` directly; file overlaid into `internal/engine/aria2` as
+`zz_audit_native_repair_test.go` — an overlay leaves the worktree untouched, so nothing of it is
+committed; overlay `/tmp/native-repair-overlay.json`). The wrapper applies a fraction of every
+requested limit and the unchanged suite decides — requested 1048576 while the daemon is actually
+configured:
+
+```
+$ DLTOOL_AUDIT_ARIA2_BINARY=<native aria2 1.37.0> go test -mod=readonly -tags=integration -count=1 -v \
+    -overlay=/tmp/native-repair-overlay.json \
+    -run 'TestAuditNativeRateContract/(exact|three_quarters)/SpeedLimitRoundTrips$' ./internal/engine/aria2
+=== RUN   TestAuditNativeRateContract/exact/SpeedLimitRoundTrips
+    requested=1048576 daemon_max-download-limit=1048576
+    requested=1048576 daemon_max-overall-download-limit=1048576
+=== RUN   TestAuditNativeRateContract/three_quarters/SpeedLimitRoundTrips
+    requested=1048576 daemon_max-download-limit=786432
+        Error:  Not equal: expected: 1048576, actual: 786432
+        Messages: the daemon is configured with 786432 B/s download limit for task aria2:42b6e2678e3aa589, not the requested 1048576 B/s
+--- FAIL: TestAuditNativeRateContract (17.69s)
+    --- PASS: TestAuditNativeRateContract/exact (17.63s)
+    --- FAIL: TestAuditNativeRateContract/three_quarters (0.06s)
+```
+
+Exact cap passes; the audit's three-quarters daemon — which passed the pre-repair suite — is now
+rejected at the readback before a single throttled byte moves.
+
+`make test-integration` on this PR's CI `integration` job (GitHub Actions, ubuntu-latest; this dev
+machine has no Docker, as before). Container lifecycle noise elided, nothing else changed:
+
+```
+$ make test-integration
+go test -tags=integration -count=1 -timeout=20m ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	8.953s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	96.771s
+ok  	github.com/L-K-M/dl-tool/internal/engine/enginetest	16.075s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	3.374s
+```
+
+`ok` with no `--- FAIL` and no `--- SKIP`: the runner is not verbose, but this job printed
+`--- FAIL:` subtest lines on every genuinely failing run of the original task (see `## Blocked` and
+the flake rounds below), so failures surface at this verbosity. The aria2 package grew from ~62 s
+to ~97 s — `TestAria2Contract` now also performs the two readback assertions, and
+`TestAria2DaemonLimitReadback` adds its own container round; `enginetest`'s 16.075 s are the
+committed fake subtests.
+
 #### Original task runs (historical — describe commit 91e6d24 and PR #101's CI, superseded above where the repair speaks)
 
 `make test-integration` needs a Docker daemon; this dev machine has none (no
