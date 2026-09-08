@@ -173,7 +173,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files are Prettier code style!
 go test -race -count=1 ./internal/engine/qbittorrent/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.498s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	2.519s
 ```
 
 Named tests (`go test -count=1 -v -run … ./internal/engine/qbittorrent/...`):
@@ -188,7 +188,10 @@ ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.083s
 ```
 
 Full suite (the Reconciler change touches `internal/engine` too):
-`make test` — every Go package `ok`, vitest 13 passed.
+`make test` — every Go package `ok`, vitest 13 passed. The
+race-sensitive tests (`TestSetOwnershipFilterForcesFullResync`,
+`TestOwnedRefs…`, `TestForeignHashIsInvisible`, `TestDefaultFilterOwnsNothing`,
+`TestTorrentsRemovedEmitsEventRemoved`) also pass `-race -count=5`.
 
 Scope check:
 
@@ -231,7 +234,10 @@ Divergence recorded: 06 §5.4 also says to reset the rid to 0 after a failed
 poll and after a five-minute full-sync interval; this task's rule table
 says the opposite ("never reset `rid` to 0 unless the daemon says
 `full_update`"), and the table governs — the no-reset rule is what
-TestPollFailureKeepsCache asserts.
+TestPollFailureKeepsCache asserts. The one rid reset the adapter performs
+is on a `SetOwnershipFilter` install (a local resync under the new
+predicate, enforced against in-flight replies by a stale-response guard),
+which the transport-failure rule does not cover.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

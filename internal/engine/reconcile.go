@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -83,6 +84,11 @@ type Reconciler struct {
 	admitter DiskFullPauser
 	poll     time.Duration
 	log      *slog.Logger
+	// installed records the engines the ownership predicate was handed
+	// to, so the defensive re-install in Boot only touches engines
+	// registered since — re-installing on an already-filtered engine
+	// would reset its delta rid and cost a full snapshot every sweep.
+	installed map[string]bool
 }
 
 // NewReconciler wires the registry to the task store and the admission
@@ -103,7 +109,7 @@ func NewReconciler(reg *Registry, ts TaskWriter, admitter DiskFullPauser, poll t
 	if log == nil {
 		log = slog.Default()
 	}
-	r := &Reconciler{registry: reg, tasks: ts, admitter: admitter, poll: poll, log: log}
+	r := &Reconciler{registry: reg, tasks: ts, admitter: admitter, poll: poll, log: log, installed: map[string]bool{}}
 	r.installOwnershipFilters()
 	return r
 }
@@ -120,18 +126,20 @@ type ownershipFilterer interface {
 
 // installOwnershipFilters wires the ownership predicate into every
 // registered engine that accepts one, so production runs the reconciler's
-// predicate and never the adapter's default-deny one. NewReconciler runs
-// after the composition root registered its engines; an engine registered
-// later never receives the filter and its cache stays empty — the registry
-// is built once, before the reconciler, and never mutated after.
+// predicate and never the adapter's default-deny one. Engines already
+// filtered are skipped — re-installing would reset a cache's delta rid —
+// which is also what makes the defensive re-run in Boot safe: an engine
+// registered after NewReconciler still receives its filter before the
+// first sweep that could observe it.
 func (r *Reconciler) installOwnershipFilters() {
 	for _, name := range r.registry.Names() {
 		e, ok := r.registry.Get(name)
 		if !ok {
 			continue // Names and Get disagree only mid-Register; skip it.
 		}
-		if o, accepts := e.(ownershipFilterer); accepts {
+		if o, accepts := e.(ownershipFilterer); accepts && !r.installed[name] {
 			o.SetOwnershipFilter(r.OwnedRefs(name))
+			r.installed[name] = true
 		}
 	}
 }
@@ -144,6 +152,11 @@ func (r *Reconciler) installOwnershipFilters() {
 // a warning, not a Boot failure — it is retried on the next poll and no task
 // state changes on its account.
 func (r *Reconciler) Boot(ctx context.Context) error {
+	// A late registration must not sweep under the default-deny filter:
+	// re-install before the first look at any engine (a no-op for every
+	// engine already filtered at construction).
+	r.installOwnershipFilters()
+
 	for _, name := range r.registry.Names() {
 		e, ok := r.registry.Get(name)
 		if !ok {
@@ -497,30 +510,64 @@ func bareHandle(engineName, id string) string {
 	return strings.TrimPrefix(id, engineName+":")
 }
 
-// ownershipCheckBudget bounds one ownership predicate's store lookup: the
+// ownershipCheckBudget bounds one ownership listing's store lookup: the
 // predicate runs on an engine's poll goroutine, so a wedged store must not
 // wedge the poll with it.
 const ownershipCheckBudget = 5 * time.Second
 
+// ownershipListingTTL is how long one store listing serves every predicate
+// call: the predicate is consulted once per hash per sync, so one listing
+// per engine per window collapses an N-torrent full sync from N queries to
+// one, while a task submitted mid-window becomes visible to the next one.
+const ownershipListingTTL = time.Second
+
 // OwnedRefs returns the ownership predicate for one engine: a handle is
 // owned when the tasks table holds a non-terminal row naming it — the
 // detection rule of 06-download-engines.md section 8, by handle alone. The
-// listing is per invocation, not cached at install time, because tasks are
+// listing is per TTL window, not cached at install time, because tasks are
 // added and removed for the process lifetime and a snapshot at boot would
-// turn every later task foreign. A store failure answers foreign: an
-// unreadable table must never admit a transfer dl-tool cannot account for.
+// turn every later task foreign. A store failure keeps the last good set
+// for one window — a transient blip must not hide owned transfers from an
+// engine listing, which a sweep would read as vanished handles and
+// re-submit — and answers foreign only before the first successful
+// listing, when there is no prior truth to serve and an unreadable table
+// must never admit a transfer dl-tool cannot account for.
 func (r *Reconciler) OwnedRefs(engineName string) func(handle string) bool {
+	var (
+		mu       sync.Mutex
+		expires  time.Time
+		lastGood map[string]struct{}
+	)
 	return func(handle string) bool {
-		ctx, cancel := context.WithTimeout(context.Background(), ownershipCheckBudget)
-		defer cancel()
+		mu.Lock()
+		defer mu.Unlock()
 
-		known, err := r.tasks.ListNonTerminalByEngine(ctx, engineName)
-		if err != nil {
-			r.log.Warn("ownership check failed; treating the handle as foreign",
-				"engine", engineName, "engine_ref", handle, "error", err)
-			return false
+		if now := time.Now(); !now.Before(expires) {
+			if owned, ok := r.ownedListing(engineName); ok {
+				lastGood = owned
+			}
+			expires = now.Add(ownershipListingTTL)
 		}
-		_, owned := known[handle]
+		_, owned := lastGood[handle]
 		return owned
 	}
+}
+
+// ownedListing reads one engine's owned-handle set; ok false means the
+// store listing failed and the caller keeps whatever it last held.
+func (r *Reconciler) ownedListing(engineName string) (set map[string]struct{}, ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), ownershipCheckBudget)
+	defer cancel()
+
+	known, err := r.tasks.ListNonTerminalByEngine(ctx, engineName)
+	if err != nil {
+		r.log.Warn("ownership listing failed; keeping the last known handles",
+			"engine", engineName, "error", err)
+		return nil, false
+	}
+	set = make(map[string]struct{}, len(known))
+	for handle := range known {
+		set[handle] = struct{}{}
+	}
+	return set, true
 }

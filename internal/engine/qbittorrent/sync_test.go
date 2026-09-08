@@ -159,17 +159,66 @@ func mapsClone(src map[string]any) map[string]any {
 
 func TestFullUpdateReAppliesOwnershipFilter(t *testing.T) {
 	// The first full update owns both hashes; the row of the second is
-	// then deleted, and the next full update must drop it from the cache.
+	// then deleted, and the next full update must drop it from the cache —
+	// silently: a hash the predicate now rejects appears in no report.
 	owned := map[string]bool{fixtureHashes[0]: true, fixtureHashes[1]: true}
 	c := &cache{owned: func(hash string) bool { return owned[hash] }}
 	_, _ = c.merge(mustReadMaindata(t))
 	require.Len(t, c.fields, 2)
 
 	delete(owned, fixtureHashes[1])
-	changed, removed := c.merge(mustReadMaindata(t))
-	require.Equal(t, []string{fixtureHashes[0]}, changed)
-	require.Equal(t, []string{fixtureHashes[1]}, removed)
+	m := mustReadMaindata(t)
+	changed, removed := c.merge(m)
+	require.Empty(t, changed, "an identical full update changes nothing")
+	require.Empty(t, removed, "a rejected hash disappears without a removal report")
 	require.NotContains(t, c.fields, fixtureHashes[1])
+
+	// An owned hash that vanished from the full response is removed and
+	// reported — the re-added-and-then-deleted row is still a loss the
+	// event consumer must hear about.
+	delete(m.Torrents, fixtureHashes[0])
+	changed, removed = c.merge(m)
+	require.Empty(t, changed)
+	require.Equal(t, []string{fixtureHashes[0]}, removed)
+	require.NotContains(t, c.fields, fixtureHashes[0])
+}
+
+func TestMergePartialIntoZeroCacheDoesNotPanic(t *testing.T) {
+	// A zero-value cache — nil fields map — must survive a partial that
+	// arrives before any full response: the poll goroutine has no recover,
+	// so a panic here would take the process down.
+	c := &cache{owned: func(string) bool { return true }}
+	changed, removed := c.merge(maindata{
+		Rid: 3,
+		Torrents: map[string]json.RawMessage{
+			testHash: json.RawMessage(`{"state":"downloading"}`),
+		},
+	})
+	require.Equal(t, []string{testHash}, changed)
+	require.Empty(t, removed)
+	require.Contains(t, c.fields, testHash)
+}
+
+func TestHashChangedAndRemovedInOneDeltaIsRemovedOnly(t *testing.T) {
+	// One delta that both changes and removes the same hash: removal
+	// wins, and no event may carry a zero-value info for it.
+	c := &cache{owned: func(string) bool { return true }}
+	_, _ = c.merge(maindata{
+		Rid: 1, FullUpdate: true,
+		Torrents: map[string]json.RawMessage{
+			testHash: json.RawMessage(torrentBody(testHash, "downloading")),
+		},
+	})
+	changed, removed := c.merge(maindata{
+		Rid: 2,
+		Torrents: map[string]json.RawMessage{
+			testHash: json.RawMessage(`{"state":"pausedDL"}`),
+		},
+		TorrentsRemoved: []string{testHash},
+	})
+	require.Empty(t, changed)
+	require.Equal(t, []string{testHash}, removed)
+	require.NotContains(t, c.fields, testHash)
 }
 
 // maindataServer is a WebAPI stand-in for the sync tests. It answers the
@@ -234,14 +283,19 @@ func (f *maindataServer) ridsSeen() []string {
 	return slices.Clone(f.rids)
 }
 
-// connectedSyncClient returns a client past Connect, polling at test speed
-// against one maindataServer.
-func connectedSyncClient(t *testing.T, f *maindataServer) *Client {
+// connectedSyncClient returns a client past Connect, polling at test
+// speed against one maindataServer. The ownership filter is installed
+// before Connect: the loop starts with Connect, and a first poll under the
+// default-deny predicate would drop the full snapshot a test scripts.
+func connectedSyncClient(t *testing.T, f *maindataServer, owned func(string) bool) *Client {
 	t.Helper()
 
 	c, err := New(Config{BaseURL: f.srv.URL, Username: testUsername, Password: testPassword}, nil)
 	require.NoError(t, err)
 	c.md.pollEvery = 5 * time.Millisecond
+	if owned != nil {
+		c.SetOwnershipFilter(owned)
+	}
 	require.NoError(t, c.Connect(context.Background()))
 	t.Cleanup(func() { require.NoError(t, c.Close()) })
 	return c
@@ -292,8 +346,7 @@ func TestTorrentsRemovedEmitsEventRemoved(t *testing.T) {
 			return http.StatusOK, `{"rid":2,"torrents_removed":["` + testHash + `"]}`
 		}
 	})
-	c := connectedSyncClient(t, f)
-	c.SetOwnershipFilter(func(string) bool { return true })
+	c := connectedSyncClient(t, f, func(string) bool { return true })
 
 	events, err := c.Events(context.Background())
 	require.NoError(t, err)
@@ -376,15 +429,20 @@ func (e t030Engine) Remove(ctx context.Context, id string) error {
 }
 
 // syncTasks is the engine.TaskWriter surface NewReconciler needs: one
-// engine's owned handles, consulted live by the ownership predicate.
+// engine's owned handles, consulted live by the ownership predicate, with
+// a switch that makes the listing fail to exercise the stale window.
 type syncTasks struct {
 	mu       sync.Mutex
+	fail     bool
 	byEngine map[string]map[string]store.Reconcilable
 }
 
 func (f *syncTasks) ListNonTerminalByEngine(_ context.Context, engineName string) (map[string]store.Reconcilable, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail {
+		return nil, errors.New("store: unavailable")
+	}
 	return f.byEngine[engineName], nil
 }
 
@@ -472,12 +530,46 @@ func TestDefaultFilterOwnsNothing(t *testing.T) {
 			testHash: torrentBody(testHash, "downloading"),
 		})
 	})
-	c := connectedSyncClient(t, f)
+	c := connectedSyncClient(t, f, nil)
 
 	require.Never(t, func() bool {
 		listed, err := c.List(context.Background())
 		return err == nil && len(listed) > 0
 	}, 50*time.Millisecond, 5*time.Millisecond, "a hash entered the cache with no ownership filter")
+	// The window must have actually polled, or the Never above proved
+	// nothing about the default filter.
+	require.NotEmpty(t, f.ridsSeen(), "the poll loop never ran; the Never above was vacuous")
+}
+
+func TestSetOwnershipFilterForcesFullResync(t *testing.T) {
+	// A filter installed after polls have run must heal the cache it
+	// rejected: the rid resets, the next poll is a full snapshot, and the
+	// now-owned hash enters — deltas alone would never carry an idle
+	// torrent that changed nothing since the rid the daemon remembers.
+	f := newMaindataServer(t, func(rid int) (int, string) {
+		if rid == 0 {
+			return http.StatusOK, fullBody(1, map[string]string{
+				testHash: torrentBody(testHash, "downloading"),
+			})
+		}
+		return http.StatusOK, `{"rid":` + strconv.Itoa(rid+1) + `}`
+	})
+	c := connectedSyncClient(t, f, nil)
+
+	require.Eventually(t, func() bool {
+		return len(f.ridsSeen()) >= 2
+	}, 2*time.Second, 2*time.Millisecond)
+
+	c.SetOwnershipFilter(func(string) bool { return true })
+
+	// The next request carries rid 0 — the local resync — and the full
+	// snapshot under the new filter fills the cache.
+	require.Eventually(t, func() bool {
+		listed, err := c.List(context.Background())
+		return err == nil && len(listed) == 1
+	}, 2*time.Second, 2*time.Millisecond)
+	require.Equal(t, 2, strings.Count(strings.Join(f.ridsSeen(), ","), "0"),
+		"the filter install must force a second rid-0 request")
 }
 
 func TestPollFailureKeepsCache(t *testing.T) {
@@ -498,8 +590,7 @@ func TestPollFailureKeepsCache(t *testing.T) {
 		// presents stays deterministic however many partials land.
 		return http.StatusOK, `{"rid":8,"torrents":{"` + testHash + `":{"dlspeed":2048}}}`
 	})
-	c := connectedSyncClient(t, f)
-	c.SetOwnershipFilter(func(string) bool { return true })
+	c := connectedSyncClient(t, f, func(string) bool { return true })
 
 	require.Eventually(t, func() bool {
 		info, err := c.Get(context.Background(), engine.NameQBittorrent+":"+testHash)
@@ -543,8 +634,7 @@ func TestEventsDropDoesNotBlockPoll(t *testing.T) {
 		}
 		return http.StatusOK, `{"rid":` + strconv.Itoa(rid+1) + `,"torrents":{"` + testHash + `":{"dlspeed":` + strconv.Itoa(rid) + `}}`
 	})
-	c := connectedSyncClient(t, f)
-	c.SetOwnershipFilter(func(string) bool { return true })
+	c := connectedSyncClient(t, f, func(string) bool { return true })
 
 	_, err := c.Events(context.Background()) // registered, never read
 	require.NoError(t, err)
@@ -594,4 +684,53 @@ func TestCloseStopsPollGoroutine(t *testing.T) {
 	require.NoError(t, err)
 	_, open = <-fresh
 	require.False(t, open, "Events after Close must return a closed channel")
+}
+
+// The two OwnedRefs tests live in this file — not reconcile_test.go —
+// because the Files table of T030 names this one; the predicate is the
+// reconciler half of the very filter the rest of this file exercises.
+func TestOwnedRefsReadsTheLiveTasksTable(t *testing.T) {
+	tasks := &syncTasks{byEngine: map[string]map[string]store.Reconcilable{
+		engine.NameQBittorrent: {testHash: {ID: "task-1", EngineRef: testHash, State: string(engine.StateDownloading)}},
+	}}
+	r := engine.NewReconciler(engine.NewRegistry(), tasks, syncAdmitter{}, time.Second, nil)
+
+	owned := r.OwnedRefs(engine.NameQBittorrent)
+	require.True(t, owned(testHash))
+	require.False(t, owned(otherHash))
+
+	// A row removed at runtime stops owning its handle on the next
+	// listing — the predicate is live, not a boot snapshot.
+	tasks.mu.Lock()
+	delete(tasks.byEngine[engine.NameQBittorrent], testHash)
+	tasks.mu.Unlock()
+	require.Eventually(t, func() bool {
+		return !owned(testHash)
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestOwnedRefsFailsStaleAfterFirstListing(t *testing.T) {
+	tasks := &syncTasks{byEngine: map[string]map[string]store.Reconcilable{
+		engine.NameQBittorrent: {testHash: {ID: "task-1", EngineRef: testHash, State: string(engine.StateDownloading)}},
+	}}
+	r := engine.NewReconciler(engine.NewRegistry(), tasks, syncAdmitter{}, time.Second, nil)
+	owned := r.OwnedRefs(engine.NameQBittorrent)
+	require.True(t, owned(testHash), "the first listing must succeed for the stale window to be meaningful")
+
+	// A store blip keeps the last good set: hiding an owned handle would
+	// read as a vanished transfer downstream and cost a re-submission.
+	tasks.mu.Lock()
+	tasks.fail = true
+	tasks.mu.Unlock()
+	require.True(t, owned(testHash))
+	require.False(t, owned(otherHash))
+
+	// Before any successful listing there is no prior truth to serve, so
+	// the predicate answers foreign — never admitting an unaccounted
+	// transfer on the strength of a failed read.
+	fresh := engine.NewReconciler(
+		engine.NewRegistry(),
+		&syncTasks{fail: true, byEngine: map[string]map[string]store.Reconcilable{}},
+		syncAdmitter{}, time.Second, nil)
+	require.False(t, fresh.OwnedRefs(engine.NameQBittorrent)(testHash))
 }

@@ -52,7 +52,10 @@ type maindata struct {
 	FullUpdate      bool                       `json:"full_update"`
 	Torrents        map[string]json.RawMessage `json:"torrents"`
 	TorrentsRemoved []string                   `json:"torrents_removed"`
-	ServerState     json.RawMessage            `json:"server_state"`
+	// ServerState is held for the envelope's completeness — the full or
+	// partial global-state object — but nothing consumes it in this task;
+	// global rates and totals are later tasks' to read.
+	ServerState json.RawMessage `json:"server_state"`
 }
 
 // cache is the merged view. fields[hash] holds the accumulated JSON object
@@ -75,13 +78,21 @@ func rejectAll(string) bool { return false }
 // TorrentsRemoved. It returns the hashes whose value changed and the hashes
 // that disappeared, both sorted. A hash the ownership predicate rejects is
 // never stored, never returned and never counted — the invariant is that
-// fields holds owned hashes only, which is what lets removal skip a second
-// ownership check. rid advances with the response even when the merge
+// fields holds owned hashes only, which is what lets the delta-removal
+// path skip a second ownership check (the full-update path cannot: it
+// reports old hashes the predicate may since have rejected, and those it
+// drops silently). rid advances with the response even when the merge
 // itself is a no-op: rid tracks the server's protocol state, not ours.
 func (c *cache) merge(m maindata) (changed, removed []string) {
 	owned := c.owned
 	if owned == nil {
 		owned = rejectAll
+	}
+	if c.fields == nil {
+		// A zero-value cache is mergeable too: a partial can arrive before
+		// any full response, and assigning into a nil map would panic the
+		// poll goroutine — the one failure the keep-the-cache rule forbids.
+		c.fields = make(map[string]map[string]any)
 	}
 
 	if m.FullUpdate {
@@ -98,14 +109,25 @@ func (c *cache) merge(m maindata) (changed, removed []string) {
 			}
 		}
 		for hash := range c.fields {
-			if _, still := fresh[hash]; !still {
+			_, still := fresh[hash]
+			if !still && owned(hash) {
+				// owned guards the report, not the drop: a hash the current
+				// predicate rejects appears in no TaskEvent, so it vanishes
+				// from the cache without a removal event for it.
 				removed = append(removed, hash)
 			}
 		}
-		c.fields = fresh
-		for hash := range fresh {
-			changed = append(changed, hash)
+		// changed is a diff against the old cache, not every fresh hash:
+		// a full resync after a lost session re-sends byte-identical
+		// objects, and one event per changed hash means unchanged is no
+		// event — otherwise a large queue re-floods every subscriber
+		// buffer on every full response.
+		for hash, fields := range fresh {
+			if old, held := c.fields[hash]; !held || !torrentFieldsEqual(old, fields) {
+				changed = append(changed, hash)
+			}
 		}
+		c.fields = fresh
 	} else {
 		for hash, raw := range m.Torrents {
 			if !owned(hash) {
@@ -134,6 +156,11 @@ func (c *cache) merge(m maindata) (changed, removed []string) {
 			}
 			delete(c.fields, hash)
 			removed = append(removed, hash)
+			// A hash the same delta both changed and removed — a re-add
+			// racing a delete — is removed, full stop: fields no longer
+			// holds it, so a leftover changed entry would project a
+			// zero-value TaskEvent beside the removal.
+			changed = slices.DeleteFunc(changed, func(h string) bool { return h == hash })
 		}
 	}
 
@@ -253,6 +280,14 @@ func (c *Client) SetOwnershipFilter(owned func(hash string) bool) {
 			delete(c.md.cache.fields, hash)
 		}
 	}
+	// A rejected hash is dropped without a removal event — it appears in
+	// no TaskEvent — and a hash the previous predicate rejected cannot
+	// come back through a delta, which only carries changed torrents. So
+	// the rid is reset here to force one full snapshot under the new
+	// predicate on the next tick. This is a deliberate local resync on a
+	// configuration change, not the transport-failure reset the task's
+	// poll-loop table forbids.
+	c.md.cache.rid = 0
 }
 
 // List returns every owned torrent in the cache, sorted by id. It performs
@@ -396,6 +431,14 @@ func (c *Client) pollOnce(ctx context.Context) {
 
 	c.md.mu.Lock()
 	defer c.md.mu.Unlock()
+
+	// A response is stale the moment a filter install reset the rid while
+	// the request was in flight: applying it would clobber the reset —
+	// and the full snapshot it asks for — with the old session's last
+	// delta. Only a reply to the rid the cache still holds may merge.
+	if c.md.cache.rid != rid {
+		return
+	}
 
 	changed, removed := c.md.cache.merge(m)
 	c.emitLocked(c.eventsLocked(changed, removed))
