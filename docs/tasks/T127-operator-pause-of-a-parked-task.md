@@ -215,7 +215,47 @@ internal/store/tasks_test.go
 Exactly the four non-doc paths of the Files table; the docs side is this file and the two
 status cells of `00-task-index.md`.
 
-### Review round 1 (commit f678ef4 → this one)
+### Review round 2 (commit 532804e → this one)
+
+Three inline comments: two were round-1 leftovers whose suggestions had already landed (the
+subtest-visible paste — line 202's "drop subtests wording" premise no longer holds, the paste
+shows both `/disk_full` and `/concurrency_hold` — and the claim-decline subtest itself); one
+applied: the claim-decline subtest now seeds a positive control — an identical untouched parked
+row asserted still claimable — so the decline is the takeover's doing, not a claim that declines
+everything.
+
+`make lint && make test PKG=./internal/...` after the round-2 fix — lint clean, every internal
+package `ok`, no `FAIL`, exit 0:
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier Code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	48.366s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.106s
+ok  	github.com/L-K-M/dl-tool/internal/engine	20.428s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.149s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.601s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.163s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.138s
+ok  	github.com/L-K-M/dl-tool/internal/store	67.783s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.344s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.021s
+EXIT=0
+```
+
+### Review round 1 (commit f678ef4 → 532804e)
 
 Two majors — one applied as a test, one declined on a verified premise — four minors applied,
 the rest declined with evidence.

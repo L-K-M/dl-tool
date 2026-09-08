@@ -1078,10 +1078,18 @@ func TestClearPausedHoldCode(t *testing.T) {
 		tasks := NewTaskStore(db)
 
 		seed := seedParked(t, tasks, "paused", "disk_full")
+		// Positive control: an identical row the operator did not take over
+		// stays claimable, so the decline below is the takeover's doing and
+		// not a claim that declines everything.
+		control := seedParked(t, tasks, "paused", "disk_full")
 
 		cleared, err := tasks.ClearPausedHoldCode(t.Context(), seed.ID)
 		require.NoError(t, err)
 		require.True(t, cleared)
+
+		controlClaimed, err := tasks.ClaimParkedDiskFull(t.Context(), control.ID)
+		require.NoError(t, err)
+		require.True(t, controlClaimed, "an untouched parked row must stay claimable")
 
 		// The takeover's whole point, driven against the other half of the
 		// contract: the guarded claim the admission pass runs before its
