@@ -1073,6 +1073,29 @@ func TestClearPausedHoldCode(t *testing.T) {
 		}
 	})
 
+	t.Run("a taken-over row is invisible to the admission claim", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		seed := seedParked(t, tasks, "paused", "disk_full")
+
+		cleared, err := tasks.ClearPausedHoldCode(t.Context(), seed.ID)
+		require.NoError(t, err)
+		require.True(t, cleared)
+
+		// The takeover's whole point, driven against the other half of the
+		// contract: the guarded claim the admission pass runs before its
+		// first engine call must decline the row, so the pass can never
+		// resume what the operator took over.
+		claimed, err := tasks.ClaimParkedDiskFull(t.Context(), seed.ID)
+		require.NoError(t, err)
+		require.False(t, claimed, "the admission claim must decline an operator pause")
+
+		after, err := tasks.Get(t.Context(), seed.ID)
+		require.NoError(t, err)
+		require.Equal(t, "paused", after.State)
+	})
+
 	t.Run("reports a missing id as not found", func(t *testing.T) {
 		db, _, _ := openTestStore(t)
 		tasks := NewTaskStore(db)

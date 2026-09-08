@@ -385,10 +385,15 @@ func (h *TaskHandlers) pauseAction(ctx context.Context, task actionTask) ActionR
 	// The lease wait runs under the named operator budget, never the
 	// request context alone: a wait that outlives it returns the retry
 	// outcome below with nothing touched — no engine call, no mutating
-	// store call.
+	// store call. The budget bounds only the wait: once acquired, the
+	// lease lives until the deferred release below runs — the registry
+	// ties the hold to that closure, not to waitCtx, whose deadline may
+	// well expire while a slow engine call is still in flight under ctx.
 	waitCtx, cancelWait := context.WithTimeout(ctx, pauseLeaseWait)
 	defer cancelWait()
 
+	// TaskOpWait can answer only the context's error here (a busy try is
+	// the Try mode's answer), so every failure is the expired wait.
 	releaseLease, err := h.engines.AcquireTaskOp(waitCtx, task.ID, engine.TaskOpWait)
 	if err != nil {
 		return actionFailure(task.ID, SlugValidationFailed, detailTaskOpBusy)

@@ -1208,13 +1208,16 @@ func (e *pauseEnv) taskHoldCode(t *testing.T, id string) (code, message string) 
 	return code, message
 }
 
-// taskEventCodes reads one task's event codes in insert order.
+// taskEventCodes reads one task's event codes in insert order — rowid,
+// not the ULID id: two events of one millisecond would otherwise sort by
+// random entropy, and the sequence assertions below compare pairs that
+// can land inside the same millisecond.
 func (e *pauseEnv) taskEventCodes(t *testing.T, id string) []string {
 	t.Helper()
 
 	var codes []string
 	if err := e.db.SelectContext(t.Context(), &codes,
-		`SELECT code FROM task_events WHERE task_id = ? ORDER BY at, id`, id); err != nil {
+		`SELECT code FROM task_events WHERE task_id = ? ORDER BY at, rowid`, id); err != nil {
 		t.Fatalf("read events of %s: %v", id, err)
 	}
 
@@ -1417,7 +1420,13 @@ func TestOperatorPauseWaitsForTheAdmissionRelease(t *testing.T) {
 	env.waitResumeRecorded(t)
 
 	// The operator's pause joins the lease behind the pass — waiting mode,
-	// never a busy failure.
+	// never a busy failure. The goroutine is not synchronised with the
+	// gate close below on purpose: whether it parks before the handoff or
+	// acquires the just-freed lease a moment later, it reloads the same
+	// released row and takes the same branch, and the frozen paused
+	// snapshot it preloads makes the reload the only thing that can move
+	// the decision. That it waits rather than fails is pinned by the
+	// timeout test's busy outcome behind a held lease.
 	pauseDone := make(chan ActionResult, 1)
 	go func() { pauseDone <- env.pauseStale(t.Context(), t, id, string(engine.StatePaused)) }()
 
@@ -1430,7 +1439,7 @@ func TestOperatorPauseWaitsForTheAdmissionRelease(t *testing.T) {
 	var result ActionResult
 	select {
 	case result = <-pauseDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(pauseLeaseWait + 5*time.Second):
 		t.Fatal("the pause action never returned after the release")
 	}
 	if !result.Ok {
@@ -1488,7 +1497,7 @@ func TestOperatorPauseAfterAFailedRelease(t *testing.T) {
 	var result ActionResult
 	select {
 	case result = <-pauseDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(pauseLeaseWait + 5*time.Second):
 		t.Fatal("the pause action never returned after the failed release")
 	}
 	if !result.Ok {
