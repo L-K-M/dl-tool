@@ -173,7 +173,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/qbittorrent/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.581s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.633s
 ```
 
 Named tests (`go test -count=1 -v -run … ./internal/engine/qbittorrent/...`):
@@ -184,23 +184,37 @@ Named tests (`go test -count=1 -v -run … ./internal/engine/qbittorrent/...`):
 === RUN   TestMergePartialKeepsUntouchedFields
 --- PASS: TestMergePartialKeepsUntouchedFields (0.00s)
 === RUN   TestTorrentsRemovedEmitsEventRemoved
---- PASS: TestTorrentsRemovedEmitsEventRemoved (0.01s)
+--- PASS: TestTorrentsRemovedEmitsEventRemoved (0.02s)
 === RUN   TestForeignHashIsInvisible
 --- PASS: TestForeignHashIsInvisible (0.03s)
 === RUN   TestPollFailureKeepsCache
-2026/09/08 10:27:15 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
-2026/09/08 10:27:15 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
-2026/09/08 10:27:15 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
+2026/09/08 11:11:16 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
+2026/09/08 11:11:16 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
+2026/09/08 11:11:16 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
 --- PASS: TestPollFailureKeepsCache (0.03s)
 PASS
 ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.085s
 ```
 
+Rid locality
+(`go test -count=1 -v -run TestEngineRidStaysInsideCache ./internal/engine/qbittorrent/...`):
+
+```
+=== RUN   TestEngineRidStaysInsideCache
+--- PASS: TestEngineRidStaysInsideCache (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.009s
+```
+
+The test serializes every adapter output (`List`, `Get`, `TaskEvent`) and
+proves a unique engine rid is absent. `Client` has no store writer, and the
+scope check below contains no database, API or generated-contract path.
+
 Full suite (the Reconciler change touches `internal/engine` too):
 `make test` — every Go package `ok`, vitest 13 passed. The
 race-sensitive tests, including ownership refresh and poll lifecycle races,
 also pass `go test -race -count=5 ./internal/engine/qbittorrent/...`
-(`ok … 18.715s`).
+(`ok … 19.029s`).
 
 Scope check:
 

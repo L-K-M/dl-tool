@@ -254,6 +254,9 @@ type maindataServer struct {
 	mu    sync.Mutex
 	rids  []string // every rid the client presented, in order
 	reply func(rid int) (int, string)
+
+	webapiReached chan struct{} // optional gate for a Connect/Close race
+	webapiRelease chan struct{}
 }
 
 func newMaindataServer(t *testing.T, reply func(rid int) (int, string)) *maindataServer {
@@ -275,6 +278,13 @@ func (f *maindataServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(testVersion))
 
 	case "/api/v2/app/webapiVersion":
+		if f.webapiReached != nil {
+			select {
+			case f.webapiReached <- struct{}{}:
+			default:
+			}
+			<-f.webapiRelease
+		}
 		_, _ = w.Write([]byte(testWebapi))
 
 	case "/api/v2/sync/maindata":
@@ -645,27 +655,46 @@ func TestRejectedHashBecomesVisibleAfterOwnershipRefresh(t *testing.T) {
 		return listErr == nil && len(listed) == 1
 	}, 2*time.Second, 2*time.Millisecond)
 
-	// The task appears inside the ownership listing's TTL. Its one add
-	// delta is rejected against the old snapshot; a later ownership
-	// refresh must force a full response so an idle torrent is not lost.
-	tasks.mu.Lock()
-	tasks.byEngine[engine.NameQBittorrent][otherHash] = store.Reconcilable{
-		ID: "task-2", EngineRef: otherHash, State: string(engine.StatePaused),
-	}
-	tasks.mu.Unlock()
+	// First reject the daemon's one-shot add delta while the store does
+	// not own it. Only then add the task, forcing the recovery path.
 	daemonMu.Lock()
 	daemonHasOther = true
 	daemonMu.Unlock()
-
 	require.Eventually(t, func() bool {
 		daemonMu.Lock()
 		defer daemonMu.Unlock()
 		return deltaSent
 	}, 2*time.Second, 2*time.Millisecond, "the one-shot add delta was not sent")
 	require.Eventually(t, func() bool {
+		c.md.mu.Lock()
+		defer c.md.mu.Unlock()
+		_, withheld := c.md.cache.withheld[otherHash]
+		return withheld
+	}, 2*time.Second, 2*time.Millisecond, "the add delta was not rejected")
+
+	tasks.mu.Lock()
+	tasks.byEngine[engine.NameQBittorrent][otherHash] = store.Reconcilable{
+		ID: "task-2", EngineRef: otherHash, State: string(engine.StatePaused),
+	}
+	tasks.mu.Unlock()
+	require.Eventually(t, func() bool {
 		listed, listErr := c.List(context.Background())
 		return listErr == nil && len(listed) == 2
 	}, 2*time.Second, 2*time.Millisecond, "the rejected hash never recovered")
+
+	// A successful full merge consumes the withheld identifier. A later
+	// non-zero request proves the adapter did not enter a rid-0 loop.
+	require.Eventually(t, func() bool {
+		seen := f.ridsSeen()
+		return len(seen) > 0 && seen[len(seen)-1] != "0"
+	}, 2*time.Second, 2*time.Millisecond, "polling remained stuck at rid 0")
+	zeros := 0
+	for _, seen := range f.ridsSeen() {
+		if seen == "0" {
+			zeros++
+		}
+	}
+	require.Equal(t, 2, zeros, "ownership recovery must request one extra full update")
 }
 
 func TestOwnershipListingRecoveryRestoresInitialFullUpdate(t *testing.T) {
@@ -789,6 +818,65 @@ func TestEventsDropDoesNotBlockPoll(t *testing.T) {
 // polling after the buffer filled and drops began.
 const eventsBufferSlack = 64
 
+func TestWithheldOwnershipRetriesFullUntilMerged(t *testing.T) {
+	c := &Client{}
+	c.md.cache = cache{
+		rid:      7,
+		owned:    func(string) bool { return true },
+		withheld: map[string]struct{}{testHash: {}},
+	}
+
+	// No response was applied between these reads. Both must request a
+	// full update so a failed first request cannot lose the recovery.
+	require.Equal(t, 0, c.currentRid())
+	require.Equal(t, 0, c.currentRid())
+
+	c.md.mu.Lock()
+	_, _ = c.md.cache.merge(maindata{
+		Rid:        8,
+		FullUpdate: true,
+		Torrents: map[string]json.RawMessage{
+			testHash: json.RawMessage(torrentBody(testHash, "downloading")),
+		},
+	})
+	c.md.mu.Unlock()
+
+	require.Equal(t, 8, c.currentRid())
+	require.NotContains(t, c.md.cache.withheld, testHash)
+}
+
+func TestEngineRidStaysInsideCache(t *testing.T) {
+	const privateRid = 987654321
+
+	c := &Client{}
+	c.md.cache.owned = func(string) bool { return true }
+	changed, removed := c.md.cache.merge(maindata{
+		Rid:        privateRid,
+		FullUpdate: true,
+		Torrents: map[string]json.RawMessage{
+			testHash: json.RawMessage(torrentBody(testHash, "downloading")),
+		},
+	})
+	require.Empty(t, removed)
+
+	listed, err := c.List(context.Background())
+	require.NoError(t, err)
+	got, err := c.Get(context.Background(), engine.NameQBittorrent+":"+testHash)
+	require.NoError(t, err)
+
+	c.md.mu.Lock()
+	events := c.eventsLocked(changed, nil)
+	c.md.mu.Unlock()
+	payload, err := json.Marshal(struct {
+		List   []engine.TaskInfo
+		Get    engine.TaskInfo
+		Events []engine.TaskEvent
+	}{List: listed, Get: got, Events: events})
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), strconv.Itoa(privateRid))
+	require.Equal(t, privateRid, c.md.cache.rid, "the adapter must retain its private protocol rid")
+}
+
 func TestPollLifecycleIsIdempotentAndCloseWins(t *testing.T) {
 	c := &Client{}
 	c.md.pollEvery = time.Hour
@@ -821,6 +909,38 @@ func TestPollLifecycleIsIdempotentAndCloseWins(t *testing.T) {
 	require.True(t, closed)
 
 	c.stopPoll() // an already-stopped tracker is a safe no-op
+}
+
+func TestCloseWinningConnectRacePreventsPoll(t *testing.T) {
+	f := newMaindataServer(t, func(rid int) (int, string) {
+		return http.StatusOK, `{"rid":` + strconv.Itoa(rid+1) + `}`
+	})
+	f.webapiReached = make(chan struct{}, 1)
+	f.webapiRelease = make(chan struct{})
+
+	c, err := New(Config{BaseURL: f.srv.URL, Username: testUsername, Password: testPassword}, nil)
+	require.NoError(t, err)
+	c.md.pollEvery = 5 * time.Millisecond
+
+	connected := make(chan error, 1)
+	go func() { connected <- c.Connect(context.Background()) }()
+	select {
+	case <-f.webapiReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Connect did not reach the gated WebAPI probe")
+	}
+
+	require.NoError(t, c.Close())
+	close(f.webapiRelease)
+	require.NoError(t, <-connected)
+	require.Never(t, func() bool {
+		return len(f.ridsSeen()) > 0
+	}, 50*time.Millisecond, 5*time.Millisecond, "Connect started a poll after Close returned")
+
+	events, err := c.Events(context.Background())
+	require.NoError(t, err)
+	_, open := <-events
+	require.False(t, open)
 }
 
 func TestStartPollRacingStopPollLeavesNoLoop(t *testing.T) {

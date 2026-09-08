@@ -95,12 +95,17 @@ func (c *cache) merge(m maindata) (changed, removed []string) {
 		c.withheld = make(map[string]struct{})
 	}
 
+	owned := c.owned
+	if owned == nil {
+		owned = rejectAll
+	}
+
 	forceFull := false
 	if m.FullUpdate {
 		fresh := make(map[string]map[string]any, len(m.Torrents))
 		withheld := make(map[string]struct{})
 		for hash, raw := range m.Torrents {
-			if !c.owns(hash) {
+			if !owned(hash) {
 				withheld[hash] = struct{}{}
 				continue
 			}
@@ -110,7 +115,7 @@ func (c *cache) merge(m maindata) (changed, removed []string) {
 		}
 		for hash := range c.fields {
 			_, still := fresh[hash]
-			if !still && c.owns(hash) {
+			if !still && owned(hash) {
 				// A newly rejected hash vanishes silently: it must appear in
 				// no TaskEvent. An owned hash missing from the full view is a
 				// real removal.
@@ -127,7 +132,7 @@ func (c *cache) merge(m maindata) (changed, removed []string) {
 		c.withheld = withheld
 	} else {
 		for hash, raw := range m.Torrents {
-			if !c.owns(hash) {
+			if !owned(hash) {
 				delete(c.fields, hash)
 				c.withheld[hash] = struct{}{}
 				continue
@@ -202,6 +207,8 @@ func (c *cache) refreshOwnership() (forceFull bool) {
 	}
 	for hash := range c.withheld {
 		if c.owns(hash) {
+			// Keep the identifier until a successful full merge replaces
+			// withheld. If that request fails, the next tick must retry 0.
 			forceFull = true
 		}
 	}
@@ -310,17 +317,9 @@ func (c *Client) SetOwnershipFilter(owned func(hash string) bool) {
 	defer c.md.mu.Unlock()
 
 	c.md.cache.owned = owned
-	if c.md.cache.withheld == nil {
-		c.md.cache.withheld = make(map[string]struct{})
-	}
-	// Re-filter what is already held. Only rejected identifiers remain,
-	// so a later ownership refresh can request their complete objects.
-	for hash := range c.md.cache.fields {
-		if !owned(hash) {
-			delete(c.md.cache.fields, hash)
-			c.md.cache.withheld[hash] = struct{}{}
-		}
-	}
+	// Re-filter what is already held. refreshOwnership retains only the
+	// rejected identifiers needed to recover complete objects later.
+	c.md.cache.refreshOwnership()
 	// A rejected hash is dropped without a removal event — it appears in
 	// no TaskEvent — and a hash the previous predicate rejected cannot
 	// come back through a delta, which only carries changed torrents. So
