@@ -229,6 +229,11 @@ func decodeTorrentFields(raw json.RawMessage) (map[string]any, bool) {
 			"engine", engine.NameQBittorrent, "error", err)
 		return nil, false
 	}
+	if fields == nil {
+		slog.Warn("qbittorrent: sync/maindata carried a null torrent value",
+			"engine", engine.NameQBittorrent)
+		return nil, false
+	}
 	return fields, true
 }
 

@@ -206,26 +206,30 @@ func TestFullUpdateDroppingFieldReportsChange(t *testing.T) {
 }
 
 func TestFullUpdateDecodeFailureKeepsLastGoodObject(t *testing.T) {
-	c := &cache{owned: func(string) bool { return true }}
-	_, _ = c.merge(maindata{
-		Rid:        1,
-		FullUpdate: true,
-		Torrents: map[string]json.RawMessage{
-			testHash: json.RawMessage(torrentBody(testHash, "downloading")),
-		},
-	})
-	before := mapsClone(c.fields[testHash])
+	for _, raw := range []string{`42`, `null`} {
+		t.Run(raw, func(t *testing.T) {
+			c := &cache{owned: func(string) bool { return true }}
+			_, _ = c.merge(maindata{
+				Rid:        1,
+				FullUpdate: true,
+				Torrents: map[string]json.RawMessage{
+					testHash: json.RawMessage(torrentBody(testHash, "downloading")),
+				},
+			})
+			before := mapsClone(c.fields[testHash])
 
-	changed, removed := c.merge(maindata{
-		Rid:        2,
-		FullUpdate: true,
-		Torrents: map[string]json.RawMessage{
-			testHash: json.RawMessage(`42`),
-		},
-	})
-	require.Empty(t, changed)
-	require.Empty(t, removed)
-	require.Equal(t, before, c.fields[testHash])
+			changed, removed := c.merge(maindata{
+				Rid:        2,
+				FullUpdate: true,
+				Torrents: map[string]json.RawMessage{
+					testHash: json.RawMessage(raw),
+				},
+			})
+			require.Empty(t, changed)
+			require.Empty(t, removed)
+			require.Equal(t, before, c.fields[testHash])
+		})
+	}
 }
 
 func TestMergePartialIntoZeroCacheDoesNotPanic(t *testing.T) {
