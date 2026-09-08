@@ -102,7 +102,7 @@ The qBittorrent adapter, `.torrent`/magnet inspection, file selection, trackers 
 | Task | Title | Depends on | Status |
 |---|---|---|---|
 | [T028](T028-engine-contract-test-suite.md) | Add the shared engine contract test suite | T016, T019 | done |
-| [T029](T029-qbittorrent-session-and-add.md) | Implement the qBittorrent session, state mapping and `torrents/add` | T005, T016, T019, T027 | todo |
+| [T029](T029-qbittorrent-session-and-add.md) | Implement the qBittorrent session, state mapping and `torrents/add` | T005, T016, T019, T027 | done |
 | [T030](T030-qbittorrent-maindata-deltas.md) | Track qBittorrent state through `sync/maindata` rid deltas | T026, T029 | todo |
 | [T031](T031-metainfo-and-inspect-endpoint.md) | Parse torrent metainfo and serve `POST /tasks/inspect` | T015, T020 | todo |
 | [T032](T032-file-selection-and-priorities.md) | Select and prioritise the files of a task | T021, T029, T030 | todo |
@@ -311,7 +311,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
 | T028 | Add the shared engine contract test suite | T016, T019 | yes | done | [T028](T028-engine-contract-test-suite.md) |
-| T029 | Implement the qBittorrent session, state mapping and `torrents/add` | T005, T016, T019, T027 | no | todo | [T029](T029-qbittorrent-session-and-add.md) |
+| T029 | Implement the qBittorrent session, state mapping and `torrents/add` | T005, T016, T019, T027 | no | done | [T029](T029-qbittorrent-session-and-add.md) |
 | T030 | Track qBittorrent state through `sync/maindata` rid deltas | T026, T029 | no | todo | [T030](T030-qbittorrent-maindata-deltas.md) |
 | T031 | Parse torrent metainfo and serve `POST /tasks/inspect` | T015, T020 | no | todo | [T031](T031-metainfo-and-inspect-endpoint.md) |
 | T032 | Select and prioritise the files of a task | T021, T029, T030 | no | todo | [T032](T032-file-selection-and-priorities.md) |

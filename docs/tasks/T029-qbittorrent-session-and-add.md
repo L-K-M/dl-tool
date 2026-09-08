@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T029 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T005, T016, T019, T027 |
 | **Blocks** | T030, T032, T034, T035, T036, T037, T038, T100, T101 |
 | **Parallel-safe** | yes — every file it touches is new |
@@ -215,7 +215,55 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/engine/qbittorrent/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/qbittorrent/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.166s
+```
+
+All 17 tests `PASS`, including the five the block names: `TestLoginAcceptsNoContent`,
+`TestRetriesOnceOn401`, `TestAddSendsBothPausedSpellings`, `TestPauseFallsBackTo4x`,
+`TestNormaliseState` (`go test -count=1 -v` printed 17 `--- PASS` lines; no `FAIL`).
+Full `make test` green (all 12 Go packages `ok`, web suite 13/13), `make vet` clean.
+
+Scope check, `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```
+go.mod
+go.sum
+internal/engine/qbittorrent/client.go
+internal/engine/qbittorrent/client_test.go
+internal/engine/qbittorrent/map.go
+```
+
+Exactly the Files table, plus `go.mod`/`go.sum` under the standing exception for the
+first import of an already-pinned dependency. `go mod tidy` did three things, verified
+with `go mod tidy -diff` (empty), `go mod verify` (all modules verified) and `go mod why -m`:
+`github.com/anacrolix/torrent v1.61.0` became direct (first import); ten further modules
+were reclassified from `// indirect` to direct with **no version change** — huma/v2, chi/v5,
+sqlx, tint, ulid/v2, goose/v3, cobra, x/crypto, x/sys, modernc.org/sqlite — all stale
+annotations for packages earlier tasks already import; and tidy pruned T004's transitive
+pins of the full anacrolix closure plus other unneeded requirements (pion/*, gofeed,
+zombiezen/go/sqlite, go-llsqlite/*, …), all of which `go mod why -m` reports the main
+module does not need. No module version changed and no module was added.
+
+Note for T100 and docs/06 §3.5: `expectedTorrentID` keys a hybrid torrent on the 40-hex truncation of
+its v2 hash, not on `infohash_v1` as docs/06 §3.5's table says — verified against
+libtorrent RC_2_0 `info_hash_t::get_best()` and release-5.2.3 `InfoHash::toTorrentID()`;
+see the comment on `expectedTorrentID` and the PR description.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
