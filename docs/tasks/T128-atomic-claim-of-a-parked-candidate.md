@@ -340,9 +340,10 @@ outputs below were re-observed on 2026-09-08 at main 9b3b35a.
 
 On the repaired code the regression tests pass. Against the rejected PR #98 code they fail — run
 in a worktree checked out at 46f08a9 with the current `admission_test.go` overlaid onto it, so
-only the tests differ from the rejected state. The overlay file mapped exactly one path:
-`/tmp/t128-overlay-test.go` was a byte-for-byte copy of this branch's
-`internal/engine/admission_test.go`, and `/tmp/t128-rejected` was the 46f08a9 worktree:
+only the tests differ from the rejected state. The overlay file `/tmp/t128-overlay.json`
+mapped exactly one path: its replacement source `/tmp/t128-overlay-test.go` was a byte-for-byte
+copy of this branch's `internal/engine/admission_test.go`, and `/tmp/t128-rejected` was the
+46f08a9 worktree:
 
 ```json
 {"Replace":{"/tmp/t128-rejected/internal/engine/admission_test.go":"/tmp/t128-overlay-test.go"}}
