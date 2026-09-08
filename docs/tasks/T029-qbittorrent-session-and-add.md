@@ -337,5 +337,55 @@ Full `go test -mod=readonly -count=1 -race ./...`: all 12 packages `ok`, no `FAI
 `TestAuditPendingTorrentURLRetainsIdentity --- PASS`, returning
 `qbittorrent:b2ff1d0b915849a3afe5f6de49ae4828299ddc8b` with `error=<nil>`.
 
+### Repair: a failed pre-resolution aborts the add before submission (post-merge)
+
+The audit of 2026-09-08 (recovery gate, `recovery/dltool-13`) found the previous
+repair incomplete: `urlTorrentID` still discarded a failed prefetch with one
+`slog.Warn` and let the submission proceed, so a daemon-accepted `202` add returned
+`id=""` and `identity is not locally resolvable` — an accepted task nobody could
+reference, violating 06 §5.3's resolve-before-add and T029 step 9. It also found the
+warning's wrapped error carried the `*url.Error` message, whose URL embeds the query,
+leaking a tracker passkey — the previous section's `no URL in the log` claim was wrong
+for transport failures; that description is superseded by this repair.
+
+Reproduced first: `TestAddTorrentURLPrefetchFailureAbortsBeforeSubmission` (metadata
+fixture 503 to the client, valid bytes to the daemon, daemon set to accept `202`)
+failed with the daemon recording one `torrents/add` and `Add` returning
+`identity is not locally resolvable`;
+`TestAddTorrentURLFetchFailureRedactsQuerySecret` failed with the passkey present in
+the captured log; `TestAddTorrentURLPrefetchNotFoundAborts` replaced
+`TestAddPendingURLHasNoIdentity`, which had codified the rejected
+submit-then-decode-error behavior, and failed likewise.
+
+Fixed: `urlTorrentID` now returns the fetch error and `Add` aborts before the
+submission — the daemon never receives an add whose identity is unknown, so a
+pre-resolution failure cannot lose an accepted task; callers retry the whole add.
+`redactURL` unwraps `*url.Error` so the returned error keeps the operation and cause
+but never the URL (docs/14 §3.3). URIs that are not http(s) `.torrent` URLs still
+resolve to `""` without an error: only the reply can name those identities, as
+before. The unresolved-pending error in `decodeAddResult` remains for the shapes that
+reach it (a multi-URI pending add, an xt-less magnet).
+
+`make lint && make test PKG=./internal/engine/qbittorrent/...` on `fix/t029-prefetch-abort`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> lint
+> eslint .
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/qbittorrent/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.712s
+```
+
+Full `go test -mod=readonly -race -count=1 ./...`: all 12 packages `ok`, no `FAIL`.
+`make vet` clean. The audit's control harness (`audit_pending_test.go` through a
+`-overlay` mapping) still passes: `TestAuditPendingTorrentURLRetainsIdentity
+--- PASS`, `id="qbittorrent:b2ff1d0b915849a3afe5f6de49ae4828299ddc8b"`, `error=<nil>`.
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
