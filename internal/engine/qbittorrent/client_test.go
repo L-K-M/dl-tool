@@ -467,7 +467,7 @@ func TestAddResolvesIDAndRejectsBadCounts(t *testing.T) {
 			BlobKind: blobKindTorrent,
 		})
 		require.ErrorContains(t, err, "failed for all 2 submissions")
-		require.Empty(t, id, "refusal must not surface the blob identity %s", blobHash)
+		require.Empty(t, id, "refusal must not surface any identity for blob %s, got %q", blobHash, id)
 	})
 
 	t.Run("pending add reports failure", func(t *testing.T) {
