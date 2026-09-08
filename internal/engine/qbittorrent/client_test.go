@@ -448,6 +448,28 @@ func TestAddResolvesIDAndRejectsBadCounts(t *testing.T) {
 		require.ErrorContains(t, err, "failed for all 2 submissions")
 	})
 
+	t.Run("blob and uri all refused keeps blob identity", func(t *testing.T) {
+		// The motivating case: a blob+URI add resolves the expected id
+		// from the blob, so an all-failed reply must not return it as
+		// success.
+		sum := sha1.Sum([]byte(v1Info))
+		blobHash := hex.EncodeToString(sum[:])
+
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusOK
+			f.addBody = addBody(t, 0, 0, 2)
+		})
+		c := connectedClient(t, f)
+
+		id, err := c.Add(context.Background(), engine.AddRequest{
+			URIs:     []string{magnetOf(otherHash)},
+			Blob:     []byte(v1Blob),
+			BlobKind: blobKindTorrent,
+		})
+		require.ErrorContains(t, err, "failed for all 2 submissions")
+		require.NotEqual(t, engine.NameQBittorrent+":"+blobHash, id)
+	})
+
 	t.Run("pending add reports failure", func(t *testing.T) {
 		// A 202 whose only outcome is a failure is a refusal too; the
 		// expected identity must not be returned as success.
