@@ -57,9 +57,9 @@ func TestAria2Contract(t *testing.T) {
 	enginetest.RunContract(t, func(t *testing.T) engine.Engine { return newAria2(t) })
 }
 
-// requestedLimit is the cap the readback test round-trips: the suite's
-// own rateLimitBytesPerSecond, which the exact-setting obligation hangs on.
-const requestedLimit int64 = 1 << 20
+// requestedLimit is the suite's own cap, referenced directly so this test
+// cannot drift from the exact-setting obligation it pins.
+const requestedLimit = enginetest.RateLimitBytesPerSecond
 
 // TestAria2DaemonLimitReadback pins the readback the contract suite relies
 // on to daemon truth. A limit set through the adapter must read back

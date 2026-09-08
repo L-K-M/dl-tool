@@ -119,25 +119,36 @@ func (f *fakeThrottle) Resume(_ context.Context, id string) error {
 // Get advances the transfer in wall-clock time at the applied cap, so the
 // suite's elapsed bounds and rate floor see a believable throttled
 // transfer. A task without its own cap runs under the global one, the
-// same way a real daemon applies its global limit.
+// same way a real daemon applies its global limit. A task that was never
+// resumed is still parked, whatever the suite asks — a zero start time
+// must not masquerade as a long-finished transfer.
 func (f *fakeThrottle) Get(_ context.Context, id string) (engine.TaskInfo, error) {
 	f.mu.Lock()
 	limit, taskCapped := f.limits[id]
 	global := f.limits[""]
-	started := f.started[id]
+	started, resumed := f.started[id]
 	f.mu.Unlock()
+
+	total := int64(fixtureBytes)
+	if !resumed {
+		return engine.TaskInfo{ID: id, Engine: "fake", State: engine.StatePaused, TotalBytes: &total}, nil
+	}
 	if !taskCapped {
 		limit = global
 	}
 
-	// bytes = elapsed × (limit B/s): Duration arithmetic keeps the ns
-	// scale, the final quotient is the byte count.
-	completed := min(int64(time.Since(started)*time.Duration(limit)/time.Second), fixtureBytes)
+	// bytes = elapsed × (limit B/s). float64 carries the ns scale without
+	// the int64 overflow an elapsed×limit Duration product would risk at
+	// high caps.
+	progress := float64(time.Since(started)) * float64(limit) / float64(time.Second)
+	var completed int64 = fixtureBytes
+	if progress < float64(fixtureBytes) {
+		completed = int64(progress)
+	}
 	state := engine.StateDownloading
 	if completed >= fixtureBytes {
 		state = engine.StateCompleted
 	}
-	total := int64(fixtureBytes)
 	return engine.TaskInfo{
 		ID:             id,
 		Engine:         "fake",
@@ -168,10 +179,13 @@ func TestSpeedLimitsReadBackTheDaemonLimit(t *testing.T) {
 		testSpeedLimits(t, func(*testing.T) engine.Engine { return fake })
 
 		// The suite must have asked the daemon for the per-task and the
-		// global limit, in that order — a suite that stopped asking is
-		// the original defect again.
-		require.Equal(t, []string{fake.firstTaskID, ""}, fake.consultedIDs(),
-			"the suite must read both limits back from the daemon")
+		// global limit, exactly once each and in that order — a suite that
+		// stopped asking is the original defect again, and one that asks
+		// more often has changed shape and must update this pin knowingly.
+		ids := fake.consultedIDs()
+		require.Len(t, ids, 2, "the suite must consult the daemon exactly twice: per-task, then global")
+		require.Equal(t, fake.firstTaskID, ids[0], "the per-task limit must be read back first")
+		require.Equal(t, "", ids[1], "the global limit must be read back second")
 	})
 
 	for _, target := range []string{dishonestFraction, dishonestNoReadback} {
@@ -202,9 +216,11 @@ func dishonestEngine(t *testing.T, target string) func(*testing.T) engine.Engine
 }
 
 // requireSuiteProcessFails re-executes this test binary against one
-// dishonest engine and asserts SpeedLimitRoundTrips fails it: the failure
-// cannot be observed in-process, because a failure the suite records on a
-// subtest of this tree fails this test too.
+// dishonest engine and asserts SpeedLimitRoundTrips fails it with a
+// genuine test failure: the failure cannot be observed in-process, because
+// a failure the suite records on a subtest of this tree fails this test
+// too. Exit code 1 is pinned so a crash or a timeout in the child — which
+// would prove nothing about the readback contract — cannot pass vacuously.
 func requireSuiteProcessFails(t *testing.T, target string) {
 	t.Helper()
 
@@ -215,6 +231,10 @@ func requireSuiteProcessFails(t *testing.T, target string) {
 	cmd.Env = append(os.Environ(), dishonestEnv+"="+target)
 
 	output, err := cmd.CombinedOutput()
-	require.Error(t, err,
-		"SpeedLimitRoundTrips must fail the %s engine, but it passed. Output:\n%s", target, output)
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr,
+		"SpeedLimitRoundTrips must fail the %s engine, but it did not run to a verdict. Output:\n%s", target, output)
+	require.Equal(t, 1, exitErr.ExitCode(),
+		"the suite must reject the %s engine with a test failure (exit 1), not a crash or timeout. Output:\n%s",
+		target, output)
 }

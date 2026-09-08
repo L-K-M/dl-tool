@@ -48,7 +48,8 @@ const (
 
 	// rateLimitBytesPerSecond is the SpeedLimitRoundTrips obligation value
 	// (1048576 B/s) and the throttle that keeps the lifecycle subtest's
-	// phases observable.
+	// phases observable. Exported as RateLimitBytesPerSecond so call-site
+	// tests can pin their readbacks to the exact value the suite asserts.
 	rateLimitBytesPerSecond int64 = 1 << 20
 
 	// rateFloorFactor is how far below the cap the reported rate may sit: a
@@ -195,6 +196,11 @@ func Has(e engine.Engine, c engine.Capability) bool {
 type DownloadLimitReadback interface {
 	DaemonDownloadLimit(ctx context.Context, id string) (int64, error)
 }
+
+// RateLimitBytesPerSecond is the cap SpeedLimitRoundTrips round-trips
+// through the daemon; call-site tests use it so their readback assertions
+// cannot drift from the suite's obligation.
+const RateLimitBytesPerSecond = rateLimitBytesPerSecond
 
 // RunContract asserts that an Engine implementation honours the interface in
 // docs/06-download-engines.md against a real daemon. newEngine must return a

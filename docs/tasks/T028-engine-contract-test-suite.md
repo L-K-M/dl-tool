@@ -232,6 +232,23 @@ $ go test -tags=integration -count=1 -run 'TestSpeedLimitsReadBackTheDaemonLimit
 --- FAIL: TestSpeedLimitsReadBackTheDaemonLimit (53.73s)
 ```
 
+Review hardening (GLM 5.3 round 1, verified after adoption): the child-process assertion pins
+exit code 1 — a genuine test failure — so a crash or timeout in the child cannot pass vacuously.
+Proved with a temporary panicking engine target (reverted before the commit):
+
+```
+$ go test -tags=integration -count=1 -run '.../the_suite_rejects_the_panic' ./internal/engine/enginetest/
+    Error:  Not equal:
+    Messages: the suite must reject the panic engine with a test failure (exit 1), not a crash or timeout. Output: …
+--- FAIL: TestSpeedLimitsReadBackTheDaemonLimit (0.10s)
+```
+
+The fake's `Get` also reports a task that was never resumed as `paused` instead of a completed
+transfer, and the consulted-readback assertions name count and order separately. After these
+fixes the fakes are green again (`--- PASS: TestSpeedLimitsReadBackTheDaemonLimit (16.15s)`),
+`golangci-lint` reports `0 issues` with and without the integration tag, `go vet` and `make
+doclint` are clean, and `go test -race ./internal/engine/...` passes.
+
 Full local checks on the repaired tree: `gofmt -l` empty; `go vet ./...` and
 `go vet -tags=integration ./internal/...` clean; `golangci-lint run ./...` and
 `golangci-lint run --build-tags integration ./internal/engine/...` — `0 issues`; `make lint`,
