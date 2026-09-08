@@ -157,7 +157,81 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/engine/qbittorrent/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files are Prettier code style!
+go test -race -count=1 ./internal/engine/qbittorrent/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.498s
+```
+
+Named tests (`go test -count=1 -v -run … ./internal/engine/qbittorrent/...`):
+
+```
+--- PASS: TestMergeFullUpdate (0.00s)
+--- PASS: TestMergePartialKeepsUntouchedFields (0.00s)
+--- PASS: TestTorrentsRemovedEmitsEventRemoved (0.02s)
+--- PASS: TestForeignHashIsInvisible (0.02s)
+--- PASS: TestPollFailureKeepsCache (0.03s)
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.083s
+```
+
+Full suite (the Reconciler change touches `internal/engine` too):
+`make test` — every Go package `ok`, vitest 13 passed.
+
+Scope check:
+
+```
+internal/engine/qbittorrent/client.go
+internal/engine/qbittorrent/sync.go
+internal/engine/qbittorrent/sync_test.go
+internal/engine/qbittorrent/testdata/qb_maindata_full_5.2.3.json
+internal/engine/reconcile.go
+```
+
+Fixture capture — 2026-09-08, from a live qBittorrent **5.2.3** daemon (no
+Docker on the capturing machine; `qbittorrent-nox --version` reported
+`qBittorrent v5.2.3`, the static official-source build
+`x86_64-qbittorrent-nox` of userdocs/qbittorrent-nox-static
+`release-5.2.3_v2.0.14`). The WebUI listened on 127.0.0.1:8080 with the
+loopback subnet whitelisted; two Ubuntu 24.04.3 iso torrents were mid-download:
+
+```sh
+QBT=http://127.0.0.1:8080
+curl -s "$QBT/api/v2/torrents/add" -F "torrents=@ubuntu-24.04.3-desktop-amd64.iso.torrent"
+curl -s "$QBT/api/v2/torrents/add" -F "torrents=@ubuntu-24.04.3-live-server-amd64.iso.torrent"
+curl -s "$QBT/api/v2/sync/maindata?rid=0" > testdata/qb_maindata_full_5.2.3.json
+```
+
+Redaction per docs/13-testing-and-verification.md §5: the local save-path
+prefix was replaced with `/data`, and the capture machine's public IP in
+`server_state.last_external_address_v4` with `198.51.100.7` (TEST-NET-2).
+Everything else is byte-for-byte what the daemon emitted, including the
+top-level `trackers` object §5.4 does not document — the envelope ignores
+unknown keys, and the fixture proves it.
+
+Behaviour verified against the live daemon beyond the fixture: within one
+session (`SID` cookie) `rid` advances per served response, `full_update` is
+**absent** — not false — on a partial, and a no-change poll is a bare
+`{"rid":2}`. Sessionless requests (no cookie) always answer `full_update:
+true`, which is why the adapter's poll rides the login session of T029.
+
+Divergence recorded: 06 §5.4 also says to reset the rid to 0 after a failed
+poll and after a five-minute full-sync interval; this task's rule table
+says the opposite ("never reset `rid` to 0 unless the daemon says
+`full_update`"), and the table governs — the no-reset rule is what
+TestPollFailureKeepsCache asserts.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

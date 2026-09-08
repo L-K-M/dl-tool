@@ -1,7 +1,8 @@
 // Package qbittorrent implements the download-engine adapter for the
 // qBittorrent WebAPI v2 of docs/06-download-engines.md section 5: the login
 // and session cookie, the version probe, torrents/add and the lifecycle
-// calls. State normalisation lives in map.go. The adapter is not a complete
+// calls. State normalisation lives in map.go; the sync/maindata cache and
+// its poll loop live in sync.go. The adapter is not a complete
 // engine.Engine until T038 adds the last methods; it is not registered
 // anywhere yet.
 package qbittorrent
@@ -142,6 +143,12 @@ type Client struct {
 	version string         // cached GET app/version body, e.g. "v5.2.3"
 	webapi  string         // cached GET app/webapiVersion body, e.g. "2.15.1"
 	life    *lifecyclePair // nil until the daemon's spelling is probed
+
+	// md is the sync/maindata machinery of T030: the merged torrent
+	// cache with its rid, the ownership filter and the poll goroutine's
+	// lifecycle. Its zero value is an idle tracker over an empty,
+	// default-deny cache.
+	md maindataTracker
 }
 
 // New returns a Client ready for Connect. It performs no I/O. The injected
@@ -256,15 +263,23 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.version = strings.TrimSpace(string(version))
 	c.webapi = strings.TrimSpace(string(webapi))
+	c.mu.Unlock()
+
+	// The session is proven, so the sync/maindata poll that feeds the
+	// cache behind List, Get and Events starts here, on a context Close
+	// owns.
+	c.startPoll()
 	return nil
 }
 
-// Close releases the client. The sync/maindata poll arrives with T030; no
-// long-lived component exists yet, so this is a no-op today.
-func (c *Client) Close() error { return nil }
+// Close stops the sync/maindata poll goroutine and waits for it to exit
+// before returning; the event subscribers' channels close with it.
+func (c *Client) Close() error {
+	c.stopPoll()
+	return nil
+}
 
 // Health returns the cached app/version, re-probing when the cache is empty.
 // Any failure is engine.ErrUnavailable: a daemon that cannot serve

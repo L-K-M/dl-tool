@@ -103,7 +103,37 @@ func NewReconciler(reg *Registry, ts TaskWriter, admitter DiskFullPauser, poll t
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Reconciler{registry: reg, tasks: ts, admitter: admitter, poll: poll, log: log}
+	r := &Reconciler{registry: reg, tasks: ts, admitter: admitter, poll: poll, log: log}
+	r.installOwnershipFilters()
+	return r
+}
+
+// ownershipFilterer is the optional engine surface that can enforce the
+// ownership rule of ADR-0017 inside the engine itself: an adapter that
+// holds a transfer cache — qBittorrent's sync/maindata cache of T030 —
+// filters there, so a foreign transfer never even reaches the reconciler's
+// List join. Engines without such a cache (aria2, filtered here in
+// sweepEngine) simply do not expose the method.
+type ownershipFilterer interface {
+	SetOwnershipFilter(owned func(handle string) bool)
+}
+
+// installOwnershipFilters wires the ownership predicate into every
+// registered engine that accepts one, so production runs the reconciler's
+// predicate and never the adapter's default-deny one. NewReconciler runs
+// after the composition root registered its engines; an engine registered
+// later never receives the filter and its cache stays empty — the registry
+// is built once, before the reconciler, and never mutated after.
+func (r *Reconciler) installOwnershipFilters() {
+	for _, name := range r.registry.Names() {
+		e, ok := r.registry.Get(name)
+		if !ok {
+			continue // Names and Get disagree only mid-Register; skip it.
+		}
+		if o, accepts := e.(ownershipFilterer); accepts {
+			o.SetOwnershipFilter(r.OwnedRefs(name))
+		}
+	}
 }
 
 // Boot runs one full sweep before the HTTP listener opens, over the
@@ -465,4 +495,32 @@ func resubmittable(state string) bool {
 // the value tasks.engine_ref stores: "aria2:<gid>" -> "<gid>".
 func bareHandle(engineName, id string) string {
 	return strings.TrimPrefix(id, engineName+":")
+}
+
+// ownershipCheckBudget bounds one ownership predicate's store lookup: the
+// predicate runs on an engine's poll goroutine, so a wedged store must not
+// wedge the poll with it.
+const ownershipCheckBudget = 5 * time.Second
+
+// OwnedRefs returns the ownership predicate for one engine: a handle is
+// owned when the tasks table holds a non-terminal row naming it — the
+// detection rule of 06-download-engines.md section 8, by handle alone. The
+// listing is per invocation, not cached at install time, because tasks are
+// added and removed for the process lifetime and a snapshot at boot would
+// turn every later task foreign. A store failure answers foreign: an
+// unreadable table must never admit a transfer dl-tool cannot account for.
+func (r *Reconciler) OwnedRefs(engineName string) func(handle string) bool {
+	return func(handle string) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), ownershipCheckBudget)
+		defer cancel()
+
+		known, err := r.tasks.ListNonTerminalByEngine(ctx, engineName)
+		if err != nil {
+			r.log.Warn("ownership check failed; treating the handle as foreign",
+				"engine", engineName, "engine_ref", handle, "error", err)
+			return false
+		}
+		_, owned := known[handle]
+		return owned
+	}
 }
