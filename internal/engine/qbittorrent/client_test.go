@@ -45,7 +45,7 @@ type recordedRequest struct {
 	Path   string
 	Header http.Header
 	Form   url.Values
-	Files  map[string]uploadedFile
+	Files  map[string][]uploadedFile
 }
 
 // fakeServer is a qBittorrent WebAPI stand-in. It enforces the session
@@ -154,40 +154,45 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// record captures one request's method, headers, fields and files.
+// record captures one request's method, headers, fields and files. It runs
+// on the httptest handler goroutine, so it reports with Errorf and answers
+// the request; Fatalf would Goexit the handler goroutine, not the test.
 func (f *fakeServer) record(r *http.Request) recordedRequest {
 	rec := recordedRequest{Method: r.Method, Path: r.URL.Path, Header: r.Header.Clone()}
 
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
 		if err := r.ParseMultipartForm(testMaxUpload); err != nil {
-			f.t.Fatalf("parse multipart form: %v", err)
+			f.t.Errorf("parse multipart form: %v", err)
+			return rec
 		}
 		rec.Form = url.Values{}
 		for name, values := range r.MultipartForm.Value {
 			rec.Form[name] = append([]string(nil), values...)
 		}
-		rec.Files = map[string]uploadedFile{}
+		rec.Files = map[string][]uploadedFile{}
 		for name, headers := range r.MultipartForm.File {
 			for _, header := range headers {
 				file, err := header.Open()
 				if err != nil {
-					f.t.Fatalf("open uploaded file: %v", err)
+					f.t.Errorf("open uploaded file: %v", err)
+					continue
 				}
 				data, err := io.ReadAll(file)
 				if err != nil {
-					f.t.Fatalf("read uploaded file: %v", err)
+					f.t.Errorf("read uploaded file: %v", err)
 				}
 				if err := file.Close(); err != nil {
-					f.t.Fatalf("close uploaded file: %v", err)
+					f.t.Errorf("close uploaded file: %v", err)
 				}
-				rec.Files[name] = uploadedFile{ContentType: header.Header.Get("Content-Type"), Data: data}
+				rec.Files[name] = append(rec.Files[name],
+					uploadedFile{ContentType: header.Header.Get("Content-Type"), Data: data})
 			}
 		}
 		return rec
 	}
 
 	if err := r.ParseForm(); err != nil {
-		f.t.Fatalf("parse form: %v", err)
+		f.t.Errorf("parse form: %v", err)
 	}
 	rec.Form = url.Values{}
 	for name, values := range r.Form {
@@ -230,6 +235,13 @@ func (f *fakeServer) count(path string) int {
 		}
 	}
 	return n
+}
+
+// loginCount returns the number of logins the fake has served.
+func (f *fakeServer) loginCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.logins
 }
 
 // newClient returns a connected-or-connectable client for one fake.
@@ -308,7 +320,7 @@ func TestRetriesOnceOn401(t *testing.T) {
 	// The first stop is refused with 401; the client must re-login exactly
 	// once and retry the stop exactly once, never loop.
 	require.NoError(t, c.Pause(context.Background(), engine.NameQBittorrent+":"+testHash))
-	require.Equal(t, 2, f.logins)
+	require.Equal(t, 2, f.loginCount())
 	require.Equal(t, 2, f.count("torrents/stop"))
 
 	// The retried call carried the new session cookie and succeeded.
@@ -506,10 +518,12 @@ func testAddBlob(t *testing.T, blob, wantHash string) {
 	require.Equal(t, engine.NameQBittorrent+":"+wantHash, id)
 
 	add := f.call("torrents/add")
-	file, ok := add.Files["torrents"]
+	require.Equal(t, "/data/bt", add.Form.Get("savepath"))
+	files, ok := add.Files["torrents"]
 	require.True(t, ok, "no torrents file part")
-	require.Equal(t, torrentMIME, file.ContentType)
-	require.Equal(t, blob, string(file.Data))
+	require.Len(t, files, 1)
+	require.Equal(t, torrentMIME, files[0].ContentType)
+	require.Equal(t, blob, string(files[0].Data))
 }
 
 func TestPauseFallsBackTo4x(t *testing.T) {
@@ -550,6 +564,7 @@ func TestRemoveSendsDeleteFiles(t *testing.T) {
 
 	require.NoError(t, c.Remove(context.Background(), testHash, false))
 	del = f.call("torrents/delete")
+	require.Equal(t, []string{testHash}, del.Form["hashes"])
 	require.Equal(t, []string{"false"}, del.Form["deleteFiles"])
 }
 
@@ -611,9 +626,10 @@ func TestNormaliseState(t *testing.T) {
 		{"forcedDL", 0, engine.StateDownloading},
 		{"forcedMetaDL", 0, engine.StateDownloading},
 		{"stalledDL", 0, engine.StateDownloading},
-		// seeding row
+		// seeding row; forcedUP is the serialiser's spelling, not section
+		// 5.6's table typo "forcedOP"
 		{"uploading", 1, engine.StateSeeding},
-		{"forcedOP", 1, engine.StateSeeding},
+		{"forcedUP", 1, engine.StateSeeding},
 		{"stalledUP", 1, engine.StateSeeding},
 		// queued row
 		{"queuedDL", 0, engine.StateQueued},

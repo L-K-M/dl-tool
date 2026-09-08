@@ -72,6 +72,11 @@ const (
 	// cannot stall a caller forever.
 	defaultCallTimeout = 30 * time.Second
 
+	// maxResponseBytes caps one response body. A misconfigured base URL
+	// can point at an arbitrary HTTP server; the adapter must never buffer
+	// an unbounded reply.
+	maxResponseBytes = 64 << 20
+
 	// v1TorrentHexChars and v2TorrentHexChars are the hex lengths of the
 	// two infohash shapes: 20-byte SHA-1, 32-byte SHA-256.
 	v1TorrentHexChars = 40
@@ -91,9 +96,13 @@ var (
 )
 
 // renamedAddParams lists torrents/add parameters whose name changed between
-// qBittorrent 4.x and 5.x. Both sides ignore unknown parameters, so every
+// qBittorrent 4.x/5.2.x and master: skip_checking became seedMode there
+// (both are read; 5.2.3 knows only skip_checking), and contentLayout
+// replaced root_folder. Both sides ignore unknown parameters, so every
 // pair is sent under both names with one value: stopped/paused comes from
-// AddRequest.StartPaused, the rest ride verbatim on AddRequest.Extra.
+// AddRequest.StartPaused, the two pairs below ride on AddRequest.Extra,
+// verbatim and only under these names. Other Extra keys are not forwarded:
+// the typed AddRequest fields own every other parameter the adapter sends.
 var renamedAddParams = [][2]string{
 	{"skip_checking", "seedMode"},
 	{"contentLayout", "root_folder"},
@@ -160,9 +169,12 @@ func New(cfg Config, hc *http.Client) (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("qbittorrent: create cookie jar: %w", err)
 		}
-		// Shallow-copy the client rather than mutate the caller's; the
-		// jar is the only field that changes.
-		hc = &http.Client{Transport: hc.Transport, Jar: jar, Timeout: hc.Timeout}
+		// Copy the whole client rather than rebuild it field by field, so
+		// a caller's CheckRedirect and any other setting survive; the jar is
+		// the only field that changes.
+		cpy := *hc
+		cpy.Jar = jar
+		hc = &cpy
 	}
 
 	timeout := cfg.Timeout
@@ -742,9 +754,15 @@ func (c *Client) roundTrip(ctx context.Context, method, apiPath string, query ur
 		}
 	}()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return 0, nil, fmt.Errorf("qbittorrent: %s read response: %w: %w", apiPath, engine.ErrUnavailable, err)
+	}
+	if len(data) > maxResponseBytes {
+		// A capped read is a truncated body; parse errors downstream would
+		// only obscure the cause, so fail here instead.
+		return 0, nil, fmt.Errorf("qbittorrent: %s response exceeds %d bytes: %w",
+			apiPath, maxResponseBytes, engine.ErrUnavailable)
 	}
 	return resp.StatusCode, data, nil
 }

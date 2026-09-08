@@ -250,10 +250,17 @@ internal/engine/qbittorrent/map.go
 ```
 
 Exactly the Files table, plus `go.mod`/`go.sum` under the standing exception for the
-first import of an already-pinned dependency (`github.com/anacrolix/torrent v1.61.0`,
-now direct; tidy pruned T004's unused transitive pins to the imported closure).
+first import of an already-pinned dependency. `go mod tidy` did three things, verified
+with `go mod tidy -diff` (empty), `go mod verify` (all modules verified) and `go mod why -m`:
+`github.com/anacrolix/torrent v1.61.0` became direct (first import); ten further modules
+were reclassified from `// indirect` to direct with **no version change** — huma/v2, chi/v5,
+sqlx, tint, ulid/v2, goose/v3, cobra, x/crypto, x/sys, modernc.org/sqlite — all stale
+annotations for packages earlier tasks already import; and tidy pruned T004's transitive
+pins of the full anacrolix closure plus other unneeded requirements (pion/*, gofeed,
+zombiezen/go/sqlite, go-llsqlite/*, …), all of which `go mod why -m` reports the main
+module does not need. No module version changed and no module was added.
 
-Note for T100: `expectedTorrentID` keys a hybrid torrent on the 40-hex truncation of
+Note for T100 and docs/06 §3.5: `expectedTorrentID` keys a hybrid torrent on the 40-hex truncation of
 its v2 hash, not on `infohash_v1` as docs/06 §3.5's table says — verified against
 libtorrent RC_2_0 `info_hash_t::get_best()` and release-5.2.3 `InfoHash::toTorrentID()`;
 see the comment on `expectedTorrentID` and the PR description.

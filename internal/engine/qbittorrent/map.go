@@ -49,11 +49,13 @@ type torrentJSON struct {
 // The 5.2.3 serialiser emits exactly these state strings
 // (docs/06-download-engines.md section 5.6); pausedDL, pausedUP and
 // allocating come from 4.x and the stale wiki, and stay for compatibility.
+// forcedUP is the serialiser's spelling (release-5.2.3 serialize_torrent.cpp
+// returns u"forcedUP"), not section 5.6's table typo "forcedOP".
 const (
 	stateError             = "error"
 	stateMissingFiles      = "missingFiles"
 	stateUploading         = "uploading"
-	stateForcedUP          = "forcedOP"
+	stateForcedUP          = "forcedUP"
 	stateStalledUP         = "stalledUP"
 	stateStoppedUP         = "stoppedUP"
 	statePausedUP          = "pausedUP"
