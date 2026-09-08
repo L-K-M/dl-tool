@@ -183,6 +183,28 @@ func TestFullUpdateReAppliesOwnershipFilter(t *testing.T) {
 	require.NotContains(t, c.fields, fixtureHashes[0])
 }
 
+func TestFullUpdateDroppingFieldReportsChange(t *testing.T) {
+	c := &cache{owned: func(string) bool { return true }}
+	_, _ = c.merge(maindata{
+		Rid:        1,
+		FullUpdate: true,
+		Torrents: map[string]json.RawMessage{
+			testHash: json.RawMessage(`{"hash":"` + testHash + `","name":"old","state":"downloading"}`),
+		},
+	})
+
+	changed, removed := c.merge(maindata{
+		Rid:        2,
+		FullUpdate: true,
+		Torrents: map[string]json.RawMessage{
+			testHash: json.RawMessage(`{"hash":"` + testHash + `","state":"downloading"}`),
+		},
+	})
+	require.Equal(t, []string{testHash}, changed)
+	require.Empty(t, removed)
+	require.NotContains(t, c.fields[testHash], "name")
+}
+
 func TestMergePartialIntoZeroCacheDoesNotPanic(t *testing.T) {
 	// A zero-value cache — nil fields map — must survive a partial that
 	// arrives before any full response: the poll goroutine has no recover,
@@ -472,7 +494,9 @@ func TestForeignHashIsInvisible(t *testing.T) {
 		}
 		// A moving value keeps one event per tick flowing for the owned
 		// hash, so the subscriber cannot miss a one-shot burst.
-		return http.StatusOK, `{"rid":` + strconv.Itoa(rid+1) + `,"torrents":{"` + testHash + `":{"dlspeed":` + strconv.Itoa(rid) + `}}}`
+		return http.StatusOK, `{"rid":` + strconv.Itoa(rid+1) + `,"torrents":{"` +
+			testHash + `":{"dlspeed":` + strconv.Itoa(rid) + `},"` +
+			otherHash + `":{"dlspeed":` + strconv.Itoa(rid) + `}}}`
 	})
 
 	c, err := New(Config{BaseURL: f.srv.URL, Username: testUsername, Password: testPassword}, nil)
@@ -568,8 +592,123 @@ func TestSetOwnershipFilterForcesFullResync(t *testing.T) {
 		listed, err := c.List(context.Background())
 		return err == nil && len(listed) == 1
 	}, 2*time.Second, 2*time.Millisecond)
-	require.Equal(t, 2, strings.Count(strings.Join(f.ridsSeen(), ","), "0"),
-		"the filter install must force a second rid-0 request")
+	zeros := 0
+	for _, seen := range f.ridsSeen() {
+		if seen == "0" {
+			zeros++
+		}
+	}
+	require.Equal(t, 2, zeros, "the filter install must force a second rid-0 request")
+}
+
+func TestRejectedHashBecomesVisibleAfterOwnershipRefresh(t *testing.T) {
+	var daemonMu sync.Mutex
+	daemonHasOther := false
+	deltaSent := false
+
+	f := newMaindataServer(t, func(rid int) (int, string) {
+		daemonMu.Lock()
+		defer daemonMu.Unlock()
+
+		torrents := map[string]string{testHash: torrentBody(testHash, "downloading")}
+		if daemonHasOther {
+			torrents[otherHash] = torrentBody(otherHash, "pausedDL")
+		}
+		if rid == 0 {
+			return http.StatusOK, fullBody(1, torrents)
+		}
+		if daemonHasOther && !deltaSent {
+			deltaSent = true
+			return http.StatusOK, `{"rid":` + strconv.Itoa(rid+1) + `,"torrents":{"` +
+				otherHash + `":` + torrentBody(otherHash, "pausedDL") + `}}`
+		}
+		return http.StatusOK, `{"rid":` + strconv.Itoa(rid+1) + `}`
+	})
+
+	c, err := New(Config{BaseURL: f.srv.URL, Username: testUsername, Password: testPassword}, nil)
+	require.NoError(t, err)
+	c.md.pollEvery = 5 * time.Millisecond
+
+	tasks := &syncTasks{byEngine: map[string]map[string]store.Reconcilable{
+		engine.NameQBittorrent: {
+			testHash: {ID: "task-1", EngineRef: testHash, State: string(engine.StateDownloading)},
+		},
+	}}
+	registry := engine.NewRegistry()
+	registry.Register(t030Engine{Client: c})
+	engine.NewReconciler(registry, tasks, syncAdmitter{}, time.Second, nil)
+
+	require.NoError(t, c.Connect(context.Background()))
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	require.Eventually(t, func() bool {
+		listed, listErr := c.List(context.Background())
+		return listErr == nil && len(listed) == 1
+	}, 2*time.Second, 2*time.Millisecond)
+
+	// The task appears inside the ownership listing's TTL. Its one add
+	// delta is rejected against the old snapshot; a later ownership
+	// refresh must force a full response so an idle torrent is not lost.
+	tasks.mu.Lock()
+	tasks.byEngine[engine.NameQBittorrent][otherHash] = store.Reconcilable{
+		ID: "task-2", EngineRef: otherHash, State: string(engine.StatePaused),
+	}
+	tasks.mu.Unlock()
+	daemonMu.Lock()
+	daemonHasOther = true
+	daemonMu.Unlock()
+
+	require.Eventually(t, func() bool {
+		daemonMu.Lock()
+		defer daemonMu.Unlock()
+		return deltaSent
+	}, 2*time.Second, 2*time.Millisecond, "the one-shot add delta was not sent")
+	require.Eventually(t, func() bool {
+		listed, listErr := c.List(context.Background())
+		return listErr == nil && len(listed) == 2
+	}, 2*time.Second, 2*time.Millisecond, "the rejected hash never recovered")
+}
+
+func TestOwnershipListingRecoveryRestoresInitialFullUpdate(t *testing.T) {
+	f := newMaindataServer(t, func(rid int) (int, string) {
+		if rid == 0 {
+			return http.StatusOK, fullBody(1, map[string]string{
+				testHash: torrentBody(testHash, "pausedDL"),
+			})
+		}
+		return http.StatusOK, `{"rid":` + strconv.Itoa(rid+1) + `}`
+	})
+
+	tasks := &syncTasks{
+		fail: true,
+		byEngine: map[string]map[string]store.Reconcilable{
+			engine.NameQBittorrent: {
+				testHash: {ID: "task-1", EngineRef: testHash, State: string(engine.StatePaused)},
+			},
+		},
+	}
+	c, err := New(Config{BaseURL: f.srv.URL, Username: testUsername, Password: testPassword}, nil)
+	require.NoError(t, err)
+	c.md.pollEvery = 5 * time.Millisecond
+	registry := engine.NewRegistry()
+	registry.Register(t030Engine{Client: c})
+	engine.NewReconciler(registry, tasks, syncAdmitter{}, time.Second, nil)
+
+	require.NoError(t, c.Connect(context.Background()))
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	require.Eventually(t, func() bool {
+		c.md.mu.Lock()
+		defer c.md.mu.Unlock()
+		_, withheld := c.md.cache.withheld[testHash]
+		return withheld
+	}, 2*time.Second, 2*time.Millisecond, "the failed first listing did not reject the hash")
+
+	tasks.mu.Lock()
+	tasks.fail = false
+	tasks.mu.Unlock()
+	require.Eventually(t, func() bool {
+		listed, listErr := c.List(context.Background())
+		return listErr == nil && len(listed) == 1
+	}, 2*time.Second, 2*time.Millisecond, "store recovery did not restore the initial hash")
 }
 
 func TestPollFailureKeepsCache(t *testing.T) {
@@ -649,6 +788,68 @@ func TestEventsDropDoesNotBlockPoll(t *testing.T) {
 // buffer with margin, so the asserted value can only exist if the loop kept
 // polling after the buffer filled and drops began.
 const eventsBufferSlack = 64
+
+func TestPollLifecycleIsIdempotentAndCloseWins(t *testing.T) {
+	c := &Client{}
+	c.md.pollEvery = time.Hour
+
+	c.startPoll()
+	c.md.mu.Lock()
+	firstDone := c.md.done
+	c.md.mu.Unlock()
+	require.NotNil(t, firstDone)
+
+	c.startPoll()
+	c.md.mu.Lock()
+	secondDone := c.md.done
+	c.md.mu.Unlock()
+	require.Equal(t, firstDone, secondDone, "a second start replaced the running poll")
+
+	c.stopPoll()
+	select {
+	case <-firstDone:
+	default:
+		t.Fatal("stopPoll returned before the poll goroutine exited")
+	}
+
+	c.startPoll()
+	c.md.mu.Lock()
+	startedAfterClose := c.md.started
+	closed := c.md.closed
+	c.md.mu.Unlock()
+	require.False(t, startedAfterClose, "a poll started after Close won the race")
+	require.True(t, closed)
+
+	c.stopPoll() // an already-stopped tracker is a safe no-op
+}
+
+func TestStartPollRacingStopPollLeavesNoLoop(t *testing.T) {
+	const attempts = 100
+
+	for range attempts {
+		c := &Client{}
+		c.md.pollEvery = time.Hour
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			c.startPoll()
+		}()
+		go func() {
+			defer wg.Done()
+			c.stopPoll()
+		}()
+		wg.Wait()
+
+		c.md.mu.Lock()
+		started := c.md.started
+		closed := c.md.closed
+		c.md.mu.Unlock()
+		require.False(t, started)
+		require.True(t, closed)
+	}
+}
 
 func TestCloseStopsPollGoroutine(t *testing.T) {
 	f := newMaindataServer(t, func(rid int) (int, string) {

@@ -67,6 +67,10 @@ type cache struct {
 	rid    int
 	fields map[string]map[string]any
 	owned  func(hash string) bool
+	// withheld stores only rejected hash identifiers, never torrent data.
+	// Rechecking them lets a stale ownership snapshot heal without making
+	// a foreign transfer visible through List, Get or Events.
+	withheld map[string]struct{}
 }
 
 // rejectAll is the default ownership predicate: until the Reconciler of
@@ -76,32 +80,28 @@ func rejectAll(string) bool { return false }
 // merge applies one response. On FullUpdate it replaces fields wholesale;
 // otherwise it deep-merges each per-hash object and then applies
 // TorrentsRemoved. It returns the hashes whose value changed and the hashes
-// that disappeared, both sorted. A hash the ownership predicate rejects is
-// never stored, never returned and never counted — the invariant is that
-// fields holds owned hashes only, which is what lets the delta-removal
-// path skip a second ownership check (the full-update path cannot: it
-// reports old hashes the predicate may since have rejected, and those it
-// drops silently). rid advances with the response even when the merge
-// itself is a no-op: rid tracks the server's protocol state, not ours.
+// that disappeared, both sorted. A rejected torrent object is never stored,
+// returned or counted; only its hash is withheld for later rechecking.
+// fields therefore holds owned hashes only. rid normally advances with the
+// response; a newly owned withheld hash is the one local resync that keeps
+// it at 0 until the daemon supplies a complete object.
 func (c *cache) merge(m maindata) (changed, removed []string) {
-	owned := c.owned
-	if owned == nil {
-		owned = rejectAll
-	}
 	if c.fields == nil {
-		// A zero-value cache is mergeable too: a partial can arrive before
-		// any full response, and assigning into a nil map would panic the
-		// poll goroutine — the one failure the keep-the-cache rule forbids.
+		// A partial can arrive before a full response; the zero value must
+		// not panic the poll goroutine on its first map assignment.
 		c.fields = make(map[string]map[string]any)
 	}
+	if c.withheld == nil {
+		c.withheld = make(map[string]struct{})
+	}
 
+	forceFull := false
 	if m.FullUpdate {
-		// A full response replaces the cache and re-runs the ownership
-		// filter over every hash — the one place a hash whose task row
-		// vanished since the last poll is dropped again.
 		fresh := make(map[string]map[string]any, len(m.Torrents))
+		withheld := make(map[string]struct{})
 		for hash, raw := range m.Torrents {
-			if !owned(hash) {
+			if !c.owns(hash) {
+				withheld[hash] = struct{}{}
 				continue
 			}
 			if fields, ok := decodeTorrentFields(raw); ok {
@@ -110,29 +110,35 @@ func (c *cache) merge(m maindata) (changed, removed []string) {
 		}
 		for hash := range c.fields {
 			_, still := fresh[hash]
-			if !still && owned(hash) {
-				// owned guards the report, not the drop: a hash the current
-				// predicate rejects appears in no TaskEvent, so it vanishes
-				// from the cache without a removal event for it.
+			if !still && c.owns(hash) {
+				// A newly rejected hash vanishes silently: it must appear in
+				// no TaskEvent. An owned hash missing from the full view is a
+				// real removal.
 				removed = append(removed, hash)
 			}
 		}
-		// changed is a diff against the old cache, not every fresh hash:
-		// a full resync after a lost session re-sends byte-identical
-		// objects, and one event per changed hash means unchanged is no
-		// event — otherwise a large queue re-floods every subscriber
-		// buffer on every full response.
 		for hash, fields := range fresh {
-			if old, held := c.fields[hash]; !held || !torrentFieldsEqual(old, fields) {
+			old, held := c.fields[hash]
+			if !held || len(old) != len(fields) || !torrentFieldsEqual(old, fields) {
 				changed = append(changed, hash)
 			}
 		}
 		c.fields = fresh
+		c.withheld = withheld
 	} else {
 		for hash, raw := range m.Torrents {
-			if !owned(hash) {
+			if !c.owns(hash) {
+				delete(c.fields, hash)
+				c.withheld[hash] = struct{}{}
 				continue
 			}
+			if _, wasWithheld := c.withheld[hash]; wasWithheld {
+				// This partial may omit fields lost while the hash was
+				// rejected. Keep it invisible and request a full object.
+				forceFull = true
+				continue
+			}
+
 			partial, ok := decodeTorrentFields(raw)
 			if !ok {
 				continue
@@ -142,7 +148,6 @@ func (c *cache) merge(m maindata) (changed, removed []string) {
 				stored = make(map[string]any, len(partial))
 				c.fields[hash] = stored
 			} else if torrentFieldsEqual(stored, partial) {
-				// The daemon re-sent values we already hold; no event.
 				continue
 			}
 			for name, value := range partial {
@@ -151,23 +156,56 @@ func (c *cache) merge(m maindata) (changed, removed []string) {
 			changed = append(changed, hash)
 		}
 		for _, hash := range m.TorrentsRemoved {
+			delete(c.withheld, hash)
 			if _, exists := c.fields[hash]; !exists {
 				continue
 			}
 			delete(c.fields, hash)
 			removed = append(removed, hash)
-			// A hash the same delta both changed and removed — a re-add
-			// racing a delete — is removed, full stop: fields no longer
-			// holds it, so a leftover changed entry would project a
-			// zero-value TaskEvent beside the removal.
+			// Removal wins when one delta also changed the hash.
 			changed = slices.DeleteFunc(changed, func(h string) bool { return h == hash })
 		}
 	}
 
 	slices.Sort(changed)
 	slices.Sort(removed)
-	c.rid = m.Rid
+	if forceFull {
+		c.rid = 0
+	} else {
+		c.rid = m.Rid
+	}
 	return changed, removed
+}
+
+// owns applies the fail-closed default when no Reconciler installed a
+// predicate.
+func (c *cache) owns(hash string) bool {
+	if c.owned == nil {
+		return rejectAll(hash)
+	}
+	return c.owned(hash)
+}
+
+// refreshOwnership rechecks both sides of a cached ownership snapshot.
+// Newly rejected objects are discarded silently. A newly owned withheld
+// hash requests a full response because only its identifier was retained.
+func (c *cache) refreshOwnership() (forceFull bool) {
+	if c.withheld == nil {
+		c.withheld = make(map[string]struct{})
+	}
+	for hash := range c.fields {
+		if c.owns(hash) {
+			continue
+		}
+		delete(c.fields, hash)
+		c.withheld[hash] = struct{}{}
+	}
+	for hash := range c.withheld {
+		if c.owns(hash) {
+			forceFull = true
+		}
+	}
+	return forceFull
 }
 
 // decodeTorrentFields decodes one per-hash torrent value. A value that is
@@ -272,12 +310,15 @@ func (c *Client) SetOwnershipFilter(owned func(hash string) bool) {
 	defer c.md.mu.Unlock()
 
 	c.md.cache.owned = owned
-	// Re-filter what is already held: the filter may arrive after polls
-	// have run, and a rejected hash must not survive until the next
-	// full_update to disappear.
+	if c.md.cache.withheld == nil {
+		c.md.cache.withheld = make(map[string]struct{})
+	}
+	// Re-filter what is already held. Only rejected identifiers remain,
+	// so a later ownership refresh can request their complete objects.
 	for hash := range c.md.cache.fields {
 		if !owned(hash) {
 			delete(c.md.cache.fields, hash)
+			c.md.cache.withheld[hash] = struct{}{}
 		}
 	}
 	// A rejected hash is dropped without a removal event — it appears in
@@ -330,8 +371,9 @@ func (c *Client) Get(ctx context.Context, id string) (engine.TaskInfo, error) {
 // Events subscribes to the poll goroutine's feed: one TaskEvent per changed
 // hash per tick, EventRemoved with a nil Info for a removed hash. The
 // channel is buffered and the loop drops an event rather than block when a
-// subscriber's buffer is full, logging the drop; it closes when ctx is
-// cancelled or Close is called, never twice — removal from the subscriber
+// subscriber's buffer is full, logging the drop. Events are hints: callers
+// establish or recover their authoritative snapshot through List. The
+// channel closes when ctx is cancelled or Close is called, never twice — removal from the subscriber
 // set and the close happen under one lock, on whichever path gets there
 // first.
 func (c *Client) Events(ctx context.Context) (<-chan engine.TaskEvent, error) {
@@ -444,10 +486,16 @@ func (c *Client) pollOnce(ctx context.Context) {
 	c.emitLocked(c.eventsLocked(changed, removed))
 }
 
-// currentRid snapshots the rid of the last applied response.
+// currentRid snapshots the next request rid. A rejected identifier is
+// rechecked on every tick; once the task-store snapshot owns it, rid 0
+// obtains the complete object that its one-shot delta could not preserve.
 func (c *Client) currentRid() int {
 	c.md.mu.Lock()
 	defer c.md.mu.Unlock()
+
+	if c.md.cache.refreshOwnership() {
+		c.md.cache.rid = 0
+	}
 	return c.md.cache.rid
 }
 

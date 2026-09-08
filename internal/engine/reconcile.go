@@ -84,10 +84,11 @@ type Reconciler struct {
 	admitter DiskFullPauser
 	poll     time.Duration
 	log      *slog.Logger
-	// installed records the engines the ownership predicate was handed
-	// to, so the defensive re-install in Boot only touches engines
-	// registered since — re-installing on an already-filtered engine
-	// would reset its delta rid and cost a full snapshot every sweep.
+	// installMu lets a defensive Boot overlap another Boot or a late
+	// registration without racing the installed map.
+	installMu sync.Mutex
+	// installed records engines already given an ownership predicate;
+	// re-installing would reset their delta rid every sweep.
 	installed map[string]bool
 }
 
@@ -132,6 +133,9 @@ type ownershipFilterer interface {
 // registered after NewReconciler still receives its filter before the
 // first sweep that could observe it.
 func (r *Reconciler) installOwnershipFilters() {
+	r.installMu.Lock()
+	defer r.installMu.Unlock()
+
 	for _, name := range r.registry.Names() {
 		e, ok := r.registry.Get(name)
 		if !ok {
@@ -526,12 +530,10 @@ const ownershipListingTTL = time.Second
 // detection rule of 06-download-engines.md section 8, by handle alone. The
 // listing is per TTL window, not cached at install time, because tasks are
 // added and removed for the process lifetime and a snapshot at boot would
-// turn every later task foreign. A store failure keeps the last good set
-// for one window — a transient blip must not hide owned transfers from an
-// engine listing, which a sweep would read as vanished handles and
-// re-submit — and answers foreign only before the first successful
-// listing, when there is no prior truth to serve and an unreadable table
-// must never admit a transfer dl-tool cannot account for.
+// turn every later task foreign. The adapter remembers rejected identifiers
+// and rechecks them each poll, forcing a full engine snapshot when a later
+// listing owns one. A store failure serves the last good set until a later
+// read succeeds; before the first success it fails closed.
 func (r *Reconciler) OwnedRefs(engineName string) func(handle string) bool {
 	var (
 		mu       sync.Mutex
@@ -542,11 +544,13 @@ func (r *Reconciler) OwnedRefs(engineName string) func(handle string) bool {
 		mu.Lock()
 		defer mu.Unlock()
 
-		if now := time.Now(); !now.Before(expires) {
+		if !time.Now().Before(expires) {
 			if owned, ok := r.ownedListing(engineName); ok {
 				lastGood = owned
 			}
-			expires = now.Add(ownershipListingTTL)
+			// Measure the window after the store call. A slow successful
+			// listing must still serve the remaining hashes in this batch.
+			expires = time.Now().Add(ownershipListingTTL)
 		}
 		_, owned := lastGood[handle]
 		return owned

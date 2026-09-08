@@ -118,13 +118,13 @@ Poll loop rules, exactly these:
    `List`, `Get` or the event channel; and a transport failure leaving the previous cache intact.
 
 ## Acceptance criteria
-- [ ] A partial delta merges into the cache without clearing any field the delta omitted.
-- [ ] `full_update: true` replaces the cache and re-applies the ownership filter.
-- [ ] A hash the ownership predicate rejects appears in no `List`, no `Get` and no `TaskEvent`.
-- [ ] `TestForeignHashIsInvisible` exercises a predicate installed by `NewReconciler`, not the default.
-- [ ] The engine `rid` is never sent to any dl-tool client and never stored in the database.
-- [ ] A failed poll leaves the previous cache and the previous `rid` unchanged.
-- [ ] `Close` returns only after the poll goroutine has exited; `go test -race` is clean.
+- [x] A partial delta merges into the cache without clearing any field the delta omitted.
+- [x] `full_update: true` replaces the cache and re-applies the ownership filter.
+- [x] A hash the ownership predicate rejects appears in no `List`, no `Get` and no `TaskEvent`.
+- [x] `TestForeignHashIsInvisible` exercises a predicate installed by `NewReconciler`, not the default.
+- [x] The engine `rid` is never sent to any dl-tool client and never stored in the database.
+- [x] A failed poll leaves the previous cache and the previous `rid` unchanged.
+- [x] `Close` returns only after the poll goroutine has exited; `go test -race` is clean.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -171,27 +171,36 @@ cd web && npm run lint
 
 cd web && npx prettier --check .
 Checking formatting...
-All matched files are Prettier code style!
+All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/qbittorrent/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	2.519s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.581s
 ```
 
 Named tests (`go test -count=1 -v -run … ./internal/engine/qbittorrent/...`):
 
 ```
+=== RUN   TestMergeFullUpdate
 --- PASS: TestMergeFullUpdate (0.00s)
+=== RUN   TestMergePartialKeepsUntouchedFields
 --- PASS: TestMergePartialKeepsUntouchedFields (0.00s)
---- PASS: TestTorrentsRemovedEmitsEventRemoved (0.02s)
---- PASS: TestForeignHashIsInvisible (0.02s)
+=== RUN   TestTorrentsRemovedEmitsEventRemoved
+--- PASS: TestTorrentsRemovedEmitsEventRemoved (0.01s)
+=== RUN   TestForeignHashIsInvisible
+--- PASS: TestForeignHashIsInvisible (0.03s)
+=== RUN   TestPollFailureKeepsCache
+2026/09/08 10:27:15 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
+2026/09/08 10:27:15 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
+2026/09/08 10:27:15 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
 --- PASS: TestPollFailureKeepsCache (0.03s)
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.083s
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.085s
 ```
 
 Full suite (the Reconciler change touches `internal/engine` too):
 `make test` — every Go package `ok`, vitest 13 passed. The
-race-sensitive tests (`TestSetOwnershipFilterForcesFullResync`,
-`TestOwnedRefs…`, `TestForeignHashIsInvisible`, `TestDefaultFilterOwnsNothing`,
-`TestTorrentsRemovedEmitsEventRemoved`) also pass `-race -count=5`.
+race-sensitive tests, including ownership refresh and poll lifecycle races,
+also pass `go test -race -count=5 ./internal/engine/qbittorrent/...`
+(`ok … 18.715s`).
 
 Scope check:
 
@@ -234,10 +243,11 @@ Divergence recorded: 06 §5.4 also says to reset the rid to 0 after a failed
 poll and after a five-minute full-sync interval; this task's rule table
 says the opposite ("never reset `rid` to 0 unless the daemon says
 `full_update`"), and the table governs — the no-reset rule is what
-TestPollFailureKeepsCache asserts. The one rid reset the adapter performs
-is on a `SetOwnershipFilter` install (a local resync under the new
-predicate, enforced against in-flight replies by a stale-response guard),
-which the transport-failure rule does not cover.
+TestPollFailureKeepsCache asserts. Local ownership changes are the only
+other reset: installing a predicate, or finding that a previously rejected
+hash is now owned, requests a complete object under the new ownership
+snapshot. A stale-response guard preserves that reset. The
+transport-failure rule does not cover either ownership resync.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
