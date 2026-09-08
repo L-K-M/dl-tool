@@ -140,7 +140,75 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make test-integration` needs a Docker daemon; this dev machine has none (no
+CLI, no socket), so the command ran on this branch's CI `integration` job
+(GitHub Actions, ubuntu-latest, commit `2badb9e`) — the job the `docs/13`
+§4-gated workflow starts precisely because `internal/engine/enginetest`
+now exists. Output verbatim (container lifecycle noise elided; nothing else
+changed):
+
+```
+go test -tags=integration -count=1 -timeout=20m ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	2.368s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	64.484s
+?   	github.com/L-K-M/dl-tool/internal/engine/enginetest	[no test files]
+```
+
+`ok` with no `--- FAIL` and no `--- SKIP`: the runner is not verbose, but
+this same job's first run printed `--- FAIL:
+TestAria2Contract/AddURL/Progress/Pause/Resume/Remove` and
+`--- FAIL: TestAria2Contract/UnknownIDReturnsErrNotFound` when those two
+subtests failed (see `## Blocked`), so failures do surface at this verbosity
+— their absence on the green run means all five subtests passed. The 64.5 s
+package time matches five subtests each starting a container and a
+throttled ~8 s transfer.
+
+Acceptance criterion 1, locally with no build tag and no Docker:
+
+```
+$ go test ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.657s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	(cached)
+```
+
+Acceptance criterion 3, proved with a temporary in-repo fake engine
+(`internal/engine/enginetest/fake_proof_test.go`, deleted before the commit;
+the fake declares aria2's set and `Rename` returns nil — a silent success on
+an undeclared capability):
+
+```
+$ go test -tags=integration -count=1 -run 'TestFakeProof/UnsupportedCapability' ./internal/engine/enginetest/
+--- FAIL: TestFakeProof/UnsupportedCapabilityReturnsErrNotSupported (0.06s)
+        Error:       Expected error with "engine: capability not supported" in chain but got nil.
+        Messages:    rename is not declared, so its method must refuse
+FAIL
+```
+
+With the same fake returning `engine.ErrNotSupported` (control), the subtest
+passes:
+
+```
+$ go test -tags=integration -count=1 -v -run 'TestFakeProof/UnsupportedCapability' ./internal/engine/enginetest/
+=== RUN   TestFakeProof/UnsupportedCapabilityReturnsErrNotSupported
+--- PASS: TestFakeProof/UnsupportedCapabilityReturnsErrNotSupported (0.05s)
+PASS
+```
+
+Scope, as the Verification block prescribes:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+deploy/aria2/Dockerfile
+go.mod
+internal/engine/aria2/client.go
+internal/engine/aria2/contract_test.go
+internal/engine/enginetest/contract.go
+```
+
+Exactly the Files table (including the widened `client.go` row) plus the
+`go.mod` promotion of the two already-pinned imports allowed by
+`docs/13-testing-and-verification.md` §7.1.
 
 ## Blocked
 
