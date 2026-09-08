@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -83,6 +84,12 @@ type Reconciler struct {
 	admitter DiskFullPauser
 	poll     time.Duration
 	log      *slog.Logger
+	// installMu lets a defensive Boot overlap another Boot or a late
+	// registration without racing the installed map.
+	installMu sync.Mutex
+	// installed records engines already given an ownership predicate;
+	// re-installing would reset their delta rid every sweep.
+	installed map[string]bool
 }
 
 // NewReconciler wires the registry to the task store and the admission
@@ -103,7 +110,48 @@ func NewReconciler(reg *Registry, ts TaskWriter, admitter DiskFullPauser, poll t
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Reconciler{registry: reg, tasks: ts, admitter: admitter, poll: poll, log: log}
+	r := &Reconciler{registry: reg, tasks: ts, admitter: admitter, poll: poll, log: log, installed: map[string]bool{}}
+	r.installOwnershipFilters()
+	return r
+}
+
+// ownershipFilterer is the optional engine surface that can enforce the
+// ownership rule of ADR-0017 inside the engine itself: an adapter that
+// holds a transfer cache — qBittorrent's sync/maindata cache of T030 —
+// filters there, so a foreign transfer never even reaches the reconciler's
+// List join. Engines without such a cache (aria2, filtered here in
+// sweepEngine) simply do not expose the method.
+type ownershipFilterer interface {
+	SetOwnershipFilter(owned func(handle string) bool)
+}
+
+// installOwnershipFilters wires every engine present at construction.
+func (r *Reconciler) installOwnershipFilters() {
+	for _, name := range r.registry.Names() {
+		r.installOwnershipFilter(name)
+	}
+}
+
+// installOwnershipFilter wires one engine immediately before its first
+// sweep. Already-filtered engines are skipped because reinstalling resets
+// their delta rid.
+func (r *Reconciler) installOwnershipFilter(name string) {
+	r.installMu.Lock()
+	defer r.installMu.Unlock()
+
+	if r.installed[name] {
+		return
+	}
+	e, ok := r.registry.Get(name)
+	if !ok {
+		return
+	}
+	o, accepts := e.(ownershipFilterer)
+	if !accepts {
+		return
+	}
+	o.SetOwnershipFilter(r.OwnedRefs(name))
+	r.installed[name] = true
 }
 
 // Boot runs one full sweep before the HTTP listener opens, over the
@@ -115,6 +163,10 @@ func NewReconciler(reg *Registry, ts TaskWriter, admitter DiskFullPauser, poll t
 // state changes on its account.
 func (r *Reconciler) Boot(ctx context.Context) error {
 	for _, name := range r.registry.Names() {
+		// A name captured after construction receives its predicate now,
+		// before this Boot can observe its default-deny List.
+		r.installOwnershipFilter(name)
+
 		e, ok := r.registry.Get(name)
 		if !ok {
 			continue // Names and Get disagree only mid-Register; skip it.
@@ -465,4 +517,66 @@ func resubmittable(state string) bool {
 // the value tasks.engine_ref stores: "aria2:<gid>" -> "<gid>".
 func bareHandle(engineName, id string) string {
 	return strings.TrimPrefix(id, engineName+":")
+}
+
+// ownershipCheckBudget bounds one ownership listing's store lookup: the
+// predicate runs on an engine's poll goroutine, so a wedged store must not
+// wedge the poll with it.
+const ownershipCheckBudget = 5 * time.Second
+
+// ownershipListingTTL is how long one store listing serves every predicate
+// call: the predicate is consulted once per hash per sync, so one listing
+// per engine per window collapses an N-torrent full sync from N queries to
+// one, while a task submitted mid-window becomes visible to the next one.
+const ownershipListingTTL = time.Second
+
+// OwnedRefs returns the ownership predicate for one engine: a handle is
+// owned when the tasks table holds a non-terminal row naming it — the
+// detection rule of 06-download-engines.md section 8, by handle alone. The
+// listing is per TTL window, not cached at install time, because tasks are
+// added and removed for the process lifetime and a snapshot at boot would
+// turn every later task foreign. The adapter remembers rejected identifiers
+// and rechecks them each poll, forcing a full engine snapshot when a later
+// listing owns one. A store failure serves the last good set until a later
+// read succeeds; before the first success it fails closed.
+func (r *Reconciler) OwnedRefs(engineName string) func(handle string) bool {
+	var (
+		mu       sync.Mutex
+		expires  time.Time
+		lastGood map[string]struct{}
+	)
+	return func(handle string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if !time.Now().Before(expires) {
+			if owned, ok := r.ownedListing(engineName); ok {
+				lastGood = owned
+			}
+			// Measure the window after the store call. A slow successful
+			// listing must still serve the remaining hashes in this batch.
+			expires = time.Now().Add(ownershipListingTTL)
+		}
+		_, owned := lastGood[handle]
+		return owned
+	}
+}
+
+// ownedListing reads one engine's owned-handle set; ok false means the
+// store listing failed and the caller keeps whatever it last held.
+func (r *Reconciler) ownedListing(engineName string) (set map[string]struct{}, ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), ownershipCheckBudget)
+	defer cancel()
+
+	known, err := r.tasks.ListNonTerminalByEngine(ctx, engineName)
+	if err != nil {
+		r.log.Warn("ownership listing failed; keeping the last known handles",
+			"engine", engineName, "error", err)
+		return nil, false
+	}
+	set = make(map[string]struct{}, len(known))
+	for handle := range known {
+		set[handle] = struct{}{}
+	}
+	return set, true
 }

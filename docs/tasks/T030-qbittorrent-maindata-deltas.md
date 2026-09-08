@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T030 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T026, T029 |
 | **Blocks** | T032, T035, T037, T038, T100 |
 | **Parallel-safe** | no — extends `internal/engine/qbittorrent/client.go` |
@@ -118,13 +118,13 @@ Poll loop rules, exactly these:
    `List`, `Get` or the event channel; and a transport failure leaving the previous cache intact.
 
 ## Acceptance criteria
-- [ ] A partial delta merges into the cache without clearing any field the delta omitted.
-- [ ] `full_update: true` replaces the cache and re-applies the ownership filter.
-- [ ] A hash the ownership predicate rejects appears in no `List`, no `Get` and no `TaskEvent`.
-- [ ] `TestForeignHashIsInvisible` exercises a predicate installed by `NewReconciler`, not the default.
-- [ ] The engine `rid` is never sent to any dl-tool client and never stored in the database.
-- [ ] A failed poll leaves the previous cache and the previous `rid` unchanged.
-- [ ] `Close` returns only after the poll goroutine has exited; `go test -race` is clean.
+- [x] A partial delta merges into the cache without clearing any field the delta omitted.
+- [x] `full_update: true` replaces the cache and re-applies the ownership filter.
+- [x] A hash the ownership predicate rejects appears in no `List`, no `Get` and no `TaskEvent`.
+- [x] `TestForeignHashIsInvisible` exercises a predicate installed by `NewReconciler`, not the default.
+- [x] The engine `rid` is never sent to any dl-tool client and never stored in the database.
+- [x] A failed poll leaves the previous cache and the previous `rid` unchanged.
+- [x] `Close` returns only after the poll goroutine has exited; `go test -race` is clean.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -157,7 +157,111 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/engine/qbittorrent/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/qbittorrent/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.611s
+```
+
+Named tests (`go test -count=1 -v -run … ./internal/engine/qbittorrent/...`):
+
+```
+=== RUN   TestMergeFullUpdate
+--- PASS: TestMergeFullUpdate (0.00s)
+=== RUN   TestMergePartialKeepsUntouchedFields
+--- PASS: TestMergePartialKeepsUntouchedFields (0.00s)
+=== RUN   TestTorrentsRemovedEmitsEventRemoved
+--- PASS: TestTorrentsRemovedEmitsEventRemoved (0.02s)
+=== RUN   TestForeignHashIsInvisible
+--- PASS: TestForeignHashIsInvisible (0.03s)
+=== RUN   TestPollFailureKeepsCache
+2026/09/08 11:11:16 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
+2026/09/08 11:11:16 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
+2026/09/08 11:11:16 WARN qbittorrent: sync/maindata poll failed; keeping the last cache and rid engine=qbittorrent rid=8 error="qbittorrent: sync/maindata: status 500: boom"
+--- PASS: TestPollFailureKeepsCache (0.03s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.085s
+```
+
+Rid locality
+(`go test -count=1 -v -run TestEngineRidStaysInsideCache ./internal/engine/qbittorrent/...`):
+
+```
+=== RUN   TestEngineRidStaysInsideCache
+--- PASS: TestEngineRidStaysInsideCache (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.009s
+```
+
+The test serializes every adapter output (`List`, `Get`, `TaskEvent`) and
+proves a unique engine rid is absent. `Client` has no store writer, and the
+scope check below contains no database, API or generated-contract path.
+
+Full suite (the Reconciler change touches `internal/engine` too):
+`make test` — every Go package `ok`, vitest 13 passed. The
+race-sensitive tests, including ownership refresh and poll lifecycle races,
+also pass `go test -race -count=5 ./internal/engine/qbittorrent/...`
+(`ok … 19.139s`).
+
+Scope check:
+
+```
+internal/engine/qbittorrent/client.go
+internal/engine/qbittorrent/sync.go
+internal/engine/qbittorrent/sync_test.go
+internal/engine/qbittorrent/testdata/qb_maindata_full_5.2.3.json
+internal/engine/reconcile.go
+```
+
+Fixture capture — 2026-09-08, from a live qBittorrent **5.2.3** daemon (no
+Docker on the capturing machine; `qbittorrent-nox --version` reported
+`qBittorrent v5.2.3`, the static official-source build
+`x86_64-qbittorrent-nox` of userdocs/qbittorrent-nox-static
+`release-5.2.3_v2.0.14`). The WebUI listened on 127.0.0.1:8080 with the
+loopback subnet whitelisted; two Ubuntu 24.04.3 iso torrents were mid-download:
+
+```sh
+QBT=http://127.0.0.1:8080
+curl -s "$QBT/api/v2/torrents/add" -F "torrents=@ubuntu-24.04.3-desktop-amd64.iso.torrent"
+curl -s "$QBT/api/v2/torrents/add" -F "torrents=@ubuntu-24.04.3-live-server-amd64.iso.torrent"
+curl -s "$QBT/api/v2/sync/maindata?rid=0" > testdata/qb_maindata_full_5.2.3.json
+```
+
+Redaction per docs/13-testing-and-verification.md §5: the local save-path
+prefix was replaced with `/data`, and the capture machine's public IP in
+`server_state.last_external_address_v4` with `198.51.100.7` (TEST-NET-2).
+Everything else is byte-for-byte what the daemon emitted, including the
+top-level `trackers` object §5.4 does not document — the envelope ignores
+unknown keys, and the fixture proves it.
+
+Behaviour verified against the live daemon beyond the fixture: within one
+session (`SID` cookie) `rid` advances per served response, `full_update` is
+**absent** — not false — on a partial, and a no-change poll is a bare
+`{"rid":2}`. Sessionless requests (no cookie) always answer `full_update:
+true`, which is why the adapter's poll rides the login session of T029.
+
+Divergence recorded: 06 §5.4 also says to reset the rid to 0 after a failed
+poll and after a five-minute full-sync interval; this task's rule table
+says the opposite ("never reset `rid` to 0 unless the daemon says
+`full_update`"), and the table governs — the no-reset rule is what
+TestPollFailureKeepsCache asserts. Local ownership changes are the only
+other reset: installing a predicate, or finding that a previously rejected
+hash is now owned, requests a complete object under the new ownership
+snapshot. A stale-response guard preserves that reset. The
+transport-failure rule does not cover either ownership resync.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
