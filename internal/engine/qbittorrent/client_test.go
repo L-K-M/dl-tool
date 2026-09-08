@@ -430,7 +430,7 @@ func TestAddResolvesIDAndRejectsBadCounts(t *testing.T) {
 		c := connectedClient(t, f)
 
 		_, err := c.Add(context.Background(), engine.AddRequest{URIs: []string{magnetOf(testHash)}})
-		require.Error(t, err)
+		require.ErrorContains(t, err, "for a single submission")
 	})
 
 	t.Run("unexpected id", func(t *testing.T) {

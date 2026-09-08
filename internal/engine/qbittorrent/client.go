@@ -509,10 +509,12 @@ func decodeAddResult(status int, body []byte, req engine.AddRequest, expected st
 		return "", fmt.Errorf("qbittorrent: torrents/add success_count %d with %d added ids",
 			res.SuccessCount, len(res.AddedTorrentIDs))
 	}
-	if status == http.StatusOK && submitted == 1 && len(res.AddedTorrentIDs) != 1 {
-		// 200 means at least one immediate success and no pending torrent
-		// (06 section 5.3), so a single submission must name exactly one id.
-		return "", fmt.Errorf("qbittorrent: immediate single add returned %d added ids, want exactly 1",
+	if submitted == 1 && (len(res.AddedTorrentIDs) > 1 ||
+		(status == http.StatusOK && len(res.AddedTorrentIDs) != 1)) {
+		// A single submission never names more than one id, and 200 means
+		// at least one immediate success with nothing pending (06 section
+		// 5.3), so it must name exactly one.
+		return "", fmt.Errorf("qbittorrent: torrents/add named %d ids for a single submission",
 			len(res.AddedTorrentIDs))
 	}
 	if len(res.AddedTorrentIDs) == 1 && expected != "" && res.AddedTorrentIDs[0] != expected {
