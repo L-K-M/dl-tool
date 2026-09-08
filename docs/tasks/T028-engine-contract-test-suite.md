@@ -143,7 +143,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 `make test-integration` needs a Docker daemon; this dev machine has none (no
 CLI, no socket), so the command ran on this branch's CI `integration` job
-(GitHub Actions, ubuntu-latest, final commit `91e6d24`) — the job the
+(GitHub Actions, ubuntu-latest, commit `91e6d24`; the only later commit
+on the branch touches this Evidence text and nothing else) — the job the
 docs/13 §4-gated workflow starts precisely because `internal/engine/enginetest`
 now exists. Output verbatim (container lifecycle noise elided; nothing else
 changed):
