@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -522,7 +523,88 @@ func TestAddPendingRetainsIdentity(t *testing.T) {
 	require.Equal(t, engine.NameQBittorrent+":"+testHash, id)
 }
 
+// torrentURLServer serves one .torrent file and counts the fetches.
+func torrentURLServer(t *testing.T, status int, body string) (*httptest.Server, *int32) {
+	t.Helper()
+
+	var fetches int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&fetches, 1)
+		if status == http.StatusOK {
+			w.Header().Set("Content-Type", torrentMIME)
+		}
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_, _ = w.Write([]byte(body))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &fetches
+}
+
+func TestAddPendingTorrentURLRetainsIdentity(t *testing.T) {
+	// The identity of a .torrent URL is resolved before the submission —
+	// its bytes are fetched and hashed with the local parser (06 section
+	// 5.3) — so a pending (202) add retains the id T030 reconciles later.
+	metadata, fetches := torrentURLServer(t, http.StatusOK, v1Blob)
+	sum := sha1.Sum([]byte(v1Info))
+	want := engine.NameQBittorrent + ":" + hex.EncodeToString(sum[:])
+
+	f := newFakeServer(t, func(f *fakeServer) {
+		f.addStatus = http.StatusAccepted
+		f.addBody = addBody(t, 0, 1, 0)
+	})
+	c := connectedClient(t, f)
+
+	id, err := c.Add(context.Background(), engine.AddRequest{
+		URIs: []string{metadata.URL + "/local.torrent"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, want, id)
+	require.EqualValues(t, 1, atomic.LoadInt32(fetches), "identity must be pre-fetched once")
+}
+
+func TestAddTorrentURLVerifiesDaemonID(t *testing.T) {
+	sum := sha1.Sum([]byte(v1Info))
+	blobHash := hex.EncodeToString(sum[:])
+
+	t.Run("daemon id equals the pre-resolved identity", func(t *testing.T) {
+		metadata, _ := torrentURLServer(t, http.StatusOK, v1Blob)
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusOK
+			f.addBody = addBody(t, 1, 0, 0, blobHash)
+		})
+		c := connectedClient(t, f)
+
+		id, err := c.Add(context.Background(), engine.AddRequest{
+			URIs: []string{metadata.URL + "/local.torrent"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, engine.NameQBittorrent+":"+blobHash, id)
+	})
+
+	t.Run("daemon id disagrees with the pre-resolved identity", func(t *testing.T) {
+		metadata, _ := torrentURLServer(t, http.StatusOK, v1Blob)
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusOK
+			f.addBody = addBody(t, 1, 0, 0, otherHash)
+		})
+		c := connectedClient(t, f)
+
+		_, err := c.Add(context.Background(), engine.AddRequest{
+			URIs: []string{metadata.URL + "/local.torrent"},
+		})
+		require.ErrorContains(t, err, "want "+blobHash)
+	})
+}
+
 func TestAddPendingURLHasNoIdentity(t *testing.T) {
+	// A URL whose bytes cannot be fetched leaves the identity genuinely
+	// unresolved: a pending add then reports it explicitly instead of
+	// guessing an id (06 section 5.3). The URL points at a local server —
+	// unit tests never touch the network.
+	metadata, fetches := torrentURLServer(t, http.StatusNotFound, "")
+
 	f := newFakeServer(t, func(f *fakeServer) {
 		f.addStatus = http.StatusAccepted
 		f.addBody = addBody(t, 0, 1, 0)
@@ -530,9 +612,10 @@ func TestAddPendingURLHasNoIdentity(t *testing.T) {
 	c := connectedClient(t, f)
 
 	_, err := c.Add(context.Background(), engine.AddRequest{
-		URIs: []string{"https://example.org/some.torrent"},
+		URIs: []string{metadata.URL + "/missing.torrent"},
 	})
 	require.ErrorContains(t, err, "not locally resolvable")
+	require.EqualValues(t, 1, atomic.LoadInt32(fetches))
 }
 
 // Hand-built bencode fixtures: a v1 dict (length/name/pieces), a v2-only

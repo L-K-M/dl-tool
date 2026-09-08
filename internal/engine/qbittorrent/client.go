@@ -306,9 +306,10 @@ func (c *Client) Health(ctx context.Context) (string, error) {
 
 // Add submits one magnet, .torrent URL or raw .torrent blob and returns the
 // namespaced engine task id. Identity comes from added_torrent_ids, never
-// from a torrents/info diff; a pending (202) add returns the identity
-// resolved before the submission, which T030 reconciles once the daemon
-// reports the torrent (docs/06 section 5.3).
+// from a torrents/info diff; it is resolved before the submission — a
+// .torrent URL's bytes are fetched and hashed with the local parser (06
+// section 5.3) — so a pending (202) add returns the expected identity,
+// which T030 reconciles once the daemon reports the torrent.
 func (c *Client) Add(ctx context.Context, req engine.AddRequest) (string, error) {
 	if len(req.Blob) > 0 && req.BlobKind != blobKindTorrent {
 		return "", engine.ErrNotSupported
@@ -317,7 +318,7 @@ func (c *Client) Add(ctx context.Context, req engine.AddRequest) (string, error)
 		return "", errors.New("qbittorrent: add requires a uri or a torrent blob")
 	}
 
-	expected, err := expectedTorrentID(req)
+	expected, err := c.expectedTorrentID(ctx, req)
 	if err != nil {
 		return "", err
 	}
@@ -343,16 +344,16 @@ func (c *Client) Add(ctx context.Context, req engine.AddRequest) (string, error)
 }
 
 // expectedTorrentID resolves the TorrentID the daemon will key on, before
-// the submission; "" when it cannot be known locally (a .torrent URL the
-// daemon has to fetch). Verified against the pinned sources: libtorrent's
-// info_hash_t::get_best() (include/libtorrent/info_hash.hpp, RC_2_0) returns
-// the 40-hex truncation of the v2 hash whenever one exists — hybrid
-// included — and qBittorrent 5.2.3's InfoHash::toTorrentID()
+// the submission. "" when it cannot be known locally (a multi-URI add, or a
+// .torrent URL whose bytes cannot be fetched). Verified against the pinned
+// sources: libtorrent's info_hash_t::get_best() (include/libtorrent/info_hash.hpp,
+// RC_2_0) returns the 40-hex truncation of the v2 hash whenever one exists —
+// hybrid included — and qBittorrent 5.2.3's InfoHash::toTorrentID()
 // (src/base/bittorrent/infohash.cpp) is exactly that value. docs/06
 // section 3.5's table says hybrid mirrors infohash_v1, which the daemon
 // contradicts; the daemon wins here, and T100 owns the fixture-level
 // confirmation.
-func expectedTorrentID(req engine.AddRequest) (string, error) {
+func (c *Client) expectedTorrentID(ctx context.Context, req engine.AddRequest) (string, error) {
 	if len(req.Blob) > 0 {
 		return blobTorrentID(req.Blob)
 	}
@@ -361,17 +362,20 @@ func expectedTorrentID(req engine.AddRequest) (string, error) {
 		// several torrents, so only the reply can name the returned one.
 		return "", nil
 	}
-	return uriTorrentID(req.URIs[0])
+	return c.uriTorrentID(ctx, req.URIs[0])
 }
 
-// uriTorrentID resolves the TorrentID of one submitted URI.
-func uriTorrentID(raw string) (string, error) {
+// uriTorrentID resolves the TorrentID of one submitted URI: a bare
+// infohash is itself, a magnet's xt param parses locally, and a .torrent
+// URL is fetched and hashed so its identity is known before the add
+// (docs/06 section 5.3).
+func (c *Client) uriTorrentID(ctx context.Context, raw string) (string, error) {
 	if isBareInfohash(raw) {
 		return truncateV2(strings.ToLower(raw)), nil
 	}
 
 	if scheme, _, found := strings.Cut(raw, ":"); !found || !strings.EqualFold(scheme, "magnet") {
-		return "", nil // a .torrent URL: only the daemon can resolve it
+		return c.urlTorrentID(ctx, raw), nil
 	}
 
 	n, err := uri.ParseMagnet(raw)
@@ -386,6 +390,68 @@ func uriTorrentID(raw string) (string, error) {
 	default:
 		return "", nil
 	}
+}
+
+// urlTorrentID resolves the TorrentID of a .torrent URL through the local
+// section 3.4 parser: fetch the bytes with the injected client, then hash
+// them exactly like a blob. Any other URI shape returns "".
+//
+// A fetch that fails also returns "": the daemon fetches urls itself, so an
+// unresolved identity never blocks the submission — it only leaves a
+// pending outcome without a retained id, which decodeAddResult reports
+// explicitly rather than guessing one (docs/06 section 5.3).
+func (c *Client) urlTorrentID(ctx context.Context, raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" ||
+		(!strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https")) ||
+		!strings.HasSuffix(strings.ToLower(u.Path), ".torrent") {
+		return ""
+	}
+
+	id, err := c.fetchTorrentID(ctx, u)
+	if err != nil {
+		// The URL is not logged: it can carry a tracker token. The task
+		// row already holds the URI for diagnosis.
+		slog.Warn("qbittorrent: torrent url identity unresolved; the add proceeds without one",
+			"engine", engine.NameQBittorrent, "error", err)
+		return ""
+	}
+	return id
+}
+
+// fetchTorrentID downloads one .torrent URL under the per-call timeout and
+// caps the body like every other reply this adapter buffers.
+func (c *Client) fetchTorrentID(ctx context.Context, u *url.URL) (string, error) {
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("qbittorrent: build torrent url request: %w", err)
+	}
+
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("qbittorrent: fetch torrent url: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Debug("qbittorrent: close torrent url body", "engine", engine.NameQBittorrent, "error", err)
+		}
+	}()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("qbittorrent: fetch torrent url: status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("qbittorrent: read torrent url body: %w", err)
+	}
+	if len(data) > maxResponseBytes {
+		return "", fmt.Errorf("qbittorrent: torrent url body exceeds %d bytes", maxResponseBytes)
+	}
+	return blobTorrentID(data)
 }
 
 // truncateV2 halves a 64-hex v2 infohash to the 40-hex TorrentID form and
