@@ -241,9 +241,16 @@ feature was restored (all restorations verified by `go build ./...`):
   `TestLeaseIsHeldThroughTheReleaseWrites` FAIL (the busy task was released; the mid-write probe
   found the lease free).
 
-Scope check. The work was committed in coherent steps (the PR rule), so the working-tree gate ran
-empty by design once each step landed; the branch diff is the equivalent that names every touched
-path. Both outputs verbatim, with docs changes excluded on the code side and included below:
+Scope check — record corrected 2026-09-08. The paragraph that stood here claimed the stepwise
+commits satisfied "the PR rule" and that the branch diff was the equivalent of the prescribed
+check. Both claims were wrong and are withdrawn. The Verification block prescribes the
+working-tree gate while every task change is still uncommitted, before the task's one commit. It
+was never run that way: the code landed as six separate commits (b2b69a3, 8c74685, a938449,
+c4ee151, 7f28451, 06eae21), a17f330 then recorded this Evidence and flipped the status as a
+docs-only commit, and e32e4d8 hardened the probe test after that. The empty `git status` below
+shows only that nothing was left uncommitted, and the branch diff corroborates which paths
+changed; neither is the prescribed check, and neither is presented as one. Original outputs
+verbatim, docs changes excluded on the code side:
 
 ```
 $ git status --porcelain=v1 -uall -- . ':(exclude)docs' | cut -c4- | sort
@@ -312,6 +319,57 @@ $ go test ./internal/engine/ -run 'TestLeaseIsHeld' -count=1
 FAIL
 FAIL	github.com/L-K-M/dl-tool/internal/engine	0.031s
 ```
+
+### Post-merge rejection and repair (recorded 2026-09-08)
+
+PR #98 merged at 46f08a9 on 2026-09-07T23:00:20Z. Its review ran on e32e4d8, after a17f330 had
+already recorded this Evidence and closed the task, and reported a Major finding: `Pass` wrapped
+any candidate store error in `admission pass: %w` and returned, aborting the tick. Candidate
+selection is stable, so a persistently failing row would abort every tick at that row and starve
+every later candidate — the head-of-line blocking the busy-skip exists to prevent, reintroduced on
+the error path. The finding was merged unresolved and this Evidence did not record it.
+
+PR #99 repaired it (merged at 8d41fb4 on 2026-09-07T23:32:35Z, commits 70b2894 and d958186,
+touching only `internal/engine/admission.go` and `internal/engine/admission_test.go`): the error
+branch logs, counts the skip and walks on to the next candidate; a pass that skipped candidates
+and released nothing still returns a wrapped error, so a full store outage does not read as an
+idle queue; the regression tests `TestStoreErrorSkipsCandidateNotThePass` and
+`TestClaimErrorSkipsCandidateNotThePass` pin the revalidation-read and guarded-claim sides of the
+skip. The functional repair was verified independently before this record was written; the
+outputs below were re-observed on 2026-09-08 at main 9b3b35a.
+
+On the repaired code the regression tests pass. Against the rejected PR #98 code they fail — run
+in a worktree checked out at 46f08a9 with the current `admission_test.go` overlaid onto it, so
+only the tests differ from the rejected state. The overlay file `/tmp/t128-overlay.json`
+mapped exactly one path: its replacement source `/tmp/t128-overlay-test.go` was a byte-for-byte
+copy of this branch's `internal/engine/admission_test.go`, and `/tmp/t128-rejected` was the
+46f08a9 worktree:
+
+```json
+{"Replace":{"/tmp/t128-rejected/internal/engine/admission_test.go":"/tmp/t128-overlay-test.go"}}
+```
+
+The commands and outputs verbatim:
+
+```
+$ go test -mod=readonly -count=1 -run 'TestStoreErrorSkipsCandidateNotThePass|TestClaimErrorSkipsCandidateNotThePass' ./internal/engine/
+ok  	github.com/L-K-M/dl-tool/internal/engine	0.130s
+EXIT=0
+
+$ cd /tmp/t128-rejected && go test -mod=readonly -count=1 \
+    -run 'TestStoreErrorSkipsCandidateNotThePass|TestClaimErrorSkipsCandidateNotThePass' \
+    -overlay /tmp/t128-overlay.json ./internal/engine/
+--- FAIL: TestStoreErrorSkipsCandidateNotThePass (0.05s)
+    admission_test.go:2061: pass: admission pass: revalidate tsk_01M21BB2522TP85BCA3JQVN6VZ: injected: revalidation read failed, want no error: one candidate's store failure skips it, it does not abort the pass
+--- FAIL: TestClaimErrorSkipsCandidateNotThePass (0.04s)
+    admission_test.go:2111: pass: admission pass: claim tsk_01M21BB267FBB8MV0TAXGNCZQ5: injected: claim write failed, want no error: a released sibling proves the pass walked past the broken claim
+FAIL
+FAIL	github.com/L-K-M/dl-tool/internal/engine	0.099s
+EXIT=1
+```
+
+The failure messages are the original defect verbatim: the pass aborted at the first failing
+candidate instead of skipping it, so the sibling was never released.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
