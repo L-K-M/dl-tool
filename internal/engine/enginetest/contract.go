@@ -51,9 +51,13 @@ const (
 	// phases observable.
 	rateLimitBytesPerSecond int64 = 1 << 20
 
-	// rateCeilingFactor widens the allowed reported rate above the cap:
-	// daemons compute speed over a short window and may overshoot slightly.
-	rateCeilingFactor = 1.25
+	// rateCeilingFactor widens the allowed reported rate above the cap.
+// aria2's windowed speed calculation overshoots during the initial burst —
+// 1.385× the cap observed on CI (1452256 under 1048576) — before the
+// throttle's own average catches up, so the ceiling admits that burst and
+// leaves a missing throttle (loopback rates, an order of magnitude up) to
+// the elapsed-time bound below.
+	rateCeilingFactor = 2.0
 
 	// rateFloorFactor is how far below the cap the reported rate may sit: a
 	// correctly throttled transfer reports close to the limit, not a stall.
