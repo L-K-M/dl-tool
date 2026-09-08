@@ -402,7 +402,9 @@ func (c *Client) uriTorrentID(ctx context.Context, raw string) (string, error) {
 // explicitly rather than guessing one (docs/06 section 5.3).
 func (c *Client) urlTorrentID(ctx context.Context, raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || !strings.HasSuffix(strings.ToLower(u.Path), ".torrent") {
+	if err != nil || u.Host == "" ||
+		(!strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https")) ||
+		!strings.HasSuffix(strings.ToLower(u.Path), ".torrent") {
 		return ""
 	}
 

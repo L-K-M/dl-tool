@@ -529,7 +529,8 @@ func torrentURLServer(t *testing.T, status int, body string) (*httptest.Server, 
 
 	var fetches int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&fetches, 1) == 1 && status == http.StatusOK {
+		atomic.AddInt32(&fetches, 1)
+		if status == http.StatusOK {
 			w.Header().Set("Content-Type", torrentMIME)
 		}
 		w.WriteHeader(status)
