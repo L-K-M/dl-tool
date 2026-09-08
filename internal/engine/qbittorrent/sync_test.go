@@ -205,6 +205,29 @@ func TestFullUpdateDroppingFieldReportsChange(t *testing.T) {
 	require.NotContains(t, c.fields[testHash], "name")
 }
 
+func TestFullUpdateDecodeFailureKeepsLastGoodObject(t *testing.T) {
+	c := &cache{owned: func(string) bool { return true }}
+	_, _ = c.merge(maindata{
+		Rid:        1,
+		FullUpdate: true,
+		Torrents: map[string]json.RawMessage{
+			testHash: json.RawMessage(torrentBody(testHash, "downloading")),
+		},
+	})
+	before := mapsClone(c.fields[testHash])
+
+	changed, removed := c.merge(maindata{
+		Rid:        2,
+		FullUpdate: true,
+		Torrents: map[string]json.RawMessage{
+			testHash: json.RawMessage(`42`),
+		},
+	})
+	require.Empty(t, changed)
+	require.Empty(t, removed)
+	require.Equal(t, before, c.fields[testHash])
+}
+
 func TestMergePartialIntoZeroCacheDoesNotPanic(t *testing.T) {
 	// A zero-value cache — nil fields map — must survive a partial that
 	// arrives before any full response: the poll goroutine has no recover,

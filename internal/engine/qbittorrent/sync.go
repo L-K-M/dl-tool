@@ -111,6 +111,10 @@ func (c *cache) merge(m maindata) (changed, removed []string) {
 			}
 			if fields, ok := decodeTorrentFields(raw); ok {
 				fresh[hash] = fields
+			} else if old, held := c.fields[hash]; held {
+				// Invalid data is not a removal. Keep the last complete
+				// object until the daemon reports a decodable value.
+				fresh[hash] = old
 			}
 		}
 		for hash := range c.fields {
@@ -247,8 +251,8 @@ func torrentFieldsEqual(stored, partial map[string]any) bool {
 // maindataTracker is the poll machinery: the merged cache with its rid, the
 // ownership predicate, the event subscribers and the poll goroutine's
 // lifecycle. Its zero value is an idle tracker over an empty, default-deny
-// cache. mu guards every field; the poll goroutine holds it only for the
-// in-memory merge and the non-blocking fan-out, never across I/O.
+// cache. mu guards every field; daemon HTTP runs outside it. Ownership
+// checks may perform their bounded store read while it is held.
 type maindataTracker struct {
 	mu        sync.Mutex
 	pollEvery time.Duration // test override; 0 means maindataPollInterval
@@ -328,7 +332,8 @@ func (m *maindataTracker) stopSignalLocked() chan struct{} {
 // through NewReconciler. Hashes it rejects are dropped from the cache, from
 // List, from Get and from every TaskEvent. Until it is set the cache holds
 // nothing, so a caller that forgets to install it sees an empty queue
-// rather than foreign transfers.
+// rather than foreign transfers. The predicate runs under the tracker
+// mutex and must never call back into this Client.
 func (c *Client) SetOwnershipFilter(owned func(hash string) bool) {
 	if owned == nil {
 		owned = rejectAll
