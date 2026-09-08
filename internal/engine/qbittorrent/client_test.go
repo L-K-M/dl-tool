@@ -430,7 +430,20 @@ func TestAddResolvesIDAndRejectsBadCounts(t *testing.T) {
 		c := connectedClient(t, f)
 
 		_, err := c.Add(context.Background(), engine.AddRequest{URIs: []string{magnetOf(testHash)}})
-		require.ErrorContains(t, err, "for a single submission")
+		require.ErrorContains(t, err, "failed for the single submission")
+	})
+
+	t.Run("pending add reports failure", func(t *testing.T) {
+		// A 202 whose only outcome is a failure is a refusal too; the
+		// expected identity must not be returned as success.
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusAccepted
+			f.addBody = addBody(t, 0, 0, 1)
+		})
+		c := connectedClient(t, f)
+
+		_, err := c.Add(context.Background(), engine.AddRequest{URIs: []string{magnetOf(testHash)}})
+		require.ErrorContains(t, err, "failed for the single submission")
 	})
 
 	t.Run("single submission names two ids", func(t *testing.T) {
