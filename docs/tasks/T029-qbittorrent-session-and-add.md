@@ -174,14 +174,14 @@ Declared capabilities, exactly this set and no other: `bittorrent`, `magnet`, `b
     method, so a `Register` call here cannot compile. T038 owns the `internal/api/server.go` edit.
 
 ## Acceptance criteria
-- [ ] Login succeeds only when the jar captured a cookie and an authenticated `GET app/version` returned
+- [x] Login succeeds only when the jar captured a cookie and an authenticated `GET app/version` returned
       200; the adapter never names the cookie itself.
-- [ ] `Add` takes its engine reference from `added_torrent_ids` and never from a `torrents/info` diff.
-- [ ] A single `401` mid-session causes exactly one re-login and one retry, never a loop.
-- [ ] `Add` sends `stopped` and `paused` with the same value, and `autoTMM=false`.
-- [ ] `normaliseState` returns the documented value for all 21 spellings and `queued` plus one warning for
+- [x] `Add` takes its engine reference from `added_torrent_ids` and never from a `torrents/info` diff.
+- [x] A single `401` mid-session causes exactly one re-login and one retry, never a loop.
+- [x] `Add` sends `stopped` and `paused` with the same value, and `autoTMM=false`.
+- [x] `normaliseState` returns the documented value for all 21 spellings and `queued` plus one warning for
       an unknown one.
-- [ ] `Capabilities()` returns exactly the eleven names listed above, sorted and stable.
+- [x] `Capabilities()` returns exactly the eleven names listed above, sorted and stable.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -264,6 +264,36 @@ Note for T100 and docs/06 §3.5: `expectedTorrentID` keys a hybrid torrent on th
 its v2 hash, not on `infohash_v1` as docs/06 §3.5's table says — verified against
 libtorrent RC_2_0 `info_hash_t::get_best()` and release-5.2.3 `InfoHash::toTorrentID()`;
 see the comment on `expectedTorrentID` and the PR description.
+
+### Repair: immediate single add must return exactly one id (post-merge)
+
+The verifier of 2026-09-08 found `decodeAddResult` accepted a single-magnet `200` body of
+`success_count=0, pending_count=0, failure_count=1, added_torrent_ids=[]` and returned the expected id
+with a nil error. Reproduced first (`TestAddResolvesIDAndRejectsBadCounts/immediate_add_reports_failure`
+failed with "An error is expected but got nil"), then fixed: a `200` reply to a single submission must
+carry exactly one added id (06 §5.3: `200` means at least one immediate success and `pending_count == 0`).
+
+`make lint && make test PKG=./internal/engine/qbittorrent/...` on `fix/t029-single-add-id`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> lint
+> eslint .
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/qbittorrent/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.170s
+```
+
+The verifier's second finding — that `TestAddPendingURLHasNoIdentity` should retain an identity for a
+pending `.torrent` URL add — was declined: a `.torrent` URL's TorrentID is not locally resolvable
+(`expectedTorrentID` returns ""), `fetchMetadata`/`parseMetadata` shapes are UNVERIFIED and owned by T038,
+and recovering the id by diffing `torrents/info` is forbidden by step 9. A pending magnet still retains
+its identity (`TestAddPendingRetainsIdentity`).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

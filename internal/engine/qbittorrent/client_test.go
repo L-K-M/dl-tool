@@ -420,6 +420,19 @@ func TestAddResolvesIDAndRejectsBadCounts(t *testing.T) {
 		require.ErrorContains(t, err, "success_count")
 	})
 
+	t.Run("immediate add reports failure", func(t *testing.T) {
+		// 200 with failure_count=1 and no ids: never infer success from
+		// a 2xx status (06 section 5.3, T029 step 9).
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusOK
+			f.addBody = addBody(t, 0, 0, 1)
+		})
+		c := connectedClient(t, f)
+
+		_, err := c.Add(context.Background(), engine.AddRequest{URIs: []string{magnetOf(testHash)}})
+		require.Error(t, err)
+	})
+
 	t.Run("unexpected id", func(t *testing.T) {
 		f := newFakeServer(t, func(f *fakeServer) {
 			f.addStatus = http.StatusOK

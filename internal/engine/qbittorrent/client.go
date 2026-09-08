@@ -483,7 +483,8 @@ type addResult struct {
 
 // decodeAddResult applies the documented outcome of docs/06 section 5.3.
 // Success is never inferred from a 2xx status alone: malformed JSON,
-// inconsistent counts or an unexpected id are protocol errors.
+// inconsistent counts, an unexpected id, or an immediate single add that
+// returned no id are protocol errors.
 func decodeAddResult(status int, body []byte, req engine.AddRequest, expected string) (string, error) {
 	if status != http.StatusOK && status != http.StatusAccepted {
 		// 409 and 415 are mapped by Add before this runs.
@@ -508,8 +509,10 @@ func decodeAddResult(status int, body []byte, req engine.AddRequest, expected st
 		return "", fmt.Errorf("qbittorrent: torrents/add success_count %d with %d added ids",
 			res.SuccessCount, len(res.AddedTorrentIDs))
 	}
-	if submitted == 1 && len(res.AddedTorrentIDs) > 1 {
-		return "", fmt.Errorf("qbittorrent: single submission returned %d added ids",
+	if status == http.StatusOK && submitted == 1 && len(res.AddedTorrentIDs) != 1 {
+		// 200 means at least one immediate success and no pending torrent
+		// (06 section 5.3), so a single submission must name exactly one id.
+		return "", fmt.Errorf("qbittorrent: immediate single add returned %d added ids, want exactly 1",
 			len(res.AddedTorrentIDs))
 	}
 	if len(res.AddedTorrentIDs) == 1 && expected != "" && res.AddedTorrentIDs[0] != expected {
