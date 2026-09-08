@@ -420,6 +420,82 @@ func TestAddResolvesIDAndRejectsBadCounts(t *testing.T) {
 		require.ErrorContains(t, err, "success_count")
 	})
 
+	t.Run("immediate add reports failure", func(t *testing.T) {
+		// 200 with failure_count=1 and no ids: never infer success from
+		// a 2xx status (06 section 5.3, T029 step 9).
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusOK
+			f.addBody = addBody(t, 0, 0, 1)
+		})
+		c := connectedClient(t, f)
+
+		_, err := c.Add(context.Background(), engine.AddRequest{URIs: []string{magnetOf(testHash)}})
+		require.ErrorContains(t, err, "failed for the single submission")
+	})
+
+	t.Run("all submissions refused", func(t *testing.T) {
+		// Two URIs, 0+0+2 and no ids: a total refusal must not fall
+		// through to the identity-resolved return path (06 section 5.3).
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusOK
+			f.addBody = addBody(t, 0, 0, 2)
+		})
+		c := connectedClient(t, f)
+
+		_, err := c.Add(context.Background(), engine.AddRequest{
+			URIs: []string{magnetOf(testHash), magnetOf(otherHash)},
+		})
+		require.ErrorContains(t, err, "failed for all 2 submissions")
+	})
+
+	t.Run("blob and uri all refused keeps blob identity", func(t *testing.T) {
+		// The motivating case: a blob+URI add resolves the expected id
+		// from the blob, so an all-failed reply must not return it as
+		// success.
+		sum := sha1.Sum([]byte(v1Info))
+		blobHash := hex.EncodeToString(sum[:])
+
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusOK
+			f.addBody = addBody(t, 0, 0, 2)
+		})
+		c := connectedClient(t, f)
+
+		id, err := c.Add(context.Background(), engine.AddRequest{
+			URIs:     []string{magnetOf(otherHash)},
+			Blob:     []byte(v1Blob),
+			BlobKind: blobKindTorrent,
+		})
+		require.ErrorContains(t, err, "failed for all 2 submissions")
+		require.Empty(t, id, "refusal must not surface any identity for blob %s, got %q", blobHash, id)
+	})
+
+	t.Run("pending add reports failure", func(t *testing.T) {
+		// A 202 whose only outcome is a failure is a refusal too; the
+		// expected identity must not be returned as success.
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusAccepted
+			f.addBody = addBody(t, 0, 0, 1)
+		})
+		c := connectedClient(t, f)
+
+		_, err := c.Add(context.Background(), engine.AddRequest{URIs: []string{magnetOf(testHash)}})
+		require.ErrorContains(t, err, "failed for the single submission")
+	})
+
+	t.Run("single submission names two ids", func(t *testing.T) {
+		// Consistent counts (0+1+0=1) let this reach the id-count guard
+		// before the success-count check, on a 202 as on any status.
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusAccepted
+			f.addBody = addBody(t, 0, 1, 0, testHash, otherHash)
+		})
+		c := connectedClient(t, f)
+
+		_, err := c.Add(context.Background(), engine.AddRequest{URIs: []string{magnetOf(testHash)}})
+		require.ErrorContains(t, err, "named 2 ids")
+	})
+
 	t.Run("unexpected id", func(t *testing.T) {
 		f := newFakeServer(t, func(f *fakeServer) {
 			f.addStatus = http.StatusOK

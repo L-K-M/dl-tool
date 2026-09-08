@@ -483,7 +483,8 @@ type addResult struct {
 
 // decodeAddResult applies the documented outcome of docs/06 section 5.3.
 // Success is never inferred from a 2xx status alone: malformed JSON,
-// inconsistent counts or an unexpected id are protocol errors.
+// inconsistent counts, an unexpected id, or an immediate single add that
+// returned no id are protocol errors.
 func decodeAddResult(status int, body []byte, req engine.AddRequest, expected string) (string, error) {
 	if status != http.StatusOK && status != http.StatusAccepted {
 		// 409 and 415 are mapped by Add before this runs.
@@ -504,13 +505,31 @@ func decodeAddResult(status int, body []byte, req engine.AddRequest, expected st
 			"qbittorrent: torrents/add counted %d+%d+%d outcomes for %d submitted torrents",
 			res.SuccessCount, res.PendingCount, res.FailureCount, submitted)
 	}
+	// A reply whose only outcome is failure means the daemon refused
+	// every submission — a total refusal on either status, one URI or
+	// many (a blob+URI add whose expected id is the blob's hash would
+	// otherwise fall through and return success). Never infer success
+	// from a 2xx status.
+	if res.FailureCount == submitted && len(res.AddedTorrentIDs) == 0 {
+		if submitted == 1 {
+			return "", fmt.Errorf("qbittorrent: torrents/add failed for the single submission (status %d, counts %d+%d+%d)",
+				status, res.SuccessCount, res.PendingCount, res.FailureCount)
+		}
+		return "", fmt.Errorf("qbittorrent: torrents/add failed for all %d submissions (status %d, counts %d+%d+%d)",
+			submitted, status, res.SuccessCount, res.PendingCount, res.FailureCount)
+	}
+	// A single submission never names more than one id, and 200 means
+	// at least one immediate success with nothing pending (06 section
+	// 5.3), so it must name exactly one. This guard runs before the
+	// success-count check so both violations report the sharper message.
+	if submitted == 1 && (len(res.AddedTorrentIDs) > 1 ||
+		(status == http.StatusOK && len(res.AddedTorrentIDs) != 1)) {
+		return "", fmt.Errorf("qbittorrent: torrents/add named %d ids for a single submission (status %d, counts %d+%d+%d)",
+			len(res.AddedTorrentIDs), status, res.SuccessCount, res.PendingCount, res.FailureCount)
+	}
 	if res.SuccessCount != len(res.AddedTorrentIDs) {
 		return "", fmt.Errorf("qbittorrent: torrents/add success_count %d with %d added ids",
 			res.SuccessCount, len(res.AddedTorrentIDs))
-	}
-	if submitted == 1 && len(res.AddedTorrentIDs) > 1 {
-		return "", fmt.Errorf("qbittorrent: single submission returned %d added ids",
-			len(res.AddedTorrentIDs))
 	}
 	if len(res.AddedTorrentIDs) == 1 && expected != "" && res.AddedTorrentIDs[0] != expected {
 		return "", fmt.Errorf("qbittorrent: torrents/add returned id %s, want %s",
