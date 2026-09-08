@@ -293,11 +293,49 @@ go test -race -count=1 ./internal/engine/qbittorrent/...
 ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.192s
 ```
 
-The verifier's second finding — that `TestAddPendingURLHasNoIdentity` should retain an identity for a
-pending `.torrent` URL add — was declined: a `.torrent` URL's TorrentID is not locally resolvable
-(`expectedTorrentID` returns ""), `fetchMetadata`/`parseMetadata` shapes are UNVERIFIED and owned by T038,
-and recovering the id by diffing `torrents/info` is forbidden by step 9. A pending magnet still retains
-its identity (`TestAddPendingRetainsIdentity`).
+### Repair: a pending .torrent URL add retains its identity (post-merge)
+
+The verifier's earlier finding — that a pending `.torrent` URL add must retain an
+identity — was first declined claiming only the UNVERIFIED T038-owned
+`fetchMetadata`/`parseMetadata` endpoints could resolve it. That decline was wrong:
+06 §5.3 names the local §3.4 parser as an equal path, and it is pinned and already
+used for blobs. Reproduced first: `TestAddPendingTorrentURLRetainsIdentity` failed
+with "pending add of a uri whose identity is not locally resolvable" and the
+daemon-id disagreement subtest expectedly returned nil, because no fetch was ever
+attempted.
+
+Fixed: `expectedTorrentID` became a client method; for one `.torrent` URL it now
+fetches the bytes through the injected `*http.Client` under the per-call timeout,
+caps the body like every other reply, and hashes it with `blobTorrentID` — identity
+resolved before the submission, so a `202` pending add retains it and an immediate
+add's daemon id is verified against it. A fetch that fails leaves the identity
+honestly unresolved (one `slog.Warn`, no URL in the log: it can carry a tracker
+token): the daemon fetches `urls` itself, so the submission proceeds and only a
+pending outcome without a retained id reports the explicit error, as before.
+Identity is never guessed and `torrents/info` is never diffed.
+
+`make lint && make test PKG=./internal/engine/qbittorrent/...` on `fix/t029-pending-url-identity`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> lint
+> eslint .
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/qbittorrent/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.551s
+```
+
+Full `go test -mod=readonly -count=1 -race ./...`: all 12 packages `ok`, no `FAIL`.
+`make vet` clean. The independent audit harness
+(`/tmp/dltool-legacy-audit.CCQHQq/audit_pending_test.go`, added as
+`zz_audit_pending_test.go` through a `-overlay` mapping) now passes:
+`TestAuditPendingTorrentURLRetainsIdentity --- PASS`, returning
+`qbittorrent:b2ff1d0b915849a3afe5f6de49ae4828299ddc8b` with `error=<nil>`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
