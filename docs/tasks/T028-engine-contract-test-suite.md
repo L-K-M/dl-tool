@@ -30,6 +30,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/enginetest/contract.go` | create | `RunContract` and its five subtests. |
 | `internal/engine/aria2/contract_test.go` | create | The aria2 call site plus its testcontainers fixture. |
 | `deploy/aria2/Dockerfile` | create | Two lines: `FROM alpine:3.22` and `RUN apk add --no-cache aria2`. Nothing else — T115 turns it into the published image. |
+| `internal/engine/aria2/client.go` | modify | *Widened mid-task, see [`## Blocked`](#blocked):* aria2 serves every JSON-RPC fault as HTTP 400 with the fault object in the body; `post` now decodes a 400 instead of reporting `ErrUnavailable`, so the fault→error mapping of §4.7 actually runs. |
 
 No other file may be modified.
 
@@ -142,4 +143,49 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+*Resolved — see the end of this section — but recorded because it forced a
+Files-table widening before the out-of-table edit was made.*
+
+The suite is complete and three of five subtests pass against a real
+container, but `UnknownIDReturnsErrNotFound` and the `Get`-after-`Remove`
+step of the lifecycle subtest cannot pass without editing a file outside
+this task's Files table:
+
+- aria2 answers **every JSON-RPC fault with HTTP 400**, not 200 —
+  `HttpServerBodyCommand::sendJsonRpcResponse` maps fault code 1 to 400
+  (aria2 release-1.37.0 source, `src/HttpServerBodyCommand.cc`).
+- The T019 client's `post` treated any non-200 as
+  `engine.ErrUnavailable` and discarded the body, so `rpcReply.result` —
+  the fault-message→`ErrNotFound` mapping this task's obligations mandate —
+  was unreachable for single calls over HTTP. Batch replies are always 200,
+  which is why T019's own tests never caught it.
+
+Observed on this branch's first CI run (GitHub Actions `integration` job,
+real aria2 1.37.0 container from `deploy/aria2/Dockerfile`):
+
+```
+--- FAIL: TestAria2Contract (65.55s)
+    --- FAIL: TestAria2Contract/AddURL/Progress/Pause/Resume/Remove (15.12s)
+        Error:       Target error should be in err chain:
+                     expected: "engine: task not found"
+                     in chain: "aria2: rpc status 400: engine: daemon unreachable or session refused"
+        Messages:    Get after Remove must report ErrNotFound
+    --- FAIL: TestAria2Contract/UnknownIDReturnsErrNotFound (8.01s)
+        Error:       Target error should be in err chain:
+                     expected: "engine: task not found"
+                     in chain: "aria2: rpc status 400: engine: daemon unreachable or session refused"
+        Messages:    Get on a fabricated id
+FAIL	github.com/L-K-M/dl-tool/internal/engine/aria2	67.370s
+```
+
+The alternatives were rejected: weakening the subtests to accept
+`ErrUnavailable` contradicts both the obligations table and
+`engine.Engine`'s contract, and no suite-side trick can change what the
+adapter returns. The fix is four lines in `internal/engine/aria2/client.go`
+(`post` decodes a 400 body like a 200; any other status, or a non-JSON body,
+stays `ErrUnavailable`), so the Files table above was widened by that one
+row — the same resolution T027 used for its fixture collision.
+
+**Resolution (2026-09-08):** widened, fixed, and the full
+`make test-integration` is green on the widened tree; see `## Evidence`.
