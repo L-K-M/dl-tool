@@ -178,11 +178,13 @@ func (f *fakeServer) record(r *http.Request) recordedRequest {
 					continue
 				}
 				data, err := io.ReadAll(file)
+				closeErr := file.Close()
 				if err != nil {
 					f.t.Errorf("read uploaded file: %v", err)
+					continue
 				}
-				if err := file.Close(); err != nil {
-					f.t.Errorf("close uploaded file: %v", err)
+				if closeErr != nil {
+					f.t.Errorf("close uploaded file: %v", closeErr)
 				}
 				rec.Files[name] = append(rec.Files[name],
 					uploadedFile{ContentType: header.Header.Get("Content-Type"), Data: data})
