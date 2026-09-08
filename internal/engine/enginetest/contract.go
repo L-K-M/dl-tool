@@ -51,14 +51,6 @@ const (
 	// phases observable.
 	rateLimitBytesPerSecond int64 = 1 << 20
 
-	// rateCeilingFactor widens the allowed reported rate above the cap.
-	// aria2's windowed speed calculation overshoots during the initial burst —
-	// 1.385× the cap observed on CI (1452256 under 1048576) — before the
-	// throttle's own average catches up, so the ceiling admits that burst and
-	// leaves a missing throttle (loopback rates, an order of magnitude up) to
-	// the elapsed-time bound below.
-	rateCeilingFactor = 2.0
-
 	// rateFloorFactor is how far below the cap the reported rate may sit: a
 	// correctly throttled transfer reports close to the limit, not a stall.
 	rateFloorFactor = 0.5
@@ -305,8 +297,8 @@ func testUnknownID(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 }
 
 // testSpeedLimits proves a per-task and a global 1048576 B/s cap both reach
-// the daemon: the reported download rate settles in a band around the cap,
-// and the transfer takes at least the physical minimum bytes/limit time.
+// the daemon: the reported download rate rises near the cap, and the
+// transfer takes at least the physical minimum bytes/limit time.
 // Both limits are armed while the task is paused, so no unthrottled byte is
 // ever transferred and the timing bound cannot be beaten by a race.
 func testSpeedLimits(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
@@ -337,9 +329,13 @@ func testSpeedLimits(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 	assertThrottled(t, maxRate, time.Since(started))
 }
 
-// assertThrottled checks one throttled transfer: the daemon must report a
-// rate inside the band around the cap, and the transfer must last at least
-// the physical minimum (bytes / cap) reduced by throttleSlack.
+// assertThrottled checks one throttled transfer. aria2's reported
+// downloadSpeed is a windowed metric that overshoots the cap during bursts —
+// 1.385× and 2.855× observed on CI across runs of a correctly throttled
+// transfer — so no instantaneous rate ceiling is asserted: the elapsed-time
+// bound below caps the average rate and is the real detector of a missing
+// throttle. The floor only proves the daemon actively reports a rate near
+// the cap instead of a stall.
 func assertThrottled(t *testing.T, maxReportedRate int64, elapsed time.Duration) {
 	t.Helper()
 
@@ -349,12 +345,9 @@ func assertThrottled(t *testing.T, maxReportedRate int64, elapsed time.Duration)
 	require.GreaterOrEqual(t, minimum, 3*pollInterval,
 		"the fixture must span several poll intervals at the cap for the rate assertions to be reliable")
 
-	ceiling := int64(float64(rateLimitBytesPerSecond) * rateCeilingFactor)
 	floor := int64(float64(rateLimitBytesPerSecond) * rateFloorFactor)
 	require.GreaterOrEqual(t, maxReportedRate, floor,
 		"daemon must report a rate near %d B/s, not a stall", rateLimitBytesPerSecond)
-	require.LessOrEqual(t, maxReportedRate, ceiling,
-		"daemon must not report more than %d B/s under a %d B/s cap", ceiling, rateLimitBytesPerSecond)
 
 	expected := time.Duration(float64(minimum) * throttleSlack)
 	require.GreaterOrEqual(t, elapsed, expected,
