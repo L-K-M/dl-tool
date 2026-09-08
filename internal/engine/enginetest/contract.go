@@ -182,7 +182,10 @@ func Has(e engine.Engine, c engine.Capability) bool {
 // t.Cleanup.
 //
 // Each subtest opens its own 120 s deadline and calls newEngine itself, so
-// no subtest ever shares a daemon with another.
+// no subtest ever shares a daemon with another. Because every subtest gets
+// its own fixture server (see Fixture), newEngine must call Fixture(t)
+// itself — before creating the container — so the port can be tunneled to
+// the daemon with testcontainers.WithHostPortAccess.
 func RunContract(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 	t.Helper()
 
@@ -251,7 +254,8 @@ func testLifecycle(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 }
 
 // testListStableIDs adds one task and asserts List reports its id,
-// byte-identical, in three consecutive calls.
+// byte-identical, in three consecutive calls. The full id list is compared
+// per call, so an id that drifts, vanishes or is joined by a phantom fails.
 func testListStableIDs(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 	t.Helper()
 	e := newEngine(t)
@@ -262,23 +266,23 @@ func testListStableIDs(t *testing.T, newEngine func(t *testing.T) engine.Engine)
 	id, err := e.Add(ctx, engine.AddRequest{URIs: []string{fixtureURL}, StartPaused: true})
 	require.NoError(t, err)
 
-	var seen [3]string
+	var seen [3][]string
 	for i := range seen {
 		infos, err := e.List(ctx)
 		require.NoError(t, err, "List call %d", i+1)
 		for _, info := range infos {
-			if info.ID == id {
-				seen[i] = info.ID
-			}
+			seen[i] = append(seen[i], info.ID)
 		}
-		require.NotEmpty(t, seen[i], "List call %d must contain id %q", i+1, id)
+		require.Contains(t, seen[i], id, "List call %d must contain id %q", i+1, id)
 	}
-	require.Equal(t, seen[0], seen[1], "id changed between List calls 1 and 2")
-	require.Equal(t, seen[1], seen[2], "id changed between List calls 2 and 3")
+	require.Equal(t, seen[0], seen[1], "ids changed between List calls 1 and 2")
+	require.Equal(t, seen[1], seen[2], "ids changed between List calls 2 and 3")
 }
 
-// testUnknownID drives every id-taking query and action with a fabricated id
-// and requires ErrNotFound from each.
+// testUnknownID drives Get, Files, Pause, Resume and Remove — the calls the
+// obligations table names — with a fabricated id and requires ErrNotFound
+// from each. SetRateLimits is not capability-gated and not in the table, so
+// it is not probed here.
 func testUnknownID(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 	t.Helper()
 	e := newEngine(t)
@@ -335,6 +339,12 @@ func testSpeedLimits(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 func assertThrottled(t *testing.T, maxReportedRate int64, elapsed time.Duration) {
 	t.Helper()
 
+	// The rate assertions sample once per pollInterval, so the throttled
+	// transfer must span several samples for the floor to be meaningful.
+	minimum := time.Duration(float64(fixtureBytes) / float64(rateLimitBytesPerSecond) * float64(time.Second))
+	require.GreaterOrEqual(t, minimum, 3*pollInterval,
+		"the fixture must span several poll intervals at the cap for the rate assertions to be reliable")
+
 	ceiling := int64(float64(rateLimitBytesPerSecond) * rateCeilingFactor)
 	floor := int64(float64(rateLimitBytesPerSecond) * rateFloorFactor)
 	require.GreaterOrEqual(t, maxReportedRate, floor,
@@ -342,7 +352,6 @@ func assertThrottled(t *testing.T, maxReportedRate int64, elapsed time.Duration)
 	require.LessOrEqual(t, maxReportedRate, ceiling,
 		"daemon must not report more than %d B/s under a %d B/s cap", ceiling, rateLimitBytesPerSecond)
 
-	minimum := time.Duration(float64(fixtureBytes) / float64(rateLimitBytesPerSecond) * float64(time.Second))
 	expected := time.Duration(float64(minimum) * throttleSlack)
 	require.GreaterOrEqual(t, elapsed, expected,
 		"%d bytes cannot arrive in under %s of a %d B/s cap; the limit never applied",
@@ -369,6 +378,7 @@ func pollUntilCompleted(t *testing.T, ctx context.Context, e engine.Engine, id s
 			t.Fatalf("task %s entered error state while throttled: %+v (code %q: %s)",
 				id, info, info.ErrorCode, info.ErrorMessage)
 		default:
+			lastErr = nil
 			maxRate = max(maxRate, info.DownloadRate)
 			last = info
 			if info.State == engine.StateCompleted {
@@ -404,7 +414,7 @@ var optionalMethods = []optionalMethod{
 		return e.SetFiles(ctx, id, []int{0}, map[int]int{0: 1}) // 1 = normal, §1.1
 	}},
 	{engine.CapSetLocation, func(ctx context.Context, e engine.Engine, id string) error {
-		return e.SetLocation(ctx, id, "/enginetest-relocated")
+		return e.SetLocation(ctx, id, "/tmp/enginetest-relocated")
 	}},
 	{engine.CapRename, func(ctx context.Context, e engine.Engine, id string) error {
 		return e.Rename(ctx, id, "enginetest-renamed")
@@ -432,8 +442,7 @@ func testUnsupported(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 	id, err := e.Add(ctx, engine.AddRequest{URIs: []string{fixtureURL}, StartPaused: true})
 	require.NoError(t, err)
 
-	before, err := e.Get(ctx, id)
-	require.NoError(t, err)
+	before := settlePaused(t, ctx, e, id)
 
 	for _, method := range optionalMethods {
 		if Has(e, method.capability) {
@@ -447,6 +456,33 @@ func testUnsupported(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 		require.NoError(t, err, "state re-read after refusing %s", method.capability)
 		require.Empty(t, cmp.Diff(before, after),
 			"refusing %s must mutate nothing", method.capability)
+	}
+}
+
+// settlePaused waits until two consecutive Get calls agree, so the diff
+// baseline around each refusal only trips on mutations the refused method
+// caused — never on fields an adapter still populates asynchronously after
+// Add returned.
+func settlePaused(t *testing.T, ctx context.Context, e engine.Engine, id string) engine.TaskInfo {
+	t.Helper()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	previous, err := e.Get(ctx, id)
+	require.NoError(t, err, "baseline read of task %s", id)
+	for {
+		current, err := e.Get(ctx, id)
+		require.NoError(t, err, "re-read while settling task %s", id)
+		if cmp.Equal(previous, current) {
+			return current
+		}
+		previous = current
+
+		select {
+		case <-ctx.Done():
+			t.Fatalf("paused task %s never settled to a stable state: %+v", id, current)
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -471,6 +507,7 @@ func pollUntil(t *testing.T, ctx context.Context, e engine.Engine, id, what stri
 		case want(info):
 			return info
 		default:
+			lastErr = nil
 			last = info
 		}
 

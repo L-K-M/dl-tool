@@ -38,7 +38,9 @@ const (
 	// publishes; the contract suite builds its daemon from it.
 	dockerfileContext = "../../../deploy/aria2"
 
-	// containerTimeout bounds container start and terminate.
+	// containerTimeout bounds container start (build, pull, readiness wait),
+	// connect and terminate, so a hung daemon fails fast instead of running
+	// out the whole go test deadline.
 	containerTimeout = 60 * time.Second
 )
 
@@ -60,7 +62,8 @@ func newAria2(t *testing.T) engine.Engine {
 	fixturePort, err := fixturePort(fixtureURL)
 	require.NoError(t, err)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), containerTimeout)
+	defer cancel()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			FromDockerfile: testcontainers.FromDockerfile{
