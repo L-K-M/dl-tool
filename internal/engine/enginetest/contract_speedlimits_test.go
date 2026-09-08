@@ -231,9 +231,12 @@ func requireSuiteProcessFails(t *testing.T, target string) {
 	cmd.Env = append(os.Environ(), dishonestEnv+"="+target)
 
 	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("SpeedLimitRoundTrips must fail the %s engine, but it passed. Output:\n%s", target, output)
+	}
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr,
-		"SpeedLimitRoundTrips must fail the %s engine, but it did not run to a verdict. Output:\n%s", target, output)
+		"the %s child produced no exit status (launch failure or killed before a verdict). Output:\n%s", target, output)
 	require.Equal(t, 1, exitErr.ExitCode(),
 		"the suite must reject the %s engine with a test failure (exit 1), not a crash or timeout. Output:\n%s",
 		target, output)
