@@ -846,17 +846,70 @@ is dramatically cheaper than polling `torrents/info`.
 }
 ```
 
-Algorithm: hold `rid` in adapter memory; send it on every poll; if `full_update` is true **replace** the cache,
-else **deep-merge** each per-hash partial and then apply the `*_removed` arrays. Decode and merge into a copy,
-then publish the cache and new rid together so a truncated body cannot advance either one. Emit one
-`TaskEvent` per changed hash.
+Algorithm: hold the last accepted `rid` in adapter memory and normally send it on every poll. Ownership is
+resolved only by matching the hash against `tasks.engine_ref` (§8), never from torrent fields. Keep merged
+fields only for accepted hashes. Retain foreign identifiers in a `rejected` set; when one transitions to
+accepted, move it to a `pendingFull` set until an accepted full response arrives. Neither set nor foreign
+torrent data surfaces through `List`, `Get` or `Events`.
 
-After a timeout, transport failure, non-2xx response or decode failure, set the next request's rid to `0`.
-Also force `rid=0` after the named `qbtFullSyncInterval` of five minutes. Pinned 5.2.3 can
-[omit an earlier unacknowledged field](https://github.com/qbittorrent/qBittorrent/issues/24845) from a later
-delta, so only a full response repairs a lost update. This `rid` is the engine's own and is unrelated to
-dl-tool's SSE `rid`
-([ADR-0006](decisions/0006-sse-with-rid-deltas.md)).
+If `full_update` is true, rebuild the cache and `rejected` set solely from the response and clear
+`pendingFull`. An accepted pending hash enters the cache directly because the response supplies complete
+fields; an omitted identifier is pruned. Compare accepted fields with the old cache and mark only new or
+genuinely different hashes changed. Emit `EventRemoved` for each previously visible hash the current
+ownership snapshot still accepts but the response omits. A hash the snapshot rejects disappears without an
+event.
+
+For a partial response, re-evaluate every reported hash. Pinned 5.2.3's
+[`processHash`](https://github.com/qbittorrent/qBittorrent/blob/release-5.2.3/src/webui/api/synccontroller.cpp#L265-L288)
+copies the complete value when a hash is absent from the acknowledged data, so a first-seen accepted hash may
+be inserted directly. Remove a now-rejected visible hash without an event and retain only its identifier. A `pendingFull` hash the
+snapshot now rejects moves back to `rejected` without rejecting the response and without setting the
+force-full flag or incrementing the epoch. If a `rejected` hash transitions to accepted, move it to `pendingFull`, set the flag,
+increment the epoch once for the pass and reject the response. Any still-accepted `pendingFull` hash also
+rejects a partial without another increment and leaves the flag set. A rejected partial applies none of its
+payload, including `torrents_removed`, and its rid and events are not accepted; the pass's ownership
+reclassification remains published. Otherwise insert a new
+accepted hash or **deep-merge** its fields into the existing entry, then apply `torrents_removed` to the cache
+and both identifier sets, emitting `EventRemoved` only if the hash was visible. Categories and tags are not
+cached, so their maindata values and removal arrays are ignored. Decode and merge into copies, then publish
+the cache, identifier sets and new rid together so a truncated body cannot advance any of them. Emit one
+`TaskEvent` per changed visible hash. `List` is authoritative; events are lossy hints, so an ownership
+rejection emits no removal event. Ownership follows non-terminal tasks; a terminal task's cached engine entry
+therefore disappears silently, after task state has recorded completion.
+
+Each ownership pass snapshots its source and epoch under the cache mutex, invokes the source and copies the
+returned hash set without that mutex, then reacquires it. `OwnedRefs` refreshes its memoized set with at most
+one `ListNonTerminalByEngine` read under the named `ownershipCheckBudget` when the one-second TTL expires. A
+failed read logs at warn and returns the last good set, or an empty set before the first success. The initial
+empty result deliberately fails closed: ownership cannot be proven, so `List` may be temporarily empty but
+never exposes foreign fields. If the epoch changed while the source ran, a pre-request pass skips
+the request for that tick, while a response pass discards both the fetched set and response; the next tick
+retries. Otherwise store the set as the cache's current ownership snapshot before scanning `fields`,
+`rejected` and `pendingFull`; membership checks under the mutex perform no I/O. A full-response pass stores the
+snapshot but skips the `rejected` → `pendingFull` edge because the full merge can publish complete fields. A
+response-time pass may refresh after a slow request.
+
+A recheck-driven visible-to-rejected change is a silent drop and does not set the force-full flag or change
+the epoch. Installing or replacing the snapshot source is always an ownership reset: classify newly accepted
+rejected hashes as `pendingFull`, and newly rejected visible or pending hashes as `rejected`. The other reset
+is the one-time `rejected` → `pendingFull` transition found during a pre-request or partial-response pass; a
+hash already in `pendingFull` cannot reset again. Each reset sets the force-full flag and increments the epoch
+once for that pass; `pendingFull` remains non-empty only while that flag stays set. A full response promotes
+accepted pending hashes directly and clears both. A request captures the epoch
+and its response is accepted only while the epoch still matches.
+
+A timeout, transport failure, non-2xx response or decode failure keeps the last accepted cache and rid, but
+sets the force-full flag: every subsequent request sends `rid=0` until an accepted `full_update` lands. Every
+failure resets immediately because its outcome is ambiguous: the daemon may have generated a response the
+adapter did not accept, and waiting for a failure threshold can preserve fields lost by pinned 5.2.3's bug.
+Also send `rid=0` five minutes after the last accepted full update, using the named `qbtFullSyncInterval`. Every
+accepted `full_update` clears the flag and restarts the interval, regardless of what triggered it. A response
+whose captured ownership epoch no longer matches is deliberately stale, even if it carries
+`full_update: true`: it must not publish cache state, retained identifiers, rid or events, clear the flag or
+restart the interval. Pinned 5.2.3 can
+[omit an earlier unacknowledged field](https://github.com/qbittorrent/qBittorrent/issues/24845)
+from a later delta, so only a full response repairs a lost update. This `rid` is the engine's own and is
+unrelated to dl-tool's SSE `rid` ([ADR-0006](decisions/0006-sse-with-rid-deltas.md)).
 
 ### 5.5 `torrents/info`
 
@@ -1138,9 +1191,11 @@ is no adopt mode and no `foreign_task_policy` column.
 | Data | dl-tool **never deletes** a foreign transfer and never deletes data it did not record in `task_files`. |
 
 - Detection is by handle: a transfer is foreign when its `engine_ref` matches no `tasks` row for that engine —
-  the aria2 GID, the qBittorrent `hash`, the yt-dlp job id.
-- The check runs at `Connect()` and again on every `full_update` from `sync/maindata` (§5.4) or full
-  `tellActive`/`tellWaiting`/`tellStopped` sweep (§4.3). It only filters; it creates nothing.
+  the aria2 GID, the qBittorrent `hash`, the yt-dlp job id. Live adapter caches accept only handles named by a
+  non-terminal row; terminal rows no longer need engine state.
+- qBittorrent's reconciler-installed source is rechecked before each maindata request and response (§5.4).
+  aria2 rechecks on every full `tellActive`/`tellWaiting`/`tellStopped` sweep (§4.3). The check only filters;
+  it creates nothing.
 - A foreign transfer therefore never becomes a dl-tool task. The one way a task enters the queue is
   `POST /tasks` → [`05-api-contract.md`](05-api-contract.md).
 
@@ -1361,3 +1416,4 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
 | 2026-09-02 | The aria2 RPC secret is read from a mounted secret file by the entrypoint rather than passed as a container environment variable. |
 | 2026-09-02 | Review pass: corrected the `--progress-template` of §7.3, whose unguarded numerics render the literal `NA` and produce invalid JSON (measured 13 of 13 lines against yt-dlp 2026.08.19); recorded that §7.2's extractor-pattern enumeration does not exist and that 284 of 1702 `_VALID_URL` patterns do not compile with Go `regexp`, deferring T088; noted that `aria2.remove` errors on an already-stopped download and that every aria2 JSON-RPC fault is `code: 1`; raised the missing `ffmpeg` and the RAR-codec question as open. |
 | 2026-09-07 | Corrected disk-full recovery: aria2 cannot unpause a stopped error result, so admission confirms `error` + `disk_full`, re-submits with `continue=true` and replaces the GID. |
+| 2026-09-08 | Corrected qBittorrent maindata recovery and ownership: rejected hashes retain no torrent data, full snapshots repair and prune the cache, and poll failures, periodic syncs and ownership resyncs force `rid=0` behind an epoch guard. |
