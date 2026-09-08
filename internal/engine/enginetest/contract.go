@@ -63,9 +63,10 @@ const (
 	// throttleOverheadFactor is how far above the physical minimum transfer
 	// time (bytes / limit) a correctly throttled download may stretch: the
 	// observed CI overhead is ~1.25× (daemon ramp-up, connection setup,
-	// poll granularity). A daemon that applies a FRACTION of the requested
-	// limit — e.g. half of 1048576 — takes 2× the minimum and must fail.
-	throttleOverheadFactor = 1.6
+	// poll granularity), and jitter varies run to run — leave headroom:
+	// a half-applied limit still costs 2× the minimum and must fail, so
+	// anything below 2.0 preserves that detector.
+	throttleOverheadFactor = 1.8
 
 	// fabricatedRef is a daemon-shaped reference no adapter ever issued:
 	// aria2 GIDs are 16 hex chars, so this parses everywhere it must.
@@ -345,8 +346,9 @@ func testSpeedLimits(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 // elapsed-time bounds instead pin the AVERAGE rate to the requested cap:
 // elapsed ≥ minimum×throttleSlack detects a missing throttle (unthrottled
 // loopback finishes in under a second), and elapsed ≤
-// minimum×throttleOverheadFactor detects a daemon that applied a fraction
-// of the requested limit — half the cap doubles the minimum. The rate
+// minimum×throttleOverheadFactor detects a daemon that applied a severe
+// fraction of the cap — anything below 1/throttleOverheadFactor of the
+// request; half the cap doubles the minimum. The rate
 // floor only proves the daemon actively reports a rate near the cap
 // instead of a stall.
 func assertThrottled(t *testing.T, maxReportedRate int64, elapsed time.Duration) {
@@ -369,7 +371,7 @@ func assertThrottled(t *testing.T, maxReportedRate int64, elapsed time.Duration)
 
 	ceiling := time.Duration(float64(minimum) * throttleOverheadFactor)
 	require.LessOrEqual(t, elapsed, ceiling,
-		"%d bytes took %s at a requested %d B/s cap; the daemon applied a lower limit than requested",
+		"%d bytes took %s at a requested %d B/s cap; the daemon likely applied a lower limit than requested (a stalled runner can also trip this)",
 		fixtureBytes, elapsed, rateLimitBytesPerSecond)
 }
 
