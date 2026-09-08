@@ -173,7 +173,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/qbittorrent/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.633s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.645s
 ```
 
 Named tests (`go test -count=1 -v -run … ./internal/engine/qbittorrent/...`):
@@ -214,7 +214,7 @@ Full suite (the Reconciler change touches `internal/engine` too):
 `make test` — every Go package `ok`, vitest 13 passed. The
 race-sensitive tests, including ownership refresh and poll lifecycle races,
 also pass `go test -race -count=5 ./internal/engine/qbittorrent/...`
-(`ok … 19.029s`).
+(`ok … 19.150s`).
 
 Scope check:
 

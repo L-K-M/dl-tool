@@ -255,7 +255,8 @@ type maindataTracker struct {
 	cache     cache
 	subs      map[chan engine.TaskEvent]struct{}
 	cancel    context.CancelFunc
-	done      chan struct{}
+	done      chan struct{} // poll goroutine exit
+	stopped   chan struct{} // full Close completion, including subscribers
 	started   bool
 	closed    bool
 }
@@ -272,6 +273,7 @@ func (c *Client) startPoll() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	c.md.stopSignalLocked()
 	c.md.cancel = cancel
 	c.md.done = done
 	c.md.started = true
@@ -283,14 +285,17 @@ func (c *Client) startPoll() {
 // gone: no poll, no merge, no event can follow it.
 func (c *Client) stopPoll() {
 	c.md.mu.Lock()
+	stopped := c.md.stopSignalLocked()
+	if c.md.closed {
+		c.md.mu.Unlock()
+		<-stopped
+		return
+	}
+	c.md.closed = true
 	cancel := c.md.cancel
 	done := c.md.done
 	subs := c.md.subs
-	c.md.cancel = nil
-	c.md.done = nil
 	c.md.subs = nil
-	c.md.started = false
-	c.md.closed = true
 	c.md.mu.Unlock()
 
 	if cancel != nil {
@@ -300,6 +305,22 @@ func (c *Client) stopPoll() {
 	for sub := range subs {
 		close(sub)
 	}
+
+	c.md.mu.Lock()
+	c.md.cancel = nil
+	c.md.done = nil
+	c.md.started = false
+	c.md.mu.Unlock()
+	close(stopped)
+}
+
+// stopSignalLocked returns the one channel closed after the poll and every
+// subscriber stop. Caller holds md.mu.
+func (m *maindataTracker) stopSignalLocked() chan struct{} {
+	if m.stopped == nil {
+		m.stopped = make(chan struct{})
+	}
+	return m.stopped
 }
 
 // SetOwnershipFilter installs the predicate deciding whether a qBittorrent
@@ -388,10 +409,14 @@ func (c *Client) Events(ctx context.Context) (<-chan engine.TaskEvent, error) {
 		c.md.subs = make(map[chan engine.TaskEvent]struct{})
 	}
 	c.md.subs[events] = struct{}{}
+	stopped := c.md.stopSignalLocked()
 	c.md.mu.Unlock()
 
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-stopped:
+		}
 		c.dropSubscription(events)
 	}()
 	return events, nil

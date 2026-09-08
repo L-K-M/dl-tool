@@ -971,6 +971,66 @@ func TestStartPollRacingStopPollLeavesNoLoop(t *testing.T) {
 	}
 }
 
+func TestEventsContextCancellationClosesChannel(t *testing.T) {
+	c := &Client{}
+	ctx, cancel := context.WithCancel(context.Background())
+	events, err := c.Events(ctx)
+	require.NoError(t, err)
+
+	cancel()
+	select {
+	case _, open := <-events:
+		require.False(t, open)
+	case <-time.After(2 * time.Second):
+		t.Fatal("event channel stayed open after context cancellation")
+	}
+	require.NoError(t, c.Close())
+}
+
+func TestConcurrentStopWaitsForPollExit(t *testing.T) {
+	c := &Client{}
+	loopDone := make(chan struct{})
+	cancelled := make(chan struct{})
+	release := make(chan struct{})
+	c.md.started = true
+	c.md.done = loopDone
+	c.md.cancel = func() { close(cancelled) }
+	go func() {
+		<-release
+		close(loopDone)
+	}()
+
+	firstReturned := make(chan struct{})
+	go func() {
+		c.stopPoll()
+		close(firstReturned)
+	}()
+	<-cancelled
+
+	secondReturned := make(chan struct{})
+	go func() {
+		c.stopPoll()
+		close(secondReturned)
+	}()
+	select {
+	case <-secondReturned:
+		t.Fatal("a concurrent stop returned while the poll loop was running")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-firstReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first stop did not return after poll exit")
+	}
+	select {
+	case <-secondReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the concurrent stop did not return after poll exit")
+	}
+}
+
 func TestCloseStopsPollGoroutine(t *testing.T) {
 	f := newMaindataServer(t, func(rid int) (int, string) {
 		return http.StatusOK, `{"rid":` + strconv.Itoa(rid+1) + `}`
