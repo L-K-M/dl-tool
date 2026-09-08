@@ -48,7 +48,8 @@ const (
 
 	// rateLimitBytesPerSecond is the SpeedLimitRoundTrips obligation value
 	// (1048576 B/s) and the throttle that keeps the lifecycle subtest's
-	// phases observable.
+	// phases observable. Exported as RateLimitBytesPerSecond so call-site
+	// tests can pin their readbacks to the exact value the suite asserts.
 	rateLimitBytesPerSecond int64 = 1 << 20
 
 	// rateFloorFactor is how far below the cap the reported rate may sit: a
@@ -180,6 +181,27 @@ func Has(e engine.Engine, c engine.Capability) bool {
 	return slices.Contains(e.Capabilities(), c)
 }
 
+// DownloadLimitReadback lets the suite observe the download limit the
+// daemon itself is configured with. SpeedLimitRoundTrips' obligation is
+// that the daemon reports the requested value, and transfer timing alone
+// cannot prove that: a daemon holding three quarters of the request still
+// fits the timing window, which is how a misconfigured cap once passed.
+//
+// The engine a call site hands to RunContract must implement it. id follows
+// SetRateLimits: a task's engine-namespaced id reads that task's limit, ""
+// reads the daemon's global one. The value is bytes per second, 0 meaning
+// unlimited. The implementation must query the daemon, never echo the
+// request it was asked to set — the suite's equality check is only as
+// honest as the readback behind it.
+type DownloadLimitReadback interface {
+	DaemonDownloadLimit(ctx context.Context, id string) (int64, error)
+}
+
+// RateLimitBytesPerSecond is the cap SpeedLimitRoundTrips round-trips
+// through the daemon; call-site tests use it so their readback assertions
+// cannot drift from the suite's obligation.
+const RateLimitBytesPerSecond = rateLimitBytesPerSecond
+
 // RunContract asserts that an Engine implementation honours the interface in
 // docs/06-download-engines.md against a real daemon. newEngine must return a
 // connected Engine bound to a throwaway container and register its own
@@ -305,17 +327,22 @@ func testUnknownID(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 }
 
 // testSpeedLimits proves a per-task and a global 1048576 B/s cap both reach
-// the daemon at the requested value: the reported download rate rises near
-// the cap, the transfer takes at least the physical minimum bytes/limit
-// time and no longer than a bounded overhead above it — so a daemon that
-// applies a fraction of the limit fails the suite.
-// Both limits are armed while the task is paused, so no unthrottled byte is
-// ever transferred and the timing bound cannot be beaten by a race.
+// the daemon at the requested value. The value itself is verified by
+// reading the daemon's configured limit back through DownloadLimitReadback
+// while the task is still parked; the reported download rate and the two
+// elapsed-time bounds then pin the transfer to the cap — a daemon that
+// applies no limit at all, or a severe fraction of it, still fails.
 func testSpeedLimits(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 	t.Helper()
 	e := newEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), subtestTimeout)
 	defer cancel()
+
+	// The exact-setting obligation needs a readback: without one the suite
+	// can only infer the cap from timing, and a wrong cap fits the window.
+	readback, ok := e.(DownloadLimitReadback)
+	require.True(t, ok,
+		"SpeedLimitRoundTrips needs a DownloadLimitReadback on %T to observe the daemon's configured limit", e)
 
 	limit := rateLimitBytesPerSecond
 	fixtureURL, _ := Fixture(t)
@@ -323,6 +350,7 @@ func testSpeedLimits(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 	taskID, err := e.Add(ctx, engine.AddRequest{URIs: []string{fixtureURL}, StartPaused: true})
 	require.NoError(t, err)
 	require.NoError(t, e.SetRateLimits(ctx, taskID, &limit, nil), "per-task limit")
+	requireDaemonLimit(t, ctx, readback, taskID, limit)
 
 	started := time.Now()
 	require.NoError(t, e.Resume(ctx, taskID))
@@ -332,11 +360,33 @@ func testSpeedLimits(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 	globalID, err := e.Add(ctx, engine.AddRequest{URIs: []string{fixtureURL}, StartPaused: true})
 	require.NoError(t, err)
 	require.NoError(t, e.SetRateLimits(ctx, "", &limit, nil), "global limit")
+	requireDaemonLimit(t, ctx, readback, "", limit)
 
 	started = time.Now()
 	require.NoError(t, e.Resume(ctx, globalID))
 	maxRate = pollUntilCompleted(t, ctx, e, globalID)
 	assertThrottled(t, maxRate, time.Since(started))
+}
+
+// requireDaemonLimit asserts the daemon is configured with exactly the
+// requested limit — the readback the exact-setting obligation hangs on.
+func requireDaemonLimit(t *testing.T, ctx context.Context, readback DownloadLimitReadback, id string, requested int64) {
+	t.Helper()
+
+	reported, err := readback.DaemonDownloadLimit(ctx, id)
+	require.NoError(t, err, "read the daemon's %s back", limitScope(id))
+	require.Equal(t, requested, reported,
+		"the daemon is configured with %d B/s %s, not the requested %d B/s",
+		reported, limitScope(id), requested)
+}
+
+// limitScope names which of the daemon's limits an id refers to, for
+// assertion messages.
+func limitScope(id string) string {
+	if id == "" {
+		return "global download limit"
+	}
+	return "download limit for task " + id
 }
 
 // assertThrottled checks one throttled transfer. aria2's reported

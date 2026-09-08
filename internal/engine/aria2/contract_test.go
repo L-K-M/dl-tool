@@ -7,6 +7,7 @@ package aria2
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -38,6 +39,12 @@ const (
 	// publishes; the contract suite builds its daemon from it.
 	dockerfileContext = "../../../deploy/aria2"
 
+	// methodGetOption and methodGetGlobalOption are the read-only option
+	// surfaces DownloadLimitReadback queries; the write-side change*
+	// methods live in client.go.
+	methodGetOption       = "aria2.getOption"
+	methodGetGlobalOption = "aria2.getGlobalOption"
+
 	// containerTimeout bounds container start (build, pull, readiness wait),
 	// connect and terminate, so a hung daemon fails fast instead of running
 	// out the whole go test deadline.
@@ -47,12 +54,112 @@ const (
 // TestAria2Contract runs the shared engine conformance suite against a real
 // aria2 daemon built from deploy/aria2/Dockerfile.
 func TestAria2Contract(t *testing.T) {
-	enginetest.RunContract(t, newAria2)
+	enginetest.RunContract(t, func(t *testing.T) engine.Engine { return newAria2(t) })
+}
+
+// requestedLimit is the suite's own cap, referenced directly so this test
+// cannot drift from the exact-setting obligation it pins.
+const requestedLimit = enginetest.RateLimitBytesPerSecond
+
+// TestAria2DaemonLimitReadback pins the readback the contract suite relies
+// on to daemon truth. A limit set through the adapter must read back
+// exactly; overwriting the daemon's option directly — bypassing the
+// adapter entirely — must read back as the injected value, so an adapter
+// that echoes its last request instead of querying the daemon cannot
+// satisfy the suite's equality check by accident.
+func TestAria2DaemonLimitReadback(t *testing.T) {
+	e := newAria2(t)
+	ctx, cancel := context.WithTimeout(context.Background(), containerTimeout)
+	defer cancel()
+
+	fixtureURL, _ := enginetest.Fixture(t)
+	id, err := e.Add(ctx, engine.AddRequest{URIs: []string{fixtureURL}, StartPaused: true})
+	require.NoError(t, err)
+
+	// Per-task: adapter round trip, then a wrong value injected straight
+	// into the daemon at three quarters of the request.
+	requested := requestedLimit
+	require.NoError(t, e.SetRateLimits(ctx, id, &requested, nil))
+	report(t, ctx, e, id, requestedLimit)
+	inject(t, ctx, e, methodChangeOption, []any{ref(id), map[string]string{
+		optMaxDownloadLimit: strconv.FormatInt(wrongThreeQuarters, 10),
+	}})
+	report(t, ctx, e, id, wrongThreeQuarters)
+
+	// Global: the same two steps through the daemon's global options.
+	require.NoError(t, e.SetRateLimits(ctx, "", &requested, nil))
+	report(t, ctx, e, "", requestedLimit)
+	inject(t, ctx, e, methodChangeGlobalOption, []any{map[string]string{
+		optMaxOverallDownloadRate: strconv.FormatInt(wrongThreeQuarters, 10),
+	}})
+	report(t, ctx, e, "", wrongThreeQuarters)
+}
+
+// wrongThreeQuarters is the wrong daemon value this test injects: three
+// quarters of the request, small enough to stay inside the suite's timing
+// window — the exact setting only the readback can expose.
+const wrongThreeQuarters = 3 * (1 << 20) / 4
+
+// report asserts the daemon reports exactly want for id's limit.
+func report(t *testing.T, ctx context.Context, e readbackClient, id string, want int64) {
+	t.Helper()
+
+	reported, err := e.DaemonDownloadLimit(ctx, id)
+	require.NoError(t, err, "read the daemon's limit for %q back", id)
+	require.Equal(t, want, reported,
+		"the daemon must report %d B/s for %q, not %d — the readback must query the daemon, not echo a request",
+		want, id, reported)
+}
+
+// inject overwrites a daemon option directly, bypassing the adapter.
+func inject(t *testing.T, ctx context.Context, e readbackClient, method string, params []any) {
+	t.Helper()
+	_, err := e.call(ctx, method, params...)
+	require.NoError(t, err, "inject %s straight into the daemon", method)
+}
+
+// readbackClient adds the suite's DownloadLimitReadback to the aria2
+// client. It rides the client's transport but issues its own
+// getOption/getGlobalOption calls and decodes the answer itself, so the
+// suite learns what the daemon is configured with — never what the
+// adapter was merely asked to set.
+type readbackClient struct {
+	*Client
+}
+
+// DaemonDownloadLimit reads the daemon's configured download limit: one
+// task's max-download-limit through aria2.getOption, or the global
+// max-overall-download-limit through aria2.getGlobalOption. id follows
+// SetRateLimits: "" is the global limit, otherwise the engine-namespaced
+// task id. aria2 answers both keys as plain digits in bytes/second.
+func (c readbackClient) DaemonDownloadLimit(ctx context.Context, id string) (int64, error) {
+	method, key := methodGetGlobalOption, optMaxOverallDownloadRate
+	var params []any
+	if id != "" {
+		method, key = methodGetOption, optMaxDownloadLimit
+		params = []any{ref(id)}
+	}
+
+	raw, err := c.call(ctx, method, params...)
+	if err != nil {
+		return 0, err
+	}
+
+	options := map[string]string{}
+	if err := json.Unmarshal(raw, &options); err != nil {
+		return 0, fmt.Errorf("aria2: decode %s reply: %w", method, err)
+	}
+	value, err := strconv.ParseInt(options[key], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("aria2: %s replied %q, not a plain B/s count: %w", key, options[key], err)
+	}
+	return value, nil
 }
 
 // newAria2 starts one throwaway aria2 container and returns a connected
-// client. It is the suite's newEngine: every subtest gets its own daemon.
-func newAria2(t *testing.T) engine.Engine {
+// client wrapped in the suite's DownloadLimitReadback. It is the suite's
+// newEngine: every subtest gets its own daemon.
+func newAria2(t *testing.T) readbackClient {
 	t.Helper()
 
 	// The fixture server must exist before the container, so its port can be
@@ -119,7 +226,7 @@ func newAria2(t *testing.T) engine.Engine {
 		}
 	})
 
-	return client
+	return readbackClient{Client: client}
 }
 
 // fixturePort extracts the numeric port from a fixture URL so it can be
