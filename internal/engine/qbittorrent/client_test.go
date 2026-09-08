@@ -433,6 +433,19 @@ func TestAddResolvesIDAndRejectsBadCounts(t *testing.T) {
 		require.ErrorContains(t, err, "for a single submission")
 	})
 
+	t.Run("single submission names two ids", func(t *testing.T) {
+		// Consistent counts (0+1+0=1) let this reach the id-count guard
+		// before the success-count check, on a 202 as on any status.
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusAccepted
+			f.addBody = addBody(t, 0, 1, 0, testHash, otherHash)
+		})
+		c := connectedClient(t, f)
+
+		_, err := c.Add(context.Background(), engine.AddRequest{URIs: []string{magnetOf(testHash)}})
+		require.ErrorContains(t, err, "named 2 ids")
+	})
+
 	t.Run("unexpected id", func(t *testing.T) {
 		f := newFakeServer(t, func(f *fakeServer) {
 			f.addStatus = http.StatusOK

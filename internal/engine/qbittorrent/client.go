@@ -505,17 +505,18 @@ func decodeAddResult(status int, body []byte, req engine.AddRequest, expected st
 			"qbittorrent: torrents/add counted %d+%d+%d outcomes for %d submitted torrents",
 			res.SuccessCount, res.PendingCount, res.FailureCount, submitted)
 	}
+	// A single submission never names more than one id, and 200 means
+	// at least one immediate success with nothing pending (06 section
+	// 5.3), so it must name exactly one. This guard runs before the
+	// success-count check so both violations report the sharper message.
+	if submitted == 1 && (len(res.AddedTorrentIDs) > 1 ||
+		(status == http.StatusOK && len(res.AddedTorrentIDs) != 1)) {
+		return "", fmt.Errorf("qbittorrent: torrents/add named %d ids for a single submission",
+			len(res.AddedTorrentIDs))
+	}
 	if res.SuccessCount != len(res.AddedTorrentIDs) {
 		return "", fmt.Errorf("qbittorrent: torrents/add success_count %d with %d added ids",
 			res.SuccessCount, len(res.AddedTorrentIDs))
-	}
-	if submitted == 1 && (len(res.AddedTorrentIDs) > 1 ||
-		(status == http.StatusOK && len(res.AddedTorrentIDs) != 1)) {
-		// A single submission never names more than one id, and 200 means
-		// at least one immediate success with nothing pending (06 section
-		// 5.3), so it must name exactly one.
-		return "", fmt.Errorf("qbittorrent: torrents/add named %d ids for a single submission",
-			len(res.AddedTorrentIDs))
 	}
 	if len(res.AddedTorrentIDs) == 1 && expected != "" && res.AddedTorrentIDs[0] != expected {
 		return "", fmt.Errorf("qbittorrent: torrents/add returned id %s, want %s",

@@ -272,7 +272,8 @@ The verifier of 2026-09-08 found `decodeAddResult` accepted a single-magnet `200
 with a nil error. Reproduced first (`TestAddResolvesIDAndRejectsBadCounts/immediate_add_reports_failure`
 failed with "An error is expected but got nil"), then fixed: a single submission never names more
 than one added id, and a `200` reply — at least one immediate success, nothing pending (06 §5.3) — must
-carry exactly one.
+carry exactly one. The guard runs before the success-count check so both violations report the sharper
+message, and `single submission names two ids` fails if its clause is removed.
 
 `make lint && make test PKG=./internal/engine/qbittorrent/...` on `fix/t029-single-add-id`:
 
@@ -287,7 +288,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/qbittorrent/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.184s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.194s
 ```
 
 The verifier's second finding — that `TestAddPendingURLHasNoIdentity` should retain an identity for a
