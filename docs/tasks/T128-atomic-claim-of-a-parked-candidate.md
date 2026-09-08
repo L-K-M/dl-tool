@@ -340,16 +340,24 @@ outputs below were re-observed on 2026-09-08 at main 9b3b35a.
 
 On the repaired code the regression tests pass. Against the rejected PR #98 code they fail — run
 in a worktree checked out at 46f08a9 with the current `admission_test.go` overlaid onto it, so
-only the tests differ from the rejected state:
+only the tests differ from the rejected state. The overlay file mapped exactly one path:
+`/tmp/t128-overlay-test.go` was a byte-for-byte copy of this branch's
+`internal/engine/admission_test.go`, and `/tmp/t128-rejected` was the 46f08a9 worktree:
+
+```json
+{"Replace":{"/tmp/t128-rejected/internal/engine/admission_test.go":"/tmp/t128-overlay-test.go"}}
+```
+
+The commands and outputs verbatim:
 
 ```
 $ go test -mod=readonly -count=1 -run 'TestStoreErrorSkipsCandidateNotThePass|TestClaimErrorSkipsCandidateNotThePass' ./internal/engine/
 ok  	github.com/L-K-M/dl-tool/internal/engine	0.130s
 EXIT=0
 
-$ cd <worktree at 46f08a9> && go test -mod=readonly -count=1 \
+$ cd /tmp/t128-rejected && go test -mod=readonly -count=1 \
     -run 'TestStoreErrorSkipsCandidateNotThePass|TestClaimErrorSkipsCandidateNotThePass' \
-    -overlay overlay.json ./internal/engine/
+    -overlay /tmp/t128-overlay.json ./internal/engine/
 --- FAIL: TestStoreErrorSkipsCandidateNotThePass (0.05s)
     admission_test.go:2061: pass: admission pass: revalidate tsk_01M21BB2522TP85BCA3JQVN6VZ: injected: revalidation read failed, want no error: one candidate's store failure skips it, it does not abort the pass
 --- FAIL: TestClaimErrorSkipsCandidateNotThePass (0.04s)
