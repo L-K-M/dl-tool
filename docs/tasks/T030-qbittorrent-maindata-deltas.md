@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T030 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T026, T029 |
 | **Blocks** | T032, T035, T037, T038, T100 |
 | **Parallel-safe** | no — extends `internal/engine/qbittorrent/client.go` |
