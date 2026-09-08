@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T127 |
 | **Milestone** | M1 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T022, T099, T128 |
 | **Blocks** | — |
 | **Parallel-safe** | yes — code edits stay in the action layer and store; plan edits stay in this task file and its two status cells in `00-task-index.md` |
@@ -86,20 +86,20 @@ No other file may be modified.
    status cells in [`00-task-index.md`](00-task-index.md). Commit them with the work.
 
 ## Acceptance criteria
-- [ ] An operator pause on a paused + `disk_full` row (the idempotent branch) clears the stamp
+- [x] An operator pause on a paused + `disk_full` row (the idempotent branch) clears the stamp
   and writes no pause event; a fresh pause on an active task still writes exactly one.
-- [ ] The admission pass does not select the row afterwards: state stays `paused` with space and
+- [x] The admission pass does not select the row afterwards: state stays `paused` with space and
   a slot available, and the engine sees no `Resume`.
-- [ ] The action and admission release use the same task-operation lease. An operator-first clear
+- [x] The action and admission release use the same task-operation lease. An operator-first clear
   aborts the release. After an admission-first success or `ErrUnavailable` inside the five-second
   budget, the action reloads current state and leaves the row paused with no hold stamp; it calls
   the engine only when the release succeeded.
-- [ ] A lease wait that reaches the named timeout returns a per-id `validation-failed` task-busy
+- [x] A lease wait that reaches the named timeout returns a per-id `validation-failed` task-busy
   outcome, mutates nothing, and succeeds on retry after the holder releases.
-- [ ] An operator pause on an active task keeps the existing engine-first behavior: state and one
+- [x] An operator pause on an active task keeps the existing engine-first behavior: state and one
   event land as before, and the hold stamp is cleared with the pause.
-- [ ] A paused row carrying a non-hold code (e.g. an operator message) keeps it.
-- [ ] An operator pause on a queued row carrying a hold stamp clears the stamp with the pause;
+- [x] A paused row carrying a non-hold code (e.g. an operator message) keeps it.
+- [x] An operator pause on a queued row carrying a hold stamp clears the stamp with the pause;
   admission's under-lease revalidation does not release the stale queued snapshot.
 
 ## Verification
@@ -129,33 +129,220 @@ are hidden by the `:(exclude)docs` pathspec.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Paste each Verification command, its full output and its exit status here before marking done.>
+
+`make lint && make test PKG=./internal/...` after the last code change — lint clean, every
+internal package `ok`, no `FAIL`, exit 0:
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier Code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	54.054s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.246s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.876s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.163s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.033s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.060s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.199s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.166s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.823s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.380s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.021s
+EXIT=0
+```
+
+The task's new tests, run verbosely (`-race -count=1`):
+
+```
+$ go test ./internal/api/ ./internal/store/ -run 'TestOperatorPause|TestStaleQueuedReleaseAbortsUnderTheLease|TestClearPausedHoldCode' -count=1 -race -v | grep -E '(--- (PASS|FAIL)|^ok |^FAIL)'
+--- PASS: TestOperatorPauseTakesOverAParkedRow (0.42s)
+--- PASS: TestOperatorPauseKeepsANonHoldCode (0.33s)
+--- PASS: TestOperatorPauseOnAnActiveRowKeepsEngineFirst (0.34s)
+--- PASS: TestOperatorPauseClearsAQueuedRowHoldStamp (0.64s)
+    --- PASS: TestOperatorPauseClearsAQueuedRowHoldStamp/disk_full (0.31s)
+    --- PASS: TestOperatorPauseClearsAQueuedRowHoldStamp/concurrency_hold (0.32s)
+--- PASS: TestOperatorPauseWaitsForTheAdmissionRelease (0.37s)
+--- PASS: TestOperatorPauseAfterAFailedRelease (0.37s)
+--- PASS: TestOperatorPauseTimesOutBehindTheLease (0.55s)
+--- PASS: TestStaleQueuedReleaseAbortsUnderTheLease (0.35s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.447s
+--- PASS: TestClearPausedHoldCode (1.74s)
+    --- PASS: TestClearPausedHoldCode/clears_a_hold_stamp_off_a_paused_row (0.70s)
+    --- PASS: TestClearPausedHoldCode/a_declined_clear_writes_nothing (0.35s)
+    --- PASS: TestClearPausedHoldCode/a_taken-over_row_is_invisible_to_the_admission_claim (0.33s)
+    --- PASS: TestClearPausedHoldCode/reports_a_missing_id_as_not_found (0.36s)
+ok  	github.com/L-K-M/dl-tool/internal/store	2.792s
+```
+
+Mutation checks — each defence was disabled in turn and its test observed to FAIL before
+the feature was restored (every restoration verified by `go build ./...`):
+
+- Reload under the lease replaced with the preloaded snapshot →
+  `TestOperatorPauseWaitsForTheAdmissionRelease` FAIL (no operator `Pause` call, no
+  `task.paused` event, the row left `downloading`).
+- Lease acquisition switched from `TaskOpWait` to `TaskOpTry` →
+  `TestOperatorPauseWaitsForTheAdmissionRelease` and `TestOperatorPauseAfterAFailedRelease`
+  FAIL (the waiting action answered the retry outcome instead of joining the holder).
+- Hold-stamp clear dropped from the action → `TestOperatorPauseTakesOverAParkedRow` FAIL
+  (the stamp survived and the next pass released the row to `downloading`),
+  `TestOperatorPauseOnAnActiveRowKeepsEngineFirst` FAIL and both
+  `TestOperatorPauseClearsAQueuedRowHoldStamp` subtests FAIL
+  (`/disk_full` and `/concurrency_hold`, re-observed with subtests visible after review round 1
+  noted the first paste's grep hid them).
+- Store guard loosened to `state = 'paused'` alone → `TestClearPausedHoldCode` FAIL
+  (the non-hold-code decline case wiped the row's own code).
+
+Scope check, run while every task change was still uncommitted:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | cut -c4- | sort
+internal/api/tasks_actions.go
+internal/api/tasks_actions_test.go
+internal/store/tasks.go
+internal/store/tasks_test.go
+```
+
+Exactly the four non-doc paths of the Files table; the docs side is this file and the two
+status cells of `00-task-index.md`.
+
+### Review round 2 (commit 532804e → this one)
+
+Three inline comments: two were round-1 leftovers whose suggestions had already landed (the
+subtest-visible paste — line 202's "drop subtests wording" premise no longer holds, the paste
+shows both `/disk_full` and `/concurrency_hold` — and the claim-decline subtest itself); one
+applied: the claim-decline subtest now seeds a positive control — an identical untouched parked
+row asserted still claimable — so the decline is the takeover's doing, not a claim that declines
+everything.
+
+`make lint && make test PKG=./internal/...` after the round-2 fix — lint clean, every internal
+package `ok`, no `FAIL`, exit 0:
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier Code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	48.366s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.106s
+ok  	github.com/L-K-M/dl-tool/internal/engine	20.428s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.149s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.601s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.163s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.138s
+ok  	github.com/L-K-M/dl-tool/internal/store	67.783s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.344s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.021s
+EXIT=0
+```
+
+### Review round 1 (commit f678ef4 → 532804e)
+
+Two majors — one applied as a test, one declined on a verified premise — four minors applied,
+the rest declined with evidence.
+
+**Majors**
+
+- **The lease hold may be bounded by the five-second wait context** — premise verified false:
+  `Registry.AcquireTaskOp` ties the hold to the returned release closure, never to the context —
+  the context only gates the wait (a canceled waiter leaves the queue, and a handoff that already
+  won still returns the lease; `TestTaskOpCanceledWaiterAnswersItsContext` and
+  `TestTaskOpHandoffCancelRaceHasOneOutcome` pin both). Nothing watches `waitCtx` after the
+  acquisition returns. Applied as a comment at the acquisition site stating the budget bounds
+  only the wait, so the next reader need not re-derive it from the registry.
+- **The takeover is never tested against the admission claim** — applied:
+  `TestClearPausedHoldCode/a_taken-over_row_is_invisible_to_the_admission_claim` drives clear then
+  `ClaimParkedDiskFull` on one row and pins the decline.
+
+**Applied (minors)**
+
+- `pauseEnv.pause` guards an empty `Results` slice before indexing.
+- `pauseEnv.taskEventCodes` orders by `rowid`, not the ULID `id`: event ids carry same-millisecond
+  random entropy, and the sequence assertions compare pairs that can land inside one millisecond.
+- The verbose paste now shows the subtest lines (the first paste's `^(---` grep hid them); the
+  mutation bullet's "both subtests" claim is re-observed with them visible.
+- The two goroutine tests' `time.After` backstops widen to `pauseLeaseWait + 5s` so the backstop
+  cannot race the action's own budget clock, and the waits-for-release test documents why the
+  pause goroutine is deliberately not synchronised with the gate close (outcome-equivalent
+  scheduling; the frozen preloaded snapshot makes the reload the only mover, and the
+  waiting-not-failing half is pinned by the timeout test's busy outcome).
+
+**Declined with evidence**
+
+- **A busy/conflict slug instead of `/problems/validation-failed`** (raised twice) — the task's
+  step 2 pins the slug and the detail verbatim and names the constraint: the action layer's
+  existing current-state failure type, never `engine-unavailable`; §5.7's outcome vocabulary has
+  no busy slug, and inventing one is outside this task's Files table.
+- **Distinguish `AcquireTaskOp`'s errors** — verified total: in `TaskOpWait` the acquisition can
+  answer only its context's error or nil (`ErrTaskOpBusy` is the Try mode's answer), so there is
+  nothing to distinguish; a comment at the call site now says so. A canceled parent answering the
+  retry outcome is harmless — the client is gone.
+- **`reloaded` copies only four fields** — verified: `actionTask` has exactly `ID`, `Engine`,
+  `EngineRef` and `State`.
+- **`transitionAction`'s successful result discarded** — verified equivalent: on success it
+  returns the identical `ActionResult{ID, Ok: true}` the pause path builds.
+- **Cover the action's own engine Pause failing** — already pinned:
+  `TestActionsEngineErrorMapping/engine_unavailable` sets `pauseErr` on an active task and asserts
+  the per-id `engine-unavailable` outcome with the state unchanged, through the full pause path
+  (the uncontended lease).
+- **`ClearPausedHoldCode` answering not-found after the pause landed** — a vanished row cannot be
+  resumed by the pass either; the not-found outcome is the store's plain answer, and deletion
+  racing a mid-pause request is the pre-existing delete path's territory, outside this task.
+- **`waitResumeRecorded` should surface a failed pass** — the pass goroutines already report their
+  error with `t.Errorf`, so an early failure fails the test with the real cause; the channel
+  wiring would only move the same message earlier.
+- **The restored Blocked placeholder reads unfilled** — it is the file's own instruction (step 4)
+  and the convention every done task keeps, T128's own Blocked section included.
+
+`make lint && make test PKG=./internal/...` after the round-1 fixes — lint clean, every internal
+package `ok`, no `FAIL`, exit 0:
+
+```
+$ make lint && make test PKG=./internal/...
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier Code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	49.169s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.110s
+ok  	github.com/L-K-M/dl-tool/internal/engine	20.793s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.180s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.029s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.335s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.184s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.236s
+ok  	github.com/L-K-M/dl-tool/internal/store	65.974s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.367s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.041s
+EXIT=0
+```
 
 ## Blocked
-Stopped at step 2, before any code: the required mid-pass atomic claim does not exist, so the
-pre-rewrite step 2's STOP-and-register instruction was carried out — the claim is registered as
-[T128](T128-atomic-claim-of-a-parked-candidate.md), the task that owns the task-operation lease,
-the admission pass's files and the store's claim write; this row's `Depends on` now names it (the
-T099→T126 pattern).
-
-What was verified, at d3946ad (`internal/engine/admission.go`, `internal/store/tasks.go`):
-
-- `Admitter.release` calls `Engine.Resume` before its first guarded row write — `markReleased`
-  runs only after the engine call answered. Between `SelectQueuedCandidates` and the engine call
-  there is no row write at all: the space gate and the limit gate are read-only.
-- No store write both conditions on `state = 'paused' AND error_code = 'disk_full'` and reports
-  whether it took the row: `SetErrorCodeIfState` guards the state alone and answers every declined
-  write with success; `ClearHoldCode` matches `state <> 'paused'` and refuses paused rows (the
-  refusal this task's own step 1 preserves); `PauseWithCode` lands pauses, it does not claim;
-  `Transition` conditions on state legality alone.
-
-PR review then exposed that a bare stamp-clear claim closes only the selection-to-claim half of
-the race and creates a crash state indistinguishable from an operator pause. T128 therefore owns
-a task-operation lease and a no-op guarded claim that keeps the parked pair intact.
-
-The pre-rewrite criterion 3 was therefore uncheckable inside this task's Files table, and the
-clear without the shared lease and claim would close only the next-tick hole while the mid-pass
-race stayed open — a half-done task against the one-commit Definition of Done. No code was written;
-the edits are this file's dependency and blocker record, its Goal/Context/Files/Steps/criteria
-rewrite around T128, the new T128 task file, and the index registration and dependency cells,
-risk-register row, and overflow note.
+<Only if you had to stop. State the exact ambiguity and which file should answer it.>

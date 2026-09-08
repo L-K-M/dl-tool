@@ -1020,3 +1020,95 @@ func TestClaimParkedDiskFull(t *testing.T) {
 		require.ErrorIs(t, err, ErrNotFound)
 	})
 }
+
+// TestClearPausedHoldCode pins the operator pause's takeover clear: only
+// a paused row carrying one of the two hold stamps is wiped — and only
+// its stamp columns, never its state — while any other state, any other
+// code and a missing id leave everything untouched, the last one as
+// ErrNotFound.
+func TestClearPausedHoldCode(t *testing.T) {
+	t.Run("clears a hold stamp off a paused row", func(t *testing.T) {
+		for _, code := range []string{"disk_full", "concurrency_limit"} {
+			db, _, _ := openTestStore(t)
+			tasks := NewTaskStore(db)
+
+			seed := seedParked(t, tasks, "paused", code)
+
+			cleared, err := tasks.ClearPausedHoldCode(t.Context(), seed.ID)
+			require.NoError(t, err)
+			require.True(t, cleared, "a paused row carrying %q must be taken over", code)
+
+			after, err := tasks.Get(t.Context(), seed.ID)
+			require.NoError(t, err)
+			require.Equal(t, "paused", after.State, "the clear never touches state")
+			require.Nil(t, after.ErrorCode, "the hold stamp must be gone")
+			require.Nil(t, after.ErrorMessage, "a cleared code keeps no message")
+		}
+	})
+
+	t.Run("a declined clear writes nothing", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		cleared := seedParked(t, tasks, "paused", "disk_full")
+		_, err := tasks.ClearPausedHoldCode(t.Context(), cleared.ID)
+		require.NoError(t, err)
+		alreadyCleared, err := tasks.Get(t.Context(), cleared.ID)
+		require.NoError(t, err)
+
+		declines := map[string]Task{
+			"paused with another code": seedParked(t, tasks, "paused", "timeout"),
+			"queued with a hold stamp": seedParked(t, tasks, "queued", "disk_full"),
+			"downloading with a stamp": seedParked(t, tasks, "downloading", "disk_full"),
+			"already cleared":          alreadyCleared,
+		}
+		for name, seed := range declines {
+			cleared, err := tasks.ClearPausedHoldCode(t.Context(), seed.ID)
+			require.NoError(t, err, "%s: a decline is not an error", name)
+			require.False(t, cleared, "%s: only a paused row with a hold stamp clears", name)
+
+			after, err := tasks.Get(t.Context(), seed.ID)
+			require.NoError(t, err)
+			require.Equal(t, seed, after, "%s: a declined clear writes nothing", name)
+		}
+	})
+
+	t.Run("a taken-over row is invisible to the admission claim", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		seed := seedParked(t, tasks, "paused", "disk_full")
+		// Positive control: an identical row the operator did not take over
+		// stays claimable, so the decline below is the takeover's doing and
+		// not a claim that declines everything.
+		control := seedParked(t, tasks, "paused", "disk_full")
+
+		cleared, err := tasks.ClearPausedHoldCode(t.Context(), seed.ID)
+		require.NoError(t, err)
+		require.True(t, cleared)
+
+		controlClaimed, err := tasks.ClaimParkedDiskFull(t.Context(), control.ID)
+		require.NoError(t, err)
+		require.True(t, controlClaimed, "an untouched parked row must stay claimable")
+
+		// The takeover's whole point, driven against the other half of the
+		// contract: the guarded claim the admission pass runs before its
+		// first engine call must decline the row, so the pass can never
+		// resume what the operator took over.
+		claimed, err := tasks.ClaimParkedDiskFull(t.Context(), seed.ID)
+		require.NoError(t, err)
+		require.False(t, claimed, "the admission claim must decline an operator pause")
+
+		after, err := tasks.Get(t.Context(), seed.ID)
+		require.NoError(t, err)
+		require.Equal(t, "paused", after.State)
+	})
+
+	t.Run("reports a missing id as not found", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		_, err := tasks.ClearPausedHoldCode(t.Context(), "tsk_missing")
+		require.ErrorIs(t, err, ErrNotFound)
+	})
+}
