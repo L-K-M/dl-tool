@@ -992,7 +992,13 @@ func (c *Client) post(ctx context.Context, body any) ([]rpcReply, error) {
 		}
 	}()
 
-	if resp.StatusCode != http.StatusOK {
+	// aria2 answers a JSON-RPC fault with HTTP 400 and the fault object in
+	// the body — HttpServerBodyCommand::sendJsonRpcResponse maps fault code 1
+	// to 400 — so a 400 is a decodable reply, not a dead daemon; rpcReply.result
+	// then maps the fault (§4.7). Any other non-200 status is a transport
+	// failure, and a 400 whose body is not JSON-RPC fails to decode below and
+	// still reports ErrUnavailable.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusBadRequest {
 		return nil, fmt.Errorf("aria2: rpc status %d: %w", resp.StatusCode, engine.ErrUnavailable)
 	}
 
