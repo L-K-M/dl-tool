@@ -360,11 +360,16 @@ submit-then-decode-error behavior, and failed likewise.
 Fixed: `urlTorrentID` now returns the fetch error and `Add` aborts before the
 submission — the daemon never receives an add whose identity is unknown, so a
 pre-resolution failure cannot lose an accepted task; callers retry the whole add.
-`redactURL` unwraps `*url.Error` so the returned error keeps the operation and cause
-but never the URL (docs/14 §3.3). URIs that are not http(s) `.torrent` URLs still
-resolve to `""` without an error: only the reply can name those identities, as
-before. The unresolved-pending error in `decodeAddResult` remains for the shapes that
-reach it (a multi-URI pending add, an xt-less magnet).
+`redactURL` rebuilds the `*url.Error` with doc 11's `__redacted__` placeholder in
+place of the URL, so the returned error keeps the type, the cause and `net.Error`'s
+Timeout/Temporary delegation but never the URL (docs/14 §3.3). URIs that are not
+http(s) `.torrent` URLs still resolve to `""` without an error: 06 §2's routing
+table sends every other http(s) URL to aria2, so they are outside this engine's
+lane; if one is forced through anyway, the unresolved-pending error in
+`decodeAddResult` remains for the shapes that reach it (a multi-URI pending add,
+an xt-less magnet). Known tradeoff, accepted per 06 §5.3's resolve-before-add: a
+metadata server hostile to the prefetch (UA filter, one-time token) now fails the
+add up front instead of leaving an unreferencable pending task.
 
 `make lint && make test PKG=./internal/engine/qbittorrent/...` on `fix/t029-prefetch-abort`:
 
@@ -379,13 +384,23 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/qbittorrent/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.712s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.709s
 ```
 
 Full `go test -mod=readonly -race -count=1 ./...`: all 12 packages `ok`, no `FAIL`.
-`make vet` clean. The audit's control harness (`audit_pending_test.go` through a
-`-overlay` mapping) still passes: `TestAuditPendingTorrentURLRetainsIdentity
---- PASS`, `id="qbittorrent:b2ff1d0b915849a3afe5f6de49ae4828299ddc8b"`, `error=<nil>`.
+`make vet` and `make doclint` clean. The audit's control harness
+(`audit_pending_test.go` through a `-overlay` mapping) still passes:
+`TestAuditPendingTorrentURLRetainsIdentity --- PASS`,
+`id="qbittorrent:b2ff1d0b915849a3afe5f6de49ae4828299ddc8b"`, `error=<nil>`.
+
+Review round 1 (GLM 5.3) on the first push: its Major — extension-less http URLs
+still submit unresolved — was declined with 06 §2's routing table as evidence: row 2
+is the only lane that reaches `qbittorrent.Add`, and it admits `.torrent` paths
+alone; every other http(s) URL is row 4, aria2's lane. The misleading doc-comment
+clause it quoted was corrected instead. Its Minor was accepted: `redactURL` now
+preserves the `*url.Error` type with doc 11's `__redacted__` placeholder, keeping
+`net.Error` timeout classification for callers (`TestRedactURL`). Its Info is
+recorded above as the known tradeoff.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

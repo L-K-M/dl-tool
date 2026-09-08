@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -662,6 +664,30 @@ func TestAddTorrentURLFetchFailureRedactsQuerySecret(t *testing.T) {
 	require.NotContains(t, logs.String(), "passkey=")
 	require.NotContains(t, logs.String(), "t029-secret-token")
 	require.Equal(t, 0, f.count("torrents/add"))
+}
+
+func TestRedactURL(t *testing.T) {
+	// The wrapper must keep the *url.Error type — net.Error's
+	// Timeout/Temporary delegation is how callers classify a prefetch
+	// failure — while never emitting the real URL, whose query can carry
+	// a tracker passkey (docs/14 section 3.3, doc 11's placeholder).
+	secret := "http://tracker.example/dl.torrent?passkey=t029-secret-token"
+	original := &url.Error{Op: "Get", URL: secret, Err: os.ErrDeadlineExceeded}
+
+	redacted := redactURL(original)
+
+	require.NotContains(t, redacted.Error(), "passkey=")
+	require.NotContains(t, redacted.Error(), "tracker.example")
+	require.Contains(t, redacted.Error(), "__redacted__")
+
+	var ue *url.Error
+	require.ErrorAs(t, redacted, &ue)
+	require.True(t, ue.Timeout(), "net.Error timeout semantics must survive redaction")
+	require.ErrorIs(t, redacted, os.ErrDeadlineExceeded)
+
+	// A chain without a *url.Error passes through untouched.
+	plain := errors.New("no url in this chain")
+	require.Same(t, plain, redactURL(plain))
 }
 
 func TestAddTorrentURLPrefetchNotFoundAborts(t *testing.T) {

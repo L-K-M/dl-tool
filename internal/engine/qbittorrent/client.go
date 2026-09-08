@@ -82,6 +82,10 @@ const (
 	// two infohash shapes: 20-byte SHA-1, 32-byte SHA-256.
 	v1TorrentHexChars = 40
 	v2TorrentHexChars = 64
+
+	// redactedURL is docs/11's literal placeholder, substituted for a real
+	// URL wherever one must not reach a log or a returned error.
+	redactedURL = "__redacted__"
 )
 
 // lifecyclePair is one daemon generation's stop/start endpoint spelling.
@@ -404,9 +408,11 @@ func (c *Client) uriTorrentID(ctx context.Context, raw string) (string, error) {
 // or parse failure is an error and Add aborts before submitting: the
 // daemon fetches urls itself and would accept the task, and an accepted
 // task with no locally retained id is lost — its caller saw only an
-// error. Any other URI shape returns "" without an error: it is not
-// locally resolvable, and the reply's added_torrent_ids names what the
-// daemon did with it.
+// error. Any other URI shape returns "" without an error: it is outside
+// this engine's lane (06 section 2 routes every other http(s) URL to
+// aria2), so no local identity exists; if one is forced through Add
+// anyway, a pending reply that names no id still errors explicitly in
+// decodeAddResult rather than guessing.
 func (c *Client) urlTorrentID(ctx context.Context, raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" ||
@@ -465,12 +471,13 @@ func truncateV2(v2Hex string) string {
 // redactURL strips a *url.Error's URL out of an error chain: a .torrent
 // URL's query can carry a tracker passkey, and docs/14 section 3.3 forbids
 // letting query secrets out at any level — a returned error is logged
-// upstream. The operation and the underlying cause survive, so the
-// failure stays diagnosable without the secret.
+// upstream. The type is preserved with doc 11's "__redacted__" placeholder
+// in place of the URL, so unwrapping and net.Error's Timeout/Temporary
+// delegation keep working; the underlying cause survives for diagnosis.
 func redactURL(err error) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return fmt.Errorf("%s request failed: %w", ue.Op, ue.Err)
+		return &url.Error{Op: ue.Op, URL: redactedURL, Err: ue.Err}
 	}
 	return err
 }
