@@ -125,27 +125,33 @@ type ownershipFilterer interface {
 	SetOwnershipFilter(owned func(handle string) bool)
 }
 
-// installOwnershipFilters wires the ownership predicate into every
-// registered engine that accepts one, so production runs the reconciler's
-// predicate and never the adapter's default-deny one. Engines already
-// filtered are skipped — re-installing would reset a cache's delta rid —
-// which is also what makes the defensive re-run in Boot safe: an engine
-// registered after NewReconciler still receives its filter before the
-// first sweep that could observe it.
+// installOwnershipFilters wires every engine present at construction.
 func (r *Reconciler) installOwnershipFilters() {
+	for _, name := range r.registry.Names() {
+		r.installOwnershipFilter(name)
+	}
+}
+
+// installOwnershipFilter wires one engine immediately before its first
+// sweep. Already-filtered engines are skipped because reinstalling resets
+// their delta rid.
+func (r *Reconciler) installOwnershipFilter(name string) {
 	r.installMu.Lock()
 	defer r.installMu.Unlock()
 
-	for _, name := range r.registry.Names() {
-		e, ok := r.registry.Get(name)
-		if !ok {
-			continue // Names and Get disagree only mid-Register; skip it.
-		}
-		if o, accepts := e.(ownershipFilterer); accepts && !r.installed[name] {
-			o.SetOwnershipFilter(r.OwnedRefs(name))
-			r.installed[name] = true
-		}
+	if r.installed[name] {
+		return
 	}
+	e, ok := r.registry.Get(name)
+	if !ok {
+		return
+	}
+	o, accepts := e.(ownershipFilterer)
+	if !accepts {
+		return
+	}
+	o.SetOwnershipFilter(r.OwnedRefs(name))
+	r.installed[name] = true
 }
 
 // Boot runs one full sweep before the HTTP listener opens, over the
@@ -156,12 +162,11 @@ func (r *Reconciler) installOwnershipFilters() {
 // a warning, not a Boot failure — it is retried on the next poll and no task
 // state changes on its account.
 func (r *Reconciler) Boot(ctx context.Context) error {
-	// A late registration must not sweep under the default-deny filter:
-	// re-install before the first look at any engine (a no-op for every
-	// engine already filtered at construction).
-	r.installOwnershipFilters()
-
 	for _, name := range r.registry.Names() {
+		// A name captured after construction receives its predicate now,
+		// before this Boot can observe its default-deny List.
+		r.installOwnershipFilter(name)
+
 		e, ok := r.registry.Get(name)
 		if !ok {
 			continue // Names and Get disagree only mid-Register; skip it.

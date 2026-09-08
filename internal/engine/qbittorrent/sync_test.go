@@ -917,6 +917,13 @@ func TestCloseWinningConnectRacePreventsPoll(t *testing.T) {
 	})
 	f.webapiReached = make(chan struct{}, 1)
 	f.webapiRelease = make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-f.webapiRelease:
+		default:
+			close(f.webapiRelease)
+		}
+	})
 
 	c, err := New(Config{BaseURL: f.srv.URL, Username: testUsername, Password: testPassword}, nil)
 	require.NoError(t, err)
@@ -1067,9 +1074,30 @@ func TestCloseStopsPollGoroutine(t *testing.T) {
 	require.False(t, open, "Events after Close must return a closed channel")
 }
 
-// The two OwnedRefs tests live in this file — not reconcile_test.go —
-// because the Files table of T030 names this one; the predicate is the
-// reconciler half of the very filter the rest of this file exercises.
+// The Reconciler ownership tests live here — not reconcile_test.go —
+// because T030's Files table names this file; they cover the other half of
+// the filter exercised above.
+func TestBootInstallsOwnershipFilterOnLateEngine(t *testing.T) {
+	registry := engine.NewRegistry()
+	tasks := &syncTasks{byEngine: map[string]map[string]store.Reconcilable{
+		engine.NameQBittorrent: {
+			testHash: {ID: "task-1", EngineRef: testHash, State: string(engine.StatePaused)},
+		},
+	}}
+	r := engine.NewReconciler(registry, tasks, syncAdmitter{}, time.Second, nil)
+
+	c := &Client{}
+	registry.Register(t030Engine{Client: c})
+	require.NoError(t, r.Boot(context.Background()))
+
+	c.md.mu.Lock()
+	owned := c.md.cache.owned
+	c.md.mu.Unlock()
+	require.NotNil(t, owned)
+	require.True(t, owned(testHash))
+	require.False(t, owned(otherHash))
+}
+
 func TestOwnedRefsReadsTheLiveTasksTable(t *testing.T) {
 	tasks := &syncTasks{byEngine: map[string]map[string]store.Reconcilable{
 		engine.NameQBittorrent: {testHash: {ID: "task-1", EngineRef: testHash, State: string(engine.StateDownloading)}},
