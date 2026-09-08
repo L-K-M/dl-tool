@@ -505,12 +505,18 @@ func decodeAddResult(status int, body []byte, req engine.AddRequest, expected st
 			"qbittorrent: torrents/add counted %d+%d+%d outcomes for %d submitted torrents",
 			res.SuccessCount, res.PendingCount, res.FailureCount, submitted)
 	}
-	// A reply whose only outcome is failure means the daemon refused the
-	// submission, whatever the status claimed — never infer success from
-	// a 2xx status.
-	if submitted == 1 && res.FailureCount == submitted && len(res.AddedTorrentIDs) == 0 {
-		return "", fmt.Errorf("qbittorrent: torrents/add failed for the single submission (status %d, counts %d+%d+%d)",
-			status, res.SuccessCount, res.PendingCount, res.FailureCount)
+	// A reply whose only outcome is failure means the daemon refused
+	// every submission — a total refusal on either status, one URI or
+	// many (a blob+URI add whose expected id is the blob's hash would
+	// otherwise fall through and return success). Never infer success
+	// from a 2xx status.
+	if res.FailureCount == submitted && len(res.AddedTorrentIDs) == 0 {
+		if submitted == 1 {
+			return "", fmt.Errorf("qbittorrent: torrents/add failed for the single submission (status %d, counts %d+%d+%d)",
+				status, res.SuccessCount, res.PendingCount, res.FailureCount)
+		}
+		return "", fmt.Errorf("qbittorrent: torrents/add failed for all %d submissions (status %d, counts %d+%d+%d)",
+			submitted, status, res.SuccessCount, res.PendingCount, res.FailureCount)
 	}
 	// A single submission never names more than one id, and 200 means
 	// at least one immediate success with nothing pending (06 section

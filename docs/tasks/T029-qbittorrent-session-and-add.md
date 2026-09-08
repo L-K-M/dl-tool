@@ -270,12 +270,12 @@ see the comment on `expectedTorrentID` and the PR description.
 The verifier of 2026-09-08 found `decodeAddResult` accepted a single-magnet `200` body of
 `success_count=0, pending_count=0, failure_count=1, added_torrent_ids=[]` and returned the expected id
 with a nil error. Reproduced first (`TestAddResolvesIDAndRejectsBadCounts/immediate_add_reports_failure`
-failed with "An error is expected but got nil"), then fixed: a reply whose only outcome is a failure is a
-refusal on either status — 200 or a 202 that still reports `failure_count=1` — and a single submission
-never names more than one added id, while a `200` reply — at least one immediate success, nothing pending
-(06 §5.3) — must carry exactly one. The id-count guard runs before the success-count check so both
-violations report the sharper message, and `single submission names two ids` fails if its clause is
-removed.
+failed with "An error is expected but got nil"), then fixed: a reply whose every outcome is a failure is a refusal on either status and any submission
+count — one URI or several, or a blob+URI add whose expected id is the blob's hash — and a single
+submission never names more than one added id, while a `200` reply — at least one immediate success,
+nothing pending (06 §5.3) — must carry exactly one. The id-count guard runs before the success-count
+check so both violations report the sharper message, and `single submission names two ids` fails if its
+clause is removed.
 
 `make lint && make test PKG=./internal/engine/qbittorrent/...` on `fix/t029-single-add-id`:
 
@@ -290,7 +290,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/qbittorrent/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.187s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.163s
 ```
 
 The verifier's second finding — that `TestAddPendingURLHasNoIdentity` should retain an identity for a

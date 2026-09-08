@@ -433,6 +433,21 @@ func TestAddResolvesIDAndRejectsBadCounts(t *testing.T) {
 		require.ErrorContains(t, err, "failed for the single submission")
 	})
 
+	t.Run("all submissions refused", func(t *testing.T) {
+		// Two URIs, 0+0+2 and no ids: a total refusal must not fall
+		// through to the identity-resolved return path (06 section 5.3).
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.addStatus = http.StatusOK
+			f.addBody = addBody(t, 0, 0, 2)
+		})
+		c := connectedClient(t, f)
+
+		_, err := c.Add(context.Background(), engine.AddRequest{
+			URIs: []string{magnetOf(testHash), magnetOf(otherHash)},
+		})
+		require.ErrorContains(t, err, "failed for all 2 submissions")
+	})
+
 	t.Run("pending add reports failure", func(t *testing.T) {
 		// A 202 whose only outcome is a failure is a refusal too; the
 		// expected identity must not be returned as success.
