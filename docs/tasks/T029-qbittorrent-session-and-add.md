@@ -288,7 +288,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/qbittorrent/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.194s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.163s
 ```
 
 The verifier's second finding — that `TestAddPendingURLHasNoIdentity` should retain an identity for a

@@ -511,8 +511,8 @@ func decodeAddResult(status int, body []byte, req engine.AddRequest, expected st
 	// success-count check so both violations report the sharper message.
 	if submitted == 1 && (len(res.AddedTorrentIDs) > 1 ||
 		(status == http.StatusOK && len(res.AddedTorrentIDs) != 1)) {
-		return "", fmt.Errorf("qbittorrent: torrents/add named %d ids for a single submission",
-			len(res.AddedTorrentIDs))
+		return "", fmt.Errorf("qbittorrent: torrents/add named %d ids for a single submission (status %d, counts %d+%d+%d)",
+			len(res.AddedTorrentIDs), status, res.SuccessCount, res.PendingCount, res.FailureCount)
 	}
 	if res.SuccessCount != len(res.AddedTorrentIDs) {
 		return "", fmt.Errorf("qbittorrent: torrents/add success_count %d with %d added ids",
