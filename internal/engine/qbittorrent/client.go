@@ -481,7 +481,9 @@ func redactURL(err error) error {
 	if errors.As(err, &ue) {
 		return &url.Error{Op: ue.Op, URL: redactedURL, Err: redactSecrets(ue.Err)}
 	}
-	return err
+	// No *url.Error to blank — still sanitize the text, so a secret-bearing
+	// chain that never carried a URL node cannot slip through either.
+	return redactSecrets(err)
 }
 
 // secretQueryPattern matches the query parameters docs/11 section 6 names as

@@ -450,5 +450,10 @@ Full `go test -mod=readonly -race -count=1 ./...`: all 12 packages `ok`, no `FAI
 (2381 total, 0 errors) clean; web lint not runnable locally (no eslint) — unchanged
 files, CI covers it.
 
+Review round 1 (GLM 5.3) suggested one change, accepted: the non-`*url.Error`
+fallback in `redactURL` now routes through `redactSecrets` too, so a dirty chain
+that never carried a URL node is sanitized instead of passed through — clean
+chains still return the identical error (`TestRedactURL`'s `require.Same`).
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
