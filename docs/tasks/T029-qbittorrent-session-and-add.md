@@ -402,5 +402,58 @@ preserves the `*url.Error` type with doc 11's `__redacted__` placeholder, keepin
 `net.Error` timeout classification for callers (`TestRedactURL`). Its Info is
 recorded above as the known tradeoff.
 
+### Repair: a redirect's passkey never reaches the returned error (post-merge)
+
+The verification at 097b14a (recovery gate, `recovery/dltool-15`) found one more leak
+path: `redactURL` blanked the outer `*url.Error` URL but returned `ue.Err` untouched,
+and when a .torrent URL redirects to a malformed `Location` net/http fails the fetch
+with an inner error whose cached text quotes the raw Location — passkey included —
+twice (`failed to parse Location header "/dl%zz.torrent?passkey=…": parse …`). Both
+the returned error and any upstream `slog` line carried the secret, violating
+docs/14 §§2.2,3.3 and docs/11 §6 and contradicting the section above.
+
+Reproduced first: `TestAddTorrentURLRedirectFailureRedactsQuerySecret` (metadata
+fixture answers `302` with `Location: /invalid%zz.torrent?passkey=t029-secret-token`,
+daemon set to accept `202`) failed on `main` with
+`should not contain "passkey="` — the full token was in the returned error — while
+issuing zero `torrents/add` requests.
+
+Fixed: `redactURL` now rebuilds the chain below the wrapper through `redactSecrets`.
+A `*url.Error` node keeps its type with doc 11's `__redacted__` in place of its URL
+(so `net.Error`'s Timeout/Temporary delegation and `errors.As` keep working); a node
+whose rendered text already matches no secret query parameter is kept untouched —
+a wrapper's cached message inlines its children, so a clean parent implies a clean
+subtree and `errors.Is` to sentinel causes like `os.ErrDeadlineExceeded` survives
+(`TestRedactURL`); a leaking node is replaced by a copy whose every
+`apikey|token|passkey` value is the placeholder — the parameter name stays, the same
+shape `redactedRequestURI` logs — because no structural edit can clean text already
+formatted into a cached message.
+
+`go test -mod=readonly -count=1 -run '^TestAddTorrentURLRedirectFailureRedactsQuerySecret$' ./internal/engine/qbittorrent`:
+
+```
+=== RUN   TestAddTorrentURLRedirectFailureRedactsQuerySecret
+--- PASS: TestAddTorrentURLRedirectFailureRedactsQuerySecret (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.013s
+```
+
+`go test -mod=readonly -race -count=1 ./internal/engine/qbittorrent/...`:
+
+```
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	4.685s
+```
+
+Full `go test -mod=readonly -race -count=1 ./...`: all 12 packages `ok`, no `FAIL`.
+`test -z "$(gofmt -l cmd internal)"`, `golangci-lint run
+./internal/engine/qbittorrent/...` (`0 issues.`), `go vet ./...` and `make doclint`
+(2381 total, 0 errors) clean; web lint not runnable locally (no eslint) — unchanged
+files, CI covers it.
+
+Review round 1 (GLM 5.3) suggested one change, accepted: the non-`*url.Error`
+fallback in `redactURL` now routes through `redactSecrets` too, so a dirty chain
+that never carried a URL node is sanitized instead of passed through — clean
+chains still return the identical error (`TestRedactURL`'s `require.Same`).
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

@@ -20,6 +20,7 @@ import (
 	"net/http/cookiejar"
 	"net/textproto"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -468,18 +469,53 @@ func truncateV2(v2Hex string) string {
 	return v2Hex
 }
 
-// redactURL strips a *url.Error's URL out of an error chain: a .torrent
+// redactURL strips every URL an http failure chain can render: a .torrent
 // URL's query can carry a tracker passkey, and docs/14 section 3.3 forbids
 // letting query secrets out at any level — a returned error is logged
-// upstream. The type is preserved with doc 11's "__redacted__" placeholder
-// in place of the URL, so unwrapping and net.Error's Timeout/Temporary
-// delegation keep working; the underlying cause survives for diagnosis.
+// upstream. The *url.Error type is preserved with doc 11's "__redacted__"
+// placeholder in place of each URL, so unwrapping and net.Error's
+// Timeout/Temporary delegation keep working. The chain below the wrapper
+// is rebuilt one node at a time by redactSecrets.
 func redactURL(err error) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return &url.Error{Op: ue.Op, URL: redactedURL, Err: ue.Err}
+		return &url.Error{Op: ue.Op, URL: redactedURL, Err: redactSecrets(ue.Err)}
 	}
-	return err
+	// No *url.Error to blank — still sanitize the text, so a secret-bearing
+	// chain that never carried a URL node cannot slip through either.
+	return redactSecrets(err)
+}
+
+// secretQueryPattern matches the query parameters docs/11 section 6 names as
+// never-log — indexer and tracker URLs routinely sign themselves with an
+// apikey, token or passkey. The value class stops at the next parameter,
+// whitespace or quoting delimiter, which covers both raw and %q-quoted URLs.
+var secretQueryPattern = regexp.MustCompile(`(?i)(apikey|token|passkey)=[^&\s"']*`)
+
+// redactSecrets returns a chain that renders no secret query parameter.
+// A *url.Error node keeps its type with the URL blanked and its cause
+// redacted further. Any other node is kept untouched once its rendered
+// text is clean: a wrapper's message inlines its children, so a clean
+// parent implies a clean subtree, and untouched nodes keep errors.Is to
+// sentinel causes (context.DeadlineExceeded and friends). A node whose
+// cached text leaks is replaced by a sanitized copy, because no structural
+// edit can clean text already formatted into it — a redirect whose
+// Location is malformed makes net/http quote the raw Location, secret
+// query included, inside "failed to parse Location header".
+func redactSecrets(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if ue, ok := err.(*url.Error); ok {
+		return &url.Error{Op: ue.Op, URL: redactedURL, Err: redactSecrets(ue.Err)}
+	}
+
+	text := err.Error()
+	if !secretQueryPattern.MatchString(text) {
+		return err
+	}
+	return errors.New(secretQueryPattern.ReplaceAllString(text, "${1}="+redactedURL))
 }
 
 // blobTorrentID hashes the raw info dict exactly as it appears in the file —

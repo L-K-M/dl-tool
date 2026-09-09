@@ -666,6 +666,44 @@ func TestAddTorrentURLFetchFailureRedactsQuerySecret(t *testing.T) {
 	require.Equal(t, 0, f.count("torrents/add"))
 }
 
+func TestAddTorrentURLRedirectFailureRedactsQuerySecret(t *testing.T) {
+	// A redirect whose Location is malformed fails inside net/http with
+	// an inner parse error that quotes the raw Location header — which a
+	// tracker routinely signs with a passkey. The add must abort before
+	// the submission and neither the returned error nor any log line may
+	// carry the secret (docs/14 section 3.3, doc 11's placeholder).
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/invalid%zz.torrent?passkey=t029-secret-token")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(metadata.Close)
+
+	f := newFakeServer(t, func(f *fakeServer) {
+		f.addStatus = http.StatusAccepted
+		f.addBody = addBody(t, 0, 1, 0)
+	})
+	c := connectedClient(t, f)
+
+	_, err := c.Add(context.Background(), engine.AddRequest{
+		URIs: []string{metadata.URL + "/local.torrent?passkey=t029-secret-token"},
+	})
+	require.ErrorContains(t, err, "fetch torrent url")
+	require.NotContains(t, err.Error(), "t029-secret-token")
+	// The parameter name stays, but the value behind it must be the doc 11
+	// placeholder — the same shape redactedRequestURI logs. The Location is
+	// quoted twice in the chain (wrap prefix and inner parse text), so count
+	// is not pinned; what matters is that no raw value survives anywhere.
+	require.NotContains(t, err.Error(), "passkey=t029")
+	require.Contains(t, err.Error(), "passkey=__redacted__")
+	require.NotContains(t, logs.String(), "t029-secret-token")
+	require.Equal(t, 0, f.count("torrents/add"))
+}
+
 func TestRedactURL(t *testing.T) {
 	// The wrapper must keep the *url.Error type — net.Error's
 	// Timeout/Temporary delegation is how callers classify a prefetch
