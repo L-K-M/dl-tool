@@ -472,18 +472,25 @@ failed on `main` with `should not contain "t029-secret-token"` /
 `should not contain "t029-secret-password"` while issuing zero `torrents/add`
 requests.
 
-Fixed: the literal-name pattern is replaced by `sanitizeSecretText`.
-`queryPairPattern` captures each rendered `key=value` pair (its key class
-forbids URL structural bytes, so a candidate never spans scheme or host) and
-`isSecretParamKey` compares the percent-decoded key with the doc 11 §6 names
-case-insensitively, keeping the rendered spelling and substituting
-`__redacted__` for the value — the same shape `redactedRequestURI` logs.
-`userinfoSpanPattern` then finds each scheme URL's userinfo up to its last
-`@` (the split net/url itself makes, so a password containing `@` cannot
-survive in the span tail) and `redactUserinfoPassword` substitutes the doc 11
-placeholder for the password, keeping the user name; a span without a
-password passes through untouched. Clean nodes are still returned as-is, so
-`errors.Is` to sentinel causes keeps working (`TestRedactURL`).
+Fixed: the literal-name pattern is replaced by `sanitizeSecretText`
+(commit `00a5f90`, with the review round-1 additions below on the same
+branch). `queryPairPattern` captures each rendered `key=value` pair (its key
+class forbids URL structural bytes, so a candidate never spans scheme or host)
+and `isSecretParamKey` compares the percent-decoded whole key with the doc 11
+§6 names case-insensitively — the same whole-key rule internal/api's
+`isSecretQueryParameter` applies, so `x-apikey` is deliberately untouched —
+keeping the rendered spelling and substituting `__redacted__` for the value,
+the same shape `redactedRequestURI` logs. `userinfoSpanPattern` then finds
+each URL's userinfo — schemed and RFC 3986 network-path (`//user@host`)
+alike — up to its last `@` (the split net/url itself makes, so a password
+containing `@` cannot survive in the span tail), its class stopping at `/`,
+`?` and `#` so it never runs past an authority into path or query; and
+`redactUserinfoPassword` substitutes the doc 11 placeholder for the password,
+keeping the user name; a span without a password passes through untouched.
+A leaking node is now replaced by a `redactedError` that renders the
+sanitized text but still answers `errors.Is` for sentinel causes wrapped
+under it, so clean and leaking nodes alike keep timeout/cancellation
+classification (`TestRedactURL`, `TestRedactSecretsKeepsSentinelMatching`).
 
 `go test -mod=readonly -count=1 -run '^TestAddTorrentURLRedirectFailureRedacts(EncodedPasskey|UserinfoPassword)$' ./internal/engine/qbittorrent` before the fix:
 
@@ -491,7 +498,7 @@ password passes through untouched. Clean nodes are still returned as-is, so
 --- FAIL: TestAddTorrentURLRedirectFailureRedactsEncodedPasskey (0.00s)
         Error: "qbittorrent: fetch torrent url: Get \"__redacted__\": failed to parse Location header \"/invalid%zz.torrent?%70asskey=t029-secret-token\": parse \"/invalid%zz.torrent?%70asskey=t029-secret-token\": invalid URL escape \"%zz\"" should not contain "t029-secret-token"
 --- FAIL: TestAddTorrentURLRedirectFailureRedactsUserinfoPassword (0.00s)
-        Error: "qbittorrent: fetch torrent url: Get \"__redacted__\": failed to parse Location header \"http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent\": …" should not contain "t029-secret-password"
+        Error: "qbittorrent: fetch torrent url: Get \"__redacted__\": failed to parse Location header \"http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent\": parse \"http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent\": invalid URL escape \"%zz\"" should not contain "t029-secret-password"
 FAIL
 ```
 
@@ -516,6 +523,35 @@ ok  github.com/L-K-M/dl-tool/internal/uri       1.037s
 ./internal/engine/qbittorrent/...` (`0 issues.`), `go vet ./...` and `make doclint`
 (2381 total, 0 errors) clean; web lint not runnable locally (no eslint) — unchanged
 files, CI covers it.
+
+Review round 1 (GLM 5.3) found the scheme-relative gap before merge: a
+`Location: //alice:…@host/…` (RFC 3986 network-path reference, no scheme)
+quoted its password verbatim in the same parse failure, because the span
+pattern anchored on `scheme://`. Reproduced on the round-1 commit with
+`TestAddTorrentURLRedirectFailureRedactsSchemeRelativeUserinfo`, then fixed
+by matching both shapes. Also accepted: the span class now stops at `?` and
+`#` so a path-less URL's query cannot be swallowed into a fabricated
+user:password pair (`TestSanitizeSecretTextLeavesInnocentURLs`); leaking
+nodes keep `errors.Is` sentinel matching through `redactedError`
+(`TestRedactSecretsKeepsSentinelMatching`); whole-key matching intent locked
+(`TestSanitizeSecretTextWholeKeyMatching`); combined credentials + query
+secret on one Location covered
+(`TestAddTorrentURLRedirectFailureRedactsUserinfoAndQueryTogether`); the four
+redirect-failure tests share one `requireRedirectLocationRedacted` helper.
+Declined: a guard for a missing `"://"` in `redactUserinfoPassword` — the
+span pattern guarantees every match begins `//` or `scheme://`, so the
+authority offset is well defined by construction.
+
+`go test -mod=readonly -race -count=1 ./internal/engine/...` after round 1:
+
+```
+ok  github.com/L-K-M/dl-tool/internal/engine              22.055s
+ok  github.com/L-K-M/dl-tool/internal/engine/aria2        3.205s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.743s
+```
+
+`golangci-lint run ./internal/engine/qbittorrent/...` (`0 issues.`) and
+`go vet ./...` clean.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

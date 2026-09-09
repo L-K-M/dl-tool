@@ -488,9 +488,11 @@ func redactURL(err error) error {
 
 // secretParamNames are the query parameters docs/11 section 6 names as
 // never-log — indexer and tracker URLs routinely sign themselves with an
-// apikey, token or passkey. Keys compare case-insensitively after
-// percent-decoding, so an encoded spelling ("%70asskey" for "passkey")
-// is caught, not just the literal names.
+// apikey, token or passkey. Keys match as whole decoded names only — the
+// same whole-key rule internal/api's isSecretQueryParameter applies — so a
+// key like "x-apikey" is deliberately left untouched. Keys compare
+// case-insensitively after percent-decoding, so an encoded spelling
+// ("%70asskey" for "passkey") is caught, not just the literal names.
 var secretParamNames = []string{"apikey", "token", "passkey"}
 
 // queryPairPattern captures one key=value pair as rendered error text
@@ -501,11 +503,16 @@ var secretParamNames = []string{"apikey", "token", "passkey"}
 // delimiter, which covers both raw and %q-quoted URLs.
 var queryPairPattern = regexp.MustCompile(`[^&\s"'/?:#=]+=[^&\s"']*`)
 
-// userinfoSpanPattern captures a scheme URL's userinfo up to its last "@" —
+// userinfoSpanPattern captures a URL's userinfo up to its last "@" —
 // the split net/url itself makes — so a password containing a literal "@"
-// cannot survive in the tail of the span. A URL without userinfo never
-// matches: the class stops at the first "/" or quote before any "@".
-var userinfoSpanPattern = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s"']*@`)
+// cannot survive in the tail of the span. Both schemed (http://) and
+// RFC 3986 network-path (//user@host) references match: a redirect
+// Location may carry either shape, and net/http quotes both raw in a
+// parse failure. The class stops at "/", "?" and "#" — none legal raw in
+// userinfo, Go renders them percent-encoded — so a span never runs past
+// an authority into path or query and fabricates a user:password pair.
+// A URL without userinfo never matches.
+var userinfoSpanPattern = regexp.MustCompile(`(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?//[^/?#\s"']*@`)
 
 // isSecretParamKey reports whether a rendered query key is one of the
 // never-log names. A key with a malformed escape cannot hide one of the
@@ -541,16 +548,35 @@ func sanitizeSecretText(text string) string {
 
 // redactUserinfoPassword replaces a userinfo span's password with doc 11's
 // placeholder, keeping the user name. A span without a password (no ":" in
-// the userinfo) carries no secret and passes through untouched.
+// the userinfo) carries no secret and passes through untouched. The span
+// pattern guarantees every match begins either "//" or "scheme://", so the
+// authority offset is always well defined.
 func redactUserinfoPassword(span string) string {
-	schemeEnd := strings.Index(span, "://")
-	userinfo := span[schemeEnd+3 : len(span)-1] // without the trailing "@"
+	authority := 2 // "//user:pass@" — an RFC 3986 network-path reference
+	if !strings.HasPrefix(span, "//") {
+		authority = strings.Index(span, "://") + 3
+	}
+	userinfo := span[authority : len(span)-1] // without the trailing "@"
 	user, _, found := strings.Cut(userinfo, ":")
 	if !found {
 		return span
 	}
-	return span[:schemeEnd+3] + user + ":" + redactedURL + "@"
+	return span[:authority] + user + ":" + redactedURL + "@"
 }
+
+// redactedError renders sanitized text for a node whose cached message
+// leaked — no structural edit can clean text already formatted into it —
+// while still answering errors.Is for sentinel causes buried in its
+// cause, so callers keep classifying timeouts and cancellation after
+// redaction. It deliberately has no Unwrap: the secret-bearing cause must
+// never escape re-rendering.
+type redactedError struct {
+	cause error
+	msg   string
+}
+
+func (e redactedError) Error() string        { return e.msg }
+func (e redactedError) Is(target error) bool { return errors.Is(e.cause, target) }
 
 // redactSecrets returns a chain that renders no secret: neither a query
 // parameter docs/11 section 6 names nor a URL password. A *url.Error node
@@ -558,11 +584,12 @@ func redactUserinfoPassword(span string) string {
 // other node is kept untouched once its rendered text is clean: a wrapper's
 // message inlines its children, so a clean parent implies a clean subtree,
 // and untouched nodes keep errors.Is to sentinel causes
-// (context.DeadlineExceeded and friends). A node whose cached text leaks is
-// replaced by a sanitized copy, because no structural edit can clean text
-// already formatted into it — a redirect whose Location is malformed makes
-// net/http quote the raw Location, secrets included, inside "failed to
-// parse Location header".
+// (context.DeadlineExceeded and friends). A leaking node is replaced by a
+// redactedError: its cached text cannot be cleaned structurally — a
+// redirect whose Location is malformed makes net/http quote the raw
+// Location, secrets included, inside "failed to parse Location header" —
+// so it renders sanitized text while still matching the sentinel causes
+// wrapped under it.
 func redactSecrets(err error) error {
 	if err == nil {
 		return nil
@@ -574,7 +601,7 @@ func redactSecrets(err error) error {
 
 	text := err.Error()
 	if sanitized := sanitizeSecretText(text); sanitized != text {
-		return errors.New(sanitized)
+		return redactedError{cause: err, msg: sanitized}
 	}
 	return err
 }

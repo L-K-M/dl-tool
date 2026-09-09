@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -704,18 +705,21 @@ func TestAddTorrentURLRedirectFailureRedactsQuerySecret(t *testing.T) {
 	require.Equal(t, 0, f.count("torrents/add"))
 }
 
-func TestAddTorrentURLRedirectFailureRedactsEncodedPasskey(t *testing.T) {
-	// The literal key spellings alone are not enough: a Location can
-	// percent-encode a secret key's own name ("%70asskey" for "passkey"),
-	// which slips past a literal-name pattern. The key must be compared
-	// after decoding (docs/14 section 3.3, doc 11's placeholder).
+// requireRedirectLocationRedacted submits a clean .torrent URL whose fetch
+// is answered with one 302 Location, then asserts the add aborted before
+// the submission with every named secret scrubbed from the returned error
+// and from any log line the client emits — the add path itself currently
+// logs nothing; the guard holds for any future log line it grows.
+func requireRedirectLocationRedacted(t *testing.T, location string, secrets, wantSubstrings []string) {
+	t.Helper()
+
 	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Location", "/invalid%zz.torrent?%70asskey=t029-secret-token")
+		w.Header().Set("Location", location)
 		w.WriteHeader(http.StatusFound)
 	}))
 	t.Cleanup(metadata.Close)
@@ -730,46 +734,93 @@ func TestAddTorrentURLRedirectFailureRedactsEncodedPasskey(t *testing.T) {
 		URIs: []string{metadata.URL + "/local.torrent"},
 	})
 	require.ErrorContains(t, err, "fetch torrent url")
-	// The encoded spelling stays as rendered, but the value behind it must
-	// be the doc 11 placeholder, exactly like the literal spellings.
-	require.NotContains(t, err.Error(), "t029-secret-token")
-	require.Contains(t, err.Error(), "%70asskey=__redacted__")
-	require.NotContains(t, logs.String(), "t029-secret-token")
+	for _, want := range wantSubstrings {
+		require.Contains(t, err.Error(), want)
+	}
+	for _, secret := range secrets {
+		require.NotContains(t, err.Error(), secret)
+		require.NotContains(t, logs.String(), secret)
+	}
 	require.Equal(t, 0, f.count("torrents/add"))
+}
+
+func TestAddTorrentURLRedirectFailureRedactsEncodedPasskey(t *testing.T) {
+	// The literal key spellings alone are not enough: a Location can
+	// percent-encode a secret key's own name ("%70asskey" for "passkey"),
+	// which slips past a literal-name pattern. The key must be compared
+	// after decoding (docs/14 section 3.3, doc 11's placeholder).
+	requireRedirectLocationRedacted(t,
+		"/invalid%zz.torrent?%70asskey=t029-secret-token",
+		[]string{"t029-secret-token"},
+		[]string{"%70asskey=__redacted__"})
 }
 
 func TestAddTorrentURLRedirectFailureRedactsUserinfoPassword(t *testing.T) {
 	// docs/14 section 3.3 allows logging a URL only after stripping
 	// userinfo. A redirect Location that embeds credentials renders
 	// verbatim inside net/http's parse failure, so the password must be
-	// scrubbed from the returned error and every log line it reaches.
-	var logs bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	// scrubbed from the returned error and every log line it reaches — the
+	// user name stays, the value becomes the doc 11 placeholder, the same
+	// trade redactedRequestURI makes.
+	requireRedirectLocationRedacted(t,
+		"http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent",
+		[]string{"t029-secret-password"},
+		[]string{"alice:__redacted__@"})
+}
 
-	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Location", "http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent")
-		w.WriteHeader(http.StatusFound)
-	}))
-	t.Cleanup(metadata.Close)
+func TestAddTorrentURLRedirectFailureRedactsSchemeRelativeUserinfo(t *testing.T) {
+	// RFC 3986 network-path references carry userinfo without a scheme,
+	// and net/http quotes them raw in the same parse failure, so the
+	// redaction cannot anchor on "scheme://" alone.
+	requireRedirectLocationRedacted(t,
+		"//alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent",
+		[]string{"t029-secret-password"},
+		[]string{"//alice:__redacted__@"})
+}
 
-	f := newFakeServer(t, func(f *fakeServer) {
-		f.addStatus = http.StatusAccepted
-		f.addBody = addBody(t, 0, 1, 0)
-	})
-	c := connectedClient(t, f)
+func TestAddTorrentURLRedirectFailureRedactsUserinfoAndQueryTogether(t *testing.T) {
+	// Real tracker URLs combine credentials and query secrets; both
+	// redaction passes must compose on one Location without clobbering
+	// each other's substitutions.
+	requireRedirectLocationRedacted(t,
+		"http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent?passkey=t029-secret-token",
+		[]string{"t029-secret-password", "t029-secret-token"},
+		[]string{"alice:__redacted__@", "passkey=__redacted__"})
+}
 
-	_, err := c.Add(context.Background(), engine.AddRequest{
-		URIs: []string{metadata.URL + "/local.torrent"},
-	})
-	require.ErrorContains(t, err, "fetch torrent url")
-	// The user name stays, but the password must be the doc 11 placeholder —
-	// the same value-for-placeholder trade redactedRequestURI makes.
-	require.NotContains(t, err.Error(), "t029-secret-password")
-	require.Contains(t, err.Error(), "alice:__redacted__@")
-	require.NotContains(t, logs.String(), "t029-secret-password")
-	require.Equal(t, 0, f.count("torrents/add"))
+func TestSanitizeSecretTextWholeKeyMatching(t *testing.T) {
+	// Whole decoded keys only, mirroring internal/api's
+	// isSecretQueryParameter: "x-apikey" is not doc 11's apikey and stays,
+	// while case and percent-encoding in the key do not hide a real name.
+	require.Equal(t, "x-apikey=1", sanitizeSecretText("x-apikey=1"))
+	require.Equal(t, "APIKEY=__redacted__", sanitizeSecretText("APIKEY=t029-secret-token"))
+	require.Equal(t, "%70asskey=__redacted__", sanitizeSecretText("%70asskey=t029-secret-token"))
+}
+
+func TestSanitizeSecretTextLeavesInnocentURLs(t *testing.T) {
+	// The userinfo span must not run past a path-less host into the query
+	// and fabricate a user:password pair — over-redaction corrupts innocent
+	// URLs in error text just as surely as under-redaction leaks them.
+	for _, plain := range []string{
+		`https://example.com?start=12:30&email=a@b.com`,
+		`https://twitter.com/@handle`,
+		`http://host:8080/path`,
+	} {
+		require.Equal(t, plain, sanitizeSecretText(plain), plain)
+	}
+}
+
+func TestRedactSecretsKeepsSentinelMatching(t *testing.T) {
+	// A leaking node renders sanitized text but must still answer
+	// errors.Is for the sentinel buried in its cause, so callers keep
+	// classifying timeouts and cancellation after redaction.
+	leaking := fmt.Errorf("GET %s: %w", "http://user:t029-secret-password@host/", context.DeadlineExceeded)
+
+	red := redactSecrets(leaking)
+
+	require.ErrorIs(t, red, context.DeadlineExceeded)
+	require.NotContains(t, red.Error(), "t029-secret-password")
+	require.Contains(t, red.Error(), "user:__redacted__@")
 }
 
 func TestRedactURL(t *testing.T) {
