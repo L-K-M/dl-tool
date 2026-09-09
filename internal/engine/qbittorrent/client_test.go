@@ -896,6 +896,15 @@ func TestSanitizeSecretTextRejectsStrayQuoteSpanPairing(t *testing.T) {
 		sanitizeSecretText(`oops " see "https://b/?passkey=p w" tail`))
 }
 
+func TestSanitizeSecretTextRejectsSlashLeadingStrayQuotePairing(t *testing.T) {
+	// A stray quote followed by "/"-leading free text must not steal a
+	// genuine quoted URL's opening quote either — the shape test must
+	// accept only bodies the in-quote twins could actually redact.
+	require.Equal(t,
+		`oops "/note "https://b/?passkey=__redacted__" tail`,
+		sanitizeSecretText(`oops "/note "https://b/?passkey=p w" tail`))
+}
+
 func TestSanitizeSecretTextWholeKeyMatching(t *testing.T) {
 	// Whole decoded keys only, mirroring internal/api's
 	// isSecretQueryParameter: "x-apikey" is not doc 11's apikey and stays,

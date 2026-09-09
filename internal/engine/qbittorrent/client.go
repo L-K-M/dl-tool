@@ -532,16 +532,16 @@ var userinfoSpanPattern = regexp.MustCompile(`(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?//(?:
 // only ever whole inside a quoted span. Outside them a space ends a
 // URL, so the whitespace-tolerant classes below must never apply there.
 //
-// Only URL-shaped spans qualify: the body starts with "/" (an absolute
-// path reference), carries an authority ("//") or a query ("="). A
-// secret-bearing span always qualifies — its secret is a key=value pair
-// or userinfo on an authority — and the shape test keeps a stray quote
-// in free text from stealing a genuine quoted URL's opening quote as
-// its closer and dropping the URL into the raw pass. The limit is
-// honest: adversarial free text that itself quotes URL-shaped words
-// ("a=1 " before a real URL) can still mispair, and Go's error chains
-// do not produce such text; mispairing degrades to the raw pass.
-var quotedSpanPattern = regexp.MustCompile(`"(?:/(?:\\.|[^"\\])*|(?:\\.|[^"\\])*//(?:\\.|[^"\\])*|(?:\\.|[^"\\])*=(?:\\.|[^"\\])*)"`)
+// Only URL-shaped spans qualify: the body carries an authority ("//")
+// or a query ("=") — exactly the two shapes the in-quote twins below
+// can redact — so a secret-bearing span always qualifies, and the shape
+// test keeps a stray quote in free text from stealing a genuine quoted
+// URL's opening quote as its closer and dropping the URL into the raw
+// pass. The limit is honest: adversarial free text that itself quotes
+// URL-shaped words ("a=1 " before a real URL) can still mispair, and
+// Go's error chains do not produce such text; mispairing degrades to
+// the raw pass.
+var quotedSpanPattern = regexp.MustCompile(`"(?:(?:\\.|[^"\\])*//(?:\\.|[^"\\])*|(?:\\.|[^"\\])*=(?:\\.|[^"\\])*)"`)
 
 // quotedQueryPairPattern and quotedUserinfoSpanPattern are the in-quote
 // twins of the raw patterns: inside a quoted URL whitespace is an

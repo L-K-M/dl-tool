@@ -657,11 +657,14 @@ secret pair after it whole. Reproduced with
 `TestSanitizeSecretTextKeepsPairsSeparableAfterRawBackslashes` (fails on
 f4ad4a5, `token=x` verbatim); fixed by bounding the raw escape to a second
 byte that is neither whitespace nor `&`. The same round's minors were also
-resolved: `quotedSpanPattern` now accepts only URL-shaped bodies
-(leading `/`, `//` authority or `=` query — every secret-bearing span
-qualifies), so a stray quote in free text cannot steal a genuine quoted
-URL's opening quote (pinned by `TestSanitizeSecretTextRejectsStrayQuoteSpanPairing`,
-which fails on f4ad4a5 leaking the ` w` tail); and the escaped-quote-as-
+resolved: `quotedSpanPattern` now accepts only bodies the in-quote twins
+could actually redact — an `//` authority or an `=` query — so a stray
+quote in free text cannot steal a genuine quoted URL's opening quote
+(pinned by `TestSanitizeSecretTextRejectsStrayQuoteSpanPairing` and,
+after review round 3 removed a needless leading-`/` alternative that
+re-opened the bypass for `"/note "` bodies, by
+`TestSanitizeSecretTextRejectsSlashLeadingStrayQuotePairing`; both fail
+on f4ad4a5 leaking the ` w` tail); and the escaped-quote-as-
 final-value-byte boundary is pinned in
 `TestSanitizeSecretTextPairsEscapedBackslashesCorrectly`. The honest limit
 is documented on the pattern: adversarial free text quoting URL-shaped
@@ -671,7 +674,7 @@ Go's error chains do not produce such text.
 `go test -mod=readonly -race -count=1 ./internal/engine/qbittorrent`:
 
 ```
-ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.849s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.812s
 ```
 
 `go test -mod=readonly -count=1 ./internal/...` all `ok`; `go vet` and
