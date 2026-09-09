@@ -1,15 +1,19 @@
 package qbittorrent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -598,11 +602,108 @@ func TestAddTorrentURLVerifiesDaemonID(t *testing.T) {
 	})
 }
 
-func TestAddPendingURLHasNoIdentity(t *testing.T) {
-	// A URL whose bytes cannot be fetched leaves the identity genuinely
-	// unresolved: a pending add then reports it explicitly instead of
-	// guessing an id (06 section 5.3). The URL points at a local server —
-	// unit tests never touch the network.
+func TestAddTorrentURLPrefetchFailureAbortsBeforeSubmission(t *testing.T) {
+	// docs/06 section 5.3 resolves identity before adding, so a failed
+	// pre-resolution must abort the add rather than submit a .torrent URL
+	// the daemon would then accept: an accepted add with no retained id is
+	// a lost task. The fixture mirrors the audit that caught this — it
+	// refuses the client's first prefetch but would serve valid bytes to
+	// the daemon's own fetch of urls.
+	var fetches int32
+	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&fetches, 1) == 1 {
+			http.Error(w, "try the daemon", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", torrentMIME)
+		_, _ = w.Write([]byte(v1Blob))
+	}))
+	t.Cleanup(metadata.Close)
+
+	f := newFakeServer(t, func(f *fakeServer) {
+		f.addStatus = http.StatusAccepted // the daemon would accept
+		f.addBody = addBody(t, 0, 1, 0)
+	})
+	c := connectedClient(t, f)
+
+	_, err := c.Add(context.Background(), engine.AddRequest{
+		URIs: []string{metadata.URL + "/local.torrent"},
+	})
+	require.ErrorContains(t, err, "fetch torrent url")
+	require.Equal(t, 0, f.count("torrents/add"),
+		"a failed pre-resolution must not submit; the daemon would accept a task nobody can reference")
+	require.EqualValues(t, 1, atomic.LoadInt32(&fetches), "the prefetch itself is attempted once")
+}
+
+func TestAddTorrentURLFetchFailureRedactsQuerySecret(t *testing.T) {
+	// docs/14 section 3.3 forbids letting a URL's query secrets out at any
+	// log level. A transport failure wraps *url.Error, whose message embeds
+	// the full URL — the tracker passkey must not survive into the
+	// returned error or any log line the add emits.
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// A closed server gives a real refused-connection transport error.
+	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	metadata.Close()
+
+	f := newFakeServer(t, func(f *fakeServer) {
+		f.addStatus = http.StatusAccepted
+		f.addBody = addBody(t, 0, 1, 0)
+	})
+	c := connectedClient(t, f)
+
+	_, err := c.Add(context.Background(), engine.AddRequest{
+		URIs: []string{metadata.URL + "/local.torrent?passkey=t029-secret-token"},
+	})
+	require.ErrorContains(t, err, "fetch torrent url")
+	require.NotContains(t, err.Error(), "passkey=")
+	require.NotContains(t, err.Error(), "t029-secret-token")
+	require.NotContains(t, logs.String(), "passkey=")
+	require.NotContains(t, logs.String(), "t029-secret-token")
+	require.Equal(t, 0, f.count("torrents/add"))
+}
+
+func TestRedactURL(t *testing.T) {
+	// The wrapper must keep the *url.Error type — net.Error's
+	// Timeout/Temporary delegation is how callers classify a prefetch
+	// failure — while never emitting the real URL, whose query can carry
+	// a tracker passkey (docs/14 section 3.3, doc 11's placeholder).
+	secret := "http://tracker.example/dl.torrent?passkey=t029-secret-token"
+	original := &url.Error{Op: "Get", URL: secret, Err: os.ErrDeadlineExceeded}
+
+	redacted := redactURL(original)
+
+	require.NotContains(t, redacted.Error(), "passkey=")
+	require.NotContains(t, redacted.Error(), "tracker.example")
+	require.Contains(t, redacted.Error(), "__redacted__")
+
+	var ue *url.Error
+	require.ErrorAs(t, redacted, &ue)
+	require.True(t, ue.Timeout(), "net.Error timeout semantics must survive redaction")
+	require.ErrorIs(t, redacted, os.ErrDeadlineExceeded)
+
+	// A chain without a *url.Error passes through untouched.
+	plain := errors.New("no url in this chain")
+	require.Same(t, plain, redactURL(plain))
+
+	// errors.As must also find a *url.Error buried under wrapper context,
+	// and the redacted result must still carry no secret.
+	wrapped := errors.Join(errors.New("prefetch metadata"), original)
+	rw := redactURL(wrapped)
+	require.NotContains(t, rw.Error(), "passkey=")
+	require.NotContains(t, rw.Error(), "tracker.example")
+	var uew *url.Error
+	require.ErrorAs(t, rw, &uew)
+}
+
+func TestAddTorrentURLPrefetchNotFoundAborts(t *testing.T) {
+	// A URL whose bytes cannot be fetched aborts the add before the
+	// submission — the error names the fetch, not a pending decode
+	// (06 section 5.3). The URL points at a local server: unit tests
+	// never touch the network.
 	metadata, fetches := torrentURLServer(t, http.StatusNotFound, "")
 
 	f := newFakeServer(t, func(f *fakeServer) {
@@ -614,7 +715,8 @@ func TestAddPendingURLHasNoIdentity(t *testing.T) {
 	_, err := c.Add(context.Background(), engine.AddRequest{
 		URIs: []string{metadata.URL + "/missing.torrent"},
 	})
-	require.ErrorContains(t, err, "not locally resolvable")
+	require.ErrorContains(t, err, "fetch torrent url: status 404")
+	require.Equal(t, 0, f.count("torrents/add"))
 	require.EqualValues(t, 1, atomic.LoadInt32(fetches))
 }
 

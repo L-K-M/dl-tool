@@ -82,6 +82,10 @@ const (
 	// two infohash shapes: 20-byte SHA-1, 32-byte SHA-256.
 	v1TorrentHexChars = 40
 	v2TorrentHexChars = 64
+
+	// redactedURL is docs/11's literal placeholder, substituted for a real
+	// URL wherever one must not reach a log or a returned error.
+	redactedURL = "__redacted__"
 )
 
 // lifecyclePair is one daemon generation's stop/start endpoint spelling.
@@ -309,7 +313,9 @@ func (c *Client) Health(ctx context.Context) (string, error) {
 // from a torrents/info diff; it is resolved before the submission — a
 // .torrent URL's bytes are fetched and hashed with the local parser (06
 // section 5.3) — so a pending (202) add returns the expected identity,
-// which T030 reconciles once the daemon reports the torrent.
+// which T030 reconciles once the daemon reports the torrent, and a fetch
+// failure aborts the add before the daemon can accept an unreferencable
+// task.
 func (c *Client) Add(ctx context.Context, req engine.AddRequest) (string, error) {
 	if len(req.Blob) > 0 && req.BlobKind != blobKindTorrent {
 		return "", engine.ErrNotSupported
@@ -344,8 +350,10 @@ func (c *Client) Add(ctx context.Context, req engine.AddRequest) (string, error)
 }
 
 // expectedTorrentID resolves the TorrentID the daemon will key on, before
-// the submission. "" when it cannot be known locally (a multi-URI add, or a
-// .torrent URL whose bytes cannot be fetched). Verified against the pinned
+// the submission. "" without an error only when the URI list itself names
+// no single identity (a multi-URI add); a .torrent URL whose bytes cannot
+// be fetched is an error, because Add must not submit it (06 section 5.3).
+// Verified against the pinned
 // sources: libtorrent's info_hash_t::get_best() (include/libtorrent/info_hash.hpp,
 // RC_2_0) returns the 40-hex truncation of the v2 hash whenever one exists —
 // hybrid included — and qBittorrent 5.2.3's InfoHash::toTorrentID()
@@ -375,7 +383,7 @@ func (c *Client) uriTorrentID(ctx context.Context, raw string) (string, error) {
 	}
 
 	if scheme, _, found := strings.Cut(raw, ":"); !found || !strings.EqualFold(scheme, "magnet") {
-		return c.urlTorrentID(ctx, raw), nil
+		return c.urlTorrentID(ctx, raw)
 	}
 
 	n, err := uri.ParseMagnet(raw)
@@ -392,31 +400,28 @@ func (c *Client) uriTorrentID(ctx context.Context, raw string) (string, error) {
 	}
 }
 
-// urlTorrentID resolves the TorrentID of a .torrent URL through the local
-// section 3.4 parser: fetch the bytes with the injected client, then hash
-// them exactly like a blob. Any other URI shape returns "".
+// urlTorrentID resolves the TorrentID of an http(s) .torrent URL through
+// the local section 3.4 parser: fetch the bytes with the injected client,
+// then hash them exactly like a blob.
 //
-// A fetch that fails also returns "": the daemon fetches urls itself, so an
-// unresolved identity never blocks the submission — it only leaves a
-// pending outcome without a retained id, which decodeAddResult reports
-// explicitly rather than guessing one (docs/06 section 5.3).
-func (c *Client) urlTorrentID(ctx context.Context, raw string) string {
+// Identity is resolved before the add (docs/06 section 5.3), so a fetch
+// or parse failure is an error and Add aborts before submitting: the
+// daemon fetches urls itself and would accept the task, and an accepted
+// task with no locally retained id is lost — its caller saw only an
+// error. Any other URI shape returns "" without an error: it is outside
+// this engine's lane (06 section 2 routes every other http(s) URL to
+// aria2), so no local identity exists; if one is forced through Add
+// anyway, a pending reply that names no id still errors explicitly in
+// decodeAddResult rather than guessing.
+func (c *Client) urlTorrentID(ctx context.Context, raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" ||
 		(!strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https")) ||
 		!strings.HasSuffix(strings.ToLower(u.Path), ".torrent") {
-		return ""
+		return "", nil
 	}
 
-	id, err := c.fetchTorrentID(ctx, u)
-	if err != nil {
-		// The URL is not logged: it can carry a tracker token. The task
-		// row already holds the URI for diagnosis.
-		slog.Warn("qbittorrent: torrent url identity unresolved; the add proceeds without one",
-			"engine", engine.NameQBittorrent, "error", err)
-		return ""
-	}
-	return id
+	return c.fetchTorrentID(ctx, u)
 }
 
 // fetchTorrentID downloads one .torrent URL under the per-call timeout and
@@ -432,7 +437,7 @@ func (c *Client) fetchTorrentID(ctx context.Context, u *url.URL) (string, error)
 
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("qbittorrent: fetch torrent url: %w", err)
+		return "", fmt.Errorf("qbittorrent: fetch torrent url: %w", redactURL(err))
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -461,6 +466,20 @@ func truncateV2(v2Hex string) string {
 		return v2Hex[:v1TorrentHexChars]
 	}
 	return v2Hex
+}
+
+// redactURL strips a *url.Error's URL out of an error chain: a .torrent
+// URL's query can carry a tracker passkey, and docs/14 section 3.3 forbids
+// letting query secrets out at any level — a returned error is logged
+// upstream. The type is preserved with doc 11's "__redacted__" placeholder
+// in place of the URL, so unwrapping and net.Error's Timeout/Temporary
+// delegation keep working; the underlying cause survives for diagnosis.
+func redactURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return &url.Error{Op: ue.Op, URL: redactedURL, Err: ue.Err}
+	}
+	return err
 }
 
 // blobTorrentID hashes the raw info dict exactly as it appears in the file —
