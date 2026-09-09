@@ -218,28 +218,28 @@ an unaccepted response, and a threshold can preserve fields lost by the pinned 5
    cases named `TestConcurrentStopWaitsForPollExit` and `TestCloseStopsPollGoroutine`.
 
 ## Acceptance criteria
-- [ ] A partial delta inserts a new accepted hash and merges an existing one without clearing any field the
+- [x] A partial delta inserts a new accepted hash and merges an existing one without clearing any field the
   delta omitted.
-- [ ] `full_update: true` rebuilds the visible cache and rejected set from the response, clears `pendingFull`,
+- [x] `full_update: true` rebuilds the visible cache and rejected set from the response, clears `pendingFull`,
   directly publishes an accepted pending hash, reports no unchanged hash as changed, and emits
   `EventRemoved` for each previously visible hash the current ownership snapshot accepts but the response
   omits. An omitted pending identifier is pruned.
-- [ ] A withheld hash has no retained torrent fields and appears in no `List`, no `Get` and no `TaskEvent`;
+- [x] A withheld hash has no retained torrent fields and appears in no `List`, no `Get` and no `TaskEvent`;
   its adapter-local identifier is used only to recheck hash ownership.
-- [ ] Installing or replacing the snapshot source immediately removes newly rejected visible hashes without
+- [x] Installing or replacing the snapshot source immediately removes newly rejected visible hashes without
   events and is an ownership reset. Every delta rechecks its reported hashes and does the same removal. A
   visible-to-rejected change found by a recheck, unlike source installation, does not set the force-full flag
   or increment the ownership epoch.
-- [ ] One ownership recheck over any number of hashes makes at most one `ListNonTerminalByEngine` call, and
+- [x] One ownership recheck over any number of hashes makes at most one `ListNonTerminalByEngine` call, and
   store I/O never runs under the cache mutex. Before the first successful call, ownership fails closed; the
   first recovered snapshot forces one full resync.
-- [ ] `TestForeignHashIsInvisible` exercises a snapshot source installed by `NewReconciler`, not the default.
-- [ ] The engine `rid` is never sent to any dl-tool client and never stored in the database.
-- [ ] A failed poll leaves the last accepted cache and rid unchanged and sets the shared force-full flag, so
+- [x] `TestForeignHashIsInvisible` exercises a snapshot source installed by `NewReconciler`, not the default.
+- [x] The engine `rid` is never sent to any dl-tool client and never stored in the database.
+- [x] A failed poll leaves the last accepted cache and rid unchanged and sets the shared force-full flag, so
   every later request sends `rid=0` until an accepted full response succeeds.
-- [ ] Five minutes after the last accepted full update, the shared force-full flag is set and the next request
+- [x] Five minutes after the last accepted full update, the shared force-full flag is set and the next request
   sends `rid=0`.
-- [ ] Only installing or replacing the ownership source, or the edge-triggered `rejected` → `pendingFull`
+- [x] Only installing or replacing the ownership source, or the edge-triggered `rejected` → `pendingFull`
   transition during a pre-request or partial-response pass, is an ownership reset. It forces `rid=0` and
   increments `ownershipEpoch` once per pass; an already-pending accepted hash cannot retrigger it. A partial
   while an accepted pending hash remains does not advance rid, apply cache or removals, or emit events. A
@@ -247,7 +247,7 @@ an unaccepted response, and a threshold can preserve fields lost by the pinned 5
   response whose captured epoch no longer matches, including a full response, cannot publish state or events,
   consume that reset or restart the full-sync interval. An accepted full response directly publishes an
   accepted pending hash.
-- [ ] `Close` returns only after the poll goroutine has exited; `go test -race` is clean.
+- [x] `Close` returns only after the poll goroutine has exited; `go test -race` is clean.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -295,7 +295,56 @@ file this task creates is untracked, and `git diff --name-only` never lists an u
 
 ## Evidence
 
-Fresh verification output is required after implementing the corrected recovery rules.
+Fresh verification output after implementing the corrected recovery rules (2026-09-09),
+`make lint && make test PKG=./internal/engine/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.064s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.165s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.300s
+```
+
+All 26 tests the block names `PASS` (`go test -count=1 -v` over the package printed 82
+`--- PASS` lines and no `FAIL`): `TestMergeFullUpdate`, `TestMergePartialKeepsUntouchedFields`,
+`TestMergePartialAddsNewAcceptedHash`, `TestTorrentsRemovedEmitsEventRemoved`,
+`TestUnchangedFullSnapshotEmitsNothing`, `TestFullSnapshotEmitsEventRemovedForDroppedHash`,
+`TestFullSnapshotPrunesStaleRejectedHashes`, `TestFullSnapshotPrunesStalePendingHashes`,
+`TestFullSnapshotPublishesPendingHash`, `TestForeignHashIsInvisible`,
+`TestOwnershipFilterImmediatelyDropsRejectedHash`, `TestDeltaRevokingOwnershipDropsHash`,
+`TestOwnershipPrecheckDropsWithoutReset`, `TestOwnershipRecheckUsesOneStoreListing`,
+`TestOwnershipRefreshDoesNotBlockCacheReads`, `TestOwnedRefsFailsClosedBeforeFirstSuccess`,
+`TestOwnershipTransitionResetsOnce`, `TestRejectedPartialAppliesNothing`,
+`TestPendingHashRevocationAllowsPartial`, `TestRejectedHashBecomesVisibleAfterOwnershipRefresh`,
+`TestOwnershipResetRejectsStaleResponse` (delta, full and wire subtests),
+`TestEngineRidStaysInsideCache`, `TestPollFailureKeepsCacheAndForcesFullUpdate` (non-2xx,
+decode, timeout, transport subtests), `TestPeriodicFullSync`, `TestConcurrentStopWaitsForPollExit`
+and `TestCloseStopsPollGoroutine`. `TestOwnershipResetRejectsStaleResponse` covers stale delta
+and full responses; `TestPeriodicFullSync` seeds `lastFullAt` instead of waiting five minutes.
+No data-race report at `-race -count=1`.
+
+Scope check, `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```
+internal/engine/qbittorrent/sync.go
+internal/engine/qbittorrent/sync_test.go
+internal/engine/reconcile.go
+```
+
+`internal/engine/qbittorrent/client.go` needed no edit this round: the superseded attempt
+(PR #105) already starts and stops the poll goroutine from `Connect`/`Close`, and the corrected
+contract changes nothing about that wiring.
 
 Fixture capture — 2026-09-08, from a live qBittorrent **5.2.3** daemon (no
 Docker on the capturing machine; `qbittorrent-nox --version` reported
