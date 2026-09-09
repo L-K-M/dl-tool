@@ -455,5 +455,139 @@ fallback in `redactURL` now routes through `redactSecrets` too, so a dirty chain
 that never carried a URL node is sanitized instead of passed through — clean
 chains still return the identical error (`TestRedactURL`'s `require.Same`).
 
+### Repair: encoded passkey spellings and URL passwords (post-merge)
+
+The verification at 126c55e (recovery gate, `recovery/dltool-17`, probe
+`TestAuditTorrentRedirectFailureRedactsSecrets`) found the literal pattern
+`apikey|token|passkey=` still leaked two secret shapes a malformed redirect
+Location can carry: a percent-encoded key (`?%70asskey=…` for `passkey`) and a
+URL userinfo password (`http://alice:…@host`), both quoted verbatim inside
+`failed to parse Location header` and its nested `parse` error, in Add's
+returned error and any upstream `slog` line.
+
+Reproduced first: `TestAddTorrentURLRedirectFailureRedactsEncodedPasskey` and
+`TestAddTorrentURLRedirectFailureRedactsUserinfoPassword` (metadata fixture
+answers `302` with the secret-bearing Location; daemon set to accept `202`)
+failed on `main` with `should not contain "t029-secret-token"` /
+`should not contain "t029-secret-password"` while issuing zero `torrents/add`
+requests.
+
+Fixed: the literal-name pattern is replaced by `sanitizeSecretText`
+(commit `00a5f90`, with the review round-1 additions below on the same
+branch). `queryPairPattern` captures each rendered `key=value` pair (its key
+class forbids URL structural bytes, so a candidate never spans scheme or host)
+and `isSecretParamKey` compares the percent-decoded whole key with the doc 11
+§6 names case-insensitively — the same whole-key rule internal/api's
+`isSecretQueryParameter` applies, so `x-apikey` is deliberately untouched —
+keeping the rendered spelling and substituting `__redacted__` for the value,
+the same shape `redactedRequestURI` logs. The userinfo pass runs first
+(review round 3 below: a rendered password may itself carry `&` and `=`);
+`userinfoSpanPattern` finds
+each URL's userinfo — schemed and RFC 3986 network-path (`//user@host`)
+alike — up to its last `@` (the split net/url itself makes, so a password
+containing `@` cannot survive in the span tail), its class stopping at `/`,
+`?` and `#` so it never runs past an authority into path or query; and
+`redactUserinfoPassword` substitutes the doc 11 placeholder for the password,
+keeping the user name; a span without a password passes through untouched.
+A leaking node is now replaced by a `redactedError` that renders the
+sanitized text but still answers `errors.Is` for sentinel causes wrapped
+under it, so clean and leaking nodes alike keep timeout/cancellation
+classification (`TestRedactURL`, `TestRedactSecretsKeepsSentinelMatching`).
+
+`go test -mod=readonly -count=1 -run '^TestAddTorrentURLRedirectFailureRedacts(EncodedPasskey|UserinfoPassword)$' ./internal/engine/qbittorrent` before the fix:
+
+```
+--- FAIL: TestAddTorrentURLRedirectFailureRedactsEncodedPasskey (0.00s)
+        Error: "qbittorrent: fetch torrent url: Get \"__redacted__\": failed to parse Location header \"/invalid%zz.torrent?%70asskey=t029-secret-token\": parse \"/invalid%zz.torrent?%70asskey=t029-secret-token\": invalid URL escape \"%zz\"" should not contain "t029-secret-token"
+--- FAIL: TestAddTorrentURLRedirectFailureRedactsUserinfoPassword (0.00s)
+        Error: "qbittorrent: fetch torrent url: Get \"__redacted__\": failed to parse Location header \"http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent\": parse \"http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent\": invalid URL escape \"%zz\"" should not contain "t029-secret-password"
+FAIL
+```
+
+After the fix, `go test -mod=readonly -race -count=1 ./...`:
+
+```
+ok  github.com/L-K-M/dl-tool/internal/api        48.950s
+ok  github.com/L-K-M/dl-tool/internal/config      1.120s
+ok  github.com/L-K-M/dl-tool/internal/engine      21.120s
+ok  github.com/L-K-M/dl-tool/internal/engine/aria2        3.195s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.584s
+ok  github.com/L-K-M/dl-tool/internal/fsx      1.031s
+ok  github.com/L-K-M/dl-tool/internal/jobs      4.475s
+ok  github.com/L-K-M/dl-tool/internal/obs      1.175s
+ok  github.com/L-K-M/dl-tool/internal/secure    4.096s
+ok  github.com/L-K-M/dl-tool/internal/store     66.845s
+ok  github.com/L-K-M/dl-tool/internal/sync      4.382s
+ok  github.com/L-K-M/dl-tool/internal/uri       1.037s
+```
+
+`test -z "$(gofmt -l cmd internal)"` clean, `golangci-lint run
+./internal/engine/qbittorrent/...` (`0 issues.`), `go vet ./...` and `make doclint`
+(2381 total, 0 errors) clean; web lint not runnable locally (no eslint) — unchanged
+files, CI covers it.
+
+Review round 1 (GLM 5.3) found the scheme-relative gap before merge: a
+`Location: //alice:…@host/…` (RFC 3986 network-path reference, no scheme)
+quoted its password verbatim in the same parse failure, because the span
+pattern anchored on `scheme://`. Reproduced on the round-1 commit with
+`TestAddTorrentURLRedirectFailureRedactsSchemeRelativeUserinfo`, then fixed
+by matching both shapes. Also accepted: the span class now stops at `?` and
+`#` so a path-less URL's query cannot be swallowed into a fabricated
+user:password pair (`TestSanitizeSecretTextLeavesInnocentURLs`); leaking
+nodes keep `errors.Is` sentinel matching through `redactedError`
+(`TestRedactSecretsKeepsSentinelMatching`); whole-key matching intent locked
+(`TestSanitizeSecretTextWholeKeyMatching`); combined credentials + query
+secret on one Location covered
+(`TestAddTorrentURLRedirectFailureRedactsUserinfoAndQueryTogether`); the four
+redirect-failure tests share one `requireRedirectLocationRedacted` helper.
+Declined: a guard for a missing `"://"` in `redactUserinfoPassword` — the
+span pattern guarantees every match begins `//` or `scheme://`, so the
+authority offset is well defined by construction.
+
+`go test -mod=readonly -race -count=1 ./internal/engine/...` after round 1:
+
+```
+ok  github.com/L-K-M/dl-tool/internal/engine              22.055s
+ok  github.com/L-K-M/dl-tool/internal/engine/aria2        3.205s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.743s
+```
+
+`golangci-lint run ./internal/engine/qbittorrent/...` (`0 issues.`) and
+`go vet ./...` clean.
+
+Review round 2 (GLM 5.3, minor-only) accepted one fix: the
+`requireRedirectLocationRedacted` helper now captures slog records at
+`Level: slog.LevelDebug`, so its guard really holds for any future log
+line the add path grows — a default-level handler would drop a secret
+leaked at debug verbosity and pass vacuously (6176cbe). Declined with
+evidence: `Timeout()`/`errors.As` forwarding on `redactedError` (no
+caller classifies an Add error by timeout interface; `*url.Error` nodes
+are rebuilt structurally and never wrapped) and a broader post-round-1
+test command (every helper and test lives in
+`internal/engine/qbittorrent`, which the recorded command runs).
+
+Review round 3 (GLM 5.3) found a real pass-order leak: `net/url` renders
+a password raw except `@ / ? : #`, so a password may itself carry `&`
+and `=`. With the query pass first, `user:hunter2&token=x@host` had its
+embedded `token=x` pair replaced, destroying the `@` the userinfo pass
+needs and leaking the `hunter2&` fragment. Reproduced with
+`TestSanitizeSecretTextRedactsUserinfoBeforeQueryPairs` (fails on 048daf7),
+fixed by running the userinfo pass first (26c4ff6) — the span class stops
+at `/ ? #` so it can never consume a query pair, and the password
+redaction subsumes any secret-looking pair it swallows. Declined as
+false: the reported `0-+` reversed character class — the pattern reads
+`[a-zA-Z0-9+.-]` and the package compiles.
+
+`go test -mod=readonly -race -count=1 ./internal/engine/...` after round 3:
+
+```
+ok  github.com/L-K-M/dl-tool/internal/engine              20.349s
+ok  github.com/L-K-M/dl-tool/internal/engine/aria2        3.193s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.753s
+```
+
+`golangci-lint run ./internal/engine/qbittorrent/...` (`0 issues.`),
+`go vet ./internal/...` and `make doclint` (2381 total, 0 errors) clean.
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
