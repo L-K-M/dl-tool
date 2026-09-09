@@ -589,5 +589,39 @@ ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.753s
 `golangci-lint run ./internal/engine/qbittorrent/...` (`0 issues.`),
 `go vet ./internal/...` and `make doclint` (2381 total, 0 errors) clean.
 
+### Repair: apostrophes and escaped quotes are value bytes, not delimiters (post-merge)
+
+The verification at a3e492c (recovery gate, `recovery/dltool-19`) found one
+more delimiter flaw: both character classes excluded `'`, but an apostrophe
+is an RFC 3986 sub-delim that neither net/url nor %q quoting escapes. A
+Location like `http://al'ice:t029-'pw@host/…%zz…` matched no userinfo span
+(whole password leaked), and `?passkey=prefix'audit-synthetic-passkey`
+redacted only up to the apostrophe, leaving the `audit-synthetic-passkey`
+suffix in the returned error and any upstream log (docs/14 §§2.2,3.3,
+docs/11 §6).
+
+Reproduced first: `TestAddTorrentURLRedirectFailureRedactsApostropheUserinfo`,
+`…ApostrophePasskeyValue` and `…QuotedSecretBytes` fail on a3e492c — the
+passkey case rendered `passkey=__redacted__'audit-synthetic-passkey`, the
+suffix after the apostrophe surviving.
+
+Fixed by making both value classes hold every byte a rendered value can
+carry: `'` is ordinary, and a literal `"` inside %q-quoted text — the one
+form a stop byte takes inside a value — is consumed by an escape
+alternative listed first, so greedy matching prefers it. Only `&`,
+whitespace and a closing `"` end a value; the userinfo span keeps its
+`/ ? #` stops, so it still cannot run past an authority.
+`TestSanitizeSecretTextTreatsApostrophesAndEscapesAsValueBytes` pins the
+rendering-level rule; the innocent-URL tests are unchanged and still pass.
+
+`go test -mod=readonly -race -count=1 ./internal/engine/qbittorrent`:
+
+```
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.813s
+```
+
+`go test -mod=readonly -count=1 ./internal/...` all `ok`; `go vet` and
+`golangci-lint run ./internal/engine/qbittorrent/...` (`0 issues.`) clean.
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

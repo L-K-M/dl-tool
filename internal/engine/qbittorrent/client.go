@@ -498,21 +498,30 @@ var secretParamNames = []string{"apikey", "token", "passkey"}
 // queryPairPattern captures one key=value pair as rendered error text
 // carries it — raw or %q-quoted. The key class forbids every URL structural
 // byte, so a candidate never spans scheme, host or path, while still
-// allowing the percent escapes that disguise a secret key's own spelling;
-// the value class stops at the next parameter, whitespace or quoting
-// delimiter, which covers both raw and %q-quoted URLs.
-var queryPairPattern = regexp.MustCompile(`[^&\s"'/?:#=]+=[^&\s"']*`)
+// allowing the percent escapes that disguise a secret key's own spelling.
+//
+// The value byte set holds every byte a rendered value can carry: an
+// apostrophe is an RFC 3986 sub-delim that neither net/url nor %q quoting
+// escapes ("passkey=prefix'audit" must not stop at ', or the suffix after
+// it leaks), and inside a %q-quoted URL a literal double quote appears
+// only as the escaped pair backslash-quote — the escape alternative is
+// listed first so greedy matching prefers it over stopping at its quote
+// byte. Only three bytes truly end a value: "&" (the next pair),
+// whitespace (the message boundary) and the closing " of a quoted URL.
+var queryPairPattern = regexp.MustCompile(`[^&\s"'/?:#=]+=(?:\\"|[^&\s"])*`)
 
 // userinfoSpanPattern captures a URL's userinfo up to its last "@" —
 // the split net/url itself makes — so a password containing a literal "@"
 // cannot survive in the tail of the span. Both schemed (http://) and
 // RFC 3986 network-path (//user@host) references match: a redirect
 // Location may carry either shape, and net/http quotes both raw in a
-// parse failure. The class stops at "/", "?" and "#" — none legal raw in
-// userinfo, Go renders them percent-encoded — so a span never runs past
-// an authority into path or query and fabricates a user:password pair.
+// parse failure. The value bytes follow queryPairPattern's rule — an
+// apostrophe is a legal raw sub-delim, an escaped quote is consumed
+// whole — and stop at "/", "?" and "#" — none legal raw in userinfo, Go
+// renders them percent-encoded — so a span never runs past an authority
+// into path or query and fabricates a user:password pair.
 // A URL without userinfo never matches.
-var userinfoSpanPattern = regexp.MustCompile(`(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?//[^/?#\s"']*@`)
+var userinfoSpanPattern = regexp.MustCompile(`(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?//(?:\\"|[^/?#\s"])*@`)
 
 // isSecretParamKey reports whether a rendered query key is one of the
 // never-log names. A key with a malformed escape cannot hide one of the
