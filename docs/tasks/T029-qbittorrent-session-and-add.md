@@ -455,5 +455,67 @@ fallback in `redactURL` now routes through `redactSecrets` too, so a dirty chain
 that never carried a URL node is sanitized instead of passed through — clean
 chains still return the identical error (`TestRedactURL`'s `require.Same`).
 
+### Repair: encoded passkey spellings and URL passwords (post-merge)
+
+The verification at 126c55e (recovery gate, `recovery/dltool-17`, probe
+`TestAuditTorrentRedirectFailureRedactsSecrets`) found the literal pattern
+`apikey|token|passkey=` still leaked two secret shapes a malformed redirect
+Location can carry: a percent-encoded key (`?%70asskey=…` for `passkey`) and a
+URL userinfo password (`http://alice:…@host`), both quoted verbatim inside
+`failed to parse Location header` and its nested `parse` error, in Add's
+returned error and any upstream `slog` line.
+
+Reproduced first: `TestAddTorrentURLRedirectFailureRedactsEncodedPasskey` and
+`TestAddTorrentURLRedirectFailureRedactsUserinfoPassword` (metadata fixture
+answers `302` with the secret-bearing Location; daemon set to accept `202`)
+failed on `main` with `should not contain "t029-secret-token"` /
+`should not contain "t029-secret-password"` while issuing zero `torrents/add`
+requests.
+
+Fixed: the literal-name pattern is replaced by `sanitizeSecretText`.
+`queryPairPattern` captures each rendered `key=value` pair (its key class
+forbids URL structural bytes, so a candidate never spans scheme or host) and
+`isSecretParamKey` compares the percent-decoded key with the doc 11 §6 names
+case-insensitively, keeping the rendered spelling and substituting
+`__redacted__` for the value — the same shape `redactedRequestURI` logs.
+`userinfoSpanPattern` then finds each scheme URL's userinfo up to its last
+`@` (the split net/url itself makes, so a password containing `@` cannot
+survive in the span tail) and `redactUserinfoPassword` substitutes the doc 11
+placeholder for the password, keeping the user name; a span without a
+password passes through untouched. Clean nodes are still returned as-is, so
+`errors.Is` to sentinel causes keeps working (`TestRedactURL`).
+
+`go test -mod=readonly -count=1 -run '^TestAddTorrentURLRedirectFailureRedacts(EncodedPasskey|UserinfoPassword)$' ./internal/engine/qbittorrent` before the fix:
+
+```
+--- FAIL: TestAddTorrentURLRedirectFailureRedactsEncodedPasskey (0.00s)
+        Error: "qbittorrent: fetch torrent url: Get \"__redacted__\": failed to parse Location header \"/invalid%zz.torrent?%70asskey=t029-secret-token\": parse \"/invalid%zz.torrent?%70asskey=t029-secret-token\": invalid URL escape \"%zz\"" should not contain "t029-secret-token"
+--- FAIL: TestAddTorrentURLRedirectFailureRedactsUserinfoPassword (0.00s)
+        Error: "qbittorrent: fetch torrent url: Get \"__redacted__\": failed to parse Location header \"http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent\": …" should not contain "t029-secret-password"
+FAIL
+```
+
+After the fix, `go test -mod=readonly -race -count=1 ./...`:
+
+```
+ok  github.com/L-K-M/dl-tool/internal/api        48.950s
+ok  github.com/L-K-M/dl-tool/internal/config      1.120s
+ok  github.com/L-K-M/dl-tool/internal/engine      21.120s
+ok  github.com/L-K-M/dl-tool/internal/engine/aria2        3.195s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.584s
+ok  github.com/L-K-M/dl-tool/internal/fsx      1.031s
+ok  github.com/L-K-M/dl-tool/internal/jobs      4.475s
+ok  github.com/L-K-M/dl-tool/internal/obs      1.175s
+ok  github.com/L-K-M/dl-tool/internal/secure    4.096s
+ok  github.com/L-K-M/dl-tool/internal/store     66.845s
+ok  github.com/L-K-M/dl-tool/internal/sync      4.382s
+ok  github.com/L-K-M/dl-tool/internal/uri       1.037s
+```
+
+`test -z "$(gofmt -l cmd internal)"` clean, `golangci-lint run
+./internal/engine/qbittorrent/...` (`0 issues.`), `go vet ./...` and `make doclint`
+(2381 total, 0 errors) clean; web lint not runnable locally (no eslint) — unchanged
+files, CI covers it.
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

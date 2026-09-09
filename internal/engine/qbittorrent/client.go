@@ -486,22 +486,83 @@ func redactURL(err error) error {
 	return redactSecrets(err)
 }
 
-// secretQueryPattern matches the query parameters docs/11 section 6 names as
+// secretParamNames are the query parameters docs/11 section 6 names as
 // never-log — indexer and tracker URLs routinely sign themselves with an
-// apikey, token or passkey. The value class stops at the next parameter,
-// whitespace or quoting delimiter, which covers both raw and %q-quoted URLs.
-var secretQueryPattern = regexp.MustCompile(`(?i)(apikey|token|passkey)=[^&\s"']*`)
+// apikey, token or passkey. Keys compare case-insensitively after
+// percent-decoding, so an encoded spelling ("%70asskey" for "passkey")
+// is caught, not just the literal names.
+var secretParamNames = []string{"apikey", "token", "passkey"}
 
-// redactSecrets returns a chain that renders no secret query parameter.
-// A *url.Error node keeps its type with the URL blanked and its cause
-// redacted further. Any other node is kept untouched once its rendered
-// text is clean: a wrapper's message inlines its children, so a clean
-// parent implies a clean subtree, and untouched nodes keep errors.Is to
-// sentinel causes (context.DeadlineExceeded and friends). A node whose
-// cached text leaks is replaced by a sanitized copy, because no structural
-// edit can clean text already formatted into it — a redirect whose
-// Location is malformed makes net/http quote the raw Location, secret
-// query included, inside "failed to parse Location header".
+// queryPairPattern captures one key=value pair as rendered error text
+// carries it — raw or %q-quoted. The key class forbids every URL structural
+// byte, so a candidate never spans scheme, host or path, while still
+// allowing the percent escapes that disguise a secret key's own spelling;
+// the value class stops at the next parameter, whitespace or quoting
+// delimiter, which covers both raw and %q-quoted URLs.
+var queryPairPattern = regexp.MustCompile(`[^&\s"'/?:#=]+=[^&\s"']*`)
+
+// userinfoSpanPattern captures a scheme URL's userinfo up to its last "@" —
+// the split net/url itself makes — so a password containing a literal "@"
+// cannot survive in the tail of the span. A URL without userinfo never
+// matches: the class stops at the first "/" or quote before any "@".
+var userinfoSpanPattern = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s"']*@`)
+
+// isSecretParamKey reports whether a rendered query key is one of the
+// never-log names. A key with a malformed escape cannot hide one of the
+// plain names, so the raw spelling decides then.
+func isSecretParamKey(rawKey string) bool {
+	key, err := url.PathUnescape(rawKey)
+	if err != nil {
+		key = rawKey
+	}
+	for _, name := range secretParamNames {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeSecretText returns text with every secret a fetch chain can
+// render removed (docs/14 section 3.3): never-log query parameters,
+// compared by decoded key and substituted with doc 11's placeholder for
+// the value, and the password of any scheme URL quoted in the text —
+// userinfo being the one place a URL carries one.
+func sanitizeSecretText(text string) string {
+	text = queryPairPattern.ReplaceAllStringFunc(text, func(pair string) string {
+		rawKey, _, _ := strings.Cut(pair, "=")
+		if !isSecretParamKey(rawKey) {
+			return pair
+		}
+		return rawKey + "=" + redactedURL
+	})
+	return userinfoSpanPattern.ReplaceAllStringFunc(text, redactUserinfoPassword)
+}
+
+// redactUserinfoPassword replaces a userinfo span's password with doc 11's
+// placeholder, keeping the user name. A span without a password (no ":" in
+// the userinfo) carries no secret and passes through untouched.
+func redactUserinfoPassword(span string) string {
+	schemeEnd := strings.Index(span, "://")
+	userinfo := span[schemeEnd+3 : len(span)-1] // without the trailing "@"
+	user, _, found := strings.Cut(userinfo, ":")
+	if !found {
+		return span
+	}
+	return span[:schemeEnd+3] + user + ":" + redactedURL + "@"
+}
+
+// redactSecrets returns a chain that renders no secret: neither a query
+// parameter docs/11 section 6 names nor a URL password. A *url.Error node
+// keeps its type with the URL blanked and its cause redacted further. Any
+// other node is kept untouched once its rendered text is clean: a wrapper's
+// message inlines its children, so a clean parent implies a clean subtree,
+// and untouched nodes keep errors.Is to sentinel causes
+// (context.DeadlineExceeded and friends). A node whose cached text leaks is
+// replaced by a sanitized copy, because no structural edit can clean text
+// already formatted into it — a redirect whose Location is malformed makes
+// net/http quote the raw Location, secrets included, inside "failed to
+// parse Location header".
 func redactSecrets(err error) error {
 	if err == nil {
 		return nil
@@ -512,10 +573,10 @@ func redactSecrets(err error) error {
 	}
 
 	text := err.Error()
-	if !secretQueryPattern.MatchString(text) {
-		return err
+	if sanitized := sanitizeSecretText(text); sanitized != text {
+		return errors.New(sanitized)
 	}
-	return errors.New(secretQueryPattern.ReplaceAllString(text, "${1}="+redactedURL))
+	return err
 }
 
 // blobTorrentID hashes the raw info dict exactly as it appears in the file —

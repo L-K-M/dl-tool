@@ -704,6 +704,74 @@ func TestAddTorrentURLRedirectFailureRedactsQuerySecret(t *testing.T) {
 	require.Equal(t, 0, f.count("torrents/add"))
 }
 
+func TestAddTorrentURLRedirectFailureRedactsEncodedPasskey(t *testing.T) {
+	// The literal key spellings alone are not enough: a Location can
+	// percent-encode a secret key's own name ("%70asskey" for "passkey"),
+	// which slips past a literal-name pattern. The key must be compared
+	// after decoding (docs/14 section 3.3, doc 11's placeholder).
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/invalid%zz.torrent?%70asskey=t029-secret-token")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(metadata.Close)
+
+	f := newFakeServer(t, func(f *fakeServer) {
+		f.addStatus = http.StatusAccepted
+		f.addBody = addBody(t, 0, 1, 0)
+	})
+	c := connectedClient(t, f)
+
+	_, err := c.Add(context.Background(), engine.AddRequest{
+		URIs: []string{metadata.URL + "/local.torrent"},
+	})
+	require.ErrorContains(t, err, "fetch torrent url")
+	// The encoded spelling stays as rendered, but the value behind it must
+	// be the doc 11 placeholder, exactly like the literal spellings.
+	require.NotContains(t, err.Error(), "t029-secret-token")
+	require.Contains(t, err.Error(), "%70asskey=__redacted__")
+	require.NotContains(t, logs.String(), "t029-secret-token")
+	require.Equal(t, 0, f.count("torrents/add"))
+}
+
+func TestAddTorrentURLRedirectFailureRedactsUserinfoPassword(t *testing.T) {
+	// docs/14 section 3.3 allows logging a URL only after stripping
+	// userinfo. A redirect Location that embeds credentials renders
+	// verbatim inside net/http's parse failure, so the password must be
+	// scrubbed from the returned error and every log line it reaches.
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "http://alice:t029-secret-password@127.0.0.1:1/invalid%zz.torrent")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(metadata.Close)
+
+	f := newFakeServer(t, func(f *fakeServer) {
+		f.addStatus = http.StatusAccepted
+		f.addBody = addBody(t, 0, 1, 0)
+	})
+	c := connectedClient(t, f)
+
+	_, err := c.Add(context.Background(), engine.AddRequest{
+		URIs: []string{metadata.URL + "/local.torrent"},
+	})
+	require.ErrorContains(t, err, "fetch torrent url")
+	// The user name stays, but the password must be the doc 11 placeholder —
+	// the same value-for-placeholder trade redactedRequestURI makes.
+	require.NotContains(t, err.Error(), "t029-secret-password")
+	require.Contains(t, err.Error(), "alice:__redacted__@")
+	require.NotContains(t, logs.String(), "t029-secret-password")
+	require.Equal(t, 0, f.count("torrents/add"))
+}
+
 func TestRedactURL(t *testing.T) {
 	// The wrapper must keep the *url.Error type — net.Error's
 	// Timeout/Temporary delegation is how callers classify a prefetch
