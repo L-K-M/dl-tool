@@ -688,6 +688,15 @@ func TestRedactURL(t *testing.T) {
 	// A chain without a *url.Error passes through untouched.
 	plain := errors.New("no url in this chain")
 	require.Same(t, plain, redactURL(plain))
+
+	// errors.As must also find a *url.Error buried under wrapper context,
+	// and the redacted result must still carry no secret.
+	wrapped := errors.Join(errors.New("prefetch metadata"), original)
+	rw := redactURL(wrapped)
+	require.NotContains(t, rw.Error(), "passkey=")
+	require.NotContains(t, rw.Error(), "tracker.example")
+	var uew *url.Error
+	require.ErrorAs(t, rw, &uew)
 }
 
 func TestAddTorrentURLPrefetchNotFoundAborts(t *testing.T) {
