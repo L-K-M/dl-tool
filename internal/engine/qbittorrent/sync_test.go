@@ -1093,23 +1093,27 @@ func TestOwnershipRefreshDoesNotBlockCacheReads(t *testing.T) {
 	c.md.mu.Unlock()
 
 	done := make(chan struct{})
+	var prepassOK bool
 	go func() {
 		defer close(done)
-		require.True(t, c.ownershipPrepass())
+		prepassOK = c.ownershipPrepass()
 	}()
 	<-blocked
 
+	// The asserts live on the test goroutine: a require inside the
+	// spawned goroutine would FailNow the wrong one.
 	listDone := make(chan struct{})
+	var listErr error
 	go func() {
 		defer close(listDone)
-		_, err := c.List(context.Background())
-		require.NoError(t, err)
+		_, listErr = c.List(context.Background())
 	}()
 	select {
 	case <-listDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("List blocked behind the ownership source's store read")
 	}
+	require.NoError(t, listErr)
 
 	if _, err := c.Get(context.Background(), engine.NameQBittorrent+":"+testHash); err != nil {
 		t.Fatalf("Get blocked or failed behind the ownership source: %v", err)
@@ -1121,6 +1125,7 @@ func TestOwnershipRefreshDoesNotBlockCacheReads(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the prepass never finished after the source released")
 	}
+	require.True(t, prepassOK)
 
 	// Event publication survives the pass too: a later response emits.
 	c.applyResponse(maindata{

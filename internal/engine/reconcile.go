@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -541,9 +542,10 @@ const ownershipListingTTL = time.Second
 // would turn every later task foreign. A store failure logs at warn and
 // serves the last good set; before the first success it returns empty,
 // which fails closed — ownership cannot be proven, so the adapter serves
-// no transfer until store recovery triggers one full resync. The set a
-// call returns is replaced, never mutated, on refresh; the adapter copies
-// it before storing it as its snapshot.
+// no transfer until store recovery triggers one full resync. Each call
+// returns its own copy of the memoized set, so no caller can corrupt what
+// the next one reads; refreshes replace the memo rather than mutate it,
+// and the adapter clones again before storing the set as its snapshot.
 func (r *Reconciler) OwnedRefs(engineName string) func() map[string]struct{} {
 	var (
 		mu       sync.Mutex
@@ -564,7 +566,9 @@ func (r *Reconciler) OwnedRefs(engineName string) func() map[string]struct{} {
 			// listing must still serve the remaining hashes in this batch.
 			expires = time.Now().Add(ownershipListingTTL)
 		}
-		return lastGood
+		// A defensive copy: a caller cannot corrupt the memo no matter
+		// what it does with the set it was handed.
+		return maps.Clone(lastGood)
 	}
 }
 

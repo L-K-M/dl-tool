@@ -311,9 +311,9 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/...
-ok  	github.com/L-K-M/dl-tool/internal/engine	21.064s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.165s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.300s
+ok  	github.com/L-K-M/dl-tool/internal/engine	22.048s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.239s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.462s
 ```
 
 All 26 tests the block names `PASS` (`go test -count=1 -v` over the package printed 82
@@ -332,7 +332,8 @@ All 26 tests the block names `PASS` (`go test -count=1 -v` over the package prin
 decode, timeout, transport subtests), `TestPeriodicFullSync`, `TestConcurrentStopWaitsForPollExit`
 and `TestCloseStopsPollGoroutine`. `TestOwnershipResetRejectsStaleResponse` covers stale delta
 and full responses; `TestPeriodicFullSync` seeds `lastFullAt` instead of waiting five minutes.
-No data-race report at `-race -count=1`.
+No data-race report at `-race -count=1`. (Re-run after the round-1 review fixes: test-goroutine
+asserts in `TestOwnershipRefreshDoesNotBlockCacheReads`, defensive clone in `OwnedRefs`.)
 
 Scope check, `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
 
