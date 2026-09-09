@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -120,9 +121,11 @@ func NewReconciler(reg *Registry, ts TaskWriter, admitter DiskFullPauser, poll t
 // holds a transfer cache — qBittorrent's sync/maindata cache of T030 —
 // filters there, so a foreign transfer never even reaches the reconciler's
 // List join. Engines without such a cache (aria2, filtered here in
-// sweepEngine) simply do not expose the method.
+// sweepEngine) simply do not expose the method. The snapshot shape lets
+// the adapter refresh ownership once per pass and answer membership
+// without I/O under its cache mutex.
 type ownershipFilterer interface {
-	SetOwnershipFilter(owned func(handle string) bool)
+	SetOwnershipFilter(snapshot func() map[string]struct{})
 }
 
 // installOwnershipFilters wires every engine present at construction.
@@ -520,45 +523,52 @@ func bareHandle(engineName, id string) string {
 }
 
 // ownershipCheckBudget bounds one ownership listing's store lookup: the
-// predicate runs on an engine's poll goroutine, so a wedged store must not
+// source runs on an engine's poll goroutine, so a wedged store must not
 // wedge the poll with it.
 const ownershipCheckBudget = 5 * time.Second
 
-// ownershipListingTTL is how long one store listing serves every predicate
-// call: the predicate is consulted once per hash per sync, so one listing
-// per engine per window collapses an N-torrent full sync from N queries to
-// one, while a task submitted mid-window becomes visible to the next one.
+// ownershipListingTTL is how long one store listing serves every ownership
+// pass: the source is consulted once per pass — pre-request and response —
+// so one listing per engine per window collapses an N-torrent sync from N
+// queries to one, while a task submitted mid-window becomes visible to the
+// next window.
 const ownershipListingTTL = time.Second
 
-// OwnedRefs returns the ownership predicate for one engine: a handle is
-// owned when the tasks table holds a non-terminal row naming it — the
-// detection rule of 06-download-engines.md section 8, by handle alone. The
-// listing is per TTL window, not cached at install time, because tasks are
-// added and removed for the process lifetime and a snapshot at boot would
-// turn every later task foreign. The adapter remembers rejected identifiers
-// and rechecks them each poll, forcing a full engine snapshot when a later
-// listing owns one. A store failure serves the last good set until a later
-// read succeeds; before the first success it fails closed.
-func (r *Reconciler) OwnedRefs(engineName string) func(handle string) bool {
+// OwnedRefs returns the ownership snapshot source for one engine: the set
+// of handles the tasks table holds non-terminal rows for — the detection
+// rule of 06-download-engines.md section 8, by handle alone. The listing is
+// memoized for the TTL window, not cached at install time, because tasks
+// are added and removed for the process lifetime and a snapshot at boot
+// would turn every later task foreign. A store failure logs at warn and
+// serves the last good set; before the first success it returns empty,
+// which fails closed — ownership cannot be proven, so the adapter serves
+// no transfer until store recovery triggers one full resync. Each call
+// returns its own copy of the memoized set, so no caller can corrupt what
+// the next one reads; refreshes replace the memo rather than mutate it,
+// and the adapter clones again before storing the set as its snapshot.
+func (r *Reconciler) OwnedRefs(engineName string) func() map[string]struct{} {
 	var (
 		mu       sync.Mutex
 		expires  time.Time
 		lastGood map[string]struct{}
 	)
-	return func(handle string) bool {
+	return func() map[string]struct{} {
 		mu.Lock()
 		defer mu.Unlock()
 
 		if !time.Now().Before(expires) {
 			if owned, ok := r.ownedListing(engineName); ok {
+				// Replace the memo rather than mutate it: a set a caller
+				// still holds must not change under it.
 				lastGood = owned
 			}
 			// Measure the window after the store call. A slow successful
 			// listing must still serve the remaining hashes in this batch.
 			expires = time.Now().Add(ownershipListingTTL)
 		}
-		_, owned := lastGood[handle]
-		return owned
+		// A defensive copy: a caller cannot corrupt the memo no matter
+		// what it does with the set it was handed.
+		return maps.Clone(lastGood)
 	}
 }
 
