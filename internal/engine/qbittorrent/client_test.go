@@ -813,6 +813,26 @@ func TestSanitizeSecretTextLeavesInnocentURLs(t *testing.T) {
 	}
 }
 
+func TestSanitizeSecretTextRedactsUserinfoBeforeQueryPairs(t *testing.T) {
+	// net/url renders a password raw except @ / ? : #, so a password may
+	// itself carry "&" and "=": user "hunter2&token=x". The query pass must
+	// not run first, or it would replace the embedded "token=x" pair and
+	// destroy the "@" the userinfo pass needs, leaking the password
+	// fragment left before it (review round 3's blocker).
+	require.Equal(t,
+		`Get "https://user:__redacted__@host/t": boom`,
+		sanitizeSecretText(`Get "https://user:hunter2&token=x@host/t": boom`))
+
+	// The composed order still redacts a real query secret alongside a
+	// credential-bearing authority, in raw and %q-quoted renderings.
+	require.Equal(t,
+		`Get "https://user:__redacted__@host/t?token=__redacted__": boom`,
+		sanitizeSecretText(`Get "https://user:hunter2&token=x@host/t?token=y": boom`))
+	require.Equal(t,
+		`"https://u:__redacted__@h/t?%70asskey=__redacted__"`,
+		sanitizeSecretText(`"https://u:pw@h/t?%70asskey=y"`))
+}
+
 func TestRedactSecretsKeepsSentinelMatching(t *testing.T) {
 	// A leaking node renders sanitized text but must still answer
 	// errors.Is for the sentinel buried in its cause, so callers keep

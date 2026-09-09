@@ -535,15 +535,23 @@ func isSecretParamKey(rawKey string) bool {
 // compared by decoded key and substituted with doc 11's placeholder for
 // the value, and the password of any scheme URL quoted in the text —
 // userinfo being the one place a URL carries one.
+//
+// Userinfo runs first: net/url renders a password raw except @ / ? : #,
+// so a password may itself contain "&" and "=" (user:hunter2&token=x@h).
+// The query pass would treat the embedded "token=x" as a pair and swap
+// its value for the placeholder, destroying the "@" the userinfo pass
+// needs — leaking the password fragment left behind it. The span class
+// stops at / ? #, so it can never consume a query pair in the other
+// direction, and the password redaction subsumes any pair it swallows.
 func sanitizeSecretText(text string) string {
-	text = queryPairPattern.ReplaceAllStringFunc(text, func(pair string) string {
+	text = userinfoSpanPattern.ReplaceAllStringFunc(text, redactUserinfoPassword)
+	return queryPairPattern.ReplaceAllStringFunc(text, func(pair string) string {
 		rawKey, _, _ := strings.Cut(pair, "=")
 		if !isSecretParamKey(rawKey) {
 			return pair
 		}
 		return rawKey + "=" + redactedURL
 	})
-	return userinfoSpanPattern.ReplaceAllStringFunc(text, redactUserinfoPassword)
 }
 
 // redactUserinfoPassword replaces a userinfo span's password with doc 11's
