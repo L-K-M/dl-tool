@@ -715,7 +715,10 @@ func requireRedirectLocationRedacted(t *testing.T, location string, secrets, wan
 
 	var logs bytes.Buffer
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	// Capture debug records too, so the guard below really holds for any
+	// future log line the add path grows — a default-level handler would
+	// drop a secret leaked at debug verbosity and pass vacuously.
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	metadata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
