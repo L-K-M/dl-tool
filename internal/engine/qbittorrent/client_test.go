@@ -791,6 +791,120 @@ func TestAddTorrentURLRedirectFailureRedactsUserinfoAndQueryTogether(t *testing.
 		[]string{"alice:__redacted__@", "passkey=__redacted__"})
 }
 
+func TestAddTorrentURLRedirectFailureRedactsApostropheUserinfo(t *testing.T) {
+	// An apostrophe is an RFC 3986 sub-delim: legal raw in userinfo, and
+	// neither net/url nor Go quoting escapes it. Delimiter classes that
+	// treat it as a stop leave the span unmatched, so the whole password
+	// survives — user and password each carry one here to pin that.
+	requireRedirectLocationRedacted(t,
+		"http://al'ice:t029-'secret-password@127.0.0.1:1/invalid%zz.torrent",
+		[]string{"t029-'secret-password"},
+		[]string{"al'ice:__redacted__@"})
+	// The same byte inside the password alone must not cut the span short.
+	requireRedirectLocationRedacted(t,
+		"http://alice:t029-secret-'password@127.0.0.1:1/invalid%zz.torrent",
+		[]string{"t029-secret-'password"},
+		[]string{"alice:__redacted__@"})
+}
+
+func TestAddTorrentURLRedirectFailureRedactsApostrophePasskeyValue(t *testing.T) {
+	// A passkey value may contain an apostrophe as legitimately as any
+	// other unreserved byte; redaction that stops at ' leaks the suffix
+	// after it, so the value class must treat ' as ordinary.
+	requireRedirectLocationRedacted(t,
+		"/invalid%zz.torrent?passkey=prefix'audit-synthetic-passkey",
+		[]string{"prefix'audit-synthetic-passkey", "audit-synthetic-passkey"},
+		[]string{"passkey=__redacted__"})
+}
+
+func TestAddTorrentURLRedirectFailureRedactsQuotedSecretBytes(t *testing.T) {
+	// Inside net/http's %q-quoted Location a secret's literal double quote
+	// renders as the escaped pair \" — the one place a stop byte appears
+	// inside a value. Both passes must consume the escape instead of
+	// truncating and leaking the tail after it.
+	requireRedirectLocationRedacted(t,
+		`http://alice:t029-"secret-password@127.0.0.1:1/invalid%zz.torrent`,
+		[]string{`t029-"secret-password`},
+		[]string{`alice:__redacted__@`})
+	requireRedirectLocationRedacted(t,
+		`/invalid%zz.torrent?passkey=pre"audit-synthetic-passkey`,
+		[]string{`pre"audit-synthetic-passkey`},
+		[]string{"passkey=__redacted__"})
+}
+
+func TestAddTorrentURLRedirectFailureRedactsSpacedSecrets(t *testing.T) {
+	// %q quoting leaves a literal space raw inside a quoted URL, and a
+	// Location header may carry spaces: a passkey or password containing
+	// whitespace must still redact whole, or its tail after the space
+	// leaks — the same suffix-leak class as the apostrophe finding.
+	requireRedirectLocationRedacted(t,
+		"/invalid%zz.torrent?passkey=pre audit-tail",
+		[]string{"pre audit-tail", "audit-tail"},
+		[]string{"passkey=__redacted__"})
+	requireRedirectLocationRedacted(t,
+		"http://alice:t029 secret password@127.0.0.1:1/invalid%zz.torrent",
+		[]string{"t029 secret password"},
+		[]string{"alice:__redacted__@"})
+}
+
+func TestSanitizeSecretTextRedactsQuotedSpansWithWhitespace(t *testing.T) {
+	// Inside a %q-quoted URL a space is an ordinary value byte — %q leaves
+	// it raw — so the quoted pass tolerates whitespace; outside quotes a
+	// space ends the URL and the raw pass keeps its stops. An unquoted
+	// value's tail after a space is unknowable free text and stays.
+	require.Equal(t,
+		`Get "http://h/t?passkey=__redacted__": boom`,
+		sanitizeSecretText(`Get "http://h/t?passkey=pre audit-tail": boom`))
+	require.Equal(t,
+		`"https://u:__redacted__@h/t": boom`,
+		sanitizeSecretText(`"https://u:p w@h/t": boom`))
+	require.Equal(t,
+		`passkey=__redacted__ audit-tail token=__redacted__`,
+		sanitizeSecretText(`passkey=pre audit-tail token=1`))
+}
+
+func TestSanitizeSecretTextPairsEscapedBackslashesCorrectly(t *testing.T) {
+	// A value ending in a backslash renders as \\ before the closing
+	// quote; consuming backslash pairs whole keeps the pairing correct so
+	// the closing quote and the text after it survive redaction.
+	require.Equal(t,
+		`Get "http://h/t?passkey=__redacted__": boom`,
+		sanitizeSecretText(`Get "http://h/t?passkey=ab\\": boom`))
+	// An escaped quote as the final value byte, immediately before the
+	// real closing quote, must pair correctly too.
+	require.Equal(t,
+		`Get "http://h/t?passkey=__redacted__": boom`,
+		sanitizeSecretText(`Get "http://h/t?passkey=ab\"": boom`))
+}
+
+func TestSanitizeSecretTextKeepsPairsSeparableAfterRawBackslashes(t *testing.T) {
+	// In unquoted text a lone backslash is not a %q escape: consuming
+	// \& as an escape pair would let a non-secret pair ending in a
+	// backslash swallow the &-separated secret pair after it whole —
+	// "&" must stay a hard pair boundary in the raw pass.
+	require.Equal(t,
+		`state a=1\&token=__redacted__ end`,
+		sanitizeSecretText(`state a=1\&token=x end`))
+}
+
+func TestSanitizeSecretTextRejectsStrayQuoteSpanPairing(t *testing.T) {
+	// A stray quote in free text must not steal a genuine quoted URL's
+	// opening quote as its closer — that would drop the URL into the raw
+	// pass and leak the whitespace tail of its value.
+	require.Equal(t,
+		`oops " see "https://b/?passkey=__redacted__" tail`,
+		sanitizeSecretText(`oops " see "https://b/?passkey=p w" tail`))
+}
+
+func TestSanitizeSecretTextRejectsSlashLeadingStrayQuotePairing(t *testing.T) {
+	// A stray quote followed by "/"-leading free text must not steal a
+	// genuine quoted URL's opening quote either — the shape test must
+	// accept only bodies the in-quote twins could actually redact.
+	require.Equal(t,
+		`oops "/note "https://b/?passkey=__redacted__" tail`,
+		sanitizeSecretText(`oops "/note "https://b/?passkey=p w" tail`))
+}
+
 func TestSanitizeSecretTextWholeKeyMatching(t *testing.T) {
 	// Whole decoded keys only, mirroring internal/api's
 	// isSecretQueryParameter: "x-apikey" is not doc 11's apikey and stays,
@@ -831,6 +945,26 @@ func TestSanitizeSecretTextRedactsUserinfoBeforeQueryPairs(t *testing.T) {
 	require.Equal(t,
 		`"https://u:__redacted__@h/t?%70asskey=__redacted__"`,
 		sanitizeSecretText(`"https://u:pw@h/t?%70asskey=y"`))
+}
+
+func TestSanitizeSecretTextTreatsApostrophesAndEscapesAsValueBytes(t *testing.T) {
+	// Neither net/url nor %q quoting escapes an apostrophe, so a ' inside
+	// a password or a passkey value is an ordinary value byte; a stop
+	// there leaks the suffix after it. A double quote inside quoted text
+	// only ever appears as the escaped pair \" — consumed whole, never
+	// treated as the closing quote.
+	require.Equal(t,
+		`Get "https://al'ice:__redacted__@host/t": boom`,
+		sanitizeSecretText(`Get "https://al'ice:t029-'pw@host/t": boom`))
+	require.Equal(t,
+		`?passkey=__redacted__&x=1`,
+		sanitizeSecretText(`?passkey=prefix'audit-synthetic-passkey&x=1`))
+	require.Equal(t,
+		`Get "/x?passkey=__redacted__": boom`,
+		sanitizeSecretText(`Get "/x?passkey=pre\"audit": boom`))
+	require.Equal(t,
+		`"https://u:__redacted__@h/t": boom`,
+		sanitizeSecretText(`"https://u:p\"w@h/t": boom`))
 }
 
 func TestRedactSecretsKeepsSentinelMatching(t *testing.T) {

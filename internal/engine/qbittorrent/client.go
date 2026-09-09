@@ -496,23 +496,60 @@ func redactURL(err error) error {
 var secretParamNames = []string{"apikey", "token", "passkey"}
 
 // queryPairPattern captures one key=value pair as rendered error text
-// carries it — raw or %q-quoted. The key class forbids every URL structural
-// byte, so a candidate never spans scheme, host or path, while still
-// allowing the percent escapes that disguise a secret key's own spelling;
-// the value class stops at the next parameter, whitespace or quoting
-// delimiter, which covers both raw and %q-quoted URLs.
-var queryPairPattern = regexp.MustCompile(`[^&\s"'/?:#=]+=[^&\s"']*`)
+// carries it outside a %q-quoted span — raw words, bare URLs. The key
+// class forbids every URL structural byte, so a candidate never spans
+// scheme, host or path, while still allowing the percent escapes that
+// disguise a secret key's own spelling. The value stops at the three
+// bytes that truly end a raw value: "&" (the next pair), whitespace (the
+// message boundary) and a quote (a quoted-span boundary). An apostrophe
+// is an ordinary byte — an RFC 3986 sub-delim that neither net/url nor
+// %q quoting escapes. A backslash pair is consumed whole only when its
+// second byte is neither whitespace nor "&" — a lone backslash is no
+// escape in unquoted text, so "&" stays a hard pair boundary and a
+// non-secret pair ending in a backslash cannot swallow the secret pair
+// after it; the raw backslash itself rides into the value or its stop,
+// which over-redacts at worst, never leaks.
+var queryPairPattern = regexp.MustCompile(`[^&\s"'/?:#=]+=(?:\\[^\s&]|[^&\s"])*`)
 
 // userinfoSpanPattern captures a URL's userinfo up to its last "@" —
 // the split net/url itself makes — so a password containing a literal "@"
 // cannot survive in the tail of the span. Both schemed (http://) and
 // RFC 3986 network-path (//user@host) references match: a redirect
 // Location may carry either shape, and net/http quotes both raw in a
-// parse failure. The class stops at "/", "?" and "#" — none legal raw in
-// userinfo, Go renders them percent-encoded — so a span never runs past
-// an authority into path or query and fabricates a user:password pair.
+// parse failure. The value bytes follow queryPairPattern's rule — an
+// apostrophe is a legal raw sub-delim, a backslash pair is consumed
+// whole — and stop at "/", "?" and "#" — none legal raw in userinfo, Go
+// renders them percent-encoded — so a span never runs past an authority
+// into path or query and fabricates a user:password pair.
 // A URL without userinfo never matches.
-var userinfoSpanPattern = regexp.MustCompile(`(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?//[^/?#\s"']*@`)
+var userinfoSpanPattern = regexp.MustCompile(`(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?//(?:\\.|[^/?#\s"])*@`)
+
+// quotedSpanPattern captures one %q-quoted span exactly as Go renders
+// it: quote, then ordinary bytes and backslash escapes, closing quote.
+// Go's own error chains quote URLs this way (url.Error's rendering,
+// net/http's Location parse failure), and %q leaves a literal space raw
+// inside the quotes — so a secret whose value carries whitespace is
+// only ever whole inside a quoted span. Outside them a space ends a
+// URL, so the whitespace-tolerant classes below must never apply there.
+//
+// Only URL-shaped spans qualify: the body carries an authority ("//")
+// or a query ("=") — exactly the two shapes the in-quote twins below
+// can redact — so a secret-bearing span always qualifies, and the shape
+// test keeps a stray quote in free text from stealing a genuine quoted
+// URL's opening quote as its closer and dropping the URL into the raw
+// pass. The limit is honest: adversarial free text that itself quotes
+// URL-shaped words ("a=1 " before a real URL) can still mispair, and
+// Go's error chains do not produce such text; mispairing degrades to
+// the raw pass.
+var quotedSpanPattern = regexp.MustCompile(`"(?:(?:\\.|[^"\\])*//(?:\\.|[^"\\])*|(?:\\.|[^"\\])*=(?:\\.|[^"\\])*)"`)
+
+// quotedQueryPairPattern and quotedUserinfoSpanPattern are the in-quote
+// twins of the raw patterns: inside a quoted URL whitespace is an
+// ordinary value byte, so a value ends only at "&" (the next pair) or
+// the closing quote, and a userinfo span only at "/", "?", "#" or the
+// closing quote. Key matching is shared with the raw pass.
+var quotedQueryPairPattern = regexp.MustCompile(`[^&\s"'/?:#=]+=(?:\\.|[^&"])*`)
+var quotedUserinfoSpanPattern = regexp.MustCompile(`(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?//(?:\\.|[^/?#"])*@`)
 
 // isSecretParamKey reports whether a rendered query key is one of the
 // never-log names. A key with a malformed escape cannot hide one of the
@@ -536,16 +573,49 @@ func isSecretParamKey(rawKey string) bool {
 // the value, and the password of any scheme URL quoted in the text —
 // userinfo being the one place a URL carries one.
 //
-// Userinfo runs first: net/url renders a password raw except @ / ? : #,
-// so a password may itself contain "&" and "=" (user:hunter2&token=x@h).
+// Quoted spans run first with the tolerant classes — %q leaves spaces
+// raw inside the quotes, so a spaced value is whole only there — and
+// the unquoted remainder runs the raw classes, where a space ends the
+// URL and must stop the match. In both passes userinfo runs before
+// query pairs: net/url renders a password raw except @ / ? : #, so a
+// password may itself contain "&" and "=" (user:hunter2&token=x@h).
 // The query pass would treat the embedded "token=x" as a pair and swap
 // its value for the placeholder, destroying the "@" the userinfo pass
-// needs — leaking the password fragment left behind it. The span class
-// stops at / ? #, so it can never consume a query pair in the other
-// direction, and the password redaction subsumes any pair it swallows.
+// needs — leaking the password fragment left behind it. The span
+// classes stop at / ? #, so neither can consume a query pair in the
+// other direction, and the password redaction subsumes any
+// secret-looking pair it swallows.
 func sanitizeSecretText(text string) string {
+	var out strings.Builder
+	last := 0
+	for _, span := range quotedSpanPattern.FindAllStringIndex(text, -1) {
+		out.WriteString(sanitizeUnquoted(text[last:span[0]]))
+		out.WriteString(sanitizeQuoted(text[span[0]:span[1]]))
+		last = span[1]
+	}
+	out.WriteString(sanitizeUnquoted(text[last:]))
+	return out.String()
+}
+
+// sanitizeUnquoted scrubs the text a %q span does not cover, where a
+// URL has no quoting context and whitespace ends it.
+func sanitizeUnquoted(text string) string {
 	text = userinfoSpanPattern.ReplaceAllStringFunc(text, redactUserinfoPassword)
-	return queryPairPattern.ReplaceAllStringFunc(text, func(pair string) string {
+	return redactSecretPairs(text, queryPairPattern)
+}
+
+// sanitizeQuoted scrubs one whole %q span, where whitespace is an
+// ordinary value byte.
+func sanitizeQuoted(text string) string {
+	text = quotedUserinfoSpanPattern.ReplaceAllStringFunc(text, redactUserinfoPassword)
+	return redactSecretPairs(text, quotedQueryPairPattern)
+}
+
+// redactSecretPairs substitutes doc 11's placeholder for the value of
+// every pair whose decoded key is a never-log name; other pairs pass
+// through untouched.
+func redactSecretPairs(text string, pair *regexp.Regexp) string {
+	return pair.ReplaceAllStringFunc(text, func(pair string) string {
 		rawKey, _, _ := strings.Cut(pair, "=")
 		if !isSecretParamKey(rawKey) {
 			return pair
