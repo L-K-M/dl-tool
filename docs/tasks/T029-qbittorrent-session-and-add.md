@@ -480,7 +480,9 @@ and `isSecretParamKey` compares the percent-decoded whole key with the doc 11
 §6 names case-insensitively — the same whole-key rule internal/api's
 `isSecretQueryParameter` applies, so `x-apikey` is deliberately untouched —
 keeping the rendered spelling and substituting `__redacted__` for the value,
-the same shape `redactedRequestURI` logs. `userinfoSpanPattern` then finds
+the same shape `redactedRequestURI` logs. The userinfo pass runs first
+(review round 3 below: a rendered password may itself carry `&` and `=`);
+`userinfoSpanPattern` finds
 each URL's userinfo — schemed and RFC 3986 network-path (`//user@host`)
 alike — up to its last `@` (the split net/url itself makes, so a password
 containing `@` cannot survive in the span tail), its class stopping at `/`,
@@ -552,6 +554,40 @@ ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.743s
 
 `golangci-lint run ./internal/engine/qbittorrent/...` (`0 issues.`) and
 `go vet ./...` clean.
+
+Review round 2 (GLM 5.3, minor-only) accepted one fix: the
+`requireRedirectLocationRedacted` helper now captures slog records at
+`Level: slog.LevelDebug`, so its guard really holds for any future log
+line the add path grows — a default-level handler would drop a secret
+leaked at debug verbosity and pass vacuously (6176cbe). Declined with
+evidence: `Timeout()`/`errors.As` forwarding on `redactedError` (no
+caller classifies an Add error by timeout interface; `*url.Error` nodes
+are rebuilt structurally and never wrapped) and a broader post-round-1
+test command (every helper and test lives in
+`internal/engine/qbittorrent`, which the recorded command runs).
+
+Review round 3 (GLM 5.3) found a real pass-order leak: `net/url` renders
+a password raw except `@ / ? : #`, so a password may itself carry `&`
+and `=`. With the query pass first, `user:hunter2&token=x@host` had its
+embedded `token=x` pair replaced, destroying the `@` the userinfo pass
+needs and leaking the `hunter2&` fragment. Reproduced with
+`TestSanitizeSecretTextRedactsUserinfoBeforeQueryPairs` (fails on 048daf7),
+fixed by running the userinfo pass first (26c4ff6) — the span class stops
+at `/ ? #` so it can never consume a query pair, and the password
+redaction subsumes any secret-looking pair it swallows. Declined as
+false: the reported `0-+` reversed character class — the pattern reads
+`[a-zA-Z0-9+.-]` and the package compiles.
+
+`go test -mod=readonly -race -count=1 ./internal/engine/...` after round 3:
+
+```
+ok  github.com/L-K-M/dl-tool/internal/engine              20.349s
+ok  github.com/L-K-M/dl-tool/internal/engine/aria2        3.193s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.753s
+```
+
+`golangci-lint run ./internal/engine/qbittorrent/...` (`0 issues.`),
+`go vet ./internal/...` and `make doclint` (2381 total, 0 errors) clean.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
