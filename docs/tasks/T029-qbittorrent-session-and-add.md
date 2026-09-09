@@ -650,5 +650,32 @@ ends the URL, and the tail after it is unknowable free text; that boundary
 is pinned by the unquoted case of
 `TestSanitizeSecretTextRedactsQuotedSpansWithWhitespace`.
 
+Review round 2 (GLM 5.3, on 9fbae10..f4ad4a5) found a delta-introduced
+regression: the raw escape form `\\.` consumed `\&` as one pair, so a
+non-secret pair ending in a backslash (`a=1\&token=x`) swallowed the
+secret pair after it whole. Reproduced with
+`TestSanitizeSecretTextKeepsPairsSeparableAfterRawBackslashes` (fails on
+f4ad4a5, `token=x` verbatim); fixed by bounding the raw escape to a second
+byte that is neither whitespace nor `&`. The same round's minors were also
+resolved: `quotedSpanPattern` now accepts only URL-shaped bodies
+(leading `/`, `//` authority or `=` query — every secret-bearing span
+qualifies), so a stray quote in free text cannot steal a genuine quoted
+URL's opening quote (pinned by `TestSanitizeSecretTextRejectsStrayQuoteSpanPairing`,
+which fails on f4ad4a5 leaking the ` w` tail); and the escaped-quote-as-
+final-value-byte boundary is pinned in
+`TestSanitizeSecretTextPairsEscapedBackslashesCorrectly`. The honest limit
+is documented on the pattern: adversarial free text quoting URL-shaped
+words before a real URL can still mispair, degrading to the raw pass —
+Go's error chains do not produce such text.
+
+`go test -mod=readonly -race -count=1 ./internal/engine/qbittorrent`:
+
+```
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 4.849s
+```
+
+`go test -mod=readonly -count=1 ./internal/...` all `ok`; `go vet` and
+`golangci-lint run ./internal/engine/qbittorrent/...` (`0 issues.`) clean.
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

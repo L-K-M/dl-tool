@@ -870,6 +870,30 @@ func TestSanitizeSecretTextPairsEscapedBackslashesCorrectly(t *testing.T) {
 	require.Equal(t,
 		`Get "http://h/t?passkey=__redacted__": boom`,
 		sanitizeSecretText(`Get "http://h/t?passkey=ab\\": boom`))
+	// An escaped quote as the final value byte, immediately before the
+	// real closing quote, must pair correctly too.
+	require.Equal(t,
+		`Get "http://h/t?passkey=__redacted__": boom`,
+		sanitizeSecretText(`Get "http://h/t?passkey=ab\"": boom`))
+}
+
+func TestSanitizeSecretTextKeepsPairsSeparableAfterRawBackslashes(t *testing.T) {
+	// In unquoted text a lone backslash is not a %q escape: consuming
+	// \& as an escape pair would let a non-secret pair ending in a
+	// backslash swallow the &-separated secret pair after it whole —
+	// "&" must stay a hard pair boundary in the raw pass.
+	require.Equal(t,
+		`state a=1\&token=__redacted__ end`,
+		sanitizeSecretText(`state a=1\&token=x end`))
+}
+
+func TestSanitizeSecretTextRejectsStrayQuoteSpanPairing(t *testing.T) {
+	// A stray quote in free text must not steal a genuine quoted URL's
+	// opening quote as its closer — that would drop the URL into the raw
+	// pass and leak the whitespace tail of its value.
+	require.Equal(t,
+		`oops " see "https://b/?passkey=__redacted__" tail`,
+		sanitizeSecretText(`oops " see "https://b/?passkey=p w" tail`))
 }
 
 func TestSanitizeSecretTextWholeKeyMatching(t *testing.T) {

@@ -503,11 +503,13 @@ var secretParamNames = []string{"apikey", "token", "passkey"}
 // bytes that truly end a raw value: "&" (the next pair), whitespace (the
 // message boundary) and a quote (a quoted-span boundary). An apostrophe
 // is an ordinary byte — an RFC 3986 sub-delim that neither net/url nor
-// %q quoting escapes — and a backslash pair is consumed whole by the
-// escape alternative, so an escaped backslash before a closing quote
-// pairs correctly; the lone-backslash-before-whitespace case is
-// over-redacted into the value, never leaked.
-var queryPairPattern = regexp.MustCompile(`[^&\s"'/?:#=]+=(?:\\.|[^&\s"])*`)
+// %q quoting escapes. A backslash pair is consumed whole only when its
+// second byte is neither whitespace nor "&" — a lone backslash is no
+// escape in unquoted text, so "&" stays a hard pair boundary and a
+// non-secret pair ending in a backslash cannot swallow the secret pair
+// after it; the raw backslash itself rides into the value or its stop,
+// which over-redacts at worst, never leaks.
+var queryPairPattern = regexp.MustCompile(`[^&\s"'/?:#=]+=(?:\\[^\s&]|[^&\s"])*`)
 
 // userinfoSpanPattern captures a URL's userinfo up to its last "@" —
 // the split net/url itself makes — so a password containing a literal "@"
@@ -529,7 +531,17 @@ var userinfoSpanPattern = regexp.MustCompile(`(?:[a-zA-Z][a-zA-Z0-9+.-]*:)?//(?:
 // inside the quotes — so a secret whose value carries whitespace is
 // only ever whole inside a quoted span. Outside them a space ends a
 // URL, so the whitespace-tolerant classes below must never apply there.
-var quotedSpanPattern = regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
+//
+// Only URL-shaped spans qualify: the body starts with "/" (an absolute
+// path reference), carries an authority ("//") or a query ("="). A
+// secret-bearing span always qualifies — its secret is a key=value pair
+// or userinfo on an authority — and the shape test keeps a stray quote
+// in free text from stealing a genuine quoted URL's opening quote as
+// its closer and dropping the URL into the raw pass. The limit is
+// honest: adversarial free text that itself quotes URL-shaped words
+// ("a=1 " before a real URL) can still mispair, and Go's error chains
+// do not produce such text; mispairing degrades to the raw pass.
+var quotedSpanPattern = regexp.MustCompile(`"(?:/(?:\\.|[^"\\])*|(?:\\.|[^"\\])*//(?:\\.|[^"\\])*|(?:\\.|[^"\\])*=(?:\\.|[^"\\])*)"`)
 
 // quotedQueryPairPattern and quotedUserinfoSpanPattern are the in-quote
 // twins of the raw patterns: inside a quoted URL whitespace is an
