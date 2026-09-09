@@ -832,6 +832,46 @@ func TestAddTorrentURLRedirectFailureRedactsQuotedSecretBytes(t *testing.T) {
 		[]string{"passkey=__redacted__"})
 }
 
+func TestAddTorrentURLRedirectFailureRedactsSpacedSecrets(t *testing.T) {
+	// %q quoting leaves a literal space raw inside a quoted URL, and a
+	// Location header may carry spaces: a passkey or password containing
+	// whitespace must still redact whole, or its tail after the space
+	// leaks — the same suffix-leak class as the apostrophe finding.
+	requireRedirectLocationRedacted(t,
+		"/invalid%zz.torrent?passkey=pre audit-tail",
+		[]string{"pre audit-tail", "audit-tail"},
+		[]string{"passkey=__redacted__"})
+	requireRedirectLocationRedacted(t,
+		"http://alice:t029 secret password@127.0.0.1:1/invalid%zz.torrent",
+		[]string{"t029 secret password"},
+		[]string{"alice:__redacted__@"})
+}
+
+func TestSanitizeSecretTextRedactsQuotedSpansWithWhitespace(t *testing.T) {
+	// Inside a %q-quoted URL a space is an ordinary value byte — %q leaves
+	// it raw — so the quoted pass tolerates whitespace; outside quotes a
+	// space ends the URL and the raw pass keeps its stops. An unquoted
+	// value's tail after a space is unknowable free text and stays.
+	require.Equal(t,
+		`Get "http://h/t?passkey=__redacted__": boom`,
+		sanitizeSecretText(`Get "http://h/t?passkey=pre audit-tail": boom`))
+	require.Equal(t,
+		`"https://u:__redacted__@h/t": boom`,
+		sanitizeSecretText(`"https://u:p w@h/t": boom`))
+	require.Equal(t,
+		`passkey=__redacted__ audit-tail token=__redacted__`,
+		sanitizeSecretText(`passkey=pre audit-tail token=1`))
+}
+
+func TestSanitizeSecretTextPairsEscapedBackslashesCorrectly(t *testing.T) {
+	// A value ending in a backslash renders as \\ before the closing
+	// quote; consuming backslash pairs whole keeps the pairing correct so
+	// the closing quote and the text after it survive redaction.
+	require.Equal(t,
+		`Get "http://h/t?passkey=__redacted__": boom`,
+		sanitizeSecretText(`Get "http://h/t?passkey=ab\\": boom`))
+}
+
 func TestSanitizeSecretTextWholeKeyMatching(t *testing.T) {
 	// Whole decoded keys only, mirroring internal/api's
 	// isSecretQueryParameter: "x-apikey" is not doc 11's apikey and stays,
@@ -887,8 +927,8 @@ func TestSanitizeSecretTextTreatsApostrophesAndEscapesAsValueBytes(t *testing.T)
 		`?passkey=__redacted__&x=1`,
 		sanitizeSecretText(`?passkey=prefix'audit-synthetic-passkey&x=1`))
 	require.Equal(t,
-		`?passkey=__redacted__": boom`,
-		sanitizeSecretText(`?passkey=pre\"audit": boom`))
+		`Get "/x?passkey=__redacted__": boom`,
+		sanitizeSecretText(`Get "/x?passkey=pre\"audit": boom`))
 	require.Equal(t,
 		`"https://u:__redacted__@h/t": boom`,
 		sanitizeSecretText(`"https://u:p\"w@h/t": boom`))
