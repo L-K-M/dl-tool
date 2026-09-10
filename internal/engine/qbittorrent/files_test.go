@@ -314,6 +314,21 @@ func TestSetFilesSelectionKeepsExplicitValues(t *testing.T) {
 	require.Equal(t, []string{"2|3@0", "0@1", "1@7"}, joined)
 }
 
+func TestSetFilesEmptySelectionDeselectsAll(t *testing.T) {
+	f := newFilesFake(t, func(fake *filesFake) { fake.files = fourFileListing() })
+	c := newFilesClient(t, f)
+
+	// A non-nil empty selection is a complete selection that keeps
+	// nothing: every reported index is deselected, one group, priority 0.
+	err := c.SetFiles(context.Background(), engine.NameQBittorrent+":"+testHash, []int{}, nil)
+	require.NoError(t, err)
+
+	calls := f.prioCalls()
+	require.Len(t, calls, 1)
+	require.Equal(t, "0", calls[0].Form.Get("priority"))
+	require.Equal(t, "0|1|2|3", calls[0].Form.Get("id"))
+}
+
 func TestGroupByPriorityOrder(t *testing.T) {
 	groups := groupByPriority(map[int]int{9: 0, 1: 6, 4: 0, 2: 7, 0: 6})
 	require.Equal(t, []priorityGroup{

@@ -24,16 +24,19 @@ const (
 	operationListTaskFiles  = "list-task-files"
 	operationPatchTaskFiles = "patch-task-files"
 
-	filesDetailUnknownTask        = "the addressed task does not exist"
-	filesDetailEngineFailed       = "the engine did not accept the file change"
-	filesDetailNoPrioritySupport  = "the task's engine does not support per-file priority"
-	filesDetailNotAdmitted        = "the task has not been handed to its engine yet; select files at creation time instead"
-	filesDetailEntryIncomplete    = "each entry needs at least one of selected and priority"
-	filesDetailInvalid            = "the file selection holds entries that failed validation"
-	filesDetailUnknownIndexFormat = "file index %d is not part of the task"
-	filesDetailUnknownPriority    = "priority is not one of skip, normal, high, maximum"
-	filesDetailDisagree           = "selected and priority disagree; they are one concept, so send one value"
-	filesDetailListingMoved       = "the task's file listing changed underneath the request; get the listing and retry"
+	filesDetailUnknownTask          = "the addressed task does not exist"
+	filesDetailEngineFailed         = "the engine did not accept the file change"
+	filesDetailListingFailed        = "the engine's file listing could not be fetched"
+	filesDetailNoPrioritySupport    = "the task's engine does not support per-file priority"
+	filesDetailNotAdmitted          = "the task has not been handed to its engine yet; select files at creation time instead"
+	filesDetailNoEntries            = "the files array holds no entries; send at least one"
+	filesDetailEntryIncomplete      = "each entry needs at least one of selected and priority"
+	filesDetailInvalid              = "the file selection holds entries that failed validation"
+	filesDetailUnknownIndexFormat   = "file index %d is not part of the task"
+	filesDetailDuplicateIndexFormat = "file index %d appears more than once"
+	filesDetailUnknownPriority      = "priority is not one of skip, normal, high, maximum"
+	filesDetailDisagree             = "selected and priority disagree; they are one concept, so send one value"
+	filesDetailListingMoved         = "the task's file listing changed underneath the request; get the listing and retry"
 )
 
 // The stored priority integers of docs/04-data-model.md section 4.3, the
@@ -131,6 +134,15 @@ func (h *TaskHandlers) PatchTaskFiles(ctx context.Context, in *PatchTaskFilesInp
 	task, e, err := h.taskWithEngine(ctx, in.ID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Shape validation runs before any store read or engine call, so a
+	// malformed body touches nothing. The minItems schema tag answers a
+	// well-formed empty array; a JSON null decodes to a nil slice that no
+	// schema tag can distinguish from an absent one, so this backstop —
+	// the create endpoint's empty-submission rule — owns that case.
+	if len(in.Body.Files) == 0 {
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, filesDetailNoEntries)
 	}
 
 	if !hasCapability(e, engine.CapPerFilePriority) {
@@ -238,7 +250,7 @@ func (h *TaskHandlers) refreshTaskFiles(ctx context.Context, task store.Task, e 
 			return nil
 		}
 
-		return Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, filesDetailEngineFailed)
+		return Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, filesDetailListingFailed)
 	}
 
 	files := make([]store.TaskFile, 0, len(entries))
@@ -314,8 +326,21 @@ func resolveFileSelection(rows []store.TaskFile, entries []FileSelection) (
 
 	priorities = make(map[int]int, len(entries))
 	selection = make(map[int]store.TaskFileSelection, len(entries))
+	seen := make(map[int]struct{}, len(entries))
 	for i, entry := range entries {
 		location := fmt.Sprintf("body.files[%d]", i)
+
+		// A repeated index would fold into the maps with the last entry
+		// silently winning; two instructions for one file are a client
+		// bug, so they are named instead of resolved.
+		if _, dup := seen[entry.Index]; dup {
+			fieldErrs = append(fieldErrs, &huma.ErrorDetail{
+				Message: fmt.Sprintf(filesDetailDuplicateIndexFormat, entry.Index), Location: location + ".index",
+			})
+
+			continue
+		}
+		seen[entry.Index] = struct{}{}
 
 		if entry.Selected == nil && entry.Priority == nil {
 			fieldErrs = append(fieldErrs, &huma.ErrorDetail{
@@ -375,7 +400,12 @@ func resolveFileSelection(rows []store.TaskFile, entries []FileSelection) (
 func fileSelectionProblem(fieldErrs []*huma.ErrorDetail) error {
 	problem := Problem(SlugValidationFailed, http.StatusUnprocessableEntity, filesDetailInvalid)
 	var model *huma.ErrorModel
-	errors.As(problem, &model)
+	// Problem builds an *huma.ErrorModel by construction; the guard keeps
+	// a future change to that return type from turning every invalid PATCH
+	// into a nil-pointer 500.
+	if !errors.As(problem, &model) {
+		return problem
+	}
 	model.Errors = fieldErrs
 
 	return problem

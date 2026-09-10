@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -186,11 +187,14 @@ priority = excluded.priority,
 updated_at = excluded.updated_at`
 
 	// A listing replaces the task's rows wholesale, so an index the engine
-	// dropped disappears. The empty-listing spelling lives in its own
-	// statement because sqlx.In cannot expand an empty slice.
+	// dropped disappears. The indices ride one JSON parameter instead of
+	// one bind per index: SQLite caps bound parameters per statement, and
+	// an archive torrent can carry more files than that cap. An empty
+	// listing yields an empty json_each set, and NOT IN over it is true,
+	// so the empty case needs no branch of its own.
 	queryDeleteUnlistedTaskFiles = `DELETE FROM task_files
-WHERE task_id = ? AND file_index NOT IN (?)`
-	queryDeleteTaskFiles = `DELETE FROM task_files WHERE task_id = ?`
+WHERE task_id = ? AND file_index NOT IN (
+	SELECT CAST(json_each.value AS INTEGER) FROM json_each(?))`
 
 	queryUpdateTaskFileSelection = `UPDATE task_files
 SET selected = ?, priority = ?, updated_at = ?
@@ -1239,6 +1243,16 @@ func (s *TaskStore) ListFiles(ctx context.Context, taskID string) ([]TaskFile, e
 	return files, nil
 }
 
+// fileIndices lists a listing's file indices, in listing order.
+func fileIndices(files []TaskFile) []int {
+	indices := make([]int, 0, len(files))
+	for _, file := range files {
+		indices = append(indices, file.FileIndex)
+	}
+
+	return indices
+}
+
 // TaskFileSelection is one index's new selection state: the 0/1 selected
 // flag and the priority of docs/04-data-model.md section 4.3. A nil
 // Priority writes NULL — the storage shape of an engine that drives
@@ -1279,26 +1293,13 @@ func (s *TaskStore) UpsertFiles(ctx context.Context, taskID string, files []Task
 		}
 	}
 
-	// The listing replaces the row set, so an index it dropped disappears.
-	// An empty listing clears every row: sqlx.In cannot expand an empty
-	// slice, and "the engine reports no files" is itself a listing.
-	if len(files) > 0 {
-		indices := make([]any, 0, len(files))
-		for _, file := range files {
-			indices = append(indices, file.FileIndex)
-		}
-		query, args, err := sqlx.In(queryDeleteUnlistedTaskFiles, taskID, indices)
-		if err != nil {
-			return fmt.Errorf("store: upsert files of task %q: %w", taskID, err)
-		}
-		// sqlx.In emits `?` placeholders — SQLite's bindvar, so Rebind is
-		// an identity here today; the canonical pairing keeps the
-		// statement correct were the store's bindvar ever to change.
-		query = tx.Rebind(query)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("store: upsert files of task %q: %w", taskID, err)
-		}
-	} else if _, err := tx.ExecContext(ctx, queryDeleteTaskFiles, taskID); err != nil {
+	// The listing replaces the row set, so an index it dropped disappears;
+	// an empty listing clears every row.
+	indices, err := json.Marshal(fileIndices(files))
+	if err != nil {
+		return fmt.Errorf("store: upsert files of task %q: %w", taskID, err)
+	}
+	if _, err := tx.ExecContext(ctx, queryDeleteUnlistedTaskFiles, taskID, string(indices)); err != nil {
 		return fmt.Errorf("store: upsert files of task %q: %w", taskID, err)
 	}
 

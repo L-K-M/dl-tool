@@ -410,13 +410,14 @@ func (s *Server) registerOperations() {
 	}, s.tasks.ListTaskFiles)
 
 	huma.Register(s.API, huma.Operation{
-		OperationID: operationPatchTaskFiles,
-		Method:      http.MethodPatch,
-		Path:        "/tasks/{id}/files",
-		Summary:     "Select and prioritise the task's files",
-		Description: "Applies one selection change per listed index on the running engine and in task_files. selected:false and priority:skip are one concept; unlisted indices are untouched. 422 when the engine declares no per_file_priority.",
-		Tags:        []string{"tasks"},
-		Security:    credentialRequired,
+		OperationID:                  operationPatchTaskFiles,
+		Method:                       http.MethodPatch,
+		Path:                         "/tasks/{id}/files",
+		Summary:                      "Select and prioritise the task's files",
+		Description:                  "Applies one selection change per listed index on the running engine and in task_files. selected:false and priority:skip are one concept; unlisted indices are untouched. 422 when the engine declares no per_file_priority.",
+		Tags:                         []string{"tasks"},
+		Security:                     credentialRequired,
+		RejectUnknownQueryParameters: true,
 	}, s.tasks.PatchTaskFiles)
 
 	huma.Register(s.API, huma.Operation{

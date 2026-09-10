@@ -71,7 +71,17 @@ func (e *filesEngine) SetFiles(_ context.Context, id string, selected []int, pri
 
 	// The daemon mirrors the accepted change into its listing; so does the
 	// stand-in, so a GET after a PATCH observes what the engine now
-	// reports.
+	// reports. A non-nil selected names the complete desired selection,
+	// so it reselects its indices and deselects every other.
+	if selected != nil {
+		keep := make(map[int]bool, len(selected))
+		for _, index := range selected {
+			keep[index] = true
+		}
+		for i, entry := range e.files {
+			e.files[i].Selected = keep[entry.Index]
+		}
+	}
 	for index, priority := range priorities {
 		for i, entry := range e.files {
 			if entry.Index != index {
@@ -93,6 +103,39 @@ func (e *filesEngine) recordedSetCalls() []setFilesCall {
 	return append([]setFilesCall(nil), e.setCalls...)
 }
 
+// recordedFilesIDs returns every listing's engine task id, in call order.
+func (e *filesEngine) recordedFilesIDs() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return append([]string(nil), e.filesIDs...)
+}
+
+// setListing replaces the canned listing under the engine's mutex, so a
+// test can pin the shape a GET observes without racing the handler.
+func (e *filesEngine) setListing(files []engine.FileEntry) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.files = files
+}
+
+// failListing makes every Files call answer err under the mutex.
+func (e *filesEngine) failListing(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.filesErr = err
+}
+
+// failSet makes every SetFiles call answer err under the mutex.
+func (e *filesEngine) failSet(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.setErr = err
+}
+
 // assertNoSetCalls fails when the engine was asked to change a selection.
 func (e *filesEngine) assertNoSetCalls(t *testing.T) {
 	t.Helper()
@@ -107,8 +150,7 @@ func (e *filesEngine) assertNoSetCalls(t *testing.T) {
 const filesOtherHash = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
 
 // defaultFilesListing is the three-file listing of doc 05 section 5.8's
-// shape: two selected files and one selected-at-normal, priorities from
-// the vocabulary.
+// shape: all three files selected — two at normal priority, one at high.
 func defaultFilesListing() []engine.FileEntry {
 	return []engine.FileEntry{
 		{Index: 0, Path: "ubuntu-26.04-desktop-amd64.iso", Size: 1000, Completed: 500, Selected: true, Priority: intPtr(1)},
@@ -139,7 +181,7 @@ func newFilesTestEnv(t *testing.T) *filesTestEnv {
 	t.Helper()
 
 	aria2 := newFilesEngine(engine.NameAria2, acceptsAria2Lanes, []engine.Capability{engine.CapPerFileSelect})
-	aria2.files = aria2FilesListing()
+	aria2.setListing(aria2FilesListing())
 	qbittorrent := newFilesEngine(engine.NameQBittorrent, acceptsBitTorrent,
 		[]engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority})
 
@@ -246,6 +288,11 @@ func TestListTaskFilesRendersListing(t *testing.T) {
 		t.Errorf("files = %+v, want %+v", files, want)
 	}
 
+	// The listing was asked for under the namespaced engine id.
+	if ids := env.qbittorrent.recordedFilesIDs(); len(ids) != 1 || ids[0] != engine.NameQBittorrent+":"+qbtHash {
+		t.Errorf("listing ids = %v, want exactly the namespaced handle", ids)
+	}
+
 	// The rows the response came from are stored, selection and priority
 	// included, ready for the delete path's enumeration.
 	for index, wantSelected := range map[int]int{0: 1, 1: 1, 2: 1} {
@@ -269,7 +316,7 @@ func TestListTaskFilesServesStoredRowsWhenEngineDown(t *testing.T) {
 
 	before := filesBody(t, env.getFiles(t, id))
 
-	env.qbittorrent.filesErr = engine.ErrUnavailable
+	env.qbittorrent.failListing(engine.ErrUnavailable)
 	response := env.getFiles(t, id)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
@@ -414,6 +461,93 @@ func TestPatchFilesRejectsPriority4(t *testing.T) {
 	}
 }
 
+// TestPatchFilesReselectSetsNormal pins the reverse of the deselect: a
+// selected:true on a deselected file sends priority 1 to the engine and
+// restores the stored row.
+func TestPatchFilesReselectSetsNormal(t *testing.T) {
+	env := newFilesTestEnv(t)
+	id := env.seedQBTTask(t)
+
+	deselect := env.patchFiles(t, id, map[string]any{
+		"files": []map[string]any{{"index": 2, "selected": false}},
+	})
+	if deselect.Code != http.StatusOK {
+		t.Fatalf("deselect: status %d body %s", deselect.Code, deselect.Body.String())
+	}
+
+	response := env.patchFiles(t, id, map[string]any{
+		"files": []map[string]any{{"index": 2, "selected": true}},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("reselect: status %d body %s", response.Code, response.Body.String())
+	}
+
+	calls := env.qbittorrent.recordedSetCalls()
+	if len(calls) != 2 {
+		t.Fatalf("SetFiles calls = %+v, want the deselect then the reselect", calls)
+	}
+	if want := map[int]int{2: 1}; !reflect.DeepEqual(calls[1].priorities, want) {
+		t.Errorf("reselect priorities = %v, want %v", calls[1].priorities, want)
+	}
+
+	row := env.storedFile(t, id, 2)
+	if row.Selected != 1 || row.Priority == nil || *row.Priority != 1 {
+		t.Errorf("stored row of file 2 = %+v, want restored selected/normal", row)
+	}
+}
+
+// TestPatchFilesSkipStringDeselects pins the other spelling of the one
+// concept: a lone priority:"skip" deselects exactly like selected:false.
+func TestPatchFilesSkipStringDeselects(t *testing.T) {
+	env := newFilesTestEnv(t)
+	id := env.seedQBTTask(t)
+
+	response := env.patchFiles(t, id, map[string]any{
+		"files": []map[string]any{{"index": 2, "priority": "skip"}},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", response.Code, response.Body.String())
+	}
+
+	if want := map[int]int{2: 0}; !reflect.DeepEqual(env.qbittorrent.recordedSetCalls()[0].priorities, want) {
+		t.Errorf("priorities = %v, want %v", env.qbittorrent.recordedSetCalls()[0].priorities, want)
+	}
+
+	row := env.storedFile(t, id, 2)
+	if row.Selected != 0 || row.Priority == nil || *row.Priority != 0 {
+		t.Errorf("stored row of file 2 = %+v, want deselected with skip", row)
+	}
+}
+
+// TestListTaskFilesEmptyListingClearsRows pins the replace semantics of
+// the upsert: a listing that carries no files clears the task's rows.
+func TestListTaskFilesEmptyListingClearsRows(t *testing.T) {
+	env := newFilesTestEnv(t)
+	id := env.seedQBTTask(t)
+
+	if response := env.getFiles(t, id); response.Code != http.StatusOK {
+		t.Fatalf("seed listing: status %d body %s", response.Code, response.Body.String())
+	}
+
+	env.qbittorrent.setListing(nil)
+	response := env.getFiles(t, id)
+	if response.Code != http.StatusOK {
+		t.Fatalf("empty listing: status %d body %s", response.Code, response.Body.String())
+	}
+	if files := filesBody(t, response); len(files) != 0 {
+		t.Errorf("files = %+v, want the empty listing", files)
+	}
+
+	var rows int
+	if err := env.db.GetContext(t.Context(), &rows,
+		`SELECT COUNT(*) FROM task_files WHERE task_id = ?`, id); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("stored rows = %d, want 0 after the empty listing", rows)
+	}
+}
+
 // TestPatchFilesUnknownIndex pins the 422 of an index outside the task's
 // listing, with the offending field located in errors[].
 func TestPatchFilesUnknownIndex(t *testing.T) {
@@ -432,8 +566,9 @@ func TestPatchFilesUnknownIndex(t *testing.T) {
 }
 
 // TestPatchFilesEntryValidation pins the per-entry rules: at least one of
-// selected and priority, an entry carrying both must agree, and an
-// unknown priority name is refused.
+// selected and priority, an entry carrying both must agree, an unknown
+// priority name is refused, a repeated index is named instead of folded,
+// and the files array must not be empty or null.
 func TestPatchFilesEntryValidation(t *testing.T) {
 	env := newFilesTestEnv(t)
 	id := env.seedQBTTask(t)
@@ -449,6 +584,12 @@ func TestPatchFilesEntryValidation(t *testing.T) {
 		{"unknown priority name", map[string]any{
 			"files": []map[string]any{{"index": 0, "priority": "low"}},
 		}},
+		{"repeated index", map[string]any{
+			"files": []map[string]any{
+				{"index": 0, "selected": true},
+				{"index": 0, "priority": "skip"},
+			},
+		}},
 		{"empty files array", map[string]any{"files": []map[string]any{}}},
 	}
 	for _, tc := range cases {
@@ -457,6 +598,21 @@ func TestPatchFilesEntryValidation(t *testing.T) {
 			assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 		})
 	}
+
+	// A JSON null decodes to a nil slice no schema tag can tell from an
+	// absent one; the handler's backstop owns it.
+	t.Run("null files array", func(t *testing.T) {
+		response := env.patchFilesRaw(t, id, `{"files":null}`)
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	})
+
+	// A mistyped query key is 422, never silently ignored.
+	t.Run("unknown query parameter", func(t *testing.T) {
+		response := env.api.Patch("/tasks/"+id+"/files?indx=2",
+			map[string]any{"files": []map[string]any{{"index": 0, "priority": "high"}}},
+			"Authorization: Bearer "+env.bearer)
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	})
 
 	env.qbittorrent.assertNoSetCalls(t)
 }
@@ -530,7 +686,7 @@ func TestPatchFilesEngineFailure(t *testing.T) {
 		t.Fatalf("seed listing: status %d body %s", response.Code, response.Body.String())
 	}
 
-	env.qbittorrent.setErr = engine.ErrUnavailable
+	env.qbittorrent.failSet(engine.ErrUnavailable)
 	response := env.patchFiles(t, id, map[string]any{
 		"files": []map[string]any{{"index": 2, "selected": false}},
 	})
