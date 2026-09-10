@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -22,10 +23,10 @@ import (
 )
 
 const (
-	// maxCreateURIs is the per-submission cap of doc 05 section 5.2. The
-	// maxItems schema tag enforces it for over-long bodies; the handler
-	// enforces it for empty ones, which no schema tag can express.
-	maxCreateURIs = 50
+	// The per-submission URI cap is MaxURIs (submission.go): payload uris
+	// plus every .txt line pool under it. The maxItems schema tag enforces
+	// it for over-long JSON bodies; the handler enforces it for the merged
+	// count and for empty submissions, which no schema tag can express.
 
 	operationCreateTasks = "create-tasks"
 	operationListTasks   = "list-tasks"
@@ -37,14 +38,24 @@ VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING`
 	queryTagIDByName   = `SELECT id FROM tags WHERE name = ?`
 	queryInsertTaskTag = `INSERT INTO task_tags (task_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING`
 
+	// The store's Task row cannot carry requested_destination yet (its
+	// column is owned by the store task that adds it), so the create path
+	// records the echo itself, after the insert it belongs to. updated_at
+	// is untouched: the write completes the insert, it is not a task change.
+	querySetRequestedDestination = `UPDATE tasks SET requested_destination = ? WHERE id = ?`
+
 	emptySubmissionDetail = "the submission holds no uri; send between 1 and 50"
 	tooManyURIsFormat     = "the submission holds %d uris; send between 1 and %d"
 	allRejectedDetail     = "every uri in the submission was rejected; see rejected[] for the per-uri reasons"
-	unknownCategoryFormat = "category %q does not exist"
-	engineUnavailableFmt  = "the %s engine is required for this submission but is not registered"
-	uriRejectedDetail     = "the uri scheme is not supported in v1"
-	engineRefusesURIFmt   = "engine %q does not accept this uri"
-	duplicateDetail       = "a task for this torrent already exists"
+
+	selectionNoManifestDetail = "select_files applies to a multi-file manifest; the submission holds none"
+	selectionCapDetailFormat  = "the %s engine does not support selecting files"
+	selectionPrioCapFormat    = "the %s engine does not support per-file priority"
+	unknownCategoryFormat     = "category %q does not exist"
+	engineUnavailableFmt      = "the %s engine is required for this submission but is not registered"
+	uriRejectedDetail         = "the uri scheme is not supported in v1"
+	engineRefusesURIFmt       = "engine %q does not accept this uri"
+	duplicateDetail           = "a task for this torrent already exists"
 
 	queryTaskIDByInfohash = `SELECT id FROM tasks
 WHERE state <> 'removed' AND ((? <> '' AND infohash_v1 = ?) OR (? <> '' AND infohash_v2 = ?))
@@ -58,19 +69,20 @@ WHERE tt.task_id IN (?)
 ORDER BY t.name`
 )
 
-// CreateTasksBody is the JSON body of POST /tasks. The multipart form is
-// added by T033.
+// CreateTasksBody is the JSON body of POST /tasks, and the payload part of
+// its multipart form (without blob: the form's file parts carry the bytes).
 type CreateTasksBody struct {
-	URIs            []string        `json:"uris"             maxItems:"50" doc:"One entry per download; http(s), ftp(s), sftp, magnet, bare infohash and the obfuscated schemes"`
-	Destination     string          `json:"destination,omitempty" doc:"Must resolve inside a configured data root; defaults to the first root"`
-	Category        string          `json:"category,omitempty" doc:"Category name; must already exist"`
-	Tags            []string        `json:"tags,omitempty" doc:"Tag names; created on demand"`
-	Paused          bool            `json:"paused,omitempty" doc:"Create in paused instead of queued"`
-	Sequential      bool            `json:"sequential,omitempty"`
-	CreateSubfolder bool            `json:"create_subfolder,omitempty" doc:"Place content in <destination>/<manifest name>/ (applied by the admission pass)"`
-	FTPCredentials  *FTPCredentials `json:"ftp_credentials,omitempty" doc:"Used for this request's ftp, ftps and sftp URIs only; never returned"`
-	ExtractPassword string          `json:"extract_password,omitempty" doc:"Stored for auto-extract; never returned"`
-	Engine          string          `json:"engine,omitempty" enum:"aria2,qbittorrent,ytdlp" doc:"Overrides the routing table when that engine accepts the URI"`
+	URIs            []string               `json:"uris,omitempty"         maxItems:"50" doc:"One entry per download; http(s), ftp(s), sftp, magnet, bare infohash and the obfuscated schemes"`
+	Destination     string                 `json:"destination,omitempty" doc:"Must resolve inside a configured data root; defaults to the first root"`
+	Category        string                 `json:"category,omitempty" doc:"Category name; must already exist"`
+	Tags            []string               `json:"tags,omitempty" doc:"Tag names; created on demand"`
+	Paused          bool                   `json:"paused,omitempty" doc:"Create in paused instead of queued"`
+	Sequential      bool                   `json:"sequential,omitempty"`
+	CreateSubfolder bool                   `json:"create_subfolder,omitempty" doc:"Place content in <destination>/<manifest name>/ (applied by the admission pass)"`
+	SelectFiles     []FileSelectionRequest `json:"select_files,omitempty" doc:"Applied to the first multi-file manifest; 422 when the routed engine lacks per_file_select"`
+	FTPCredentials  *FTPCredentials        `json:"ftp_credentials,omitempty" doc:"Used for this request's ftp, ftps and sftp URIs only; never returned"`
+	ExtractPassword string                 `json:"extract_password,omitempty" doc:"Stored for auto-extract; never returned"`
+	Engine          string                 `json:"engine,omitempty" enum:"aria2,qbittorrent,ytdlp" doc:"Overrides the routing table when that engine accepts the URI"`
 }
 
 // CreateTasksInput is the operation input carrying CreateTasksBody.
@@ -229,9 +241,13 @@ func (h *TaskHandlers) registerOperations(hapi huma.API) {
 		Method:      http.MethodPost,
 		Path:        "/tasks",
 		Summary:     "Create tasks from submitted URIs",
-		Description: "Creates one queued task per accepted URI and reports the refused ones in rejected[]. Partial success is normal. No engine is contacted: the admission pass owns Engine.Add.",
+		Description: "Creates one queued task per accepted URI and reports the refused ones in rejected[]. Beside application/json the operation accepts the multipart form of doc 05 section 5.2: one payload part with this JSON body, plus .torrent, .metalink and .txt file parts. Partial success is normal. No engine is contacted: the admission pass owns Engine.Add.",
 		Tags:        []string{"tasks"},
 		Security:    credentialRequired,
+		RequestBody: multipartSubmissionBody(),
+		// The form middleware translates multipart/form-data into the JSON
+		// path and exposes the file parts on the request context.
+		Middlewares: huma.Middlewares{acceptSubmissionForm},
 	}, h.CreateTasks)
 
 	huma.Register(hapi, huma.Operation{
@@ -263,29 +279,56 @@ func (h *TaskHandlers) registerOperations(hapi huma.API) {
 	}, h.GetTask)
 }
 
-// plannedTask is one accepted URI with its routing decided, ready to insert.
+// plannedTask is one accepted submission with its routing decided, ready to
+// insert: a URI, an uploaded .torrent or an uploaded .metalink.
 type plannedTask struct {
 	normalized uri.Normalized
 	engine     string
+	// destination is the effective save directory: the resolved request
+	// destination, or its subfolder once create_subfolder moved a
+	// multi-file manifest (FR-008).
+	destination string
+	// name overrides the display name when the submission has no URI to
+	// derive it from (a metalink part).
+	name string
+	// manifest is the parsed .torrent of an uploaded part; nil for every
+	// other submission.
+	manifest *uri.Manifest
 }
 
-// CreateTasks accepts up to 50 URIs, normalises and routes each one,
-// resolves the destination inside a configured root and inserts one tasks
-// row per accepted URI. It never hands a task to an engine: the admission
-// pass (T098) is the only caller of Engine.Add, so the concurrency limits
-// govern a new task exactly as they govern a resumed one.
+// CreateTasks accepts up to 50 sources — payload uris, the lines of .txt
+// parts and one task per .torrent or .metalink part — normalises and routes
+// each submission, resolves the destination inside a configured root and
+// inserts one tasks row per accepted source. It never hands a task to an
+// engine: the admission pass (T098) is the only caller of Engine.Add, so
+// the concurrency limits govern a new task exactly as they govern a resumed
+// one.
 func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*CreateTasksOutput, error) {
+	// The form middleware stashed the parsed file parts on the request
+	// context; a JSON request carries none. Their .txt lines join the
+	// payload's uris and their blobs merge into the same submission list
+	// the JSON path builds (task step 5); an unrecognised part is a
+	// rejection, never a guess.
+	txtURIs, blobs, rejected := processUploads(uploadedFilesFrom(ctx))
+
+	uris := make([]string, 0, len(in.Body.URIs)+len(txtURIs))
+	uris = append(uris, in.Body.URIs...)
+	uris = append(uris, txtURIs...)
+
 	// Shape validation runs before any other work, so a malformed submission
 	// can create no row and touch no engine. The schema's maxItems tag
-	// usually answers the over-long case first; this branch is the backstop.
-	if len(in.Body.URIs) == 0 {
+	// answers an over-long JSON body first; this branch owns the merged
+	// count of payload uris and .txt lines, and the empty submission —
+	// which a junk-only form is not: it gets the all-rejected answer below,
+	// its rejected[] entry intact.
+	if len(uris) == 0 && len(blobs) == 0 && len(rejected) == 0 {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, emptySubmissionDetail)
 	}
-	if len(in.Body.URIs) > maxCreateURIs {
+	if len(uris) > MaxURIs {
 		return nil, Problem(
 			SlugValidationFailed,
 			http.StatusUnprocessableEntity,
-			fmt.Sprintf(tooManyURIsFormat, len(in.Body.URIs), maxCreateURIs),
+			fmt.Sprintf(tooManyURIsFormat, len(uris), MaxURIs),
 		)
 	}
 
@@ -299,12 +342,32 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 		return nil, err
 	}
 
-	planned, rejected, err := h.planURIs(ctx, in.Body)
+	// The within-submission duplicate set spans URI identities and torrent
+	// infohashes alike: one submission cannot plan the same torrent twice.
+	seenInfohashes := map[string]bool{}
+
+	blobPlanned, blobRejected, err := h.planBlobParts(ctx, blobs, in.Body.Engine, destination, in.Body.CreateSubfolder, seenInfohashes)
 	if err != nil {
 		return nil, err
 	}
+	rejected = append(rejected, blobRejected...)
+
+	mergedBody := in.Body
+	mergedBody.URIs = uris
+	planned, uriRejected, err := h.planURIs(ctx, mergedBody, destination, seenInfohashes)
+	if err != nil {
+		return nil, err
+	}
+	rejected = append(rejected, uriRejected...)
+	planned = append(planned, blobPlanned...)
+
+	// select_files precedes every insert: a refusal creates nothing.
+	if err := h.validateSelection(ctx, &in.Body, planned); err != nil {
+		return nil, err
+	}
+
 	if len(planned) == 0 {
-		// Every URI refused: the top-level detail carries the first
+		// Every submission refused: the top-level detail carries the first
 		// rejection's reason — for an ed2k-only submission exactly the
 		// message of doc 06 section 2 row 7.
 		detail := allRejectedDetail
@@ -326,7 +389,7 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 
 	created := make([]TaskDTO, 0, len(planned))
 	for _, p := range planned {
-		dto, err := h.insertPlanned(ctx, p, &in.Body, destination, categoryID)
+		dto, err := h.insertPlanned(ctx, p, &in.Body, categoryID)
 		if err != nil {
 			return nil, err
 		}
@@ -340,18 +403,236 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 	return output, nil
 }
 
+// planBlobParts turns the blob uploads of the form into planned tasks: one
+// per .torrent or .metalink part, routed by the raw-bytes rows of the
+// routing table (rows 2 and 6). An explicit engine override applies to URI
+// submissions only: a blob upload carries no URI for Accepts to judge, so a
+// mismatch with the table's route is a per-part rejection, never a silent
+// re-route.
+func (h *TaskHandlers) planBlobParts(
+	ctx context.Context,
+	blobs []uploadBlob,
+	engineOverride, destination string,
+	createSubfolder bool,
+	seen map[string]bool,
+) ([]plannedTask, []RejectedURI, error) {
+	planned := []plannedTask{}
+	rejected := []RejectedURI{}
+
+	for _, blob := range blobs {
+		engineName := engine.NameQBittorrent
+		if blob.kind == uploadKindMetalink {
+			engineName = engine.NameAria2
+		}
+		if engineOverride != "" && engineOverride != engineName {
+			rejected = append(rejected, RejectedURI{
+				URI:    blob.name,
+				Type:   SlugUnsupportedScheme,
+				Detail: fmt.Sprintf(engineRefusesURIFmt, engineOverride),
+			})
+
+			continue
+		}
+		if _, ok := h.engines.Get(engineName); !ok {
+			return nil, nil, engineUnavailable(engineName)
+		}
+
+		if blob.kind == uploadKindMetalink {
+			// A metalink has no URI identity to store: the row holds the
+			// part's display name and the aria2 routing of the table's row 6,
+			// and the admission pass owns the engine handoff.
+			planned = append(planned, plannedTask{
+				normalized:  uri.Normalized{Kind: uri.KindMetalink},
+				engine:      engine.NameAria2,
+				name:        blob.name,
+				destination: destination,
+			})
+
+			continue
+		}
+
+		p, rejection, err := h.planTorrentPart(ctx, blob, destination, createSubfolder, seen)
+		if err != nil {
+			return nil, nil, err
+		}
+		if rejection != nil {
+			rejected = append(rejected, *rejection)
+
+			continue
+		}
+		planned = append(planned, *p)
+	}
+
+	return planned, rejected, nil
+}
+
+// planTorrentPart parses one uploaded .torrent into a planned task. Its
+// stored source is the magnet the infohash rebuilds, so the admission pass
+// and the reconciler can resubmit the task after the uploaded bytes are
+// gone; its manifest drives create_subfolder and select_files. A duplicate
+// infohash is a per-part conflict rejection, the URI path's own rule.
+func (h *TaskHandlers) planTorrentPart(
+	ctx context.Context,
+	part uploadBlob,
+	destination string,
+	createSubfolder bool,
+	seen map[string]bool,
+) (*plannedTask, *RejectedURI, error) {
+	// classifyUpload already proved the bytes are bencode; this parse
+	// demands the full metainfo shape.
+	manifest, err := uri.InspectTorrent(part.bytes)
+	if err != nil {
+		rejection := RejectedURI{URI: part.name, Type: SlugValidationFailed, Detail: sentinelDetail(err, uri.ErrNotTorrent)}
+
+		return nil, &rejection, nil
+	}
+
+	normalized := uri.Normalized{
+		Kind:        uri.KindTorrent,
+		URI:         magnetFromManifest(manifest),
+		DisplayName: manifest.Name,
+		InfohashV1:  manifest.InfohashV1,
+		InfohashV2:  manifest.InfohashV2,
+	}
+
+	duplicate, err := h.duplicateInfohash(ctx, normalized, seen)
+	if err != nil {
+		return nil, nil, err
+	}
+	if duplicate {
+		rejection := RejectedURI{URI: part.name, Type: SlugConflict, Detail: duplicateDetail}
+
+		return nil, &rejection, nil
+	}
+	seen[normaliseInfohashKey(normalized)] = true
+
+	p := &plannedTask{
+		normalized:  normalized,
+		engine:      engine.NameQBittorrent,
+		destination: destination,
+		manifest:    &manifest,
+	}
+
+	// create_subfolder applies once the manifest is known (FR-008): a
+	// multi-file manifest's content lands in <destination>/<manifest name>/,
+	// sanitised and re-resolved against the roots.
+	if createSubfolder && len(manifest.Files) > 1 {
+		effective, err := subfolderDestination(h.roots, destination, manifest.Name, true)
+		if err != nil {
+			return nil, nil, destinationRejected(destination)
+		}
+		p.destination = effective
+	}
+
+	return p, nil, nil
+}
+
+// magnetFromManifest rebuilds the submit URI of an uploaded torrent from
+// its infohash — the v1 hash when present, the v2 hash otherwise — plus the
+// display name, the same identity a magnet submission would have carried.
+func magnetFromManifest(m uri.Manifest) string {
+	if m.InfohashV1 != "" {
+		return "magnet:?xt=urn:btih:" + m.InfohashV1
+	}
+
+	return "magnet:?xt=urn:btmh:" + m.InfohashV2
+}
+
+// validateSelection enforces the create-time selection rules of doc 05
+// section 5.2, before any row is written: select_files applies to the
+// first multi-file manifest of the submission, the routed engine must
+// declare per_file_select, and a high or maximum priority is 422 unless
+// the engine declares per_file_priority (task step 7) — skip and normal
+// are selection outcomes every per_file_select engine honours. The
+// resolved indices and priorities travel no further than the validation:
+// the admission pass owns Engine.Add and no create-time selection store
+// exists yet, a wiring gap this task cannot close inside its Files table
+// (noted in the PR); the debug line is the honest trace of that boundary.
+func (h *TaskHandlers) validateSelection(ctx context.Context, body *CreateTasksBody, planned []plannedTask) error {
+	if len(body.SelectFiles) == 0 {
+		return nil
+	}
+
+	engineName, fileCount, ok := selectionTarget(planned)
+	if !ok {
+		return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, selectionNoManifestDetail)
+	}
+
+	e, registered := h.engines.Get(engineName)
+	if !registered {
+		return engineUnavailable(engineName)
+	}
+	if !hasCapability(e, engine.CapPerFileSelect) {
+		return Problem(
+			SlugValidationFailed,
+			http.StatusUnprocessableEntity,
+			fmt.Sprintf(selectionCapDetailFormat, engineName),
+		)
+	}
+
+	indices, priorities, err := applySelection(body.SelectFiles, fileCount)
+	if err != nil {
+		return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, sentinelDetail(err, ErrInvalidSelection))
+	}
+
+	if !hasCapability(e, engine.CapPerFilePriority) {
+		for _, priority := range priorities {
+			if priority == priorityHigh || priority == priorityMaximum {
+				return Problem(
+					SlugValidationFailed,
+					http.StatusUnprocessableEntity,
+					fmt.Sprintf(selectionPrioCapFormat, engineName),
+				)
+			}
+		}
+	}
+
+	logFromContext(ctx).Debug("file selection accepted at creation",
+		slog.String("engine", engineName), slog.Any("indices", indices), slog.Any("priorities", priorities))
+
+	return nil
+}
+
+// selectionTarget finds the submission the select_files entries address
+// (doc 05 section 5.2: the first multi-file manifest): an uploaded torrent
+// known to hold more than one file wins; otherwise the first submission
+// whose manifest cannot be known at create time — a magnet or torrent URI,
+// an unparsed metalink part — which the engine judges at add time. Only
+// known single-file submissions remain, and those cannot take a selection.
+func selectionTarget(planned []plannedTask) (engineName string, fileCount int, ok bool) {
+	for _, p := range planned {
+		if p.manifest != nil && len(p.manifest.Files) > 1 {
+			return p.engine, len(p.manifest.Files), true
+		}
+	}
+	for _, p := range planned {
+		unknown := p.manifest == nil &&
+			(p.normalized.Kind == uri.KindMagnet || p.normalized.Kind == uri.KindTorrent || p.normalized.Kind == uri.KindMetalink)
+		if unknown {
+			return p.engine, -1, true
+		}
+	}
+
+	return "", 0, false
+}
+
 // planURIs normalises and routes every URI, collecting a rejection for each
 // refused one. It returns an error only for the whole-request failures: an
 // explicit engine that is not registered, or a routed engine that is not.
-func (h *TaskHandlers) planURIs(ctx context.Context, body CreateTasksBody) ([]plannedTask, []RejectedURI, error) {
+func (h *TaskHandlers) planURIs(
+	ctx context.Context,
+	body CreateTasksBody,
+	destination string,
+	seen map[string]bool,
+) ([]plannedTask, []RejectedURI, error) {
 	planned := make([]plannedTask, 0, len(body.URIs))
 	rejected := []RejectedURI{}
 
 	// The tasks table forbids a live duplicate of an infohash (partial unique
 	// indexes), so a repeated torrent would otherwise fail the INSERT. Both
 	// an existing row and a repeat within this submission become a per-URI
-	// conflict rejection instead.
-	seenInfohashes := map[string]bool{}
+	// conflict rejection instead; the seen map is shared with the blob
+	// planning, so an uploaded .torrent and its magnet are one duplicate too.
 
 	for _, raw := range body.URIs {
 		n, err := uri.Normalize(raw)
@@ -395,7 +676,7 @@ func (h *TaskHandlers) planURIs(ctx context.Context, body CreateTasksBody) ([]pl
 			return nil, nil, engineUnavailable(engineName)
 		}
 
-		duplicate, err := h.duplicateInfohash(ctx, n, seenInfohashes)
+		duplicate, err := h.duplicateInfohash(ctx, n, seen)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -404,21 +685,21 @@ func (h *TaskHandlers) planURIs(ctx context.Context, body CreateTasksBody) ([]pl
 
 			continue
 		}
-		seenInfohashes[normaliseInfohashKey(n)] = true
+		seen[normaliseInfohashKey(n)] = true
 
-		planned = append(planned, plannedTask{normalized: n, engine: engineName})
+		planned = append(planned, plannedTask{normalized: n, engine: engineName, destination: destination})
 	}
 
 	return planned, rejected, nil
 }
 
-// insertPlanned persists one planned task, links its tags and renders the
-// response DTO.
+// insertPlanned persists one planned task, links its tags, records the
+// requested-destination echo, seeds its create-time file selection and
+// renders the response DTO.
 func (h *TaskHandlers) insertPlanned(
 	ctx context.Context,
 	p plannedTask,
 	body *CreateTasksBody,
-	destination string,
 	categoryID *string,
 ) (TaskDTO, error) {
 	n := p.normalized
@@ -438,20 +719,38 @@ func (h *TaskHandlers) insertPlanned(
 		source = embedCredentials(n.URI, *body.FTPCredentials)
 	}
 
+	name := p.name
+	if name == "" {
+		name = displayName(n)
+	}
+	if name == "" {
+		// A metalink part sent without a filename still gets a stable label.
+		name = string(n.Kind)
+	}
+
+	// A parsed torrent knows its total already; every other submission
+	// leaves it unknown until an engine reports it.
+	var totalBytes *int64
+	if p.manifest != nil {
+		size := p.manifest.TotalSize
+		totalBytes = &size
+	}
+
 	// CreateLogged writes the row and its task.created event in one
 	// transaction (FR-150): a task can never persist without the first
 	// entry of its event log.
 	task, err := h.tasks.CreateLogged(ctx, store.Task{
 		Engine:      p.engine,
 		SourceKind:  string(n.Kind),
-		SourceURI:   &source,
-		Name:        displayName(n),
+		SourceURI:   stringOrNil(source),
+		Name:        name,
 		InfohashV1:  stringOrNil(n.InfohashV1),
 		InfohashV2:  stringOrNil(n.InfohashV2),
 		State:       state,
-		Destination: destination,
+		Destination: p.destination,
 		CategoryID:  categoryID,
 		Sequential:  boolToInt(body.Sequential),
+		TotalBytes:  totalBytes,
 		// extract_password and create_subfolder have no store.Task field yet:
 		// their columns are owned by the auto-extract and upload tasks, which
 		// extend the store with them.
@@ -464,20 +763,43 @@ func (h *TaskHandlers) insertPlanned(
 		return TaskDTO{}, internalFailure(ctx, "link tags", err)
 	}
 
+	// The canonical object echoes what the client asked for whenever the
+	// server resolved it to something else (doc 05 section 3): a subfoldered
+	// destination, or an alias of the configured root. The row carries the
+	// same echo in requested_destination (FR-044).
+	var requested *string
+	if body.Destination != "" && filepath.Clean(body.Destination) != task.Destination {
+		echo := body.Destination
+		requested = &echo
+		if err := h.recordRequestedDestination(ctx, task.ID, echo); err != nil {
+			return TaskDTO{}, internalFailure(ctx, "record requested destination", err)
+		}
+	}
+
 	var category *string
 	if body.Category != "" {
 		category = &body.Category
 	}
 
 	dto := newTaskDTO(task, n.URI, category, body.Tags)
-	// The canonical object echoes what the client asked for whenever the
-	// server resolved it to something else (doc 05 section 3).
-	if body.Destination != "" && filepath.Clean(body.Destination) != task.Destination {
-		requested := body.Destination
-		dto.RequestedDestination = &requested
+	if n.URI == "" {
+		// A metalink part has no URI identity to display.
+		dto.SourceURI = nil
 	}
+	dto.RequestedDestination = requested
 
 	return dto, nil
+}
+
+// recordRequestedDestination writes the requested_destination echo of a
+// task whose effective destination differs from what the client asked for
+// (FR-044, doc 04 section 3.3).
+func (h *TaskHandlers) recordRequestedDestination(ctx context.Context, taskID, requested string) error {
+	if _, err := h.db.ExecContext(ctx, querySetRequestedDestination, requested, taskID); err != nil {
+		return fmt.Errorf("record requested destination of %q: %w", taskID, err)
+	}
+
+	return nil
 }
 
 // resolveCategory maps a category name to its id. The category must already

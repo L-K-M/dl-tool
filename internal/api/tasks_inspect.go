@@ -16,7 +16,9 @@ const (
 	operationInspectTasks = "inspect-tasks"
 
 	// maxInspectBlobBytes is the decoded .torrent cap of doc 05 section 5.3.
-	maxInspectBlobBytes = 10 << 20 // 10 MiB
+	// The value lives at MaxBlobBytes (submission.go), which caps the
+	// multipart blob parts the same way.
+	maxInspectBlobBytes = MaxBlobBytes
 )
 
 // magnetInspector is implemented by an engine that can resolve magnet metadata
@@ -29,8 +31,11 @@ type magnetInspector interface {
 
 // InspectTasksBody is the JSON body of POST /tasks/inspect: the same uris,
 // blob and filename fields POST /tasks takes; everything else is ignored.
+// uris is optional at the schema level — a multipart inspection can carry
+// its whole submission in file parts; the handler's empty-submission rule
+// is the gate.
 type InspectTasksBody struct {
-	URIs     []string `json:"uris"             maxItems:"50" doc:"One entry per submission; http(s), ftp(s), sftp, magnet and the obfuscated schemes"`
+	URIs     []string `json:"uris,omitempty"     maxItems:"50" doc:"One entry per submission; http(s), ftp(s), sftp, magnet and the obfuscated schemes"`
 	Blob     string   `json:"blob,omitempty"   doc:"A base64-encoded .torrent file, 10 MiB decoded maximum"`
 	Filename string   `json:"filename,omitempty" doc:"Display name for a blob submission"`
 }
@@ -73,14 +78,31 @@ type InspectTasksOutput struct {
 // InspectTasks serves POST /tasks/inspect: one manifest per accepted
 // submission, without creating a task, writing to disk or inserting a tasks
 // row. The only permitted engine contact is the metadata-only magnet fetch.
+// It accepts the same multipart form as POST /tasks (doc 05 section 5.3):
+// the form's file parts inspect exactly the bytes a later create submits.
 func (h *TaskHandlers) InspectTasks(ctx context.Context, in *InspectTasksInput) (*InspectTasksOutput, error) {
-	if len(in.Body.URIs) == 0 && in.Body.Blob == "" {
+	// Same merge as the create endpoint: .txt lines join the payload's uris,
+	// blob parts inspect as themselves, an unrecognised part is a rejection.
+	txtURIs, blobs, rejected := processUploads(uploadedFilesFrom(ctx))
+
+	rawURIs := make([]string, 0, len(in.Body.URIs)+len(txtURIs))
+	rawURIs = append(rawURIs, in.Body.URIs...)
+	rawURIs = append(rawURIs, txtURIs...)
+
+	if len(rawURIs) == 0 && in.Body.Blob == "" && len(blobs) == 0 && len(rejected) == 0 {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, emptySubmissionDetail)
+	}
+	if len(rawURIs) > MaxURIs {
+		return nil, Problem(
+			SlugValidationFailed,
+			http.StatusUnprocessableEntity,
+			fmt.Sprintf(tooManyURIsFormat, len(rawURIs), MaxURIs),
+		)
 	}
 
 	output := &InspectTasksOutput{}
 	output.Body.Manifests = []ManifestDTO{}
-	output.Body.Rejected = []RejectedURI{}
+	output.Body.Rejected = rejected
 
 	if in.Body.Blob != "" {
 		manifest, err := h.inspectBlob(in.Body)
@@ -90,7 +112,17 @@ func (h *TaskHandlers) InspectTasks(ctx context.Context, in *InspectTasksInput) 
 		output.Body.Manifests = append(output.Body.Manifests, manifest)
 	}
 
-	for _, raw := range in.Body.URIs {
+	for _, blob := range blobs {
+		manifest, rejection := inspectUpload(blob)
+		if rejection != nil {
+			output.Body.Rejected = append(output.Body.Rejected, *rejection)
+
+			continue
+		}
+		output.Body.Manifests = append(output.Body.Manifests, *manifest)
+	}
+
+	for _, raw := range rawURIs {
 		manifest, rejection, err := h.inspectURI(ctx, raw)
 		if err != nil {
 			return nil, err
@@ -115,6 +147,34 @@ func (h *TaskHandlers) InspectTasks(ctx context.Context, in *InspectTasksInput) 
 	}
 
 	return output, nil
+}
+
+// inspectUpload renders one uploaded file part as its manifest DTO: a
+// torrent part through the same parser the blob field uses, a metalink part
+// in the transport shape — it is routed to aria2 unparsed, so its file list
+// is the one-entry unknown-size form of doc 05 section 5.3. The display
+// source of an upload is its client-sent filename, the blob field's
+// filename rule.
+func inspectUpload(blob uploadBlob) (*ManifestDTO, *RejectedURI) {
+	if blob.kind == uploadKindMetalink {
+		return &ManifestDTO{
+			SourceURI: blob.name,
+			Kind:      string(uri.KindMetalink),
+			Name:      blob.name,
+			FileCount: intPtr(1),
+			Files:     []ManifestFileDTO{{Path: blob.name}},
+		}, nil
+	}
+
+	manifest, err := uri.InspectTorrent(blob.bytes)
+	if err != nil {
+		return nil, &RejectedURI{URI: blob.name, Type: SlugValidationFailed, Detail: sentinelDetail(err, uri.ErrNotTorrent)}
+	}
+
+	dto := torrentManifestDTO(manifest)
+	dto.SourceURI = blob.name
+
+	return &dto, nil
 }
 
 // inspectBlob turns a base64 .torrent blob into its manifest DTO. The size

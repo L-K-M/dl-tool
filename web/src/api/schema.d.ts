@@ -196,7 +196,7 @@ export interface paths {
     put?: never;
     /**
      * Create tasks from submitted URIs
-     * @description Creates one queued task per accepted URI and reports the refused ones in rejected[]. Partial success is normal. No engine is contacted: the admission pass owns Engine.Add.
+     * @description Creates one queued task per accepted URI and reports the refused ones in rejected[]. Beside application/json the operation accepts the multipart form of doc 05 section 5.2: one payload part with this JSON body, plus .torrent, .metalink and .txt file parts. Partial success is normal. No engine is contacted: the admission pass owns Engine.Add.
      */
     post: operations["create-tasks"];
     delete?: never;
@@ -236,7 +236,7 @@ export interface paths {
     put?: never;
     /**
      * Inspect submissions without creating tasks
-     * @description Parses each submission into a manifest so the UI can show the file-selection step. Never creates a task, never writes to disk and never inserts a tasks row; the only engine contact permitted is a metadata-only fetch for magnet submissions.
+     * @description Parses each submission into a manifest so the UI can show the file-selection step. Accepts the same multipart form as POST /tasks: one payload part with this JSON body, plus .torrent, .metalink and .txt file parts. Never creates a task, never writes to disk and never inserts a tasks row; the only engine contact permitted is a metadata-only fetch for magnet submissions.
      */
     post: operations["inspect-tasks"];
     delete?: never;
@@ -376,11 +376,13 @@ export interface components {
       ftp_credentials?: components["schemas"]["FTPCredentials"];
       /** @description Create in paused instead of queued */
       paused?: boolean;
+      /** @description Applied to the first multi-file manifest; 422 when the routed engine lacks per_file_select */
+      select_files?: components["schemas"]["FileSelectionRequest"][] | null;
       sequential?: boolean;
       /** @description Tag names; created on demand */
       tags?: string[] | null;
       /** @description One entry per download; http(s), ftp(s), sftp, magnet, bare infohash and the obfuscated schemes */
-      uris: string[] | null;
+      uris?: string[] | null;
     };
     CreateTasksOutputBody: {
       /** @description The full Task objects of the created tasks */
@@ -504,6 +506,13 @@ export interface components {
       /** @description Deselect is priority skip; select without a priority is normal */
       selected?: boolean;
     };
+    FileSelectionRequest: {
+      /** Format: int64 */
+      index: number;
+      /** @enum {string} */
+      priority?: "skip" | "normal" | "high" | "maximum";
+      selected?: boolean;
+    };
     HeartbeatEvent: Record<string, never>;
     InspectTasksBody: {
       /** @description A base64-encoded .torrent file, 10 MiB decoded maximum */
@@ -511,7 +520,7 @@ export interface components {
       /** @description Display name for a blob submission */
       filename?: string;
       /** @description One entry per submission; http(s), ftp(s), sftp, magnet and the obfuscated schemes */
-      uris: string[] | null;
+      uris?: string[] | null;
     };
     InspectTasksOutputBody: {
       manifests: components["schemas"]["ManifestDTO"][] | null;
@@ -1153,6 +1162,12 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["CreateTasksBody"];
+        "multipart/form-data": {
+          /** @description .torrent, .metalink or .txt uploads */
+          file?: string[];
+          /** @description The operation's JSON body, without blob */
+          payload?: string;
+        };
       };
     };
     responses: {
@@ -1219,6 +1234,12 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["InspectTasksBody"];
+        "multipart/form-data": {
+          /** @description .torrent, .metalink or .txt uploads */
+          file?: string[];
+          /** @description The operation's JSON body, without blob */
+          payload?: string;
+        };
       };
     };
     responses: {

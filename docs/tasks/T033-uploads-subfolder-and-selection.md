@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T033 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T020, T031, T032 |
 | **Blocks** | T049 |
 | **Parallel-safe** | no — extends `internal/api/tasks.go` and `internal/api/server.go` |
@@ -124,13 +124,13 @@ Part handling, exactly this table:
     `create_subfolder` producing `<destination>/<name>/` with a hostile manifest name sanitised.
 
 ## Acceptance criteria
-- [ ] One uploaded `.torrent` yields exactly one task on `qbittorrent`.
-- [ ] A two-line `.txt` yields two tasks routed by scheme; `#` and blank lines are ignored.
-- [ ] A request above 32 MiB is refused without buffering the whole body.
-- [ ] `create_subfolder=true` resolves to `<destination>/<sanitised manifest name>/` and the result still
+- [x] One uploaded `.torrent` yields exactly one task on `qbittorrent`.
+- [x] A two-line `.txt` yields two tasks routed by scheme; `#` and blank lines are ignored.
+- [x] A request above 32 MiB is refused without buffering the whole body.
+- [x] `create_subfolder=true` resolves to `<destination>/<sanitised manifest name>/` and the result still
       passes `fsx.ResolveDestination`.
-- [ ] `select_files` on an engine without `per_file_select` returns `422`, and no task is created.
-- [ ] `POST /tasks/inspect` accepts the identical form and still creates no task.
+- [x] `select_files` on an engine without `per_file_select` returns `422`, and no task is created.
+- [x] `POST /tasks/inspect` accepts the identical form and still creates no task.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -162,7 +162,59 @@ never lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Criterion-to-test map: `TestUploadTorrentPart` (criterion 1), `TestUploadTextListExpands` (2),
+`TestRequestTooLarge` plus `TestParseSubmissionCutsAtTheCap` for the no-full-buffering half (3),
+`TestCreateSubfolderSanitisesName` plus `TestSanitiseSegmentReservedNames` for the reserved-stem half
+of the sanitised name (4), `TestSelectFilesRejectedOnIncapableEngine` (5),
+`TestInspectAcceptsMultipartForm` (6).
+
+Verification block run on the final tree (`make lint && make test PKG=./internal/api/...`):
+`make lint` printed nothing but the target echoes (`0 issues.` from golangci-lint, clean
+eslint/prettier), then:
+
+```
+go test -race -count=1 ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/api	67.480s
+```
+
+The named tests, `go test -race -count=1 -v ./internal/api/ -run
+'TestUploadTorrentPart|TestUploadTextListExpands|TestRequestTooLarge|TestCreateSubfolderSanitisesName|TestSelectFilesRejectedOnIncapableEngine|TestSanitiseSegmentReservedNames'`:
+
+```
+=== RUN   TestUploadTorrentPart
+--- PASS: TestUploadTorrentPart (0.39s)
+=== RUN   TestUploadTextListExpands
+--- PASS: TestUploadTextListExpands (0.36s)
+=== RUN   TestRequestTooLarge
+--- PASS: TestRequestTooLarge (2.25s)
+=== RUN   TestCreateSubfolderSanitisesName
+--- PASS: TestCreateSubfolderSanitisesName (0.38s)
+=== RUN   TestSelectFilesRejectedOnIncapableEngine
+--- PASS: TestSelectFilesRejectedOnIncapableEngine (0.32s)
+=== RUN   TestSanitiseSegmentReservedNames
+--- PASS: TestSanitiseSegmentReservedNames (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	4.853s
+```
+
+Scope check, `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`
+(before the task commit; the two generated paths are the standing exceptions of docs/13 §7.1):
+
+```
+api/openapi.json
+internal/api/server.go
+internal/api/submission.go
+internal/api/submission_test.go
+internal/api/tasks.go
+internal/api/tasks_inspect.go
+web/src/api/schema.d.ts
+```
+
+`make ci` on the final tree exited 0: lint `0 issues.`, vet clean, `npx tsc --noEmit` clean, all 12 Go
+test packages `ok` under `-race`, web vitest 13/13 passed, `docker compose config -q` quiet for both
+compose files, doclint `0 Errors` (2381 links). (The sandbox keeps the docker client at
+`/tmp/dltools/docker/docker`; it was on `PATH` for the run.)
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

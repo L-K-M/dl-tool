@@ -425,9 +425,11 @@ func (s *Server) registerOperations() {
 		Method:      http.MethodPost,
 		Path:        "/tasks/inspect",
 		Summary:     "Inspect submissions without creating tasks",
-		Description: "Parses each submission into a manifest so the UI can show the file-selection step. Never creates a task, never writes to disk and never inserts a tasks row; the only engine contact permitted is a metadata-only fetch for magnet submissions.",
+		Description: "Parses each submission into a manifest so the UI can show the file-selection step. Accepts the same multipart form as POST /tasks: one payload part with this JSON body, plus .torrent, .metalink and .txt file parts. Never creates a task, never writes to disk and never inserts a tasks row; the only engine contact permitted is a metadata-only fetch for magnet submissions.",
 		Tags:        []string{"tasks"},
 		Security:    credentialRequired,
+		RequestBody: multipartSubmissionBody(),
+		Middlewares: huma.Middlewares{acceptSubmissionForm},
 	}, s.tasks.InspectTasks)
 
 	huma.Register(s.API, huma.Operation{
