@@ -183,9 +183,11 @@ The 2026-09-10 record was removed because its committed-scope claim omitted
 `internal/engine/qbittorrent/files_test.go`, which the Files table above now lists, so the `done`
 flip of that cycle was void. The PR #117 implementation stays committed, so the scope check above
 prints empty on the re-verification run; prove committed scope instead with
-`git diff --name-only 84606fe80befe206a17957a1dad34896cf77d761..ad40042ea312d5c643991c56d686ac4dd1f6fa81 -- . ':(exclude)docs'`,
-whose output is exactly the Files table plus the two generated standing exceptions of
-docs/13 §7.1. Paste both outputs here before returning this task to `done`.
+`git diff --name-only 84606fe80befe206a17957a1dad34896cf77d761..HEAD -- . ':(exclude)docs'` at the
+branch tip. The output is exactly the Files table plus the two generated standing exceptions of
+docs/13 §7.1; any further path means a non-docs commit landed after
+`ad40042ea312d5c643991c56d686ac4dd1f6fa81` and must be accounted for here. Paste both outputs
+before returning this task to `done`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
