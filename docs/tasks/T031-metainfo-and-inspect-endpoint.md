@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T031 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T015, T020 |
 | **Blocks** | T033, T038, T049, T083, T100, T122 |
 | **Parallel-safe** | no — extends `internal/api/tasks_test.go` and `internal/api/server.go` |
