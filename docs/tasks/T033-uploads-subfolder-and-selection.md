@@ -175,7 +175,7 @@ eslint/prettier), then:
 
 ```
 go test -race -count=1 ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/api	66.416s
+ok  	github.com/L-K-M/dl-tool/internal/api	67.480s
 ```
 
 The named tests, `go test -race -count=1 -v ./internal/api/ -run

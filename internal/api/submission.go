@@ -498,7 +498,11 @@ func sentinelDetail(err, sentinel error) string {
 // package cannot import and whose file this task may not touch; T046 lifts
 // both into fsx.SanitiseSegment with the NFC normalisation x/text adds. The
 // two read the same except step 10, which here stems on the first dot (see
-// isReservedStem).
+// isReservedStem): until T046 unifies them, a multi-dot reserved name
+// sanitises differently in the two copies ("nul.tar.gz" → "_nul.tar.gz"
+// here, "nul.tar.gz" there). The two never pair — this copy sees only the
+// manifest name, the uri copy only file-path segments inside InspectTorrent
+// — and no code may couple their outputs until the unification.
 func sanitiseSegment(s string) string {
 	if s == "" {
 		return "_"
