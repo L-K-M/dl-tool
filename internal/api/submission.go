@@ -571,14 +571,18 @@ func truncateSegmentWithExtension(s string) string {
 }
 
 // splitSegmentExtension returns the stem and the extension — a '.' within
-// the last 9 characters plus everything after it.
+// the last 9 characters plus everything after it. Short names search their
+// whole length, so "nul.txt" splits and its reserved stem stays visible to
+// step 10.
 func splitSegmentExtension(s string) (stem, ext string) {
+	tail := s
 	if len(s) > extensionWindow {
-		if idx := strings.LastIndex(s[len(s)-extensionWindow:], "."); idx >= 0 {
-			idx += len(s) - extensionWindow
+		tail = s[len(s)-extensionWindow:]
+	}
+	if idx := strings.LastIndex(tail, "."); idx >= 0 {
+		idx += len(s) - len(tail)
 
-			return s[:idx], s[idx:]
-		}
+		return s[:idx], s[idx:]
 	}
 
 	return s, ""

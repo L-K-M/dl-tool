@@ -306,8 +306,14 @@ func TestParseSubmissionCutsAtTheCap(t *testing.T) {
 	boundary := "testboundary"
 
 	newCappedRequest := func(partName string, size int64) (*http.Request, *countingReader) {
+		// Mirror multipartForm's part shapes: the payload part is a plain
+		// form field (no filename); only file parts carry one.
+		disposition := `form-data; name="` + partName + `"`
+		if partName == filePart {
+			disposition += `; filename="big"`
+		}
 		body := &countingReader{r: io.MultiReader(
-			strings.NewReader("--"+boundary+"\r\nContent-Disposition: form-data; name=\""+partName+"\"; filename=\"big\"\r\n\r\n"),
+			strings.NewReader("--"+boundary+"\r\nContent-Disposition: "+disposition+"\r\n\r\n"),
 			&zeroReader{remaining: size},
 			strings.NewReader("\r\n--"+boundary+"--\r\n"),
 		)}
@@ -625,7 +631,7 @@ func TestClassifyUpload(t *testing.T) {
 		{"text list", UploadedFile{Name: "list.txt", Bytes: []byte("http://a.example/x\n")}, uploadKindText, false},
 		{"tie broken to text", UploadedFile{Name: "list.txt", Bytes: bencodeText}, uploadKindText, false},
 		{"tie kept as torrent", UploadedFile{Name: "x.torrent", Bytes: bencodeText}, uploadKindTorrent, false},
-		{"jpeg rejected", UploadedFile{Name: "photo.jpg", Bytes: []byte{0xFF, 0xD8, 0x00, 0x10}}, "", true},
+		{"jpeg rejected", UploadedFile{Name: "photo.jpg", Bytes: []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}}, "", true},
 	}
 
 	for _, tc := range cases {
@@ -634,6 +640,9 @@ func TestClassifyUpload(t *testing.T) {
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("classifyUpload(%q) = %q, want an error", tc.file.Name, kind)
+				}
+				if kind != "" {
+					t.Errorf("classifyUpload(%q) returned kind %q alongside error, want empty", tc.file.Name, kind)
 				}
 
 				return
@@ -645,5 +654,24 @@ func TestClassifyUpload(t *testing.T) {
 				t.Errorf("classifyUpload(%q) = %q, want %q", tc.file.Name, kind, tc.wantKind)
 			}
 		})
+	}
+}
+
+// TestSanitiseSegmentReservedNames pins doc 12 section 3.2 step 10 for the
+// short names the extension window must not swallow: a reserved stem stays
+// reserved with an extension attached (example table rows 9 and 10).
+func TestSanitiseSegmentReservedNames(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"normal.mkv", "normal.mkv"},
+		{"CON", "_CON"},
+		{"nul.txt", "_nul.txt"},
+		{"CON.txt", "_CON.txt"},
+		{"com1.bin", "_com1.bin"},
+	}
+
+	for _, tc := range cases {
+		if got := sanitiseSegment(tc.in); got != tc.want {
+			t.Errorf("sanitiseSegment(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

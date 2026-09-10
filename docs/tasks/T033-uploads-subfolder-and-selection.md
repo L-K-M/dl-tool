@@ -165,7 +165,8 @@ never lists an untracked file.
 
 Criterion-to-test map: `TestUploadTorrentPart` (criterion 1), `TestUploadTextListExpands` (2),
 `TestRequestTooLarge` plus `TestParseSubmissionCutsAtTheCap` for the no-full-buffering half (3),
-`TestCreateSubfolderSanitisesName` (4), `TestSelectFilesRejectedOnIncapableEngine` (5),
+`TestCreateSubfolderSanitisesName` plus `TestSanitiseSegmentReservedNames` for the reserved-stem half
+of the sanitised name (4), `TestSelectFilesRejectedOnIncapableEngine` (5),
 `TestInspectAcceptsMultipartForm` (6).
 
 Verification block run on the final tree (`make lint && make test PKG=./internal/api/...`):
@@ -174,25 +175,27 @@ eslint/prettier), then:
 
 ```
 go test -race -count=1 ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/api	76.725s
+ok  	github.com/L-K-M/dl-tool/internal/api	66.879s
 ```
 
 The named tests, `go test -race -count=1 -v ./internal/api/ -run
-'TestUploadTorrentPart|TestUploadTextListExpands|TestRequestTooLarge|TestCreateSubfolderSanitisesName|TestSelectFilesRejectedOnIncapableEngine'`:
+'TestUploadTorrentPart|TestUploadTextListExpands|TestRequestTooLarge|TestCreateSubfolderSanitisesName|TestSelectFilesRejectedOnIncapableEngine|TestSanitiseSegmentReservedNames'`:
 
 ```
 === RUN   TestUploadTorrentPart
---- PASS: TestUploadTorrentPart (0.39s)
+--- PASS: TestUploadTorrentPart (0.36s)
 === RUN   TestUploadTextListExpands
---- PASS: TestUploadTextListExpands (0.40s)
+--- PASS: TestUploadTextListExpands (0.33s)
 === RUN   TestRequestTooLarge
---- PASS: TestRequestTooLarge (2.24s)
+--- PASS: TestRequestTooLarge (2.27s)
 === RUN   TestCreateSubfolderSanitisesName
---- PASS: TestCreateSubfolderSanitisesName (0.42s)
+--- PASS: TestCreateSubfolderSanitisesName (0.40s)
 === RUN   TestSelectFilesRejectedOnIncapableEngine
---- PASS: TestSelectFilesRejectedOnIncapableEngine (0.44s)
+--- PASS: TestSelectFilesRejectedOnIncapableEngine (0.34s)
+=== RUN   TestSanitiseSegmentReservedNames
+--- PASS: TestSanitiseSegmentReservedNames (0.00s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/api	5.051s
+ok  	github.com/L-K-M/dl-tool/internal/api	4.849s
 ```
 
 Scope check, `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`
