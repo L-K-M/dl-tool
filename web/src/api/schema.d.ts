@@ -290,6 +290,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/tasks/{id}/files": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the task's files
+     * @description The engine's listing lands in task_files and the answer comes from the store, so the shape is identical to PATCH's and survives a briefly down engine. An engine without per-file priority reports null priorities and drives selected alone.
+     */
+    get: operations["list-task-files"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Select and prioritise the task's files
+     * @description Applies one selection change per listed index on the running engine and in task_files. selected:false and priority:skip are one concept; unlisted indices are untouched. 422 when the engine declares no per_file_priority.
+     */
+    patch: operations["patch-task-files"];
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -469,6 +493,17 @@ export interface components {
       password: string;
       username: string;
     };
+    FileSelection: {
+      /**
+       * Format: int64
+       * @description 0-based file index of the listing
+       */
+      index: number;
+      /** @enum {string} */
+      priority?: "skip" | "normal" | "high" | "maximum";
+      /** @description Deselect is priority skip; select without a priority is normal */
+      selected?: boolean;
+    };
     HeartbeatEvent: Record<string, never>;
     InspectTasksBody: {
       /** @description A base64-encoded .torrent file, 10 MiB decoded maximum */
@@ -495,6 +530,9 @@ export interface components {
        * @description Rows logged for the task, ignoring the cursor
        */
       total: number;
+    };
+    ListTaskFilesOutputBody: {
+      files: components["schemas"]["TaskFileDTO"][] | null;
     };
     ListTasksOutputBody: {
       /** @description Full Task objects, ordered by the requested sort */
@@ -566,6 +604,10 @@ export interface components {
        * @description As dl_limit, for the upload direction
        */
       ul_limit?: number;
+    };
+    PatchTaskFilesInputBody: {
+      /** @description Unlisted indices are untouched */
+      files: components["schemas"]["FileSelection"][] | null;
     };
     RejectedURI: {
       detail: string;
@@ -680,6 +722,24 @@ export interface components {
       level: "info" | "warn" | "error";
       /** @description Human-readable fallback for the code */
       message: string;
+    };
+    TaskFileDTO: {
+      /** Format: int64 */
+      completed_bytes: number;
+      /** Format: int64 */
+      index: number;
+      /** @description Relative to the task's destination */
+      path: string;
+      /**
+       * @description Null when the engine has no per-file priority
+       * @enum {string|null}
+       */
+      priority: "skip" | "normal" | "high" | "maximum" | null;
+      /** Format: double */
+      progress: number;
+      selected: boolean;
+      /** Format: int64 */
+      size_bytes: number;
     };
     TestEngineOutputBody: {
       /**
@@ -1314,6 +1374,74 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ListTaskEventsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-task-files": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListTaskFilesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-task-files": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PatchTaskFilesInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListTaskFilesOutputBody"];
         };
       };
       /** @description Error */

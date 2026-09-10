@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T032 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T021, T029, T030 |
 | **Blocks** | T033, T038, T048 |
 | **Parallel-safe** | no — extends `internal/store/tasks.go` and `internal/api/server.go` |
@@ -139,13 +139,13 @@ func (s *Store) UpdateFileSelection(ctx context.Context, taskID string, sel map[
     priorities; and a `PATCH` on an engine without `per_file_priority` returning `422`.
 
 ## Acceptance criteria
-- [ ] `PATCH` with `{"index":2,"selected":false}` results in priority `0` at the engine and `selected = 0`
+- [x] `PATCH` with `{"index":2,"selected":false}` results in priority `0` at the engine and `selected = 0`
       in `task_files`.
-- [ ] `PATCH` with `{"index":0,"priority":"high"}` sends `priority=6`, never `4`.
-- [ ] A returned qBittorrent priority of `-1` does not produce an error.
-- [ ] An aria2 task lists every file with `"priority": null` and a real `selected` value.
-- [ ] Unlisted indices keep their previous selection and priority.
-- [ ] Both verbs return the identical full-list body shape.
+- [x] `PATCH` with `{"index":0,"priority":"high"}` sends `priority=6`, never `4`.
+- [x] A returned qBittorrent priority of `-1` does not produce an error.
+- [x] An aria2 task lists every file with `"priority": null` and a real `selected` value.
+- [x] Unlisted indices keep their previous selection and priority.
+- [x] Both verbs return the identical full-list body shape.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -176,7 +176,82 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/...` on the final tree (commit T032):
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG=./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	63.277s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.316s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.180s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.230s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.291s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.036s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.204s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.199s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.012s
+ok  	github.com/L-K-M/dl-tool/internal/store	71.754s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.377s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.074s
+```
+
+The five named tests, `-v -run`:
+
+```
+$ go test ./internal/engine/qbittorrent/ ./internal/api/ -count=1 -v \
+    -run 'TestSetFilesGroupsByPriority|TestRejectsPriority4$|TestDeselectSetsSkip|TestAria2FilesHaveNullPriority|TestPatchFilesUnknownIndex'
+--- PASS: TestSetFilesGroupsByPriority (0.00s)
+--- PASS: TestRejectsPriority4 (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.008s
+--- PASS: TestDeselectSetsSkip (0.10s)
+--- PASS: TestPatchFilesUnknownIndex (0.04s)
+--- PASS: TestAria2FilesHaveNullPriority (0.04s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.203s
+```
+
+Acceptance criteria mapped to the tests that prove them:
+
+- Deselect → engine priority `0` and `task_files.selected = 0`: `TestDeselectSetsSkip`
+  (engine call `priorities {2:0}`, stored `selected=0`/`priority=0`).
+- `high` sends `6`, never `4`: `TestPatchFilesHigh` (handler passes `{0:6}` to `SetFiles`)
+  and `TestSetFilesGroupsByPriority` (adapter POSTs `priority=6`); `TestRejectsPriority4`
+  and `TestPatchFilesRejectsPriority4` pin the rejection of `4` at adapter and wire.
+- Returned `-1` is no error: `TestFilesMapsListing` (the Mixed row maps to priority 1).
+- aria2 null priorities with real `selected`: `TestAria2FilesHaveNullPriority`.
+- Unlisted indices untouched: `TestDeselectSetsSkip` (files 0 and 1 keep selection and
+  priority in `task_files` and in the response).
+- Identical body shape: `TestPatchFilesHigh` compares the PATCH body with the GET body.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/server.go
+internal/api/tasks_files.go
+internal/api/tasks_files_test.go
+internal/engine/qbittorrent/files.go
+internal/engine/qbittorrent/files_test.go
+internal/store/tasks.go
+web/src/api/schema.d.ts
+```
+
+Exactly the Files table plus the two generated standing exceptions of
+`docs/13-testing-and-verification.md` §7.1 (`api/openapi.json`, `web/src/api/schema.d.ts`,
+both from `make gen`; the two new Huma operations `list-task-files` and `patch-task-files`).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
