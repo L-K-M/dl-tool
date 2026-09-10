@@ -1243,7 +1243,10 @@ func (s *TaskStore) ListFiles(ctx context.Context, taskID string) ([]TaskFile, e
 	return files, nil
 }
 
-// fileIndices lists a listing's file indices, in listing order.
+// fileIndices lists a listing's file indices, in listing order. The
+// non-nil result is load-bearing: an empty listing must marshal to "[]",
+// since json_each("null") yields a NULL row and NULL on the right of
+// NOT IN makes the delete a silent no-op.
 func fileIndices(files []TaskFile) []int {
 	indices := make([]int, 0, len(files))
 	for _, file := range files {

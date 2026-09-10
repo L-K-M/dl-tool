@@ -136,11 +136,12 @@ func (h *TaskHandlers) PatchTaskFiles(ctx context.Context, in *PatchTaskFilesInp
 		return nil, err
 	}
 
-	// Shape validation runs before any store read or engine call, so a
-	// malformed body touches nothing. The minItems schema tag answers a
-	// well-formed empty array; a JSON null decodes to a nil slice that no
-	// schema tag can distinguish from an absent one, so this backstop —
-	// the create endpoint's empty-submission rule — owns that case.
+	// Shape validation runs before any engine call or task_files write,
+	// so a malformed body changes nothing already stored. The minItems
+	// schema tag answers a well-formed empty array; a JSON null decodes to
+	// a nil slice that no schema tag can distinguish from an absent one,
+	// so this backstop — the create endpoint's empty-submission rule —
+	// owns that case.
 	if len(in.Body.Files) == 0 {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, filesDetailNoEntries)
 	}
