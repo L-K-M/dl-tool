@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T032 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T021, T029, T030 |
 | **Blocks** | T033, T038, T048 |
 | **Parallel-safe** | no — extends `internal/store/tasks.go` and `internal/api/server.go` |
@@ -188,6 +188,74 @@ branch tip. The output is exactly the Files table plus the two generated standin
 docs/13 §7.1; any further path means a non-docs commit landed after
 `ad40042ea312d5c643991c56d686ac4dd1f6fa81` and must be accounted for here. Paste both outputs
 before returning this task to `done`.
+
+Re-verified on 2026-09-10 at `85b59cf`-lineage tip (commit `7b189e0`, PR #118 merged), on the
+re-verification run:
+
+Verification command, `make lint && make test PKG=./internal/...` — `make lint` printed `0 issues.`
+for golangci-lint and a clean eslint/prettier pass; `make test` ended with, all `ok`, no `FAIL`:
+
+```
+ok  	github.com/L-K-M/dl-tool/internal/api	59.685s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.138s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.037s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.194s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.279s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.017s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.477s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.186s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.111s
+ok  	github.com/L-K-M/dl-tool/internal/store	67.445s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.365s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.060s
+```
+
+The five named tests, via `go test ./internal/engine/qbittorrent ./internal/store ./internal/api
+-run 'TestSetFilesGroupsByPriority|TestRejectsPriority4|TestDeselectSetsSkip|
+TestAria2FilesHaveNullPriority|TestPatchFilesUnknownIndex' -v`:
+
+```
+--- PASS: TestSetFilesGroupsByPriority (0.00s)
+--- PASS: TestRejectsPriority4 (0.00s)
+--- PASS: TestDeselectSetsSkip (0.09s)
+--- PASS: TestPatchFilesUnknownIndex (0.07s)
+--- PASS: TestAria2FilesHaveNullPriority (0.04s)
+```
+
+The five named tests live in two of the three listed packages, `internal/api` and
+`internal/engine/qbittorrent`, while `./internal/store` matches none of the `-run` names
+(`grep -rn "func Test..."` pins
+`TestAria2FilesHaveNullPriority`, `TestDeselectSetsSkip` and `TestPatchFilesUnknownIndex` to
+`internal/api/tasks_files_test.go`, the other two to `internal/engine/qbittorrent/files_test.go`),
+so the command above can produce the output above.
+
+Scope check, fresh run — empty as expected, since the implementation is committed:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+(no output)
+```
+
+Committed scope since `84606fe`, exactly the six Files-table paths plus the two generated standing
+exceptions of docs/13 §7.1:
+
+```
+$ git diff --name-only 84606fe80befe206a17957a1dad34896cf77d761..HEAD -- . ':(exclude)docs' | sort
+api/openapi.json
+internal/api/server.go
+internal/api/tasks_files.go
+internal/api/tasks_files_test.go
+internal/engine/qbittorrent/files.go
+internal/engine/qbittorrent/files_test.go
+internal/store/tasks.go
+web/src/api/schema.d.ts
+```
+
+`make gen` at the same tip produced no diff. `make ci` (lint, vet, typecheck, test, compose-check,
+doclint) exited 0. First test attempt of this cycle failed
+`TestClaimTimeClearDeclinesTheGuardedClaim` with "temp filesystem has only 1176662016 free bytes;
+test needs 1992294400 of head-room" — the host build cache had filled the disk; after `go clean -cache`
+the same test passed unchanged, confirming an environment failure, not a code one.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
