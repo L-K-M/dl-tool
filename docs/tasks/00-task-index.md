@@ -313,7 +313,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T028 | Add the shared engine contract test suite | T016, T019 | yes | done | [T028](T028-engine-contract-test-suite.md) |
 | T029 | Implement the qBittorrent session, state mapping and `torrents/add` | T005, T016, T019, T027 | no | done | [T029](T029-qbittorrent-session-and-add.md) |
 | T030 | Track qBittorrent state through `sync/maindata` rid deltas | T026, T029 | no | done | [T030](T030-qbittorrent-maindata-deltas.md) |
-| T031 | Parse torrent metainfo and serve `POST /tasks/inspect` | T015, T020 | no | todo | [T031](T031-metainfo-and-inspect-endpoint.md) |
+| T031 | Parse torrent metainfo and serve `POST /tasks/inspect` | T015, T020 | no | done | [T031](T031-metainfo-and-inspect-endpoint.md) |
 | T032 | Select and prioritise the files of a task | T021, T029, T030 | no | todo | [T032](T032-file-selection-and-priorities.md) |
 | T033 | Accept uploaded files, the subfolder option and a create-time file selection | T020, T031, T032 | no | todo | [T033](T033-uploads-subfolder-and-selection.md) |
 | T034 | List, add and remove a task's trackers | T021, T029 | no | todo | [T034](T034-task-trackers.md) |
