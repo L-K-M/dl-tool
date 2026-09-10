@@ -196,18 +196,18 @@ Verification command, `make lint && make test PKG=./internal/...` — `make lint
 for golangci-lint and a clean eslint/prettier pass; `make test` ended with, all `ok`, no `FAIL`:
 
 ```
-ok  \tgithub.com/L-K-M/dl-tool/internal/api\t65.085s
-ok  \tgithub.com/L-K-M/dl-tool/internal/config\t1.256s
-ok  \tgithub.com/L-K-M/dl-tool/internal/engine\t22.994s
-ok  \tgithub.com/L-K-M/dl-tool/internal/engine/aria2\t3.239s
-ok  \tgithub.com/L-K-M/dl-tool/internal/engine/qbittorrent\t5.295s
-ok  \tgithub.com/L-K-M/dl-tool/internal/fsx\t1.017s
-ok  \tgithub.com/L-K-M/dl-tool/internal/jobs\t5.022s
-ok  \tgithub.com/L-K-M/dl-tool/internal/obs\t1.170s
-ok  \tgithub.com/L-K-M/dl-tool/internal/secure\t4.060s
-ok  \tgithub.com/L-K-M/dl-tool/internal/store\t73.896s
-ok  \tgithub.com/L-K-M/dl-tool/internal/sync\t4.377s
-ok  \tgithub.com/L-K-M/dl-tool/internal/uri\t1.073s
+ok  	github.com/L-K-M/dl-tool/internal/api	59.685s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.138s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.037s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.194s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.279s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.017s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.477s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.186s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.111s
+ok  	github.com/L-K-M/dl-tool/internal/store	67.445s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.365s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.060s
 ```
 
 The five named tests, via `go test ./internal/engine/qbittorrent ./internal/store ./internal/api
@@ -221,6 +221,11 @@ TestAria2FilesHaveNullPriority|TestPatchFilesUnknownIndex' -v`:
 --- PASS: TestPatchFilesUnknownIndex (0.07s)
 --- PASS: TestAria2FilesHaveNullPriority (0.04s)
 ```
+
+All five named tests live in the three listed packages (`grep -rn "func Test..."` pins
+`TestAria2FilesHaveNullPriority`, `TestDeselectSetsSkip` and `TestPatchFilesUnknownIndex` to
+`internal/api/tasks_files_test.go`, the other two to `internal/engine/qbittorrent/files_test.go`),
+so the command above can produce the output above.
 
 Scope check, fresh run — empty as expected, since the implementation is committed:
 
