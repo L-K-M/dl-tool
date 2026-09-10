@@ -177,7 +177,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 
-Final tree (ab23ae1, after both review rounds):
+Final tree (after all review rounds; verified with the code and this
+section staged together):
 
 `make lint && make test PKG=./internal/...`:
 
@@ -196,18 +197,18 @@ Checking formatting...
 All matched files use Prettier code style!
 
 $ make test PKG=./internal/...
-ok  	github.com/L-K-M/dl-tool/internal/api	63.203s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.276s
-ok  	github.com/L-K-M/dl-tool/internal/engine	23.082s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.210s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.328s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.030s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	5.079s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.208s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.291s
-ok  	github.com/L-K-M/dl-tool/internal/store	70.059s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.361s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.071s
+ok  	github.com/L-K-M/dl-tool/internal/api	62.416s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.123s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.516s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.211s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.285s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.040s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.292s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.190s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.143s
+ok  	github.com/L-K-M/dl-tool/internal/store	68.350s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.375s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.074s
 ```
 
 The five named tests, `-v -run`:
@@ -217,11 +218,11 @@ $ go test ./internal/engine/qbittorrent/ ./internal/api/ -count=1 -v \
     -run 'TestSetFilesGroupsByPriority|TestRejectsPriority4$|TestDeselectSetsSkip|TestAria2FilesHaveNullPriority|TestPatchFilesUnknownIndex'
 --- PASS: TestSetFilesGroupsByPriority (0.00s)
 --- PASS: TestRejectsPriority4 (0.00s)
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.023s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.021s
 --- PASS: TestDeselectSetsSkip (0.10s)
---- PASS: TestPatchFilesUnknownIndex (0.04s)
---- PASS: TestAria2FilesHaveNullPriority (0.04s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.207s
+--- PASS: TestPatchFilesUnknownIndex (0.07s)
+--- PASS: TestAria2FilesHaveNullPriority (0.07s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.265s
 ```
 
 Acceptance criteria mapped to the tests that prove them:
@@ -240,10 +241,13 @@ Acceptance criteria mapped to the tests that prove them:
 
 Round 1 fixed a real defect the review caught (`{"files":null}` answered 500;
 now the 422 of the empty array), added repeated-index rejection, a
-listing-specific 503 detail, `RejectUnknownQueryParameters` on PATCH, the
-`json_each` delete (bind-parameter ceiling), and the reselect/skip-string/
-empty-listing/empty-selection tests. Round 2 was comment-only. Both rounds'
-outputs matched the shape above on their own trees.
+listing-specific 503 detail, `RejectUnknownQueryParameters` on PATCH (whose
+regenerated document is byte-identical), the `json_each` delete
+(bind-parameter ceiling), and the reselect/skip-string/empty-listing/
+empty-selection tests. Round 2 was comment-only. Round 3 dropped the enum
+tag off the output `priority` — an OpenAPI 3.1 `enum` is an exhaustive
+allow-list, so it rejected the very `null` the field exists to carry — and
+relabelled this narrative; `make gen` regenerated the two artifacts.
 
 Scope check on the final tree (uncommitted paths only; `docs` excluded —
 the task file and index carry this Evidence and the flipped rows):
@@ -256,8 +260,7 @@ $ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | so
 Committed scope across the branch's commits is exactly the Files table plus
 the two generated standing exceptions of `docs/13-testing-and-verification.md`
 §7.1 (`api/openapi.json`, `web/src/api/schema.d.ts`, both from `make gen`; the
-two new Huma operations `list-task-files` and `patch-task-files`; the round-2
-registration tweak emits a byte-identical document).
+two new Huma operations `list-task-files` and `patch-task-files`).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

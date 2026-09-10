@@ -67,7 +67,7 @@ type TaskFileDTO struct {
 	CompletedBytes int64   `json:"completed_bytes"`
 	Progress       float64 `json:"progress"`
 	Selected       bool    `json:"selected"`
-	Priority       *string `json:"priority" enum:"skip,normal,high,maximum" doc:"Null when the engine has no per-file priority"`
+	Priority       *string `json:"priority" doc:"Null when the engine has no per-file priority"`
 }
 
 // ListTaskFilesInput addresses one task by id.

@@ -730,11 +730,8 @@ export interface components {
       index: number;
       /** @description Relative to the task's destination */
       path: string;
-      /**
-       * @description Null when the engine has no per-file priority
-       * @enum {string|null}
-       */
-      priority: "skip" | "normal" | "high" | "maximum" | null;
+      /** @description Null when the engine has no per-file priority */
+      priority: string | null;
       /** Format: double */
       progress: number;
       selected: boolean;
