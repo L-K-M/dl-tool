@@ -162,8 +162,9 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, sorted, and nothing else. Use `git status`, not `git diff`: a
-file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
+Expected — on a fresh run, exactly the paths in the Files table, sorted, and nothing else; on the
+re-verification run, empty, because the implementation is already committed. Use `git status`, not
+`git diff --name-only`, which never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT accept `select_files` on `POST /tasks`; T033 owns the create-time selection.
@@ -178,10 +179,13 @@ file this task creates is untracked, and `git diff --name-only` never lists an u
 
 ## Evidence
 
-The 2026-09-10 record was removed: its committed-scope claim omitted
+The 2026-09-10 record was removed because its committed-scope claim omitted
 `internal/engine/qbittorrent/files_test.go`, which the Files table above now lists, so the `done`
-flip of that cycle was void. The PR #117 implementation stays; re-run the Verification block on the
-current tree and paste its output here before returning this task to `done`.
+flip of that cycle was void. The PR #117 implementation stays committed, so the scope check above
+prints empty on the re-verification run; prove committed scope instead with
+`git diff --name-only 84606fe80befe206a17957a1dad34896cf77d761..ad40042ea312d5c643991c56d686ac4dd1f6fa81 -- . ':(exclude)docs'`,
+whose output is exactly the Files table plus the two generated standing exceptions of
+docs/13 §7.1. Paste both outputs here before returning this task to `done`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
