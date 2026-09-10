@@ -730,7 +730,7 @@ export interface components {
       index: number;
       /** @description Relative to the task's destination */
       path: string;
-      /** @description Null when the engine has no per-file priority */
+      /** @description One of skip, normal, high, maximum; null when the engine has no per-file priority */
       priority: string | null;
       /** Format: double */
       progress: number;
