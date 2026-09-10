@@ -225,6 +225,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/tasks/inspect": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Inspect submissions without creating tasks
+     * @description Parses each submission into a manifest so the UI can show the file-selection step. Never creates a task, never writes to disk and never inserts a tasks row; the only engine contact permitted is a metadata-only fetch for magnet submissions.
+     */
+    post: operations["inspect-tasks"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/tasks/{id}": {
     parameters: {
       query?: never;
@@ -450,6 +470,18 @@ export interface components {
       username: string;
     };
     HeartbeatEvent: Record<string, never>;
+    InspectTasksBody: {
+      /** @description A base64-encoded .torrent file, 10 MiB decoded maximum */
+      blob?: string;
+      /** @description Display name for a blob submission */
+      filename?: string;
+      /** @description One entry per submission; http(s), ftp(s), sftp, magnet and the obfuscated schemes */
+      uris: string[] | null;
+    };
+    InspectTasksOutputBody: {
+      manifests: components["schemas"]["ManifestDTO"][] | null;
+      rejected: components["schemas"]["RejectedURI"][] | null;
+    };
     ListEnginesOutputBody: {
       engines: components["schemas"]["EngineDTO"][] | null;
     };
@@ -480,6 +512,30 @@ export interface components {
       password: string;
       /** @description Account username */
       username: string;
+    };
+    ManifestDTO: {
+      /** Format: int64 */
+      file_count: number | null;
+      files: components["schemas"]["ManifestFileDTO"][] | null;
+      infohash_v1: string | null;
+      infohash_v2: string | null;
+      /** @description The source_kind vocabulary of docs/04-data-model.md section 3.3 */
+      kind: string;
+      /** @description True when magnet metadata did not arrive inside the deadline; files is then null and the UI offers add-paused */
+      metadata_pending: boolean;
+      name: string;
+      /** @description The submission as sent; a search result renders as search-result:<res_id> */
+      source_uri: string;
+      /** Format: int64 */
+      total_size: number | null;
+    };
+    ManifestFileDTO: {
+      /** Format: int64 */
+      index: number;
+      /** @description Relative, cleaned; never absolute, never containing ".." */
+      path: string;
+      /** Format: int64 */
+      size: number | null;
     };
     PatchTaskBody: {
       /** @description Category name; must already exist */
@@ -1083,6 +1139,39 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ActionsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "inspect-tasks": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["InspectTasksBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["InspectTasksOutputBody"];
         };
       };
       /** @description Error */

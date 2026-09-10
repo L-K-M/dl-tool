@@ -1,9 +1,15 @@
 package uri
 
 import (
+	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/metainfo"
 )
 
 // btihV1Hex and btihV1Base32 are the same 20-byte hash in the two BEP 9 spellings.
@@ -366,6 +372,180 @@ func TestParseED2K(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if link, err := ParseED2K(tt.raw); err == nil {
 				t.Errorf("ParseED2K(%q) = %+v, nil; want error", tt.raw, link)
+			}
+		})
+	}
+}
+
+// The fixtures below are hand-written bencode: the hash expectations are
+// computed offline over the exact `info` spans, so any change to the parser —
+// above all a re-encode of the dictionary — fails them.
+
+// pieces20 is a syntactically valid 20-byte pieces value (one SHA-1).
+const pieces20 = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+
+// piecesRoot32 is a syntactically valid BEP 52 pieces root (one SHA-256).
+const piecesRoot32 = "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11" +
+	"\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+
+const (
+	// v1SingleTorrent is a complete single-file v1 torrent; its info span
+	// hashes to v1SingleInfohash.
+	v1SingleTorrent = "d8:announce35:http://tracker.example.com/announce" +
+		"4:info" + v1SingleInfo + "e"
+	v1SingleInfo     = "d6:lengthi11e4:name9:hello.txt12:piece lengthi16384e6:pieces20:" + pieces20 + "e"
+	v1SingleInfohash = "a094d623acb1eaa2fb3fdd896260e3def6ab6dbf"
+
+	// fileTreeLeaf is the BEP 52 leaf of hello.txt: the "" properties key
+	// with length and pieces root.
+	fileTreeLeaf = "d0:d6:lengthi11e11:pieces root32:" + piecesRoot32 + "ee"
+	fileTree     = "d9:file treed9:hello.txt" + fileTreeLeaf + "e"
+
+	// hybridTorrent carries both the v1 fields and the v2 file tree.
+	hybridTorrent = "4:info" + hybridInfo + "e"
+	hybridInfo    = fileTree + "6:lengthi11e12:meta versioni2e4:name9:hello.txt" +
+		"12:piece lengthi16384e6:pieces20:" + pieces20 + "e"
+	hybridV1Infohash = "63ca2620a686ddf5a733449471cc80770a59ee9a"
+	hybridV2Infohash = "6058e80729679fe10ccd9fb14ebf087c803a337e05d4b45b7f114aaeb043b33e"
+
+	// v2OnlyTorrent carries meta version 2 without pieces: v1 hash must be
+	// empty and v2 must be present.
+	v2OnlyTorrent  = "4:info" + v2OnlyInfo + "e"
+	v2OnlyInfo     = fileTree + "12:meta versioni2e4:name9:hello.txt12:piece lengthi16384ee"
+	v2OnlyInfohash = "6ea417e970067c1bfab746942abfe99bc31e3ca78d4d7aad856657c0b11fc80f"
+
+	// unknownKeyTorrent carries an unknown key, out of canonical order. A
+	// re-encode through metainfo.Info would drop it and re-sort, so any
+	// implementation that hashes a re-encode fails the expectation.
+	unknownKeyTorrent = "4:info" + unknownKeyInfo + "e"
+	unknownKeyInfo    = "d6:lengthi11e4:name9:hello.txt1:xi5e" +
+		"12:piece lengthi16384e6:pieces20:" + pieces20 + "e"
+	unknownKeyInfohash = "309a4466ec86950524544297b9395377ed0950a4"
+)
+
+// TestInspectTorrentV1 checks the v1-only row of the hash table: SHA-1 over
+// the raw info bytes, no v2 hash, one file entry named after the torrent.
+func TestInspectTorrentV1(t *testing.T) {
+	manifest, err := InspectTorrent([]byte(v1SingleTorrent))
+	if err != nil {
+		t.Fatalf("InspectTorrent: %v", err)
+	}
+
+	if manifest.InfohashV1 != v1SingleInfohash {
+		t.Errorf("InfohashV1 = %s, want %s", manifest.InfohashV1, v1SingleInfohash)
+	}
+	if manifest.InfohashV2 != "" {
+		t.Errorf("InfohashV2 = %q, want empty for a v1-only torrent", manifest.InfohashV2)
+	}
+	if manifest.Name != "hello.txt" {
+		t.Errorf("Name = %q, want hello.txt", manifest.Name)
+	}
+	if manifest.TotalSize != 11 {
+		t.Errorf("TotalSize = %d, want 11", manifest.TotalSize)
+	}
+	if len(manifest.Files) != 1 || manifest.Files[0].Path != "hello.txt" || manifest.Files[0].Size != 11 {
+		t.Errorf("Files = %+v, want one hello.txt entry of 11 bytes", manifest.Files)
+	}
+	if manifest.Files[0].Index != 0 {
+		t.Errorf("Index = %d, want 0", manifest.Files[0].Index)
+	}
+}
+
+// TestInspectTorrentHybrid checks the hybrid row: both hashes present.
+func TestInspectTorrentHybrid(t *testing.T) {
+	manifest, err := InspectTorrent([]byte("d" + hybridTorrent))
+	if err != nil {
+		t.Fatalf("InspectTorrent: %v", err)
+	}
+
+	if manifest.InfohashV1 != hybridV1Infohash {
+		t.Errorf("InfohashV1 = %s, want %s", manifest.InfohashV1, hybridV1Infohash)
+	}
+	if manifest.InfohashV2 != hybridV2Infohash {
+		t.Errorf("InfohashV2 = %s, want %s", manifest.InfohashV2, hybridV2Infohash)
+	}
+	if len(manifest.Files) != 1 || manifest.Files[0].Path != "hello.txt" {
+		t.Errorf("Files = %+v, want one hello.txt entry from the file tree", manifest.Files)
+	}
+}
+
+// TestInspectTorrentV2Only checks the v2-only row: InfohashV2 only.
+func TestInspectTorrentV2Only(t *testing.T) {
+	manifest, err := InspectTorrent([]byte("d" + v2OnlyTorrent))
+	if err != nil {
+		t.Fatalf("InspectTorrent: %v", err)
+	}
+
+	if manifest.InfohashV1 != "" {
+		t.Errorf("InfohashV1 = %q, want empty for a v2-only torrent", manifest.InfohashV1)
+	}
+	if manifest.InfohashV2 != v2OnlyInfohash {
+		t.Errorf("InfohashV2 = %s, want %s", manifest.InfohashV2, v2OnlyInfohash)
+	}
+	if len(manifest.Files) != 1 || manifest.Files[0].Path != "hello.txt" {
+		t.Errorf("Files = %+v, want one hello.txt entry walked from the file tree", manifest.Files)
+	}
+}
+
+// TestInfoBytesAreNotReencoded proves the v1 hash is computed over the raw
+// info bytes: the fixture carries an unknown key out of canonical order, and
+// a re-encode through metainfo.Info drops it and re-sorts — a different hash.
+func TestInfoBytesAreNotReencoded(t *testing.T) {
+	manifest, err := InspectTorrent([]byte("d" + unknownKeyTorrent))
+	if err != nil {
+		t.Fatalf("InspectTorrent: %v", err)
+	}
+
+	if manifest.InfohashV1 != unknownKeyInfohash {
+		t.Fatalf("InfohashV1 = %s, want %s", manifest.InfohashV1, unknownKeyInfohash)
+	}
+
+	// The re-encode is what a re-encoding implementation would hash: without
+	// the unknown key and in sorted order it must differ.
+	var info metainfo.Info
+	if err := bencode.Unmarshal([]byte(unknownKeyInfo), &info); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	reencoded, err := bencode.Marshal(info)
+	if err != nil {
+		t.Fatalf("re-encode fixture: %v", err)
+	}
+	reencodedHash := sha1.Sum(reencoded)
+	if manifest.InfohashV1 == hex.EncodeToString(reencodedHash[:]) {
+		t.Error("InfohashV1 matches a re-encode of the info dictionary; the raw bytes must be hashed")
+	}
+}
+
+func TestInspectTorrentRejects(t *testing.T) {
+	// A multi-file v1 torrent whose second member escapes the root. The
+	// hostile segment is rejected whole, never silently flattened.
+	hostilePathTorrent := "d4:info" + "d5:filesl" +
+		"d6:lengthi1e4:pathl6:extras10:SHA256SUMSee" +
+		"d6:lengthi2e4:pathl2:..10:escape.arre" + "ee" +
+		"4:name9:hello.txt12:piece lengthi16384e6:pieces20:" + pieces20 + "e" + "e"
+
+	cases := []struct {
+		name       string
+		raw        []byte
+		errSnippet string // set to pin the rejection reason
+	}{
+		{"empty", nil, ""},
+		{"not a dictionary", []byte("le"), ""},
+		{"no info key", []byte("d8:announce35:http://tracker.example.com/announcee"), ""},
+		{"truncated mid-dictionary", []byte(v1SingleTorrent[:len(v1SingleTorrent)-12]), ""},
+		{"truncated inside info", []byte("d4:infod6:lengthi11e4:name8:hello.tx"), ""},
+		{"oversized", bytes.Repeat([]byte("d"), maxTorrentBytes+1), ""},
+		{"too deep", []byte("d1:k" + strings.Repeat("l", maxBencodeDepth+1) + strings.Repeat("e", maxBencodeDepth+1) + "e"), ""},
+		{"hostile path segment", []byte(hostilePathTorrent), "invalid path segment"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest, err := InspectTorrent(tt.raw)
+			if err == nil {
+				t.Fatalf("InspectTorrent(%q) = %+v, nil; want ErrNotTorrent", tt.raw, manifest)
+			}
+			if tt.errSnippet != "" && !strings.Contains(err.Error(), tt.errSnippet) {
+				t.Errorf("error = %v, want it to contain %q", err, tt.errSnippet)
 			}
 		})
 	}

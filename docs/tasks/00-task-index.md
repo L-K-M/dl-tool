@@ -104,7 +104,7 @@ The qBittorrent adapter, `.torrent`/magnet inspection, file selection, trackers 
 | [T028](T028-engine-contract-test-suite.md) | Add the shared engine contract test suite | T016, T019 | done |
 | [T029](T029-qbittorrent-session-and-add.md) | Implement the qBittorrent session, state mapping and `torrents/add` | T005, T016, T019, T027 | done |
 | [T030](T030-qbittorrent-maindata-deltas.md) | Track qBittorrent state through `sync/maindata` rid deltas | T026, T029 | done |
-| [T031](T031-metainfo-and-inspect-endpoint.md) | Parse torrent metainfo and serve `POST /tasks/inspect` | T015, T020 | todo |
+| [T031](T031-metainfo-and-inspect-endpoint.md) | Parse torrent metainfo and serve `POST /tasks/inspect` | T015, T020 | done |
 | [T032](T032-file-selection-and-priorities.md) | Select and prioritise the files of a task | T021, T029, T030 | todo |
 | [T033](T033-uploads-subfolder-and-selection.md) | Accept uploaded files, the subfolder option and a create-time file selection | T020, T031, T032 | todo |
 | [T034](T034-task-trackers.md) | List, add and remove a task's trackers | T021, T029 | todo |
