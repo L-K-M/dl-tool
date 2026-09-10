@@ -399,6 +399,16 @@ func (s *Server) registerOperations() {
 	}, s.tasks.ListTaskEvents)
 
 	huma.Register(s.API, huma.Operation{
+		OperationID: operationInspectTasks,
+		Method:      http.MethodPost,
+		Path:        "/tasks/inspect",
+		Summary:     "Inspect submissions without creating tasks",
+		Description: "Parses each submission into a manifest so the UI can show the file-selection step. Never creates a task, never writes to disk and never inserts a tasks row; the only engine contact permitted is a metadata-only fetch for magnet submissions.",
+		Tags:        []string{"tasks"},
+		Security:    credentialRequired,
+	}, s.tasks.InspectTasks)
+
+	huma.Register(s.API, huma.Operation{
 		OperationID: "get-system-info",
 		Method:      http.MethodGet,
 		Path:        "/system/info",

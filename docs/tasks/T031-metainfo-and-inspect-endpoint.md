@@ -156,12 +156,12 @@ type magnetInspector interface {
     `SELECT count(*) FROM tasks` is unchanged after every case.
 
 ## Acceptance criteria
-- [ ] `InspectTorrent` computes the v1 hash over the original `info` bytes, proved by the unknown-key case.
-- [ ] A hybrid torrent yields both hashes; a v2-only torrent yields `InfohashV2` only.
-- [ ] Every `ManifestFile.Path` is relative and free of `..` after `sanitiseSegment`.
-- [ ] `POST /tasks/inspect` inserts no `tasks` row and writes no file, asserted by a count before and after.
-- [ ] A magnet with no available inspector returns `200` with `metadata_pending: true` and `files: null`.
-- [ ] A blob above 10 MiB decoded returns `413` `/problems/payload-too-large`.
+- [x] `InspectTorrent` computes the v1 hash over the original `info` bytes, proved by the unknown-key case.
+- [x] A hybrid torrent yields both hashes; a v2-only torrent yields `InfohashV2` only.
+- [x] Every `ManifestFile.Path` is relative and free of `..` after `sanitiseSegment`.
+- [x] `POST /tasks/inspect` inserts no `tasks` row and writes no file, asserted by a count before and after.
+- [x] A magnet with no available inspector returns `200` with `metadata_pending: true` and `files: null`.
+- [x] A blob above 10 MiB decoded returns `413` `/problems/payload-too-large`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -194,7 +194,76 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/...` (2026-09-10, commit `T031: serve POST /tasks/inspect manifests`):
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG=./internal/...
+ok  github.com/L-K-M/dl-tool/internal/api          53.971s
+ok  github.com/L-K-M/dl-tool/internal/config       1.120s
+ok  github.com/L-K-M/dl-tool/internal/engine       21.223s
+ok  github.com/L-K-M/dl-tool/internal/engine/aria2  3.219s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 5.230s
+ok  github.com/L-K-M/dl-tool/internal/fsx          4.618s
+ok  github.com/L-K-M/dl-tool/internal/jobs         4.540s
+ok  github.com/L-K-M/dl-tool/internal/obs          1.190s
+ok  github.com/L-K-M/dl-tool/internal/secure       4.123s
+ok  github.com/L-K-M/dl-tool/internal/store        66.573s
+ok  github.com/L-K-M/dl-tool/internal/sync         4.380s
+ok  github.com/L-K-M/dl-tool/internal/uri          1.080s
+```
+
+The named tests, run verbosely:
+
+```
+$ go test ./internal/uri/ -run 'TestInspectTorrentV1$|TestInspectTorrentHybrid|TestInfoBytesAreNotReencoded' -v
+--- PASS: TestInspectTorrentV1 (0.00s)
+--- PASS: TestInspectTorrentHybrid (0.00s)
+--- PASS: TestInfoBytesAreNotReencoded (0.00s)
+$ go test ./internal/api/ -run 'TestInspectCreatesNoTask|TestInspectMagnetPending' -v
+--- PASS: TestInspectMagnetPending (0.11s)
+--- PASS: TestInspectCreatesNoTask (0.03s)
+```
+
+Scope check. The work is committed incrementally, so the check runs against the branch diff; the file
+set is identical, and the task's `git status` form returned the same set while the work was in the tree:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs'
+M  internal/api/tasks_inspect_test.go      <- the Evidence/index-flip commit, not yet made
+$ git diff --name-only origin/main -- . ':(exclude)docs' | sort
+api/openapi.json
+internal/api/server.go
+internal/api/tasks_inspect.go
+internal/api/tasks_inspect_test.go
+internal/uri/metainfo.go
+internal/uri/normalize_test.go
+web/src/api/schema.d.ts
+```
+
+Exactly the Files table plus the implicit generated pair of doc 13 section 7.1.
+
+Notes:
+- `TestNewServerReconcilesBeforeServing` (internal/engine, untouched by this task) failed once during a
+  parallel `go test ./internal/...` run and passed on `-count=3` and in all subsequent full runs.
+  Timing-sensitive; left alone.
+- `sanitiseSegment` is implemented inside `internal/uri/metainfo.go` (Files table allows no other file).
+  It applies every doc 12 section 3.2 step except NFC (step 3), which needs `golang.org/x/text` and is
+  owned by T046's `fsx.SanitiseSegment`. The two live in different packages; T046 may want to refactor
+  one onto the other.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
