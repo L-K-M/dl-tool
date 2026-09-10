@@ -117,18 +117,23 @@ func (h *TaskHandlers) InspectTasks(ctx context.Context, in *InspectTasksInput) 
 	return output, nil
 }
 
-// inspectBlob turns a base64 .torrent blob into its manifest DTO.
+// inspectBlob turns a base64 .torrent blob into its manifest DTO. The size
+// cap is checked on the encoded form first: base64 inflation is a fixed
+// ratio, so an encoded body under the cap can never decode past it, and the
+// oversized case is refused before any decode allocates.
 func (h *TaskHandlers) inspectBlob(body InspectTasksBody) (ManifestDTO, error) {
-	decoded, err := base64Decode(body.Blob)
-	if err != nil {
-		return ManifestDTO{}, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "the blob is not valid base64")
-	}
-	if len(decoded) > maxInspectBlobBytes {
+	encodedCap := base64.StdEncoding.EncodedLen(maxInspectBlobBytes)
+	if len(body.Blob) > encodedCap {
 		return ManifestDTO{}, Problem(
 			SlugPayloadTooLarge,
 			http.StatusRequestEntityTooLarge,
-			fmt.Sprintf("the decoded blob is %d bytes; the cap is %d", len(decoded), maxInspectBlobBytes),
+			fmt.Sprintf("the encoded blob is %d bytes; the decoded cap is %d", len(body.Blob), maxInspectBlobBytes),
 		)
+	}
+
+	decoded, err := base64Decode(body.Blob)
+	if err != nil {
+		return ManifestDTO{}, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "the blob is not valid base64")
 	}
 
 	manifest, err := uri.InspectTorrent(decoded)

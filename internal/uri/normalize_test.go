@@ -519,28 +519,33 @@ func TestInfoBytesAreNotReencoded(t *testing.T) {
 func TestInspectTorrentRejects(t *testing.T) {
 	// A multi-file v1 torrent whose second member escapes the root. The
 	// hostile segment is rejected whole, never silently flattened.
-	hostilePathTorrent := "d4:info" + "d4:filesl" +
-		"d6:lengthi1e4:pathl6:extras10:SHA256SUMSed" +
-		"d6:lengthi2e4:pathl2:..9:escape.arre" + "e" +
+	hostilePathTorrent := "d4:info" + "d5:filesl" +
+		"d6:lengthi1e4:pathl6:extras10:SHA256SUMSee" +
+		"d6:lengthi2e4:pathl2:..10:escape.arre" + "ee" +
 		"4:name9:hello.txt12:piece lengthi16384e6:pieces20:" + pieces20 + "e" + "e"
 
 	cases := []struct {
-		name string
-		raw  []byte
+		name       string
+		raw        []byte
+		errSnippet string // set to pin the rejection reason
 	}{
-		{"empty", nil},
-		{"not a dictionary", []byte("le")},
-		{"no info key", []byte("d8:announce35:http://tracker.example.com/announcee")},
-		{"truncated mid-dictionary", []byte(v1SingleTorrent[:len(v1SingleTorrent)-12])},
-		{"truncated inside info", []byte("d4:infod6:lengthi11e4:name8:hello.tx")},
-		{"oversized", bytes.Repeat([]byte("d"), maxTorrentBytes+1)},
-		{"too deep", []byte("d1:k" + strings.Repeat("l", maxBencodeDepth+1) + strings.Repeat("e", maxBencodeDepth+1) + "e")},
-		{"hostile path segment", []byte(hostilePathTorrent)},
+		{"empty", nil, ""},
+		{"not a dictionary", []byte("le"), ""},
+		{"no info key", []byte("d8:announce35:http://tracker.example.com/announcee"), ""},
+		{"truncated mid-dictionary", []byte(v1SingleTorrent[:len(v1SingleTorrent)-12]), ""},
+		{"truncated inside info", []byte("d4:infod6:lengthi11e4:name8:hello.tx"), ""},
+		{"oversized", bytes.Repeat([]byte("d"), maxTorrentBytes+1), ""},
+		{"too deep", []byte("d1:k" + strings.Repeat("l", maxBencodeDepth+1) + strings.Repeat("e", maxBencodeDepth+1) + "e"), ""},
+		{"hostile path segment", []byte(hostilePathTorrent), "invalid path segment"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			if manifest, err := InspectTorrent(tt.raw); err == nil {
-				t.Errorf("InspectTorrent(%q) = %+v, nil; want ErrNotTorrent", tt.raw, manifest)
+			manifest, err := InspectTorrent(tt.raw)
+			if err == nil {
+				t.Fatalf("InspectTorrent(%q) = %+v, nil; want ErrNotTorrent", tt.raw, manifest)
+			}
+			if tt.errSnippet != "" && !strings.Contains(err.Error(), tt.errSnippet) {
+				t.Errorf("error = %v, want it to contain %q", err, tt.errSnippet)
 			}
 		})
 	}

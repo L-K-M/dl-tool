@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -105,7 +106,7 @@ func infoDictBytes(b []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if strings.EqualFold(string(b[keyStart:keyEnd]), "info") {
+		if string(b[keyStart:keyEnd]) == "info" {
 			return b[valStart:valEnd], nil
 		}
 	}
@@ -268,10 +269,16 @@ func manifestFromInfo(infoBytes []byte, info metainfo.Info) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	m.Files = files
 	for _, f := range files {
+		if f.Size < 0 {
+			return Manifest{}, fmt.Errorf("%w: file %q has negative size %d", ErrNotTorrent, f.Path, f.Size)
+		}
+		if m.TotalSize > math.MaxInt64-f.Size {
+			return Manifest{}, fmt.Errorf("%w: total file size overflows int64", ErrNotTorrent)
+		}
 		m.TotalSize += f.Size
 	}
+	m.Files = files
 	return m, nil
 }
 
@@ -284,8 +291,14 @@ func manifestFiles(info metainfo.Info) ([]ManifestFile, error) {
 	case info.MetaVersion == 2:
 		return v2FileTree(info.FileTree)
 	default:
-		// Single-file v1: the torrent's name is the file.
-		return manifestFileList([]ManifestFile{{Path: sanitiseSegment(info.BestName()), Size: info.Length}})
+		// Single-file v1: the torrent's name is the file, through the same
+		// segment rules as every other entry.
+		path, err := joinSanitised([]string{info.BestName()})
+		if err != nil {
+			return nil, err
+		}
+
+		return manifestFileList([]ManifestFile{{Path: path, Size: info.Length}})
 	}
 }
 
@@ -380,8 +393,8 @@ func joinSanitised(segments []string) (string, error) {
 
 	cleaned := make([]string, 0, len(segments))
 	for _, seg := range segments {
-		if seg == ".." || strings.HasPrefix(seg, "/") {
-			return "", fmt.Errorf("%w: path segment %q escapes the torrent root", ErrNotTorrent, seg)
+		if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, "/") {
+			return "", fmt.Errorf("%w: invalid path segment %q", ErrNotTorrent, seg)
 		}
 		cleaned = append(cleaned, sanitiseSegment(seg))
 	}
@@ -393,6 +406,10 @@ func joinSanitised(segments []string) (string, error) {
 var reservedStems = map[string]bool{
 	"CON": true, "PRN": true, "AUX": true, "NUL": true, "CLOCK$": true,
 	"CONIN$": true, "CONOUT$": true,
+	"COM0": true, "COM1": true, "COM2": true, "COM3": true, "COM4": true,
+	"COM5": true, "COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT0": true, "LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true,
+	"LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
 }
 
 // sanitiseSegment applies the doc 12 section 3.2 steps to one path component.

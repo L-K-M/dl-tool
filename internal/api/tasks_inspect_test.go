@@ -236,7 +236,7 @@ func TestInspectMagnetResolved(t *testing.T) {
 	if manifest.MetadataPending {
 		t.Error("metadata_pending = true, want false for resolved metadata")
 	}
-	if manifest.Name != "Ubuntu 26.04 LTS Desktop" && manifest.Name != resolvedMagnetManifest().Name {
+	if manifest.Name != resolvedMagnetManifest().Name {
 		t.Errorf("name = %q, want the resolved name", manifest.Name)
 	}
 	if manifest.SourceURI != inspectMagnetFixture {
