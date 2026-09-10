@@ -175,7 +175,7 @@ eslint/prettier), then:
 
 ```
 go test -race -count=1 ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/api	66.879s
+ok  	github.com/L-K-M/dl-tool/internal/api	66.416s
 ```
 
 The named tests, `go test -race -count=1 -v ./internal/api/ -run
@@ -183,19 +183,19 @@ The named tests, `go test -race -count=1 -v ./internal/api/ -run
 
 ```
 === RUN   TestUploadTorrentPart
---- PASS: TestUploadTorrentPart (0.36s)
+--- PASS: TestUploadTorrentPart (0.39s)
 === RUN   TestUploadTextListExpands
---- PASS: TestUploadTextListExpands (0.33s)
+--- PASS: TestUploadTextListExpands (0.36s)
 === RUN   TestRequestTooLarge
---- PASS: TestRequestTooLarge (2.27s)
+--- PASS: TestRequestTooLarge (2.25s)
 === RUN   TestCreateSubfolderSanitisesName
---- PASS: TestCreateSubfolderSanitisesName (0.40s)
+--- PASS: TestCreateSubfolderSanitisesName (0.38s)
 === RUN   TestSelectFilesRejectedOnIncapableEngine
---- PASS: TestSelectFilesRejectedOnIncapableEngine (0.34s)
+--- PASS: TestSelectFilesRejectedOnIncapableEngine (0.32s)
 === RUN   TestSanitiseSegmentReservedNames
 --- PASS: TestSanitiseSegmentReservedNames (0.00s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/api	4.849s
+ok  	github.com/L-K-M/dl-tool/internal/api	4.853s
 ```
 
 Scope check, `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`

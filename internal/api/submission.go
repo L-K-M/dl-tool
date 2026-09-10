@@ -497,7 +497,8 @@ func sentinelDetail(err, sentinel error) string {
 // internal/uri's unexported segment sanitiser for manifest paths, which this
 // package cannot import and whose file this task may not touch; T046 lifts
 // both into fsx.SanitiseSegment with the NFC normalisation x/text adds. The
-// two must read the same until then.
+// two read the same except step 10, which here stems on the first dot (see
+// isReservedStem).
 func sanitiseSegment(s string) string {
 	if s == "" {
 		return "_"
@@ -572,8 +573,9 @@ func truncateSegmentWithExtension(s string) string {
 
 // splitSegmentExtension returns the stem and the extension — a '.' within
 // the last 9 characters plus everything after it. Short names search their
-// whole length, so "nul.txt" splits and its reserved stem stays visible to
-// step 10.
+// whole length so a short extension still re-appends after truncation.
+// Only truncateSegmentWithExtension consumes this; the reserved-name check
+// stems on the first dot instead (see isReservedStem).
 func splitSegmentExtension(s string) (stem, ext string) {
 	tail := s
 	if len(s) > extensionWindow {
@@ -611,8 +613,16 @@ var reservedStems = map[string]bool{
 }
 
 // isReservedStem reports whether upper(stem) is a Windows device name.
+// The candidate is everything before the FIRST '.' — a device name stays
+// reserved with any number of extensions attached ("nul.txt",
+// "com9.tar.gz") and however long they are ("con.abcdefghi"), while an
+// exact match keeps "connect.txt" and "nulled.bin" untouched. The
+// extension-window split of step 8 answers a different question (what to
+// re-append after truncation) and must not feed this check. Diverges from
+// internal/uri's window-derived copy, which T046 lifts into
+// fsx.SanitiseSegment with the doc 12 3.4 verbatim table.
 func isReservedStem(s string) bool {
-	stem, _ := splitSegmentExtension(s)
+	stem, _, _ := strings.Cut(s, ".")
 
 	return reservedStems[strings.ToUpper(stem)]
 }

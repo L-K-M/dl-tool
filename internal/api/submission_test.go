@@ -667,6 +667,11 @@ func TestSanitiseSegmentReservedNames(t *testing.T) {
 		{"nul.txt", "_nul.txt"},
 		{"CON.txt", "_CON.txt"},
 		{"com1.bin", "_com1.bin"},
+		{"com9.tar.gz", "_com9.tar.gz"},
+		{"nul.tar.gz", "_nul.tar.gz"},
+		{"con.abcdefghi", "_con.abcdefghi"},
+		{"connect.txt", "connect.txt"},
+		{"nulled.bin", "nulled.bin"},
 	}
 
 	for _, tc := range cases {
