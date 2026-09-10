@@ -222,7 +222,9 @@ TestAria2FilesHaveNullPriority|TestPatchFilesUnknownIndex' -v`:
 --- PASS: TestAria2FilesHaveNullPriority (0.04s)
 ```
 
-All five named tests live in the three listed packages (`grep -rn "func Test..."` pins
+The five named tests live in two of the three listed packages, `internal/api` and
+`internal/engine/qbittorrent`, while `./internal/store` matches none of the `-run` names
+(`grep -rn "func Test..."` pins
 `TestAria2FilesHaveNullPriority`, `TestDeselectSetsSkip` and `TestPatchFilesUnknownIndex` to
 `internal/api/tasks_files_test.go`, the other two to `internal/engine/qbittorrent/files_test.go`),
 so the command above can produce the output above.
