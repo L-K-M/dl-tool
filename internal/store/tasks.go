@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -168,6 +170,35 @@ WHERE id = ? AND state = ?`
 FROM task_files
 WHERE task_id = ?
 ORDER BY file_index`
+
+	// The upsert of the files endpoints (T032): an engine listing lands as
+	// one row per file, keyed on (task_id, file_index) by the unique index.
+	// The data columns follow the listing — the engine is the truth for a
+	// listing — while id and created_at survive from the first insert.
+	queryUpsertTaskFile = `INSERT INTO task_files
+(id, task_id, file_index, path, size_bytes, completed_bytes, selected, priority, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(task_id, file_index) DO UPDATE SET
+path = excluded.path,
+size_bytes = excluded.size_bytes,
+completed_bytes = excluded.completed_bytes,
+selected = excluded.selected,
+priority = excluded.priority,
+updated_at = excluded.updated_at`
+
+	// A listing replaces the task's rows wholesale, so an index the engine
+	// dropped disappears. The indices ride one JSON parameter instead of
+	// one bind per index: SQLite caps bound parameters per statement, and
+	// an archive torrent can carry more files than that cap. An empty
+	// listing yields an empty json_each set, and NOT IN over it is true,
+	// so the empty case needs no branch of its own.
+	queryDeleteUnlistedTaskFiles = `DELETE FROM task_files
+WHERE task_id = ? AND file_index NOT IN (
+	SELECT CAST(json_each.value AS INTEGER) FROM json_each(?))`
+
+	queryUpdateTaskFileSelection = `UPDATE task_files
+SET selected = ?, priority = ?, updated_at = ?
+WHERE task_id = ? AND file_index = ?`
 
 	queryQueueMembers = `SELECT id FROM tasks
 WHERE queue_position IS NOT NULL
@@ -1210,6 +1241,128 @@ func (s *TaskStore) ListFiles(ctx context.Context, taskID string) ([]TaskFile, e
 	}
 
 	return files, nil
+}
+
+// fileIndices lists a listing's file indices, in listing order. The
+// non-nil result is load-bearing: an empty listing must marshal to "[]",
+// since json_each("null") yields a NULL row and NULL on the right of
+// NOT IN makes the delete a silent no-op.
+func fileIndices(files []TaskFile) []int {
+	indices := make([]int, 0, len(files))
+	for _, file := range files {
+		indices = append(indices, file.FileIndex)
+	}
+
+	return indices
+}
+
+// TaskFileSelection is one index's new selection state: the 0/1 selected
+// flag and the priority of docs/04-data-model.md section 4.3. A nil
+// Priority writes NULL — the storage shape of an engine that drives
+// selection alone, aria2's.
+type TaskFileSelection struct {
+	Selected int
+	Priority *int
+}
+
+// UpsertFiles replaces the task's task_files rows from an engine listing,
+// keyed on (task_id, file_index): listed indices insert or update, an
+// index the listing no longer carries is deleted. Selected and priority
+// come from the listing — the engine owns a listing's truth — so the
+// write that follows a PATCH reads back the priorities the engine
+// accepted. ids and timestamps are generated here; one transaction
+// carries every row.
+func (s *TaskStore) UpsertFiles(ctx context.Context, taskID string, files []TaskFile) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: upsert files of task %q: %w", taskID, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of file upsert failed", "task_id", taskID, "error", err)
+		}
+	}()
+
+	now := time.Now().UnixMilli()
+	for _, file := range files {
+		if _, err := tx.ExecContext(
+			ctx, queryUpsertTaskFile,
+			NewID(PrefixTaskFile), taskID, file.FileIndex, file.Path,
+			file.SizeBytes, file.CompletedBytes, file.Selected, file.Priority, now, now,
+		); err != nil {
+			return fmt.Errorf("store: upsert files of task %q: %w", taskID, err)
+		}
+	}
+
+	// The listing replaces the row set, so an index it dropped disappears;
+	// an empty listing clears every row.
+	indices, err := json.Marshal(fileIndices(files))
+	if err != nil {
+		return fmt.Errorf("store: upsert files of task %q: %w", taskID, err)
+	}
+	if _, err := tx.ExecContext(ctx, queryDeleteUnlistedTaskFiles, taskID, string(indices)); err != nil {
+		return fmt.Errorf("store: upsert files of task %q: %w", taskID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: upsert files of task %q: commit: %w", taskID, err)
+	}
+
+	return nil
+}
+
+// UpdateFileSelection writes selected and priority for the listed indices
+// in one transaction, after the engine has accepted the same change: the
+// store mirrors what the engine now reports, so the next listing's upsert
+// writes the same values back. An index with no task_files row answers
+// ErrNotFound naming it — the caller validated against a listing that the
+// row set no longer matches. An empty selection is a caller bug: the
+// endpoint's body requires at least one entry, and an empty write would
+// silently succeed while touching nothing.
+func (s *TaskStore) UpdateFileSelection(ctx context.Context, taskID string, sel map[int]TaskFileSelection) error {
+	if len(sel) == 0 {
+		return fmt.Errorf("store: update file selection of task %q: empty selection", taskID)
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: update file selection of task %q: %w", taskID, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of file selection failed", "task_id", taskID, "error", err)
+		}
+	}()
+
+	// Ascending index order keeps the write sequence deterministic.
+	now := time.Now().UnixMilli()
+	for _, index := range slices.Sorted(maps.Keys(sel)) {
+		selection := sel[index]
+		result, err := tx.ExecContext(
+			ctx, queryUpdateTaskFileSelection,
+			selection.Selected, selection.Priority, now, taskID, index,
+		)
+		if err != nil {
+			return fmt.Errorf("store: update file selection of task %q: %w", taskID, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store: update file selection of task %q: count rows: %w", taskID, err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("store: update file selection of task %q: file index %d: %w", taskID, index, ErrNotFound)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: update file selection of task %q: commit: %w", taskID, err)
+	}
+
+	return nil
 }
 
 // MarkRemoved tombstones a task, running steps 5 and 6 of the delete path

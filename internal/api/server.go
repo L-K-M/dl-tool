@@ -399,6 +399,28 @@ func (s *Server) registerOperations() {
 	}, s.tasks.ListTaskEvents)
 
 	huma.Register(s.API, huma.Operation{
+		OperationID:                  operationListTaskFiles,
+		Method:                       http.MethodGet,
+		Path:                         "/tasks/{id}/files",
+		Summary:                      "List the task's files",
+		Description:                  "The engine's listing lands in task_files and the answer comes from the store, so the shape is identical to PATCH's and survives a briefly down engine. An engine without per-file priority reports null priorities and drives selected alone.",
+		Tags:                         []string{"tasks"},
+		Security:                     credentialRequired,
+		RejectUnknownQueryParameters: true,
+	}, s.tasks.ListTaskFiles)
+
+	huma.Register(s.API, huma.Operation{
+		OperationID:                  operationPatchTaskFiles,
+		Method:                       http.MethodPatch,
+		Path:                         "/tasks/{id}/files",
+		Summary:                      "Select and prioritise the task's files",
+		Description:                  "Applies one selection change per listed index on the running engine and in task_files. selected:false and priority:skip are one concept; unlisted indices are untouched. 422 when the engine declares no per_file_priority.",
+		Tags:                         []string{"tasks"},
+		Security:                     credentialRequired,
+		RejectUnknownQueryParameters: true,
+	}, s.tasks.PatchTaskFiles)
+
+	huma.Register(s.API, huma.Operation{
 		OperationID: operationInspectTasks,
 		Method:      http.MethodPost,
 		Path:        "/tasks/inspect",
