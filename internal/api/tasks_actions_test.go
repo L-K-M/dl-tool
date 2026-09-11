@@ -1423,8 +1423,8 @@ func TestPatchDestination(t *testing.T) {
 				t.Errorf("state %s: status %d, body %s — the list admits a state the store refuses",
 					state, response.Code, response.Body.String())
 			}
-			if state := env.taskState(t, id); state != string(engine.StateMoving) {
-				t.Errorf("state %s: row state = %q, want moving", state, state)
+			if row := env.taskState(t, id); row != string(engine.StateMoving) {
+				t.Errorf("state %s: row state = %q, want moving", state, row)
 			}
 		}
 	})

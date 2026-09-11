@@ -349,5 +349,11 @@ Addressed:
   poll-bounded and the write-back only shortens the double-apply window. A dedicated `Client` mutex would
   need a field in `internal/engine/qbittorrent/client.go`, outside this task's Files table.
 
+### Review round 3 (GLM 5.3, commit 91b2352 — zero actionable, one minor)
+
+- The drift-guard subtest's moving assertion shadowed the loop's `state` variable, so its failure message
+  would have printed the row state twice instead of naming the seeded entry. Fixed (renamed to `row`);
+  `make lint`, `make vet`, `make test PKG=./internal/...` re-run green on the fix commit.
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
