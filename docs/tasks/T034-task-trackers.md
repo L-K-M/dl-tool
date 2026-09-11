@@ -250,21 +250,21 @@ All matched files use Prettier code style!
 `make test PKG=./internal/...`:
 
 ```
-ok  	github.com/L-K-M/dl-tool/internal/api	78.823s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.309s
-ok  	github.com/L-K-M/dl-tool/internal/engine	22.883s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.238s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.341s
+ok  	github.com/L-K-M/dl-tool/internal/api	73.285s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.126s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.303s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.186s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.295s
 ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.773s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.217s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.200s
-ok  	github.com/L-K-M/dl-tool/internal/store	71.508s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.382s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.088s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.655s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.183s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.122s
+ok  	github.com/L-K-M/dl-tool/internal/store	68.893s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.378s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.084s
 ```
 
-(All output above is the final tree, after the review-round-1 to round-5 fixes listed under Scope.)
+(All output above is the final tree, after the review-round-1 to round-6 fixes listed under Scope.)
 
 (One environmental note from an earlier run: `internal/engine`'s `TestClaimTimeClearDeclinesTheGuardedClaim`
 failed once with "temp filesystem has only 1865420800 free bytes; test needs 1992294400 of head-room" —
@@ -400,6 +400,21 @@ Fixed in scope: the POST description now discloses that a spent gate budget also
 /problems/ssrf-blocked — fail-closed is the safe verdict, and the contract says so — and
 `TestTrackerGateBudgetFailsClosedOnExpiry` pins both the gate-context routing and the fail-closed
 verdict on expiry, using an RFC 6761 `.invalid` name so the expired-budget path is deterministic.
+
+### Review round 6 (PR #121)
+
+Fixed in scope: the POST description's 403 clause no longer reads as though an NXDOMAIN-within-budget
+were refused ("one the block gate cannot finish checking before its budget expires"); the expiry
+test's comment states that its gate-context discrimination needs a resolver that answers `.invalid`
+authoritatively, and that in DNS-less CI it proves only fail-closed-on-error; and `dnsErrorText`
+allow-lists the three address-free `net.DNSError.Err` spellings — the native resolver wraps
+transport failures verbatim into Err, embedding the local address and the resolver's — so the warn
+line leaks no topology (`TestDNSErrorTextOmitsTheHost` pins the transport-shaped case).
+
+Not adopted again: the nullable-array, `CreateTasksBody`, `InspectTasksBody`, `blob`, `elapsed_ms`,
+`FileSelection`, `Delta`, `url`-schema and 404-in-prose findings are the same shared-generator and
+other-task triage as rounds 2 to 5; the NXDOMAIN-advisory item restates the documented rebinding
+caveat whose durable fix is T123's dialer guard.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

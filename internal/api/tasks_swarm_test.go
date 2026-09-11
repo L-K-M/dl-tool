@@ -891,8 +891,26 @@ func TestDNSErrorTextOmitsTheHost(t *testing.T) {
 		t.Errorf("dnsErrorText(non-dns) = %q, want the error's own text", text)
 	}
 
-	// A DNSError with no Err of its own must still yield a reason — and
-	// never the wrapped error's host-bearing text.
+	// A DNSError whose Err wraps the transport error verbatim — the
+	// native resolver embeds the local address and the resolver's —
+	// degrades to the static reason and leaks nothing.
+	transport := &net.DNSError{
+		Err:    "read udp 10.0.0.5:59813->192.168.1.1:53: i/o timeout",
+		Name:   "tracker.example.org",
+		Server: "192.168.1.1:53",
+	}
+	if text := dnsErrorText(transport); text != dnsFailureReason {
+		t.Errorf("dnsErrorText(transport-shaped DNSError) = %q, want %q", text, dnsFailureReason)
+	}
+	if text := dnsErrorText(transport); strings.Contains(text, "10.0.0.5") || strings.Contains(text, "192.168.1.1") {
+		t.Errorf("dnsErrorText(transport-shaped DNSError) = %q, want no addresses in it", text)
+	}
+
+	// The known-safe spellings pass through, and an empty Err still
+	// yields a reason — never the wrapped error's host-bearing text.
+	if text := dnsErrorText(&net.DNSError{Err: "no such host"}); text != "no such host" {
+		t.Errorf("dnsErrorText(no such host) = %q, want the safe reason kept", text)
+	}
 	empty := &net.DNSError{Err: "", Name: "tracker.example.org"}
 	if text := dnsErrorText(empty); text != dnsFailureReason {
 		t.Errorf("dnsErrorText(empty DNSError) = %q, want %q", text, dnsFailureReason)
@@ -931,7 +949,10 @@ func TestAddTaskTrackersMaxItemsMatchesConstant(t *testing.T) {
 // name: under the expired budget the lookup errors with a deadline, not
 // an authoritative NXDOMAIN, so the only verdict the correct code can
 // return is blocked; a refactor that dropped the gate context would
-// resolve the name to its NXDOMAIN answer and allow it.
+// resolve the name to its NXDOMAIN answer and allow it. That contrast
+// needs a resolver that answers .invalid authoritatively; where DNS is
+// unreachable the lookup errors under either context and this assertion
+// passes without exercising the gate-context routing it claims to pin.
 func TestTrackerGateBudgetFailsClosedOnExpiry(t *testing.T) {
 	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()

@@ -48,9 +48,19 @@ const (
 	trackersDetailBlockedHost   = "a tracker url resolves to an address dl-tool refuses to contact, or to no verifiable address at all"
 )
 
-// dnsFailureReason is the static, host-free reason a net.DNSError with
-// no Err of its own degrades to.
+// dnsFailureReason is the static, host-free reason a net.DNSError whose
+// Err is not one of the known-safe spellings degrades to: the native
+// resolver wraps transport failures verbatim into Err, embedding the
+// local address and the resolver's ("read udp 10.0.0.5:53->...").
 const dnsFailureReason = "dns lookup failed"
+
+// dnsSafeReasons are the net.DNSError.Err spellings that carry no
+// address: the log line keeps exactly these and nothing else.
+var dnsSafeReasons = map[string]struct{}{
+	"no such host":       {},
+	"server misbehaving": {},
+	"i/o timeout":        {},
+}
 
 // trackersMaxURLs bounds one request's url count on both the add and the
 // remove path; the add side's maxItems schema tag carries the same 100,
@@ -514,11 +524,12 @@ func isNotFound(err error) bool {
 	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
-// dnsErrorText renders a resolver failure without the queried host: a
-// net.DNSError's own text embeds the host name (and the resolver's
-// address), and an announce host can be user-identifying. The error's
-// own text is never the fallback for a DNSError — it re-embeds the host
-// — so an empty Err degrades to a static reason instead.
+// dnsErrorText renders a resolver failure without the queried host or
+// any address: a net.DNSError's own text embeds the host name (and the
+// resolver's address), and its Err member can wrap the transport error
+// verbatim, embedding the local address and the resolver's. Only the
+// known-safe Err spellings pass through; everything else degrades to a
+// static reason.
 func dnsErrorText(err error) string {
 	if err == nil {
 		return "no addresses"
@@ -526,7 +537,7 @@ func dnsErrorText(err error) string {
 
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		if dnsErr.Err != "" {
+		if _, safe := dnsSafeReasons[dnsErr.Err]; safe {
 			return dnsErr.Err
 		}
 
