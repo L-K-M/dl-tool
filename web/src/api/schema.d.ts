@@ -314,6 +314,34 @@ export interface paths {
     patch: operations["patch-task-files"];
     trace?: never;
   };
+  "/tasks/{id}/trackers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the task's trackers
+     * @description The BitTorrent swarm's announce urls, the engine's synthetic DHT, PeX and LSD rows included. status is the engine's own value rendered as a string; seeds, peers and update_timer_seconds are null where the engine reports no value. 422 when the task is not a BitTorrent task.
+     */
+    get: operations["list-task-trackers"];
+    put?: never;
+    /**
+     * Add trackers to the task
+     * @description Adds http, https, udp, ws and wss announce urls to the swarm and answers with the full updated listing. A url resolving to a blocked address is refused with 403 /problems/ssrf-blocked.
+     */
+    post: operations["add-task-trackers"];
+    /**
+     * Remove trackers from the task
+     * @description Removes the named announce urls from the swarm. A pseudo-tracker row (DHT, PeX, LSD) cannot be removed and answers 422.
+     */
+    delete: operations["remove-task-tracker"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -351,6 +379,13 @@ export interface components {
     ActionsOutputBody: {
       /** @description One outcome per requested id, in request order */
       results: components["schemas"]["ActionResult"][] | null;
+    };
+    AddTaskTrackersInputBody: {
+      /** @description http, https, udp, ws and wss announce urls */
+      urls: string[] | null;
+    };
+    AddTaskTrackersOutputBody: {
+      trackers: components["schemas"]["TrackerDTO"][] | null;
     };
     AuthEnvelope: {
       /** @description Per-session token; send as X-DLTOOL-CSRF on cookie-authenticated mutations */
@@ -542,6 +577,9 @@ export interface components {
     };
     ListTaskFilesOutputBody: {
       files: components["schemas"]["TaskFileDTO"][] | null;
+    };
+    ListTaskTrackersOutputBody: {
+      trackers: components["schemas"]["TrackerDTO"][] | null;
     };
     ListTasksOutputBody: {
       /** @description Full Task objects, ordered by the requested sort */
@@ -757,6 +795,17 @@ export interface components {
       error: string | null;
       ok: boolean;
       version: string | null;
+    };
+    TrackerDTO: {
+      message: string;
+      /** Format: int64 */
+      peers: number | null;
+      /** Format: int64 */
+      seeds: number | null;
+      status: string;
+      /** Format: int64 */
+      update_timer_seconds: number | null;
+      url: string;
     };
     UserBody: {
       /**
@@ -1461,6 +1510,107 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["ListTaskFilesOutputBody"];
         };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-task-trackers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListTaskTrackersOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "add-task-trackers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AddTaskTrackersInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AddTaskTrackersOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "remove-task-tracker": {
+    parameters: {
+      query?: {
+        /** @description The announce urls to remove; repeat the parameter for several */
+        url?: string[] | null;
+      };
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description Error */
       default: {

@@ -421,6 +421,41 @@ func (s *Server) registerOperations() {
 	}, s.tasks.PatchTaskFiles)
 
 	huma.Register(s.API, huma.Operation{
+		OperationID:                  operationListTaskTrackers,
+		Method:                       http.MethodGet,
+		Path:                         "/tasks/{id}/trackers",
+		Summary:                      "List the task's trackers",
+		Description:                  "The BitTorrent swarm's announce urls, the engine's synthetic DHT, PeX and LSD rows included. status is the engine's own value rendered as a string; seeds, peers and update_timer_seconds are null where the engine reports no value. 422 when the task is not a BitTorrent task.",
+		Tags:                         []string{"tasks"},
+		Security:                     credentialRequired,
+		RejectUnknownQueryParameters: true,
+	}, s.tasks.ListTaskTrackers)
+
+	huma.Register(s.API, huma.Operation{
+		OperationID:                  operationAddTaskTrackers,
+		Method:                       http.MethodPost,
+		Path:                         "/tasks/{id}/trackers",
+		DefaultStatus:                http.StatusCreated,
+		Summary:                      "Add trackers to the task",
+		Description:                  "Adds http, https, udp, ws and wss announce urls to the swarm and answers with the full updated listing. A url resolving to a blocked address is refused with 403 /problems/ssrf-blocked.",
+		Tags:                         []string{"tasks"},
+		Security:                     credentialRequired,
+		RejectUnknownQueryParameters: true,
+	}, s.tasks.AddTaskTrackers)
+
+	huma.Register(s.API, huma.Operation{
+		OperationID:                  operationRemoveTaskTracker,
+		Method:                       http.MethodDelete,
+		Path:                         "/tasks/{id}/trackers",
+		DefaultStatus:                http.StatusNoContent,
+		Summary:                      "Remove trackers from the task",
+		Description:                  "Removes the named announce urls from the swarm. A pseudo-tracker row (DHT, PeX, LSD) cannot be removed and answers 422.",
+		Tags:                         []string{"tasks"},
+		Security:                     credentialRequired,
+		RejectUnknownQueryParameters: true,
+	}, s.tasks.RemoveTaskTracker)
+
+	huma.Register(s.API, huma.Operation{
 		OperationID: operationInspectTasks,
 		Method:      http.MethodPost,
 		Path:        "/tasks/inspect",

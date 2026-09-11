@@ -107,7 +107,7 @@ The qBittorrent adapter, `.torrent`/magnet inspection, file selection, trackers 
 | [T031](T031-metainfo-and-inspect-endpoint.md) | Parse torrent metainfo and serve `POST /tasks/inspect` | T015, T020 | done |
 | [T032](T032-file-selection-and-priorities.md) | Select and prioritise the files of a task | T021, T029, T030 | done |
 | [T033](T033-uploads-subfolder-and-selection.md) | Accept uploaded files, the subfolder option and a create-time file selection | T020, T031, T032 | done |
-| [T034](T034-task-trackers.md) | List, add and remove a task's trackers | T021, T029 | todo |
+| [T034](T034-task-trackers.md) | List, add and remove a task's trackers | T021, T029 | done |
 | [T035](T035-task-peers.md) | List a task's connected peers | T029, T030, T034 | todo |
 | [T036](T036-share-limits-and-mutators.md) | Apply share limits, sequential download and the location mutators | T022, T029 | todo |
 | [T037](T037-qbittorrent-rate-limits.md) | Apply per-task and global rate limits to running qBittorrent tasks | T022, T029, T030 | todo |
@@ -316,7 +316,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T031 | Parse torrent metainfo and serve `POST /tasks/inspect` | T015, T020 | no | done | [T031](T031-metainfo-and-inspect-endpoint.md) |
 | T032 | Select and prioritise the files of a task | T021, T029, T030 | no | done | [T032](T032-file-selection-and-priorities.md) |
 | T033 | Accept uploaded files, the subfolder option and a create-time file selection | T020, T031, T032 | no | done | [T033](T033-uploads-subfolder-and-selection.md) |
-| T034 | List, add and remove a task's trackers | T021, T029 | no | todo | [T034](T034-task-trackers.md) |
+| T034 | List, add and remove a task's trackers | T021, T029 | no | done | [T034](T034-task-trackers.md) |
 | T035 | List a task's connected peers | T029, T030, T034 | no | todo | [T035](T035-task-peers.md) |
 | T036 | Apply share limits, sequential download and the location mutators | T022, T029 | yes | todo | [T036](T036-share-limits-and-mutators.md) |
 | T037 | Apply per-task and global rate limits to running qBittorrent tasks | T022, T029, T030 | yes | todo | [T037](T037-qbittorrent-rate-limits.md) |
