@@ -62,6 +62,11 @@ const trackersMaxURLs = 100
 // full retry budget.
 const trackerHostLookupTimeout = 5 * time.Second
 
+// trackersGateBudget bounds the whole block gate for one request: a
+// hundred slow-but-successful lookups must not stack the per-host
+// timeout into minutes of held request.
+const trackersGateBudget = 30 * time.Second
+
 // trackerSchemes is the announce vocabulary of docs/05 section 5.9: the
 // schemes a BitTorrent announce url may carry.
 var trackerSchemes = map[string]struct{}{
@@ -374,13 +379,17 @@ func validateTrackerURLShapes(urls []string) []*huma.ErrorDetail {
 }
 
 // trackerURLsBlocked reports whether any added url addresses a host the
-// block list denies, or one whose address cannot be verified. Each
-// distinct host is resolved once: the body's cap is 100 urls, and
-// repeated hosts must not become repeated lookups. A blocked first
-// verdict returns immediately, so only allowed verdicts are ever
-// revisited. The check runs after the shape check, so a refused url is
-// always one a tracker could legally carry.
+// block list denies, or one whose address cannot be verified. The whole
+// gate runs under one budget, so a body of many deliberately slow names
+// cannot stack the per-host timeout into minutes; inside it, each
+// distinct host is resolved once and repeated hosts never re-look-up. A
+// blocked first verdict returns immediately, so only allowed verdicts
+// are ever revisited. The check runs after the shape check, so a refused
+// url is always one a tracker could legally carry.
 func trackerURLsBlocked(ctx context.Context, urls []string) bool {
+	gateCtx, cancel := context.WithTimeout(ctx, trackersGateBudget)
+	defer cancel()
+
 	allowed := make(map[string]struct{}, len(urls))
 	for _, raw := range urls {
 		u, err := url.Parse(raw)
@@ -394,7 +403,7 @@ func trackerURLsBlocked(ctx context.Context, urls []string) bool {
 			continue
 		}
 
-		if trackerHostBlocked(ctx, host) {
+		if trackerHostBlocked(gateCtx, host) {
 			return true
 		}
 		allowed[host] = struct{}{}

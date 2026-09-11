@@ -250,21 +250,21 @@ All matched files use Prettier code style!
 `make test PKG=./internal/...`:
 
 ```
-ok  	github.com/L-K-M/dl-tool/internal/api	73.758s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.124s
-ok  	github.com/L-K-M/dl-tool/internal/engine	21.190s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.194s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.280s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.033s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.722s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.183s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.043s
-ok  	github.com/L-K-M/dl-tool/internal/store	68.266s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.385s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.069s
+ok  	github.com/L-K-M/dl-tool/internal/api	74.053s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.108s
+ok  	github.com/L-K-M/dl-tool/internal/engine	22.143s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.214s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.284s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.028s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.352s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.212s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.142s
+ok  	github.com/L-K-M/dl-tool/internal/store	69.579s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.379s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.087s
 ```
 
-(All output above is the final tree, after the review-round-1 to round-3 fixes listed under Scope.)
+(All output above is the final tree, after the review-round-1 to round-4 fixes listed under Scope.)
 
 (One environmental note from an earlier run: `internal/engine`'s `TestClaimTimeClearDeclinesTheGuardedClaim`
 failed once with "temp filesystem has only 1865420800 free bytes; test needs 1992294400 of head-room" —
@@ -379,6 +379,20 @@ Not adopted again: the required-but-nullable-array majors and the openapi.json m
   `files`, `uris`, `FileSelectionRequest`, the declared-422 convention, `get-sync`'s `rid` default);
   `results`/`created` nullability is the same generator artifact on response bodies. They belong to
   the shared generation convention and those tasks, not to this Files table.
+
+### Review round 4 (PR #121)
+
+Fixed in scope: the two tracker descriptions render their url cap from `trackersMaxURLs` instead of a
+hardcoded "100"; the whole block gate runs under one `trackersGateBudget` (30 s), so a hundred
+slow-but-successful lookups cannot stack the per-host timeout into minutes of held request. Huma
+renders no `maxItems` on a repeated query parameter — verified against the generated spec — so the
+DELETE-side cap stays handler-enforced (`TestRemoveTrackersCapsURLCount`) and the drift-guard pins
+the add body's tag alone; the gap is noted on the test.
+
+Not adopted again: the required-but-nullable-array major (fourth restatement) and the openapi.json
+minors (`elapsed_ms`, `CreateTasksBody`, `InspectTasksBody`, `writeOnly`, `Delta.tasks`, the `url`
+parameter's nullable schema) are the same shared generator artifact and other tasks' registered
+operations as rounds 2 and 3 triaged.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

@@ -908,8 +908,11 @@ func TestTrackerHostBlockedEmptyHostFailsClosed(t *testing.T) {
 }
 
 // TestAddTaskTrackersMaxItemsMatchesConstant pins the add body's schema
-// tag to the constant the remove path enforces in code, so the two caps
-// cannot drift apart silently.
+// tag to the constant the remove path enforces in code, so the two
+// spellings of one limit cannot drift apart silently. The remove side
+// has no schema tag to pin — huma renders no maxItems on a repeated
+// query parameter — so its cap is pinned by TestRemoveTrackersCapsURLCount
+// at the handler instead.
 func TestAddTaskTrackersMaxItemsMatchesConstant(t *testing.T) {
 	field, ok := reflect.TypeOf(AddTaskTrackersInput{}.Body).FieldByName("URLs")
 	if !ok {
