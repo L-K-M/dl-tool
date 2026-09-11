@@ -456,6 +456,17 @@ func (s *Server) registerOperations() {
 	}, s.tasks.RemoveTaskTracker)
 
 	huma.Register(s.API, huma.Operation{
+		OperationID:                  operationListTaskPeers,
+		Method:                       http.MethodGet,
+		Path:                         "/tasks/{id}/peers",
+		Summary:                      "List the task's connected peers",
+		Description:                  "The peers currently connected to the task's swarm, fetched from the engine on every call and never cached — the detail pane polls this endpoint while it is open. client, flags and country are null where the engine reports no value; rates are bytes per second; progress rides the 0.0-1.0 range. 422 when the task is not a BitTorrent task or has not been admitted to an engine yet.",
+		Tags:                         []string{"tasks"},
+		Security:                     credentialRequired,
+		RejectUnknownQueryParameters: true,
+	}, s.tasks.ListTaskPeers)
+
+	huma.Register(s.API, huma.Operation{
 		OperationID: operationInspectTasks,
 		Method:      http.MethodPost,
 		Path:        "/tasks/inspect",

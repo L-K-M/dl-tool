@@ -43,6 +43,16 @@ const capturedTrackersJSON = `[
 {"endpoints":[],"min_announce":0,"msg":"","next_announce":0,"num_downloaded":-1,"num_leeches":-1,"num_peers":-1,"num_seeds":-1,"status":1,"tier":0,"updating":false,"url":"udp://tracker.example.org:6969/announce"},
 {"endpoints":[],"min_announce":77,"msg":"\"tracker\" was working","next_announce":1420,"num_downloaded":-1,"num_leeches":-1,"num_peers":118,"num_seeds":412,"status":2,"tier":0,"updating":false,"url":"http://9.9.9.9/announce"}]`
 
+// capturedPeersJSON is the sync/torrentPeers full response one live
+// release-5.2.3 daemon answered for the connected seeder of the capture
+// swarm (docs/tasks/T035-task-peers.md Evidence): the envelope shape and
+// the per-peer key names are the real wire. The first peer carries the
+// captured values of a real GeoIP-named peer (country Switzerland); the
+// second is the loopback shape — empty client and flags, the "N/A"
+// unknown country — so one listing pins both the null and the non-null
+// spelling of the optional fields.
+const capturedPeersJSON = `{"full_update":true,"peers":{"198.51.100.9:51411":{"client":"qBittorrent/5.2.3","connection":"μTP","country":"Switzerland","country_code":"ch","dl_speed":695525,"downloaded":4487452,"files":"payload.bin","flags":"D X L P","flags_desc":"D = Interested (local) and unchoked (peer)\nX = Peer from PEX\nL = Peer from LSD\nP = μTP","host_name":"","ip":"198.51.100.9","peer_id_client":"-qB5230-","port":51411,"progress":1,"relevance":1,"up_speed":0,"uploaded":0},"203.0.113.7:51413":{"client":"","connection":"μTP","country":"N/A","country_code":"","dl_speed":0,"downloaded":0,"files":"","flags":"","flags_desc":"","host_name":"","ip":"203.0.113.7","peer_id_client":"","port":51413,"progress":0.5,"relevance":0,"up_speed":262144,"uploaded":0}},"rid":1,"show_flags":true}`
+
 // swarmWireFake is a WebAPI stand-in for the three tracker endpoints. It
 // serves one mutable listing in the captured row shape, mirrors
 // addTrackers and removeTrackers onto that listing the way release-5.2.3
@@ -58,6 +68,7 @@ type swarmWireFake struct {
 	cookie     string
 	listingErr int // answered to torrents/trackers; 0 means 200
 	addErr     int // answered to torrents/addTrackers; 0 means 204
+	peersErr   int // answered to sync/torrentPeers; 0 means 200
 }
 
 func newSwarmWireFake(t *testing.T) *swarmWireFake {
@@ -192,6 +203,26 @@ func (f *swarmWireFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.rows = kept
 		w.WriteHeader(http.StatusNoContent)
 
+	case "/api/v2/sync/torrentPeers":
+		if !f.sessionOK(r) {
+			http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
+
+			return
+		}
+		f.calls = append(f.calls, rec)
+		if f.hashUnknown(rec.Form.Get("hash")) {
+			http.Error(w, "torrent not found", http.StatusNotFound)
+
+			return
+		}
+		if f.peersErr != 0 {
+			http.Error(w, "peers listing failed", f.peersErr)
+
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(capturedPeersJSON))
+
 	default:
 		http.Error(w, "unknown path", http.StatusNotFound)
 	}
@@ -253,6 +284,14 @@ func (f *swarmWireFake) failAdd(status int) {
 	defer f.mu.Unlock()
 
 	f.addErr = status
+}
+
+// failPeers makes sync/torrentPeers answer status.
+func (f *swarmWireFake) failPeers(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.peersErr = status
 }
 
 // swarmWireEngine lifts the real qbittorrent client onto the Engine
@@ -1000,4 +1039,133 @@ func mustParseAddr(t *testing.T, raw string) netip.Addr {
 	}
 
 	return addr
+}
+
+// getPeers drives GET /tasks/{id}/peers.
+func (e *swarmTestEnv) getPeers(t *testing.T, id string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Get("/tasks/"+id+"/peers", "Authorization: Bearer "+e.bearer)
+}
+
+// peersBody decodes the listing envelope.
+func peersBody(t *testing.T, recorder *httptest.ResponseRecorder) []PeerDTO {
+	t.Helper()
+
+	var body struct {
+		Peers []PeerDTO `json:"peers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body %q: %v", recorder.Body.String(), err)
+	}
+
+	return body.Peers
+}
+
+// TestTaskPeersListing pins the GET shape of doc 05 section 5.9 from the
+// captured 5.2.3 response: a GeoIP-named peer carries its client, flags
+// and country verbatim, a peer with empty keys and the "N/A" unknown
+// country answers null for all three, rates stay bytes per second and
+// progress stays 0.0-1.0 — and the engine was asked under the bare hash
+// at rid=0, the fresh client's first sync/torrentPeers request.
+func TestTaskPeersListing(t *testing.T) {
+	env := newSwarmTestEnv(t)
+	id := env.seedSwarmTask(t)
+
+	response := env.getPeers(t, id)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	peers := peersBody(t, response)
+	if len(peers) != 2 {
+		t.Fatalf("peers = %+v, want the two-peer listing", peers)
+	}
+
+	named := peers[0]
+	if named.Address != "198.51.100.9:51411" {
+		t.Errorf("first peer address = %q, want the sorted-first key", named.Address)
+	}
+	if named.Client == nil || *named.Client != "qBittorrent/5.2.3" {
+		t.Errorf("named peer client = %v, want the reported client string", named.Client)
+	}
+	if named.Flags == nil || *named.Flags != "D X L P" {
+		t.Errorf("named peer flags = %v, want the reported letter string", named.Flags)
+	}
+	if named.Country == nil || *named.Country != "Switzerland" {
+		t.Errorf("named peer country = %v, want Switzerland", named.Country)
+	}
+	if named.Progress != 1.0 {
+		t.Errorf("named peer progress = %v, want 1.0", named.Progress)
+	}
+	if named.DownloadRate != 695525 || named.UploadRate != 0 {
+		t.Errorf("named peer rates = %d/%d, want the reported bytes per second", named.DownloadRate, named.UploadRate)
+	}
+
+	unknown := peers[1]
+	if unknown.Address != "203.0.113.7:51413" {
+		t.Errorf("second peer address = %q, want the sorted-second key", unknown.Address)
+	}
+	if unknown.Client != nil || unknown.Flags != nil || unknown.Country != nil {
+		t.Errorf("unknown peer optionals = %v/%v/%v, want null/null/null",
+			unknown.Client, unknown.Flags, unknown.Country)
+	}
+	if unknown.Progress != 0.5 || unknown.DownloadRate != 0 || unknown.UploadRate != 262144 {
+		t.Errorf("unknown peer values = %+v, want the reported ones", unknown)
+	}
+
+	// The listing was asked for under the bare engine hash at rid=0: the
+	// client is fresh, so no peer delta state exists yet.
+	calls := env.wire.trackerCalls()
+	peersCalls := make([]swarmRequest, 0, 1)
+	for _, call := range calls {
+		if call.Path == "/api/v2/sync/torrentPeers" {
+			peersCalls = append(peersCalls, call)
+		}
+	}
+	if len(peersCalls) != 1 ||
+		peersCalls[0].Form.Get("hash") != swarmHash || peersCalls[0].Form.Get("rid") != "0" {
+		t.Errorf("torrentPeers calls = %+v, want one under the bare hash at rid=0", peersCalls)
+	}
+}
+
+// TestPeersOnNonBitTorrentTask pins the capability gate: a peers request
+// on a task whose engine declares no bittorrent capability is the 422 of
+// doc 05 section 5.9 — never an empty listing — and no engine call runs.
+func TestPeersOnNonBitTorrentTask(t *testing.T) {
+	env := newSwarmTestEnv(t)
+	id := env.seedActionTask(t, func(task *store.Task) {
+		task.Engine = engine.NameAria2
+		ref := aria2GID
+		task.EngineRef = &ref
+	})
+
+	assertProblem(t, env.getPeers(t, id), http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	env.aria2.assertNoCalls(t)
+	for _, call := range env.wire.trackerCalls() {
+		if call.Path == "/api/v2/sync/torrentPeers" {
+			t.Errorf("torrentPeers reached the daemon: %+v", call)
+		}
+	}
+}
+
+// TestPeersRejections pins the remaining answers of the peers endpoint:
+// 404 for an unknown task, 404 for a task the engine no longer holds and
+// 503 when the engine's listing fails.
+func TestPeersRejections(t *testing.T) {
+	env := newSwarmTestEnv(t)
+
+	assertProblem(t, env.getPeers(t, unknownID), http.StatusNotFound, SlugNotFound)
+
+	ref := filesOtherHash
+	foreign := env.seedActionTask(t, func(task *store.Task) {
+		task.Engine = engine.NameQBittorrent
+		task.EngineRef = &ref
+	})
+	assertProblem(t, env.getPeers(t, foreign), http.StatusNotFound, SlugNotFound)
+
+	env.wire.failPeers(http.StatusInternalServerError)
+	id := env.seedSwarmTask(t)
+	assertProblem(t, env.getPeers(t, id), http.StatusServiceUnavailable, SlugEngineUnavailable)
 }

@@ -314,6 +314,26 @@ export interface paths {
     patch: operations["patch-task-files"];
     trace?: never;
   };
+  "/tasks/{id}/peers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the task's connected peers
+     * @description The peers currently connected to the task's swarm, fetched from the engine on every call and never cached — the detail pane polls this endpoint while it is open. client, flags and country are null where the engine reports no value; rates are bytes per second; progress rides the 0.0-1.0 range. 422 when the task is not a BitTorrent task or has not been admitted to an engine yet.
+     */
+    get: operations["list-task-peers"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/tasks/{id}/trackers": {
     parameters: {
       query?: never;
@@ -578,6 +598,9 @@ export interface components {
     ListTaskFilesOutputBody: {
       files: components["schemas"]["TaskFileDTO"][] | null;
     };
+    ListTaskPeersOutputBody: {
+      peers: components["schemas"]["PeerDTO"][] | null;
+    };
     ListTaskTrackersOutputBody: {
       trackers: components["schemas"]["TrackerDTO"][] | null;
     };
@@ -655,6 +678,18 @@ export interface components {
     PatchTaskFilesInputBody: {
       /** @description Unlisted indices are untouched */
       files: components["schemas"]["FileSelection"][] | null;
+    };
+    PeerDTO: {
+      address: string;
+      client: string | null;
+      country: string | null;
+      /** Format: int64 */
+      download_rate: number;
+      flags: string | null;
+      /** Format: double */
+      progress: number;
+      /** Format: int64 */
+      upload_rate: number;
     };
     RejectedURI: {
       detail: string;
@@ -1509,6 +1544,38 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ListTaskFilesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-task-peers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tsk_ id of the task */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListTaskPeersOutputBody"];
         };
       };
       /** @description Error */
