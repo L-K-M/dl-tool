@@ -2,6 +2,9 @@
 
 A self-hosted replacement for **Synology Download Station**, deployed with Docker Compose.
 
+> [!IMPORTANT]
+> LLM disclosure: This codebase was written with substantial help from large language models: AI coding agents working from the [`AGENTS.md`](AGENTS.md) brief in this repo.
+
 One queue for every protocol. One folder picker. Pluggable search. RSS rules that can land anywhere.
 A modern UI that works on a phone.
 
