@@ -179,19 +179,27 @@ func (c *Client) GlobalLimits(ctx context.Context) (down, up int64, err error) {
 // verifyTaskLimitsLater confirms a per-task set against the merged cache
 // the sync/maindata poll maintains — never against a second request: the
 // daemon reports dl_limit and up_limit in every torrent object a delta
-// carries, so the delta that follows a set is the read-back. The cache may
-// already hold the sent values (an idempotent re-set changed nothing, so
-// no delta will ever name them) and then nothing is scheduled. Otherwise
-// one watcher rides the client's stop signal for limitVerifyDeltas poll
-// intervals, reading the cache alone each tick: a match retires it, and a
-// mismatch that survives three deltas logs a single warn. A warn is all a
-// per-task mismatch ever becomes — the caller's mutation already
-// succeeded, so the error path of the global read-back has no equivalent
-// here.
+// carries, so the delta that follows a set is the read-back. The caller's
+// values are snapshotted first: the watcher dereferences them long after
+// SetRateLimits has returned, and a caller that reuses its variable must
+// not change what is being verified. The cache may already hold the sent
+// values (an idempotent re-set changed nothing, so no delta will ever
+// name them) and then nothing is scheduled. Otherwise one watcher rides
+// the client's stop signal for limitVerifyDeltas poll intervals, reading
+// the cache alone each tick: a match retires it, a hash that leaves the
+// cache — removed or evicted after a successful set, with nothing left
+// to confirm — retires it quietly, and a mismatch that survives three
+// deltas logs a single warn. A warn is all a per-task mismatch ever
+// becomes — the caller's mutation already succeeded, so the error path
+// of the global read-back has no equivalent here.
 func (c *Client) verifyTaskLimitsLater(hash string, down, up *int64) {
+	down = snapshotLimit(down)
+	up = snapshotLimit(up)
+
 	if c.cacheHoldsLimits(hash, down, up) {
 		return
 	}
+	_, _, heldAtSpawn := c.cachedLimits(hash)
 
 	// The channel Close closes with the poll goroutine and every
 	// subscriber: the watcher must never outlive the client whose cache
@@ -213,10 +221,30 @@ func (c *Client) verifyTaskLimitsLater(hash string, down, up *int64) {
 			if c.cacheHoldsLimits(hash, down, up) {
 				return
 			}
+			// A hash the cache held and no longer holds was removed or
+			// evicted after a successful set; there is nothing left to
+			// confirm. A hash the cache never held keeps counting — an
+			// unknown hash is exactly what the warn exists to name.
+			if _, _, held := c.cachedLimits(hash); !held && heldAtSpawn {
+				slog.Debug("qbittorrent: per-task limit watcher retired: hash left the maindata cache",
+					"engine", engine.NameQBittorrent, "hash", hash)
+				return
+			}
 		}
 
 		c.warnTaskLimitUnconfirmed(hash, down, up)
 	}()
+}
+
+// snapshotLimit copies one caller-owned limit so the watcher never
+// dereferences memory the caller may reuse after SetRateLimits returns;
+// nil passes through as nil.
+func snapshotLimit(limit *int64) *int64 {
+	if limit == nil {
+		return nil
+	}
+	sent := *limit
+	return &sent
 }
 
 // warnTaskLimitUnconfirmed logs the per-task mismatch that survived
@@ -259,13 +287,15 @@ func (c *Client) cacheHoldsLimits(hash string, down, up *int64) bool {
 
 // limitFieldMatches compares one cached limit field against the sent
 // value. A nil sent value was not part of the set and cannot mismatch.
-// The merged object decodes JSON numbers as float64.
+// The merged object decodes JSON numbers as float64, so the comparison
+// runs in that domain: both sides round the same way, and a value beyond
+// the exact-integer range still compares equal to its own echo.
 func limitFieldMatches(fields map[string]any, name string, sent *int64) bool {
 	if sent == nil {
 		return true
 	}
 	value, ok := fields[name].(float64)
-	return ok && int64(value) == *sent
+	return ok && value == float64(*sent)
 }
 
 // cachedLimits reads the dl_limit and up_limit pair the merged cache

@@ -316,8 +316,12 @@ func TestZeroMeansUnlimited(t *testing.T) {
 	require.Equal(t, "0", taskCalls[0].Form.Get("limit"))
 
 	require.NoError(t, c.SetRateLimits(context.Background(), "", &zero, &zero))
-	require.Equal(t, "0", f.callsTo("transfer/setDownloadLimit")[0].Form.Get("limit"))
-	require.Equal(t, "0", f.callsTo("transfer/setUploadLimit")[0].Form.Get("limit"))
+	globalDown := f.callsTo("transfer/setDownloadLimit")
+	globalUp := f.callsTo("transfer/setUploadLimit")
+	require.Len(t, globalDown, 1)
+	require.Len(t, globalUp, 1)
+	require.Equal(t, "0", globalDown[0].Form.Get("limit"))
+	require.Equal(t, "0", globalUp[0].Form.Get("limit"))
 }
 
 // TestBothNilIssuesNoRequest pins the nil encoding: both directions nil
@@ -450,11 +454,13 @@ func TestPerTaskCacheMatchRetiresWatcher(t *testing.T) {
 	}, 50*time.Millisecond, 5*time.Millisecond)
 
 	// The delta that reports the applied value retires the watcher the
-	// same way.
+	// same way. The 25 ms tick leaves the hand-delivered delta ample
+	// scheduling slack: at the 1 ms cadence a descheduled test goroutine
+	// could let the watcher log its warn before the delta ever lands.
 	deltaFake := newLimitsFake(t, nil)
 	deltaClient := newLimitsClient(t, deltaFake)
 	seedLimitsCache(t, deltaClient, limitsTorrentBody("downloading", testOldLimit, testUpLimit))
-	deltaClient.md.pollEvery = time.Millisecond
+	deltaClient.md.pollEvery = 25 * time.Millisecond
 	deltaLogs := captureWarns(t)
 
 	require.NoError(t, deltaClient.SetRateLimits(context.Background(),
@@ -465,7 +471,51 @@ func TestPerTaskCacheMatchRetiresWatcher(t *testing.T) {
 	}, currentEpoch(deltaClient))
 	require.Never(t, func() bool {
 		return strings.Contains(deltaLogs.String(), "not confirmed")
-	}, 50*time.Millisecond, 5*time.Millisecond)
+	}, 150*time.Millisecond, 5*time.Millisecond)
+}
+
+// TestPerTaskVerifySnapshotsSentValues pins the boundary the watcher
+// works at: it verifies the values that were sent, not whatever the
+// caller's variables hold by the time its deltas arrive.
+func TestPerTaskVerifySnapshotsSentValues(t *testing.T) {
+	f := newLimitsFake(t, nil)
+	c := newLimitsClient(t, f)
+	seedLimitsCache(t, c, limitsTorrentBody("downloading", testOldLimit, testUpLimit))
+	c.md.pollEvery = time.Millisecond
+	logs := captureWarns(t)
+
+	sent := testDownLimit
+	require.NoError(t, c.SetRateLimits(context.Background(), engine.NameQBittorrent+":"+testHash, &sent, nil))
+	// The caller reuses its variable the moment the call returns.
+	sent = testDrift
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "not confirmed")
+	}, 5*time.Second, time.Millisecond)
+	require.Contains(t, logs.String(), "sent_down_bps="+strconv.FormatInt(testDownLimit, 10))
+	require.NotContains(t, logs.String(), strconv.FormatInt(testDrift, 10))
+}
+
+// TestPerTaskRemovalRetiresWatcher pins the removal case: a hash that
+// leaves the cache after a successful set — removed or evicted — has
+// nothing left to confirm, so no warn fires. The 25 ms tick leaves the
+// removal ample slack to land before the watcher's first evaluation.
+func TestPerTaskRemovalRetiresWatcher(t *testing.T) {
+	f := newLimitsFake(t, nil)
+	c := newLimitsClient(t, f)
+	seedLimitsCache(t, c, limitsTorrentBody("downloading", testOldLimit, testUpLimit))
+	c.md.pollEvery = 25 * time.Millisecond
+	logs := captureWarns(t)
+
+	down := testDownLimit
+	require.NoError(t, c.SetRateLimits(context.Background(), engine.NameQBittorrent+":"+testHash, &down, nil))
+
+	// The torrent disappears from the daemon's set before three deltas.
+	c.applyResponse(maindata{Rid: 2, TorrentsRemoved: []string{testHash}}, currentEpoch(c))
+
+	require.Never(t, func() bool {
+		return strings.Contains(logs.String(), "not confirmed")
+	}, 100*time.Millisecond, 5*time.Millisecond)
 }
 
 // ptr is the one-line pointer helper the override knobs take.

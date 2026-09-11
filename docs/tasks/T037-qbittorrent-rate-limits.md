@@ -165,13 +165,13 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/qbittorrent/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.851s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	6.064s
 ```
 
-The five named tests, plus the four this task adds, individually:
+The five named tests, plus the six this task adds, individually:
 
 ```
-$ go test ./internal/engine/qbittorrent/ -count=1 -v -run 'TestPerTaskLimitOneRequest|TestGlobalLimitUsesTransferPaths|TestZeroMeansUnlimited|TestBothNilIssuesNoRequest|TestReadBackMismatch|TestPerTaskLimitLeavesRunningTaskAlone|TestDirectionFailureIsNamed|TestPerTaskMismatchWarnsAfterThreeDeltas|TestPerTaskCacheMatchRetiresWatcher'
+$ go test ./internal/engine/qbittorrent/ -count=1 -v -run 'TestPerTaskLimitOneRequest|TestGlobalLimitUsesTransferPaths|TestZeroMeansUnlimited|TestBothNilIssuesNoRequest|TestReadBackMismatch|TestPerTaskLimitLeavesRunningTaskAlone|TestDirectionFailureIsNamed|TestPerTaskMismatchWarnsAfterThreeDeltas|TestPerTaskCacheMatchRetiresWatcher|TestPerTaskVerifySnapshotsSentValues|TestPerTaskRemovalRetiresWatcher'
 --- PASS: TestPerTaskLimitOneRequest (0.00s)
 --- PASS: TestGlobalLimitUsesTransferPaths (0.00s)
 --- PASS: TestZeroMeansUnlimited (0.00s)
@@ -180,9 +180,19 @@ $ go test ./internal/engine/qbittorrent/ -count=1 -v -run 'TestPerTaskLimitOneRe
 --- PASS: TestPerTaskLimitLeavesRunningTaskAlone (0.00s)
 --- PASS: TestDirectionFailureIsNamed (0.00s)
 --- PASS: TestPerTaskMismatchWarnsAfterThreeDeltas (0.01s)
---- PASS: TestPerTaskCacheMatchRetiresWatcher (0.10s)
+--- PASS: TestPerTaskCacheMatchRetiresWatcher (0.20s)
+--- PASS: TestPerTaskVerifySnapshotsSentValues (0.01s)
+--- PASS: TestPerTaskRemovalRetiresWatcher (0.10s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.153s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.365s
+```
+
+Review round 1, re-verified after the fixes on the final tree — the four timing-sensitive tests
+hold over 30 `-race` repetitions:
+
+```
+$ go test ./internal/engine/qbittorrent/ -count=30 -race -run 'TestPerTaskCacheMatchRetiresWatcher|TestPerTaskRemovalRetiresWatcher|TestPerTaskVerifySnapshotsSentValues|TestPerTaskMismatchWarnsAfterThreeDeltas'
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	12.641s
 ```
 
 The grep criterion, verbatim (stdout empty; the diagnostic and exit 2 come from the missing `-r`,
