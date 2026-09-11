@@ -195,6 +195,17 @@ $ go test ./internal/engine/qbittorrent/ -count=30 -race -run 'TestPerTaskCacheM
 ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	12.641s
 ```
 
+Review round 2 (one minor, applied): `TestPerTaskRemovalRetiresWatcher` now pins the retirement
+branch positively — the debug line naming the branch — instead of passing on the absence of a warn
+alone, and the capture helper takes the level it records. Re-verified:
+
+```
+$ go test ./internal/engine/qbittorrent/ -count=30 -race -run 'TestPerTaskRemovalRetiresWatcher'
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.231s
+$ make test PKG=./internal/engine/qbittorrent/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	6.109s
+```
+
 The grep criterion, verbatim (stdout empty; the diagnostic and exit 2 come from the missing `-r`,
 which the criterion's own step 7 rules out — see Acceptance criteria):
 

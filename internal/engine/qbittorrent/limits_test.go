@@ -217,7 +217,7 @@ func limitsTorrentBody(state string, dlLimit, upLimit int64) string {
 		`,"up_limit":` + strconv.FormatInt(upLimit, 10) + `}`
 }
 
-// lockedBuffer is the io.Writer captureWarns hands slog: warns arrive
+// lockedBuffer is the io.Writer captureLogs hands slog: logs arrive
 // from the watcher goroutine while the test polls the contents, so the
 // writes and the reads need one mutex between them.
 type lockedBuffer struct {
@@ -239,15 +239,28 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// captureWarns swaps the default logger for one that writes into a
-// buffer, so a test can pin what a warn carried. The default logger is
-// process-wide, which is why no test of this package is parallel.
-func captureWarns(t *testing.T) *lockedBuffer {
+// logCaptureLevel selects what a captured logger records: the warns the
+// mismatch tests pin, or the debug retirement the removal test pins.
+type logCaptureLevel int
+
+const (
+	captureWarnsOnly logCaptureLevel = iota
+	captureDebugToo
+)
+
+// captureLogs swaps the default logger for one that writes into a
+// buffer, so a test can pin what a log line carried. The default logger
+// is process-wide, which is why no test of this package is parallel.
+func captureLogs(t *testing.T, level logCaptureLevel) *lockedBuffer {
 	t.Helper()
 
 	var logs lockedBuffer
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	if level == captureDebugToo {
+		opts.Level = slog.LevelDebug
+	}
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, opts)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
 	return &logs
@@ -342,7 +355,7 @@ func TestBothNilIssuesNoRequest(t *testing.T) {
 func TestReadBackMismatch(t *testing.T) {
 	f := newLimitsFake(t, func(fake *limitsFake) { fake.infoDown = ptr(testDrift) })
 	c := newLimitsClient(t, f)
-	logs := captureWarns(t)
+	logs := captureLogs(t, captureWarnsOnly)
 
 	down := testDownLimit
 	err := c.SetRateLimits(context.Background(), "", &down, nil)
@@ -424,7 +437,7 @@ func TestPerTaskMismatchWarnsAfterThreeDeltas(t *testing.T) {
 	c := newLimitsClient(t, f)
 	seedLimitsCache(t, c, limitsTorrentBody("downloading", testOldLimit, testUpLimit))
 	c.md.pollEvery = time.Millisecond
-	logs := captureWarns(t)
+	logs := captureLogs(t, captureWarnsOnly)
 
 	down := testDownLimit
 	require.NoError(t, c.SetRateLimits(context.Background(), engine.NameQBittorrent+":"+testHash, &down, nil))
@@ -445,7 +458,7 @@ func TestPerTaskCacheMatchRetiresWatcher(t *testing.T) {
 	c := newLimitsClient(t, f)
 	seedLimitsCache(t, c, limitsTorrentBody("downloading", testDownLimit, testUpLimit))
 	c.md.pollEvery = time.Millisecond
-	logs := captureWarns(t)
+	logs := captureLogs(t, captureWarnsOnly)
 
 	down, up := testDownLimit, testUpLimit
 	require.NoError(t, c.SetRateLimits(context.Background(), engine.NameQBittorrent+":"+testHash, &down, &up))
@@ -461,7 +474,7 @@ func TestPerTaskCacheMatchRetiresWatcher(t *testing.T) {
 	deltaClient := newLimitsClient(t, deltaFake)
 	seedLimitsCache(t, deltaClient, limitsTorrentBody("downloading", testOldLimit, testUpLimit))
 	deltaClient.md.pollEvery = 25 * time.Millisecond
-	deltaLogs := captureWarns(t)
+	deltaLogs := captureLogs(t, captureWarnsOnly)
 
 	require.NoError(t, deltaClient.SetRateLimits(context.Background(),
 		engine.NameQBittorrent+":"+testHash, &down, nil))
@@ -482,7 +495,7 @@ func TestPerTaskVerifySnapshotsSentValues(t *testing.T) {
 	c := newLimitsClient(t, f)
 	seedLimitsCache(t, c, limitsTorrentBody("downloading", testOldLimit, testUpLimit))
 	c.md.pollEvery = time.Millisecond
-	logs := captureWarns(t)
+	logs := captureLogs(t, captureWarnsOnly)
 
 	sent := testDownLimit
 	require.NoError(t, c.SetRateLimits(context.Background(), engine.NameQBittorrent+":"+testHash, &sent, nil))
@@ -505,7 +518,7 @@ func TestPerTaskRemovalRetiresWatcher(t *testing.T) {
 	c := newLimitsClient(t, f)
 	seedLimitsCache(t, c, limitsTorrentBody("downloading", testOldLimit, testUpLimit))
 	c.md.pollEvery = 25 * time.Millisecond
-	logs := captureWarns(t)
+	logs := captureLogs(t, captureDebugToo)
 
 	down := testDownLimit
 	require.NoError(t, c.SetRateLimits(context.Background(), engine.NameQBittorrent+":"+testHash, &down, nil))
@@ -513,6 +526,11 @@ func TestPerTaskRemovalRetiresWatcher(t *testing.T) {
 	// The torrent disappears from the daemon's set before three deltas.
 	c.applyResponse(maindata{Rid: 2, TorrentsRemoved: []string{testHash}}, currentEpoch(c))
 
+	// The retirement itself is pinned positively — the debug line names
+	// the branch — so the Never below cannot pass vacuously.
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "hash left the maindata cache")
+	}, 100*time.Millisecond, 5*time.Millisecond)
 	require.Never(t, func() bool {
 		return strings.Contains(logs.String(), "not confirmed")
 	}, 100*time.Millisecond, 5*time.Millisecond)
