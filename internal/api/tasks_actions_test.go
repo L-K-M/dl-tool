@@ -1226,8 +1226,9 @@ VALUES (?, 'linux', '/data/linux', 0, 0)`, store.NewID(store.PrefixCategory)); e
 		// nil — the stored column is NULL — so the second carrying the
 		// stored 2.5 is a real merge, not a coincidence of defaults.
 		want := "SetShareLimits qbittorrent:" + qbtHash + " 2.5 3600"
-		if len(calls) != 2 || calls[0] != "SetShareLimits qbittorrent:"+qbtHash+" 2.5 nil" || calls[1] != want {
-			t.Errorf("qbittorrent calls = %v, want [%s 2.5 nil] then [%s]", calls, "SetShareLimits", want)
+		first := "SetShareLimits qbittorrent:" + qbtHash + " 2.5 nil"
+		if len(calls) != 2 || calls[0] != first || calls[1] != want {
+			t.Errorf("qbittorrent calls = %v, want [%s] then [%s]", calls, first, want)
 		}
 	})
 
@@ -1402,6 +1403,29 @@ func TestPatchDestination(t *testing.T) {
 		}
 		if task := decodeTaskBody(t, response); task.Destination != want {
 			t.Errorf("destination = %q, want the cleaned %q", task.Destination, want)
+		}
+	})
+
+	// The pre-gate's edge set is a local literal, so every entry is
+	// proven against the store's own compare-and-set: a state the list
+	// admits but the store refuses would surface here as an unexpected
+	// 422 after the engine call. Under-inclusion — a legal state the list
+	// omits — stays a 422 at the pre-gate and needs the store's own
+	// legality probe to be seen, which this package cannot reach.
+	t.Run("every state in movingEntryStates passes the pre-gate", func(t *testing.T) {
+		for _, state := range movingEntryStates {
+			env := newActionsTestEnv(t)
+			id := env.seedBitTorrentTask(t, func(task *store.Task) { task.State = state })
+
+			response := env.patchTask(t, id,
+				map[string]any{"destination": filepath.Join(env.dataRoot, "linux")})
+			if response.Code != http.StatusOK {
+				t.Errorf("state %s: status %d, body %s — the list admits a state the store refuses",
+					state, response.Code, response.Body.String())
+			}
+			if state := env.taskState(t, id); state != string(engine.StateMoving) {
+				t.Errorf("state %s: row state = %q, want moving", state, state)
+			}
 		}
 	})
 }

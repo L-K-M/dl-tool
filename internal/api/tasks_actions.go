@@ -120,13 +120,12 @@ const pauseLeaseWait = 5 * time.Second
 var taskActions = strings.Split(actionEnum, ",")
 
 // movingEntryStates is the moving-entry edge set of the store's transition
-// table (docs/04-data-model.md section 8.1; internal/store exports no
-// legality probe). The destination pre-gate reads it so a relocation that
-// cannot enter moving is refused before the engine is ever told — that
-// keeps SetLocation side-effect free for a request destined to fail.
-// Keep it in step with the table.
+// table (internal/store taskTransitions, from docs/03-architecture.md
+// section 8.1; internal/store exports no legality probe). The destination
+// pre-gate reads it so a relocation that cannot enter moving is refused
+// before the engine is ever told — that keeps SetLocation side-effect free
+// for a request destined to fail. Keep it in step with the table.
 var movingEntryStates = []string{
-	string(engine.StateChecking),
 	string(engine.StateCompleted),
 	string(engine.StateExtracting),
 	string(engine.StateSeeding),

@@ -216,6 +216,25 @@ ok  	github.com/L-K-M/dl-tool/internal/sync	4.380s
 ok  	github.com/L-K-M/dl-tool/internal/uri	1.067s
 ```
 
+And after review round 2, on the final commit:
+
+```
+ok  	github.com/L-K-M/dl-tool/internal/api	80.915s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.130s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.213s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.209s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.338s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.590s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.180s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.158s
+ok  	github.com/L-K-M/dl-tool/internal/store	67.599s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.383s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.082s
+```
+
+with `make lint` clean and the five named tests still `PASS` individually.
+
 Scope:
 
 ```
@@ -309,6 +328,26 @@ Declined, with reasons:
 - The T037 index mismatch claim: per-task rate limits are wired since T022
   (`TestPatchTaskAppliesRateLimit` pins `SetRateLimits` on a running task); T037 owns the qBittorrent
   adapter's own rate-limit calls, not this endpoint.
+
+### Review round 2 (GLM 5.3, commit 05429f7 — minor-only)
+
+Addressed:
+
+- The `movingEntryStates` drift guard: a table subtest now proves every entry of the list passes the
+  pre-gate *and* lands `moving` through the store's compare-and-set. It immediately caught a real error:
+  `checking` was in the list but the store's `taskTransitions` has no `checking → moving` edge, so the set
+  is now exactly `{completed, extracting, seeding}`. Under-inclusion (a legal state the list omits) stays
+  invisible from this package — the durable fix is the store exporting a legality probe, noted for a later
+  task.
+- The failure message of the one-sided share subtest now prints the full expected first call, engine id
+  included.
+- `TestSetTagsWriteback`'s failure block now lands the remove side before the failed add (`{a}` applied,
+  then the add of `{x}` fails with the remove of `a` already on the daemon), pins the retry recomputing
+  the whole diff, and the convergence repeat.
+- The unserialized read-guard-write race of `SetTags`/`SetSequential` (an Info finding, predating this
+  change) is documented on `rememberCacheField` per the reviewer's alternative: the divergence is
+  poll-bounded and the write-back only shortens the double-apply window. A dedicated `Client` mutex would
+  need a field in `internal/engine/qbittorrent/client.go`, outside this task's Files table.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

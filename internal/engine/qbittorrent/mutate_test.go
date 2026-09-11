@@ -380,22 +380,34 @@ func TestSetTagsWriteback(t *testing.T) {
 	require.Len(t, f.callsTo(pathRemoveTags), 1)
 	require.Len(t, f.callsTo(pathAddTags), 2)
 
-	// A failed add leaves the cache at the last fully applied set: the
-	// retry recomputes the same diff and converges.
-	failing := newMutateFake(t, func(fake *mutateFake) {
-		fake.status = map[string]int{"/api/v2/torrents/addTags": http.StatusInternalServerError}
-	})
+	// A failed add leaves the cache at the last fully applied set — even
+	// when the failed diff's remove side already landed on the daemon —
+	// so the retry recomputes the same diff against the old set and
+	// converges.
+	failing := newMutateFake(t, nil)
 	failingClient := newMutateClient(t, failing)
 	seedMutateCache(t, failingClient, mutateTorrentBody("", false))
+	require.NoError(t, failingClient.SetTags(context.Background(), engine.NameQBittorrent+":"+testHash, []string{"a"}))
+
+	// {a} -> {x}: the remove of a lands, the add of x fails.
+	failing.status = map[string]int{"/api/v2/torrents/addTags": http.StatusInternalServerError}
 	err := failingClient.SetTags(context.Background(), engine.NameQBittorrent+":"+testHash, []string{"x"})
 	require.Error(t, err)
-	failedAdds := failing.callsTo(pathAddTags)
-	require.Len(t, failedAdds, 1)
+	require.Len(t, failing.callsTo(pathRemoveTags), 1)
+	require.Len(t, failing.callsTo(pathAddTags), 2)
 
 	failing.status["/api/v2/torrents/addTags"] = 0
 	require.NoError(t, failingClient.SetTags(context.Background(), engine.NameQBittorrent+":"+testHash, []string{"x"}))
-	require.Len(t, failing.callsTo(pathRemoveTags), 0)
-	require.Len(t, failing.callsTo(pathAddTags), 2)
+	// The retry recomputed the whole diff — the remove of a rides again,
+	// a daemon-side no-op after the failed call already landed it.
+	require.Len(t, failing.callsTo(pathRemoveTags), 2)
+	require.Len(t, failing.callsTo(pathAddTags), 3)
+
+	// The convergence repeat issues nothing on either side.
+	dropCount, addCount := len(failing.callsTo(pathRemoveTags)), len(failing.callsTo(pathAddTags))
+	require.NoError(t, failingClient.SetTags(context.Background(), engine.NameQBittorrent+":"+testHash, []string{"x"}))
+	require.Len(t, failing.callsTo(pathRemoveTags), dropCount)
+	require.Len(t, failing.callsTo(pathAddTags), addCount)
 }
 
 // TestShareLimitsNotFoundMap pins the 404 mapping of the hashes-carried

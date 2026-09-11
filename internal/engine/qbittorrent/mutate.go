@@ -266,6 +266,15 @@ func (c *Client) SetSequential(ctx context.Context, id string, sequential bool) 
 // the daemon's own value. A hash the cache does not hold is left alone:
 // the callers only reach here through a cache hit, and a dropped hash
 // will be rebuilt by the next full sync regardless.
+//
+// The read-guard-write sequences that end here are not serialized per
+// torrent — a dedicated mutex would need a Client field outside this
+// task's files, and md.mu must never be held across the HTTP call — so
+// two concurrent SetTags or SetSequential calls on one hash can both
+// pass their guard and both post. The divergence is poll-bounded: the
+// daemon's next full sync rebuilds the cache from what it actually
+// holds, and the write here only shortens the window in which a retry
+// could double-apply a toggle; it never widens one.
 func (c *Client) rememberCacheField(hash, name string, value any) {
 	c.md.mu.Lock()
 	defer c.md.mu.Unlock()
