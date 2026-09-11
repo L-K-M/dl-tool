@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T036 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T022, T029 |
 | **Blocks** | T038 |
 | **Parallel-safe** | no — it also edits the shared file `internal/api/tasks_actions.go` |
@@ -109,13 +109,13 @@ qBittorrent takes **minutes**; the adapter is the only place that divides, and i
     called exactly once, and one case asserting an engine failure leaves the stored row untouched.
 
 ## Acceptance criteria
-- [ ] `SetShareLimits` always sends `ratioLimit` and `seedingTimeLimit` together, so either can stop
+- [x] `SetShareLimits` always sends `ratioLimit` and `seedingTimeLimit` together, so either can stop
       seeding.
-- [ ] `nil` becomes the observed use-the-global sentinel and `0` stays `0` on both limits.
-- [ ] `seeding_time_limit` of 90 seconds is sent as `2` minutes, not `1`.
-- [ ] `SetSequential` issues no request when the cached `seq_dl` already matches.
-- [ ] `SetTags` with an unchanged set issues no request.
-- [ ] A failing engine call leaves `tasks` unchanged and returns `503` `/problems/engine-unavailable`.
+- [x] `nil` becomes the observed use-the-global sentinel and `0` stays `0` on both limits.
+- [x] `seeding_time_limit` of 90 seconds is sent as `2` minutes, not `1`.
+- [x] `SetSequential` issues no request when the cached `seq_dl` already matches.
+- [x] `SetTags` with an unchanged set issues no request.
+- [x] A failing engine call leaves `tasks` unchanged and returns `503` `/problems/engine-unavailable`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -147,7 +147,213 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+ok  	github.com/L-K-M/dl-tool/internal/api	82.425s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.223s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.084s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.225s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.364s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.033s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.795s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.184s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.217s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.725s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.381s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.059s
+```
+
+The five named tests, re-run individually on the final tree:
+
+```
+--- PASS: TestShareLimitsSendsBoth (0.00s)
+--- PASS: TestNilLimitsSendGlobalSentinel (0.00s)
+--- PASS: TestSeedTimeRoundsUpToMinutes (0.00s)
+--- PASS: TestSequentialToggleGuard (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.026s
+--- PASS: TestPatchRollsBackOnEngineFailure (0.37s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.385s
+```
+
+The same run after the review round, on the final commit:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+ok  	github.com/L-K-M/dl-tool/internal/api	85.585s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.242s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.166s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.290s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.393s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.029s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.871s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.197s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.381s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.980s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.380s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.067s
+```
+
+And after review round 2, on the final commit:
+
+```
+ok  	github.com/L-K-M/dl-tool/internal/api	80.915s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.130s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.213s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.209s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.338s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.590s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.180s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.158s
+ok  	github.com/L-K-M/dl-tool/internal/store	67.599s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.383s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.082s
+```
+
+with `make lint` clean and the five named tests still `PASS` individually.
+
+Scope:
+
+```
+api/openapi.json
+internal/api/tasks_actions.go
+internal/api/tasks_actions_test.go
+internal/engine/qbittorrent/mutate.go
+internal/engine/qbittorrent/mutate_test.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are the standing §7.1 exception: `PatchTaskBody`
+gained the `destination` field, and both were produced by `make gen`. `make vet`, `make typecheck`,
+`make doclint` (2367 OK, 0 Errors) and a re-run `make gen` with no diff also passed; `make compose-check`
+could not run in this environment (no Docker socket), and the compose inputs are untouched by this diff.
+
+The use-the-global sentinel (the UNVERIFIED block above). Docker is unavailable in this environment, so
+the reading comes from the repository's own live capture — `internal/engine/qbittorrent/testdata/
+qb_maindata_full_5.2.3.json`, recorded from a real release-5.2.3 daemon in T030 — cross-checked against
+the pinned tag's sources:
+
+- A torrent that never had a share limit set reports the per-torrent fields `"ratio_limit": -2`,
+  `"seeding_time_limit": -2`, `"inactive_seeding_time_limit": -2`, and `"share_limit_action":
+  "Default"`. `shareLimitUseGlobal = "-2"` and `shareLimitActionDefault = "Default"` in mutate.go.
+- The `max_ratio` / `max_seeding_time` the block suggests reading are the *resolved effective* limits,
+  not the sentinel: in that capture they read `-1` because the daemon's globals were unlimited, and
+  `-1` is the daemon's *no-limit-at-all* value (`NO_RATIO_LIMIT`). Sending `-1` for a nil dl-tool limit
+  would have meant "never stop" instead of "use the global default".
+- Verbatim from the `release-5.2.3` tag, `src/base/bittorrent/sharelimits.h`:
+  `inline const qreal DEFAULT_RATIO_LIMIT = -2;`, `inline const int DEFAULT_SEEDING_TIME_LIMIT = -2;`.
+  `src/webui/api/torrentscontroller.cpp` `setShareLimitsAction` `requireParams` lists all of `hashes`,
+  `ratioLimit`, `seedingTimeLimit`, `inactiveSeedingTimeLimit`, `shareLimitAction` — hence the constant
+  `shareLimitAction` dl-tool always sends.
+
+Two notes on the interface contract, resolved toward the steps, criteria and Verification block (which
+agree with each other; only the contract block's parameter *name* differs):
+
+- The qbittorrent `SetShareLimits` parameter is named `seedSeconds`, not `seedMinutes`: the steps put
+  the seconds-to-minutes conversion in mutate.go ("the adapter is the only place that divides") and
+  `TestSeedTimeRoundsUpToMinutes` must pass in this package, so the method receives dl-tool's stored
+  seconds and converts once, via `(seconds + 59) / 60`. The signature still satisfies
+  `engine.Engine.SetShareLimits(ctx, id, *float64, *int64)`; the API layer passes
+  `tasks.seeding_time_limit` (seconds) straight through.
+- `SetTags` and `SetSequential` read the maindata cache (as their steps require) and answer
+  `engine.ErrNotFound` for a hash the cache does not hold. The five hashes-carried mutations the daemon
+  silently skips for unknown hashes (`applyToTorrents` in release-5.2.3) cannot be reported by it at all,
+  so `notFoundOr` maps the 404 the two hash-addressed endpoints (`rename`) do answer.
+
+### Review round 1 (GLM 5.3, commit 7a7cbd4)
+
+Addressed:
+
+- `SetSequential` now writes the applied value back into the maindata cache after a successful toggle
+  (`rememberCacheField`), so a retry after a lost reply — or a repeat of the same request inside one poll
+  interval — cannot flip the torrent to the opposite of what was asked. Pinned by the extended
+  `TestSequentialToggleGuard`.
+- `SetTags` writes the applied set back on full success only, so consecutive patches inside one poll
+  interval diff against what the daemon now holds instead of silently unioning; a failed add side leaves
+  the cache stale so a retry converges. Pinned by the new `TestSetTagsWriteback`.
+- The destination pre-gate: an admitted task whose state cannot enter moving is refused with 422 before
+  the first engine call, so `SetLocation` is never issued for a request destined to fail. The moving-entry
+  set lives beside the gate as `movingEntryStates`, named against the store's transition table (the store
+  exports no legality probe and `internal/store/tasks.go` is outside this task's Files table).
+  `applyDestination`'s illegal-transition mapping stays as the compare-and-set backstop. Pinned by the
+  "a state that cannot enter moving is 422 before the engine call" subtest.
+- The `tagMutator`/`sequentialEngine` narrowing refusals are hoisted before the first engine call, so a
+  body mixing a supported field with an unsupported one cannot leave the engine half-mutated behind a
+  422.
+- `SetLocation`'s engine-side guard now matches the row-write guard (`body.Destination != nil`), not the
+  resolved string.
+- `TestPatchRollsBackOnEngineFailure` now covers all five mutators (the relocation case also pins the
+  state, the destination column and the empty event log); the one-sided share subtest pins the nil half
+  of the first call; `TestPatchDestination` gained the non-normalized in-root path (stored cleaned) and
+  the pre-gate subtests; `TestActionStandInCapsMatchAdapters` fails if the stand-in capability lists
+  drift from the real adapters.
+
+Declined, with reasons:
+
+- Schema `minimum: 0` on the four limit fields: the negative-limit 422 of doc 05 §5.5 is already
+  enforced and tested at the handler (`buildTaskPatch` field errors), before any engine call; moving the
+  check into huma's schema validation would change the documented problem shape
+  (`/problems/validation-failed` with `errors[]`) for no behavioural gain, and the fields predate this
+  task (T022).
+- The remaining `api/openapi.json` schema findings (tags/urls maxItems, rid required, blob
+  contentEncoding, untyped Delta maps, SSE id format, trailing newline, `elapsed_ms` minimum, and the
+  FileSelection duplication): all are pre-existing properties of operations and structs owned by other
+  tasks, reach the spec only through their source structs, and `api/openapi.json` is generated — editing
+  it by hand is forbidden and touching the owning source files is outside this task's Files table.
+- The doc 05 §5.5 sentence about engine-side partial application after a 503: `docs/05-api-contract.md`
+  is outside the Files table; the clarification lives in `applyPatchMutators`' doc comment instead.
+- The T037 index mismatch claim: per-task rate limits are wired since T022
+  (`TestPatchTaskAppliesRateLimit` pins `SetRateLimits` on a running task); T037 owns the qBittorrent
+  adapter's own rate-limit calls, not this endpoint.
+
+### Review round 2 (GLM 5.3, commit 05429f7 — minor-only)
+
+Addressed:
+
+- The `movingEntryStates` drift guard: a table subtest now proves every entry of the list passes the
+  pre-gate *and* lands `moving` through the store's compare-and-set. It immediately caught a real error:
+  `checking` was in the list but the store's `taskTransitions` has no `checking → moving` edge, so the set
+  is now exactly `{completed, extracting, seeding}`. Under-inclusion (a legal state the list omits) stays
+  invisible from this package — the durable fix is the store exporting a legality probe, noted for a later
+  task.
+- The failure message of the one-sided share subtest now prints the full expected first call, engine id
+  included.
+- `TestSetTagsWriteback`'s failure block now lands the remove side before the failed add (`{a}` applied,
+  then the add of `{x}` fails with the remove of `a` already on the daemon), pins the retry recomputing
+  the whole diff, and the convergence repeat.
+- The unserialized read-guard-write race of `SetTags`/`SetSequential` (an Info finding, predating this
+  change) is documented on `rememberCacheField` per the reviewer's alternative: the divergence is
+  poll-bounded and the write-back only shortens the double-apply window. A dedicated `Client` mutex would
+  need a field in `internal/engine/qbittorrent/client.go`, outside this task's Files table.
+
+### Review round 3 (GLM 5.3, commit 91b2352 — zero actionable, one minor)
+
+- The drift-guard subtest's moving assertion shadowed the loop's `state` variable, so its failure message
+  would have printed the row state twice instead of naming the seeded entry. Fixed (renamed to `row`);
+  `make lint`, `make vet`, `make test PKG=./internal/...` re-run green on the fix commit.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
