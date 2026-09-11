@@ -437,7 +437,7 @@ func (s *Server) registerOperations() {
 		Path:                         "/tasks/{id}/trackers",
 		DefaultStatus:                http.StatusCreated,
 		Summary:                      "Add trackers to the task",
-		Description:                  fmt.Sprintf("Adds http, https, udp, ws and wss announce urls to the swarm — at most %d per request — and answers with the full updated listing. A url resolving to a blocked address is refused with 403 /problems/ssrf-blocked. 422 when the task is not a BitTorrent task.", trackersMaxURLs),
+		Description:                  fmt.Sprintf("Adds http, https, udp, ws and wss announce urls to the swarm — at most %d per request — and answers with the full updated listing. A url resolving to a blocked address — or to no address the block gate can verify before its budget runs out — is refused with 403 /problems/ssrf-blocked. 422 when the task is not a BitTorrent task.", trackersMaxURLs),
 		Tags:                         []string{"tasks"},
 		Security:                     credentialRequired,
 		RejectUnknownQueryParameters: true,

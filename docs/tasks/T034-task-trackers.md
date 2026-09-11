@@ -250,21 +250,21 @@ All matched files use Prettier code style!
 `make test PKG=./internal/...`:
 
 ```
-ok  	github.com/L-K-M/dl-tool/internal/api	74.053s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.108s
-ok  	github.com/L-K-M/dl-tool/internal/engine	22.143s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.214s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.284s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.028s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.352s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.212s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.142s
-ok  	github.com/L-K-M/dl-tool/internal/store	69.579s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.379s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.087s
+ok  	github.com/L-K-M/dl-tool/internal/api	78.823s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.309s
+ok  	github.com/L-K-M/dl-tool/internal/engine	22.883s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.238s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.341s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.773s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.217s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.200s
+ok  	github.com/L-K-M/dl-tool/internal/store	71.508s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.382s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.088s
 ```
 
-(All output above is the final tree, after the review-round-1 to round-4 fixes listed under Scope.)
+(All output above is the final tree, after the review-round-1 to round-5 fixes listed under Scope.)
 
 (One environmental note from an earlier run: `internal/engine`'s `TestClaimTimeClearDeclinesTheGuardedClaim`
 failed once with "temp filesystem has only 1865420800 free bytes; test needs 1992294400 of head-room" —
@@ -393,6 +393,13 @@ Not adopted again: the required-but-nullable-array major (fourth restatement) an
 minors (`elapsed_ms`, `CreateTasksBody`, `InspectTasksBody`, `writeOnly`, `Delta.tasks`, the `url`
 parameter's nullable schema) are the same shared generator artifact and other tasks' registered
 operations as rounds 2 and 3 triaged.
+
+### Review round 5 (PR #121)
+
+Fixed in scope: the POST description now discloses that a spent gate budget also answers 403
+/problems/ssrf-blocked — fail-closed is the safe verdict, and the contract says so — and
+`TestTrackerGateBudgetFailsClosedOnExpiry` pins both the gate-context routing and the fail-closed
+verdict on expiry, using an RFC 6761 `.invalid` name so the expired-budget path is deterministic.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/engine/qbittorrent"
@@ -920,6 +921,24 @@ func TestAddTaskTrackersMaxItemsMatchesConstant(t *testing.T) {
 	}
 	if got := field.Tag.Get("maxItems"); got != strconv.Itoa(trackersMaxURLs) {
 		t.Fatalf("maxItems tag = %q, want %d (trackersMaxURLs)", got, trackersMaxURLs)
+	}
+}
+
+// TestTrackerGateBudgetFailsClosedOnExpiry pins the gate's two expiry
+// behaviours: a spent budget makes the next lookup fail — and the gate
+// fail closed, never fail open — and the lookups really run under the
+// gate's context, not the caller's. The host is an RFC 6761 .invalid
+// name: under the expired budget the lookup errors with a deadline, not
+// an authoritative NXDOMAIN, so the only verdict the correct code can
+// return is blocked; a refactor that dropped the gate context would
+// resolve the name to its NXDOMAIN answer and allow it.
+func TestTrackerGateBudgetFailsClosedOnExpiry(t *testing.T) {
+	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	urls := []string{"udp://tracker-budget.invalid/announce"}
+	if !trackerURLsBlocked(expired, urls) {
+		t.Error("trackerURLsBlocked with a spent gate budget = false, want the fail-closed true")
 	}
 }
 

@@ -329,7 +329,7 @@ export interface paths {
     put?: never;
     /**
      * Add trackers to the task
-     * @description Adds http, https, udp, ws and wss announce urls to the swarm — at most 100 per request — and answers with the full updated listing. A url resolving to a blocked address is refused with 403 /problems/ssrf-blocked. 422 when the task is not a BitTorrent task.
+     * @description Adds http, https, udp, ws and wss announce urls to the swarm — at most 100 per request — and answers with the full updated listing. A url resolving to a blocked address — or to no address the block gate can verify before its budget runs out — is refused with 403 /problems/ssrf-blocked. 422 when the task is not a BitTorrent task.
      */
     post: operations["add-task-trackers"];
     /**
