@@ -1,13 +1,18 @@
-// The three tracker operations of docs/05-api-contract.md section 5.9:
-// GET /tasks/{id}/trackers lists a BitTorrent task's swarm sources — the
-// engine's synthetic DHT, PeX and LSD rows included — POST adds tracker
-// urls and DELETE removes them. Pseudo-tracker rows are listed and can
-// never be removed; every added url is scheme-checked and run past the
-// block list of docs/12-security-and-threat-model.md section 2.1, so a
+// The three tracker operations and the peer listing of
+// docs/05-api-contract.md section 5.9: GET /tasks/{id}/trackers lists a
+// BitTorrent task's swarm sources — the engine's synthetic DHT, PeX and
+// LSD rows included — POST adds tracker urls and DELETE removes them.
+// Pseudo-tracker rows are listed and can never be removed; every added
+// url is scheme-checked and run past the block list of
+// docs/12-security-and-threat-model.md section 2.1, so a
 // literal-address tracker url cannot address a private host. A hostname
 // url is checked the same way at add time, best-effort: the engine's
 // daemon re-resolves at announce time, and connect-time enforcement
 // belongs to the dialer-level guard of T123, not to this endpoint.
+//
+// GET /tasks/{id}/peers lists the peers currently connected to the
+// swarm, straight from the engine and never cached: the detail pane
+// polls it while it is open.
 package api
 
 import (
@@ -32,6 +37,7 @@ const (
 	operationListTaskTrackers  = "list-task-trackers"
 	operationAddTaskTrackers   = "add-task-trackers"
 	operationRemoveTaskTracker = "remove-task-tracker"
+	operationListTaskPeers     = "list-task-peers"
 )
 
 const (
@@ -46,6 +52,11 @@ const (
 	trackersDetailInvalidURL    = "the tracker urls hold entries that failed validation"
 	trackersDetailUnknownScheme = "a tracker url must carry a host and one of the http, https, udp, ws and wss schemes"
 	trackersDetailBlockedHost   = "a tracker url resolves to an address dl-tool refuses to contact, or to no verifiable address at all"
+)
+
+const (
+	peersDetailForeign       = "the engine no longer holds this task"
+	peersDetailListingFailed = "the engine's peer listing could not be fetched"
 )
 
 // dnsFailureReason is the static, host-free reason a net.DNSError whose
@@ -129,6 +140,13 @@ type trackerEngine interface {
 	RemoveTrackers(ctx context.Context, id string, urls []string) error
 }
 
+// peerEngine is implemented by an engine that can list a BitTorrent
+// swarm's connected peers. Declared here, at the consumer, for the same
+// reason as trackerEngine.
+type peerEngine interface {
+	Peers(ctx context.Context, id string) ([]qbittorrent.PeerEntry, error)
+}
+
 // TrackerDTO is one row of the listing: status is the engine's own value
 // rendered as a string, and seeds, peers and update_timer_seconds are
 // null where the engine reports no value for the row.
@@ -176,6 +194,31 @@ type RemoveTaskTrackerInput struct {
 
 // RemoveTaskTrackerOutput is the bodiless 204 answer.
 type RemoveTaskTrackerOutput struct{}
+
+// PeerDTO is one row of the peer listing: client, flags and country are
+// null where the engine reports no value, rates are bytes per second and
+// progress rides the 0.0-1.0 range.
+type PeerDTO struct {
+	Address      string  `json:"address"`
+	Client       *string `json:"client"`
+	Progress     float64 `json:"progress"`
+	DownloadRate int64   `json:"download_rate"`
+	UploadRate   int64   `json:"upload_rate"`
+	Flags        *string `json:"flags"`
+	Country      *string `json:"country"`
+}
+
+// ListTaskPeersInput addresses one task by id.
+type ListTaskPeersInput struct {
+	ID string `path:"id" doc:"The tsk_ id of the task"`
+}
+
+// ListTaskPeersOutput is the listing.
+type ListTaskPeersOutput struct {
+	Body struct {
+		Peers []PeerDTO `json:"peers"`
+	}
+}
 
 // ListTaskTrackers serves GET /tasks/{id}/trackers (doc 05 section 5.9):
 // the engine's listing lands in task_trackers and the answer is that same
@@ -267,11 +310,88 @@ func (h *TaskHandlers) RemoveTaskTracker(ctx context.Context, in *RemoveTaskTrac
 	return &RemoveTaskTrackerOutput{}, nil
 }
 
+// ListTaskPeers serves GET /tasks/{id}/peers (doc 05 section 5.9): the
+// peers currently connected to the task's swarm, fetched from the
+// engine on every call and never cached — the detail pane polls this
+// endpoint while it is open, so a stored snapshot could only serve it
+// stale. A task the engine no longer holds is the 404; every other
+// engine failure is the 503.
+func (h *TaskHandlers) ListTaskPeers(ctx context.Context, in *ListTaskPeersInput) (*ListTaskPeersOutput, error) {
+	task, swarm, err := h.taskWithPeerEngine(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := swarm.Peers(ctx, engineTaskID(task.Engine, task.EngineRef))
+	if err != nil {
+		if errors.Is(err, engine.ErrNotFound) {
+			return nil, Problem(SlugNotFound, http.StatusNotFound, peersDetailForeign)
+		}
+
+		return nil, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, peersDetailListingFailed)
+	}
+
+	output := &ListTaskPeersOutput{}
+	output.Body.Peers = peerDTOs(entries)
+
+	return output, nil
+}
+
 // taskWithSwarm loads the task, resolves its engine and narrows it to a
 // trackerEngine: 404 for an unknown task, 503 when the task's engine is
 // not registered, and 422 when the task is not a BitTorrent task — such a
 // task exposes no tracker data at all, not even an empty list.
 func (h *TaskHandlers) taskWithSwarm(ctx context.Context, id string) (store.Task, trackerEngine, error) {
+	task, e, err := h.taskWithBitTorrent(ctx, id)
+	if err != nil {
+		return store.Task{}, nil, err
+	}
+
+	swarm, err := swarmNarrowed[trackerEngine](e)
+	if err != nil {
+		return store.Task{}, nil, err
+	}
+
+	return task, swarm, nil
+}
+
+// taskWithPeerEngine is taskWithSwarm's peer narrowing: the same gate,
+// resolved to a peerEngine instead.
+func (h *TaskHandlers) taskWithPeerEngine(ctx context.Context, id string) (store.Task, peerEngine, error) {
+	task, e, err := h.taskWithBitTorrent(ctx, id)
+	if err != nil {
+		return store.Task{}, nil, err
+	}
+
+	peers, err := swarmNarrowed[peerEngine](e)
+	if err != nil {
+		return store.Task{}, nil, err
+	}
+
+	return task, peers, nil
+}
+
+// swarmNarrowed resolves a gated engine onto one swarm-facing interface.
+// An engine that declares bittorrent but carries none of the interface's
+// methods cannot serve the operation; the honest answer is the same 422
+// the capability gate gives. A free function because Go methods cannot
+// declare type parameters.
+func swarmNarrowed[T any](e engine.Engine) (T, error) {
+	narrowed, ok := e.(T)
+	if !ok {
+		var zero T
+		return zero, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, trackersDetailNotBitTorrent)
+	}
+
+	return narrowed, nil
+}
+
+// taskWithBitTorrent gates one swarm-facing operation: 404 for an
+// unknown task, 503 when the task's engine is not registered, 422 when
+// the task is not a BitTorrent task — such a task exposes no swarm data
+// at all, not even an empty list — and 422 again when no engine holds
+// the transfer yet, so no swarm exists to list.
+func (h *TaskHandlers) taskWithBitTorrent(ctx context.Context, id string) (store.Task, engine.Engine, error) {
 	task, e, err := h.taskWithEngine(ctx, id)
 	if err != nil {
 		return store.Task{}, nil, err
@@ -280,19 +400,12 @@ func (h *TaskHandlers) taskWithSwarm(ctx context.Context, id string) (store.Task
 	if !hasCapability(e, engine.CapBitTorrent) {
 		return store.Task{}, nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, trackersDetailNotBitTorrent)
 	}
-	swarm, ok := e.(trackerEngine)
-	if !ok {
-		// A registered engine that declares bittorrent but carries no
-		// swarm methods cannot serve the operation; the honest answer is
-		// the same 422 the capability gate gives.
-		return store.Task{}, nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, trackersDetailNotBitTorrent)
-	}
 	if task.EngineRef == nil {
 		// No engine holds the transfer yet, so no swarm exists to list.
 		return store.Task{}, nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, trackersDetailNotAdmitted)
 	}
 
-	return task, swarm, nil
+	return task, e, nil
 }
 
 // refreshTrackers fetches the engine's listing and mirrors it into
@@ -357,6 +470,24 @@ func trackerDTOs(entries []qbittorrent.TrackerEntry) []TrackerDTO {
 	}
 
 	return trackers
+}
+
+// peerDTOs renders the engine listing as the wire listing.
+func peerDTOs(entries []qbittorrent.PeerEntry) []PeerDTO {
+	peers := make([]PeerDTO, 0, len(entries))
+	for _, entry := range entries {
+		peers = append(peers, PeerDTO{
+			Address:      entry.Address,
+			Client:       entry.Client,
+			Progress:     entry.Progress,
+			DownloadRate: entry.DownloadRate,
+			UploadRate:   entry.UploadRate,
+			Flags:        entry.Flags,
+			Country:      entry.Country,
+		})
+	}
+
+	return peers
 }
 
 // validateTrackerURLShapes checks every added url's shape: the scheme
