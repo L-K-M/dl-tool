@@ -47,6 +47,10 @@ const (
 	trackersDetailBlockedHost   = "a tracker url resolves to an address dl-tool refuses to contact"
 )
 
+// dnsFailureReason is the static, host-free reason a net.DNSError with
+// no Err of its own degrades to.
+const dnsFailureReason = "dns lookup failed"
+
 // trackersMaxURLs bounds one request's url count on both the add and the
 // remove path; the add side's maxItems schema tag carries the same 100.
 const trackersMaxURLs = 100
@@ -470,7 +474,9 @@ func trackerHostBlocked(ctx context.Context, host string) bool {
 
 // dnsErrorText renders a resolver failure without the queried host: a
 // net.DNSError's own text embeds the host name (and the resolver's
-// address), and an announce host can be user-identifying.
+// address), and an announce host can be user-identifying. The error's
+// own text is never the fallback for a DNSError — it re-embeds the host
+// — so an empty Err degrades to a static reason instead.
 func dnsErrorText(err error) string {
 	if err == nil {
 		return "no addresses"
@@ -478,7 +484,11 @@ func dnsErrorText(err error) string {
 
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return dnsErr.Err
+		if dnsErr.Err != "" {
+			return dnsErr.Err
+		}
+
+		return dnsFailureReason
 	}
 
 	return err.Error()

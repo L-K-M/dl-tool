@@ -250,21 +250,21 @@ All matched files use Prettier code style!
 `make test PKG=./internal/...`:
 
 ```
-ok  	github.com/L-K-M/dl-tool/internal/api	73.834s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.118s
-ok  	github.com/L-K-M/dl-tool/internal/engine	21.155s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.211s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.299s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.602s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.184s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.212s
-ok  	github.com/L-K-M/dl-tool/internal/store	69.008s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.393s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.084s
+ok  	github.com/L-K-M/dl-tool/internal/api	78.700s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.252s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.236s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.249s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.298s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.023s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.921s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.185s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.167s
+ok  	github.com/L-K-M/dl-tool/internal/store	71.977s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.390s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.065s
 ```
 
-(All output above is the final tree, after the review-round-1 fixes listed under Scope.)
+(All output above is the final tree, after the review-round-1 and round-2 fixes listed under Scope.)
 
 (One environmental note from an earlier run: `internal/engine`'s `TestClaimTimeClearDeclinesTheGuardedClaim`
 failed once with "temp filesystem has only 1865420800 free bytes; test needs 1992294400 of head-room" —
@@ -275,20 +275,20 @@ The five named tests:
 
 ```
 $ go test ./internal/engine/qbittorrent ./internal/store ./internal/api \
-    -run 'TestTrackersListPseudoRow|TestAddTrackerReturns201|TestRemovePseudoTrackerRejected|TestTrackerURLSSRFBlocked|TestTrackersOnNonBitTorrentTask' -v
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.015s [no tests to run]
-ok  	github.com/L-K-M/dl-tool/internal/store	0.012s [no tests to run]
+    -run 'TestTrackersListPseudoRow|TestAddTrackerReturns201|TestRemovePseudoTrackerRejected|TestTrackerURLSSRFBlocked|TestTrackersOnNonBitTorrentTask' -v -count=1
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.016s [no tests to run]
+ok  	github.com/L-K-M/dl-tool/internal/store	0.010s [no tests to run]
 === RUN   TestTrackersListPseudoRow
---- PASS: TestTrackersListPseudoRow (0.06s)
+--- PASS: TestTrackersListPseudoRow (0.13s)
 === RUN   TestAddTrackerReturns201
---- PASS: TestAddTrackerReturns201 (0.05s)
+--- PASS: TestAddTrackerReturns201 (0.08s)
 === RUN   TestRemovePseudoTrackerRejected
---- PASS: TestRemovePseudoTrackerRejected (0.03s)
+--- PASS: TestRemovePseudoTrackerRejected (0.07s)
 === RUN   TestTrackerURLSSRFBlocked
---- PASS: TestTrackerURLSSRFBlocked (0.04s)
+--- PASS: TestTrackerURLSSRFBlocked (0.07s)
 === RUN   TestTrackersOnNonBitTorrentTask
---- PASS: TestTrackersOnNonBitTorrentTask (0.03s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.233s
+--- PASS: TestTrackersOnNonBitTorrentTask (0.05s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.428s
 ```
 
 The named tests live in `internal/api/tasks_swarm_test.go`; the other two packages match none of the
@@ -337,6 +337,21 @@ verbatim by this task's `## Steps`. The remaining findings target `openapi.json`
 other tasks (`sort`, `Delta.tasks`, `CreateTasksBody`, `FileSelectionRequest`, `elapsed_ms`, `blob`,
 multipart `payload`, `writeOnly`, trailing newline, bulk `delete_data`); touching them would widen
 this PR beyond its Files table, so they are left for their owning tasks.
+
+### Review round 2 (PR #121)
+
+Fixed in scope: `dnsErrorText` degrades an empty `net.DNSError.Err` to a static, host-free reason
+instead of an empty log field (extended `TestDNSErrorTextOmitsTheHost`).
+
+Not adopted: every remaining round-2 finding targets one shared artifact of the generated spec —
+huma renders every Go slice as `["array","null"]` and routes every error through the `default`
+response — so `ActionsInputBody.ids`, `PatchTaskFilesInputBody.files`, `CreateTasksBody`, the `Delta`
+map, the nullable collections, the explicit 422/403 response entries and the required `url`
+parameter's nullable schema are repo-wide conventions owned by the generator and the tasks that
+registered those operations (T020, T022, T025, T032). The runtime behaviour each finding worries
+about is guarded and tested at the handler level everywhere it applies here (`{"urls":null}` and an
+absent `url` DELETE are both 422, `TestTrackersSchemeRejections`), so the gap is contract typing, not
+behaviour, and belongs to a task that owns the shared spec generation.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

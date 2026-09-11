@@ -880,6 +880,13 @@ func TestDNSErrorTextOmitsTheHost(t *testing.T) {
 	if text := dnsErrorText(errors.New("boom")); text != "boom" {
 		t.Errorf("dnsErrorText(non-dns) = %q, want the error's own text", text)
 	}
+
+	// A DNSError with no Err of its own must still yield a reason — and
+	// never the wrapped error's host-bearing text.
+	empty := &net.DNSError{Err: "", Name: "tracker.example.org"}
+	if text := dnsErrorText(empty); text != dnsFailureReason {
+		t.Errorf("dnsErrorText(empty DNSError) = %q, want %q", text, dnsFailureReason)
+	}
 }
 
 // TestTrackerIPBlockedRules pins the block list directly against doc 12
