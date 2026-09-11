@@ -648,6 +648,8 @@ export interface components {
     PatchTaskBody: {
       /** @description Category name; must already exist */
       category?: string;
+      /** @description Moves the data; must resolve inside a configured root; the task enters moving */
+      destination?: string;
       /**
        * Format: int64
        * @description Bytes/second; 0 means unlimited; applied to a running task without restarting it

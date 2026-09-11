@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T036 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T022, T029 |
 | **Blocks** | T038 |
 | **Parallel-safe** | no — it also edits the shared file `internal/api/tasks_actions.go` |
@@ -109,13 +109,13 @@ qBittorrent takes **minutes**; the adapter is the only place that divides, and i
     called exactly once, and one case asserting an engine failure leaves the stored row untouched.
 
 ## Acceptance criteria
-- [ ] `SetShareLimits` always sends `ratioLimit` and `seedingTimeLimit` together, so either can stop
+- [x] `SetShareLimits` always sends `ratioLimit` and `seedingTimeLimit` together, so either can stop
       seeding.
-- [ ] `nil` becomes the observed use-the-global sentinel and `0` stays `0` on both limits.
-- [ ] `seeding_time_limit` of 90 seconds is sent as `2` minutes, not `1`.
-- [ ] `SetSequential` issues no request when the cached `seq_dl` already matches.
-- [ ] `SetTags` with an unchanged set issues no request.
-- [ ] A failing engine call leaves `tasks` unchanged and returns `503` `/problems/engine-unavailable`.
+- [x] `nil` becomes the observed use-the-global sentinel and `0` stays `0` on both limits.
+- [x] `seeding_time_limit` of 90 seconds is sent as `2` minutes, not `1`.
+- [x] `SetSequential` issues no request when the cached `seq_dl` already matches.
+- [x] `SetTags` with an unchanged set issues no request.
+- [x] A failing engine call leaves `tasks` unchanged and returns `503` `/problems/engine-unavailable`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -147,7 +147,94 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+ok  	github.com/L-K-M/dl-tool/internal/api	82.425s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.223s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.084s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.225s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.364s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.033s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.795s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.184s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.217s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.725s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.381s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.059s
+```
+
+The five named tests, re-run individually on the final tree:
+
+```
+--- PASS: TestShareLimitsSendsBoth (0.00s)
+--- PASS: TestNilLimitsSendGlobalSentinel (0.00s)
+--- PASS: TestSeedTimeRoundsUpToMinutes (0.00s)
+--- PASS: TestSequentialToggleGuard (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.025s
+--- PASS: TestPatchRollsBackOnEngineFailure (0.09s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.109s
+```
+
+Scope:
+
+```
+api/openapi.json
+internal/api/tasks_actions.go
+internal/api/tasks_actions_test.go
+internal/engine/qbittorrent/mutate.go
+internal/engine/qbittorrent/mutate_test.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are the standing §7.1 exception: `PatchTaskBody`
+gained the `destination` field, and both were produced by `make gen`. `make vet`, `make typecheck`,
+`make doclint` (2367 OK, 0 Errors) and a re-run `make gen` with no diff also passed; `make compose-check`
+could not run in this environment (no Docker socket), and the compose inputs are untouched by this diff.
+
+The use-the-global sentinel (the UNVERIFIED block above). Docker is unavailable in this environment, so
+the reading comes from the repository's own live capture — `internal/engine/qbittorrent/testdata/
+qb_maindata_full_5.2.3.json`, recorded from a real release-5.2.3 daemon in T030 — cross-checked against
+the pinned tag's sources:
+
+- A torrent that never had a share limit set reports the per-torrent fields `"ratio_limit": -2`,
+  `"seeding_time_limit": -2`, `"inactive_seeding_time_limit": -2`, and `"share_limit_action":
+  "Default"`. `shareLimitUseGlobal = "-2"` and `shareLimitActionDefault = "Default"` in mutate.go.
+- The `max_ratio` / `max_seeding_time` the block suggests reading are the *resolved effective* limits,
+  not the sentinel: in that capture they read `-1` because the daemon's globals were unlimited, and
+  `-1` is the daemon's *no-limit-at-all* value (`NO_RATIO_LIMIT`). Sending `-1` for a nil dl-tool limit
+  would have meant "never stop" instead of "use the global default".
+- Verbatim from the `release-5.2.3` tag, `src/base/bittorrent/sharelimits.h`:
+  `inline const qreal DEFAULT_RATIO_LIMIT = -2;`, `inline const int DEFAULT_SEEDING_TIME_LIMIT = -2;`.
+  `src/webui/api/torrentscontroller.cpp` `setShareLimitsAction` `requireParams` lists all of `hashes`,
+  `ratioLimit`, `seedingTimeLimit`, `inactiveSeedingTimeLimit`, `shareLimitAction` — hence the constant
+  `shareLimitAction` dl-tool always sends.
+
+Two notes on the interface contract, resolved toward the steps, criteria and Verification block (which
+agree with each other; only the contract block's parameter *name* differs):
+
+- The qbittorrent `SetShareLimits` parameter is named `seedSeconds`, not `seedMinutes`: the steps put
+  the seconds-to-minutes conversion in mutate.go ("the adapter is the only place that divides") and
+  `TestSeedTimeRoundsUpToMinutes` must pass in this package, so the method receives dl-tool's stored
+  seconds and converts once, via `(seconds + 59) / 60`. The signature still satisfies
+  `engine.Engine.SetShareLimits(ctx, id, *float64, *int64)`; the API layer passes
+  `tasks.seeding_time_limit` (seconds) straight through.
+- `SetTags` and `SetSequential` read the maindata cache (as their steps require) and answer
+  `engine.ErrNotFound` for a hash the cache does not hold. The five hashes-carried mutations the daemon
+  silently skips for unknown hashes (`applyToTorrents` in release-5.2.3) cannot be reported by it at all,
+  so `notFoundOr` maps the 404 the two hash-addressed endpoints (`rename`) do answer.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

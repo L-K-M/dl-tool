@@ -12,14 +12,15 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jmoiron/sqlx"
-	"strconv"
-	"time"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
+	"github.com/L-K-M/dl-tool/internal/fsx"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
@@ -80,6 +81,22 @@ const (
 	patchFailedDetail   = "the patch holds values that failed validation"
 	negativeLimitDetail = "the limit cannot be negative; 0 means unlimited"
 
+	// detailSequentialUnsupported is the 422 of a sequential patch
+	// against an engine that declares no such capability: the persisted
+	// flag could never be honoured, so the request is refused before any
+	// engine call or store write (doc 05 section 5.5).
+	detailSequentialUnsupported = "the task's engine does not declare sequential download"
+
+	// detailMutatorUnsupported is the 422 of a patch field whose
+	// engine-side setter the registered engine does not carry — the
+	// narrowed-interface refusal of tagMutator and sequentialEngine.
+	detailMutatorUnsupported = "the task's engine does not expose this capability"
+
+	// eventTaskMoved is the task_events code of the moving transition a
+	// relocated task enters (doc 05 section 5.5).
+	eventTaskMoved   = "task.moved"
+	messageTaskMoved = "destination changed; the engine was told the new location"
+
 	// The two settings keys of the concurrency limits and their defaults
 	// (docs/11-config-reference.md section 5). The initial migration seeds
 	// both keys, so a missing row is a fresh or hand-edited database.
@@ -131,8 +148,9 @@ type ActionsOutput struct {
 
 // PatchTaskInput carries only the patchable fields (docs/05-api-contract.md
 // section 5.5): an omitted field is untouched, and a non-nil Tags slice
-// replaces the whole set — an empty array clears it. Destination is
-// deliberately absent: the cross-filesystem move is owned by T076.
+// replaces the whole set — an empty array clears it. Destination tells the
+// engine the new location and enters moving; the cross-filesystem move
+// itself is owned by T076.
 type PatchTaskInput struct {
 	ID   string        `path:"id" doc:"The tsk_ id of the task"`
 	Body PatchTaskBody `json:"-"`
@@ -141,6 +159,7 @@ type PatchTaskInput struct {
 // PatchTaskBody is the JSON body of PATCH /tasks/{id}.
 type PatchTaskBody struct {
 	Name             *string  `json:"name,omitempty"           doc:"Display name only; files on disk are not renamed"`
+	Destination      *string  `json:"destination,omitempty"     doc:"Moves the data; must resolve inside a configured root; the task enters moving"`
 	Category         *string  `json:"category,omitempty"       doc:"Category name; must already exist"`
 	Tags             []string `json:"tags,omitempty"           doc:"Replaces the whole tag set; an empty array clears it"`
 	DLLimit          *int64   `json:"dl_limit,omitempty"       doc:"Bytes/second; 0 means unlimited; applied to a running task without restarting it"`
@@ -157,6 +176,21 @@ type PatchTaskBody struct {
 // failure and leaves the state unchanged.
 type recheckable interface {
 	Recheck(ctx context.Context, id string) error
+}
+
+// tagMutator is implemented by an engine that can replace a task's whole
+// tag set in one call. Declared here, at the consumer, so the Engine
+// interface of docs/06-download-engines.md section 1 stays unchanged —
+// the same pattern as trackerEngine and peerEngine.
+type tagMutator interface {
+	SetTags(ctx context.Context, id string, tags []string) error
+}
+
+// sequentialEngine is implemented by an engine that can flip a task's
+// sequential download flag; declared at the consumer for the same reason
+// as tagMutator.
+type sequentialEngine interface {
+	SetSequential(ctx context.Context, id string, sequential bool) error
 }
 
 // actionTask is the slice of a tasks row an action needs: the engine
@@ -693,9 +727,12 @@ func actionFailure(id, slug, detail string) ActionResult {
 }
 
 // PatchTask serves PATCH /tasks/{id} (doc 05 section 5.5): the display
-// name, category, tags, per-task rate limits, share limits and the
-// sequential flag. Omitted fields are untouched; a non-nil tags slice
-// replaces the whole set. The response is the full updated Task object.
+// name, destination, category, tags, per-task rate limits, share limits
+// and the sequential flag. Omitted fields are untouched; a non-nil tags
+// slice replaces the whole set. Every live engine application runs
+// before any store write, so an engine that cannot take a change fails
+// the request with nothing persisted. The response is the full updated
+// Task object.
 func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetTaskOutput, error) {
 	task, err := h.tasks.Get(ctx, in.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -705,7 +742,7 @@ func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetT
 		return nil, internalFailure(ctx, "get task for patch", err)
 	}
 
-	patch, fieldErrs, err := h.buildTaskPatch(ctx, in.Body)
+	patch, fieldErrs, err := h.buildTaskPatch(ctx, task, in.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -718,8 +755,24 @@ func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetT
 		return nil, problem
 	}
 
-	// The live application runs before the store write: an engine that
-	// cannot take the new limit fails the request with nothing persisted.
+	// The destination resolves against the data roots before anything
+	// else touches it: a path outside every root is the 403 of doc 05
+	// section 5.5, and the resolved value is what both the engine call
+	// and the row write carry.
+	destination := ""
+	if in.Body.Destination != nil {
+		destination, err = fsx.ResolveDestination(h.roots, *in.Body.Destination)
+		if err != nil {
+			return nil, destinationRejected(*in.Body.Destination)
+		}
+	}
+
+	// The live applications run in the order of the mutator block below,
+	// every one before the first store write: an engine that cannot take
+	// a change fails the request with nothing persisted.
+	if err := h.applyPatchMutators(ctx, task, in.Body, destination); err != nil {
+		return nil, err
+	}
 	if err := h.applyLiveRateLimits(ctx, task, in.Body.DLLimit, in.Body.ULLimit); err != nil {
 		return nil, err
 	}
@@ -739,6 +792,12 @@ func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetT
 	if in.Body.Tags != nil {
 		if err := h.replaceTaskTags(ctx, in.ID, in.Body.Tags); err != nil {
 			return nil, internalFailure(ctx, "replace task tags", err)
+		}
+	}
+
+	if in.Body.Destination != nil {
+		if err := h.applyDestination(ctx, in.ID, destination, task.EngineRef != nil); err != nil {
+			return nil, err
 		}
 	}
 
@@ -775,7 +834,15 @@ type patchedLimits struct {
 	SeedingTimeLimit *int64   `db:"seeding_time_limit"`
 }
 
-const queryTaskLimits = `SELECT dl_limit, ul_limit, ratio_limit, seeding_time_limit FROM tasks WHERE id = ?`
+const (
+	queryTaskLimits = `SELECT dl_limit, ul_limit, ratio_limit, seeding_time_limit FROM tasks WHERE id = ?`
+
+	// querySetTaskDestination writes the destination a relocation
+	// produced. It lives here, not in TaskPatch, because the store's patch
+	// type carries no destination column and this task owns only the
+	// files its table names.
+	querySetTaskDestination = `UPDATE tasks SET destination = ?, updated_at = ? WHERE id = ?`
+)
 
 // taskLimits reads a task's persisted limits.
 func (h *TaskHandlers) taskLimits(ctx context.Context, id string) (patchedLimits, error) {
@@ -793,6 +860,7 @@ func (h *TaskHandlers) taskLimits(ctx context.Context, id string) (patchedLimits
 // field error must not mask.
 func (h *TaskHandlers) buildTaskPatch(
 	ctx context.Context,
+	task store.Task,
 	body PatchTaskBody,
 ) (patch store.TaskPatch, fieldErrs []*huma.ErrorDetail, err error) {
 	if body.Name != nil {
@@ -848,7 +916,21 @@ func (h *TaskHandlers) buildTaskPatch(
 		}
 	}
 
-	patch.Sequential = body.Sequential
+	// A persisted sequential flag an engine could never honour is a lie
+	// the poller never corrects, so it is refused here — also for a task
+	// no engine holds yet, because the flag would ride the admission. An
+	// engine that is not registered escapes the gate: the mutator block
+	// below answers that case with the 503 it deserves.
+	if body.Sequential != nil {
+		if e, ok := h.engines.Get(task.Engine); ok && !hasCapability(e, engine.CapSequential) {
+			fieldErrs = append(fieldErrs, &huma.ErrorDetail{
+				Message:  detailSequentialUnsupported,
+				Location: "body.sequential",
+			})
+		} else {
+			patch.Sequential = body.Sequential
+		}
+	}
 
 	return patch, fieldErrs, nil
 }
@@ -878,6 +960,141 @@ func (h *TaskHandlers) applyLiveRateLimits(ctx context.Context, task store.Task,
 	}
 
 	return nil
+}
+
+// applyPatchMutators pushes the patched category, tags, sequential flag,
+// share limits and destination to the engine that holds the task, in the
+// order of docs/06-download-engines.md section 5.7's mutator table and
+// only for the fields present in the body. Any failure aborts the patch
+// with the 503 of doc 05 section 5.5 and leaves the row unchanged; a task
+// no engine holds yet persists everything and applies it at admission
+// time instead. The share limits are sent as the merge of the patch with
+// the stored row — the daemon takes both limits on every call, and an
+// omitted field is untouched, never reset to the global default.
+func (h *TaskHandlers) applyPatchMutators(
+	ctx context.Context,
+	task store.Task,
+	body PatchTaskBody,
+	destination string,
+) error {
+	if task.EngineRef == nil {
+		return nil
+	}
+
+	e, ok := h.engines.Get(task.Engine)
+	if !ok {
+		return engineUnavailable(task.Engine)
+	}
+
+	id := engineTaskID(task.Engine, task.EngineRef)
+
+	if body.Category != nil {
+		if err := e.SetCategory(ctx, id, *body.Category); err != nil {
+			return patchEngineProblem(ctx, task.ID, err)
+		}
+	}
+
+	if body.Tags != nil {
+		tagger, ok := e.(tagMutator)
+		if !ok {
+			// The engine declares tags but carries no setter — the same
+			// class of refusal as a missing capability.
+			return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailMutatorUnsupported)
+		}
+		if err := tagger.SetTags(ctx, id, body.Tags); err != nil {
+			return patchEngineProblem(ctx, task.ID, err)
+		}
+	}
+
+	if body.Sequential != nil {
+		seq, ok := e.(sequentialEngine)
+		if !ok {
+			return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailMutatorUnsupported)
+		}
+		if err := seq.SetSequential(ctx, id, *body.Sequential); err != nil {
+			return patchEngineProblem(ctx, task.ID, err)
+		}
+	}
+
+	if body.RatioLimit != nil || body.SeedingTimeLimit != nil {
+		ratio, seed := body.RatioLimit, body.SeedingTimeLimit
+		if ratio == nil || seed == nil {
+			limits, err := h.taskLimits(ctx, task.ID)
+			if err != nil {
+				return err
+			}
+			if ratio == nil {
+				ratio = limits.RatioLimit
+			}
+			if seed == nil {
+				seed = limits.SeedingTimeLimit
+			}
+		}
+		if err := e.SetShareLimits(ctx, id, ratio, seed); err != nil {
+			return patchEngineProblem(ctx, task.ID, err)
+		}
+	}
+
+	if destination != "" {
+		if err := e.SetLocation(ctx, id, destination); err != nil {
+			return patchEngineProblem(ctx, task.ID, err)
+		}
+	}
+
+	return nil
+}
+
+// patchEngineProblem maps one mutator failure onto the patch's 503. An
+// ErrNotSupported here is a hard failure — unlike a rate limit, a
+// category, tag, share limit, flag or location the engine cannot take
+// has no later moment to apply, so the request fails and the row stays
+// untouched.
+func patchEngineProblem(ctx context.Context, taskID string, err error) error {
+	if !errors.Is(err, engine.ErrUnavailable) && !errors.Is(err, engine.ErrNotSupported) {
+		logFromContext(ctx).Error("patch engine call failed", slog.String("task_id", taskID), slog.Any("err", err))
+	}
+
+	return Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, detailEngineFailed)
+}
+
+// applyDestination writes the relocated destination and, for a task an
+// engine holds, enters moving through the store's own transition — the
+// same write T022's lifecycle actions use — so the event log records the
+// move and the reconciler walks the row out of moving once the engine
+// reports its post-move state (docs/04-data-model.md section 8.1). The
+// write runs only after SetLocation succeeded, so an engine that could
+// not take the new location leaves the row untouched. An unadmitted task
+// owns no data yet and enters no state; a task whose state cannot enter
+// moving keeps the new destination and answers 422 — the state machine
+// refused the transition, not the relocation.
+func (h *TaskHandlers) applyDestination(ctx context.Context, id, destination string, admitted bool) error {
+	result, err := h.db.ExecContext(ctx, querySetTaskDestination, destination, time.Now().UnixMilli(), id)
+	if err != nil {
+		return internalFailure(ctx, "relocate task", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return internalFailure(ctx, "relocate task", err)
+	}
+	if affected == 0 {
+		return Problem(SlugNotFound, http.StatusNotFound, detailTaskNotFound)
+	}
+
+	if !admitted {
+		return nil
+	}
+
+	err = h.tasks.Transition(ctx, id, string(engine.StateMoving), eventTaskMoved, messageTaskMoved)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, store.ErrNotFound):
+		return Problem(SlugNotFound, http.StatusNotFound, detailTaskNotFound)
+	case errors.Is(err, store.ErrIllegalTransition), errors.Is(err, store.ErrTransitionConflict):
+		return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailIllegalState)
+	default:
+		return internalFailure(ctx, "transition relocated task", err)
+	}
 }
 
 // replaceTaskTags rewrites the task's task_tags rows in one transaction:
