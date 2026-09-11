@@ -200,6 +200,15 @@ WHERE task_id = ? AND file_index NOT IN (
 SET selected = ?, priority = ?, updated_at = ?
 WHERE task_id = ? AND file_index = ?`
 
+	// A tracker listing replaces the task's rows wholesale (T034): the
+	// delete and the re-insert run in one transaction, so the table holds
+	// exactly the rows of the last successful listing.
+	queryDeleteTaskTrackers = `DELETE FROM task_trackers WHERE task_id = ?`
+
+	queryInsertTaskTracker = `INSERT INTO task_trackers
+(id, task_id, url, status, update_timer_seconds, seeds, peers, message, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
 	queryQueueMembers = `SELECT id FROM tasks
 WHERE queue_position IS NOT NULL
 ORDER BY queue_position, id`
@@ -1360,6 +1369,67 @@ func (s *TaskStore) UpdateFileSelection(ctx context.Context, taskID string, sel 
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: update file selection of task %q: commit: %w", taskID, err)
+	}
+
+	return nil
+}
+
+// Tracker is one row of the task_trackers table (docs/04-data-model.md
+// section 3.3), the mirror of the engine's listing. Status and Message
+// are the engine-reported strings, stored verbatim — an absent engine
+// message stores as the empty string, never NULL; the pointer columns
+// are nil for the values the engine does not report.
+type Tracker struct {
+	URL                string `db:"url"`
+	Status             string `db:"status"`
+	UpdateTimerSeconds *int   `db:"update_timer_seconds"`
+	Seeds              *int   `db:"seeds"`
+	Peers              *int   `db:"peers"`
+	Message            string `db:"message"`
+}
+
+// ReplaceTrackers replaces the task's task_trackers rows with rows in
+// one transaction: delete all, then re-insert the listing keyed on
+// idx_task_trackers_url. A repeated url in the listing keeps its first
+// occurrence — the unique index would refuse the second, and the
+// daemon's own listing is deduplicated, so a repeat means a duplicated
+// announce and not two trackers.
+func (s *TaskStore) ReplaceTrackers(ctx context.Context, taskID string, rows []Tracker) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: replace trackers of task %q: %w", taskID, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of tracker replace failed", "task_id", taskID, "error", err)
+		}
+	}()
+
+	if _, err := tx.ExecContext(ctx, queryDeleteTaskTrackers, taskID); err != nil {
+		return fmt.Errorf("store: replace trackers of task %q: %w", taskID, err)
+	}
+
+	now := time.Now().UnixMilli()
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if _, dup := seen[row.URL]; dup {
+			continue
+		}
+		seen[row.URL] = struct{}{}
+
+		if _, err := tx.ExecContext(
+			ctx, queryInsertTaskTracker,
+			NewID(PrefixTaskTracker), taskID, row.URL, row.Status,
+			row.UpdateTimerSeconds, row.Seeds, row.Peers, row.Message, now, now,
+		); err != nil {
+			return fmt.Errorf("store: replace trackers of task %q: %w", taskID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: replace trackers of task %q: commit: %w", taskID, err)
 	}
 
 	return nil

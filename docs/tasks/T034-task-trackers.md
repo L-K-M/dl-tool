@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T034 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T021, T029 |
 | **Blocks** | T035, T048 |
 | **Parallel-safe** | no — extends `internal/store/tasks.go` and `internal/api/server.go` |
@@ -135,12 +135,12 @@ type RemoveTaskTrackerInput struct {
     returning `422`; an `ftp://` tracker URL returning `422`; and an aria2 task returning `422`.
 
 ## Acceptance criteria
-- [ ] The struct tags in `swarm.go` were derived from the captured response pasted under Evidence, not from the wiki.
-- [ ] A pseudo-tracker row is listed with `seeds: null` and cannot be removed.
-- [ ] `POST` returns `201` with the full updated list.
-- [ ] A tracker URL resolving to a private address is refused with `403` `/problems/ssrf-blocked`.
-- [ ] `GET` on a task whose engine lacks the `bittorrent` capability returns `422`.
-- [ ] `task_trackers` holds exactly the rows of the last successful listing, with no duplicates.
+- [x] The struct tags in `swarm.go` were derived from the captured response pasted under Evidence, not from the wiki.
+- [x] A pseudo-tracker row is listed with `seeds: null` and cannot be removed.
+- [x] `POST` returns `201` with the full updated list.
+- [x] A tracker URL resolving to a private address is refused with `403` `/problems/ssrf-blocked`.
+- [x] `GET` on a task whose engine lacks the `bittorrent` capability returns `422`.
+- [x] `task_trackers` holds exactly the rows of the last successful listing, with no duplicates.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -171,7 +171,250 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+### The 5.2.3 capture (step 1)
+
+No Docker daemon exists in this environment, so the live daemon is the official-source static build of the
+pinned release — `x86_64-qbittorrent-nox` from `userdocs/qbittorrent-nox-static` tag `release-5.2.3_v2.0.14`,
+which builds qBittorrent `release-5.2.3` verbatim — run locally with `--webui-port=8080`, a localhost auth
+bypass in `qBittorrent.conf`, and a locally generated one-tracker .torrent
+(`udp://tracker.example.org:6969/announce`, infohash `70bd59dc7fc9a42d12074673e54701f2e8867d10`) added
+stopped. Nothing was committed as a fixture; the commands and responses follow, session cookie redacted.
+
+```
+$ curl -s http://127.0.0.1:8080/api/v2/app/version
+v5.2.3
+
+$ curl -s -F "torrents=@fixture.torrent" -F "stopped=true" \
+    http://127.0.0.1:8080/api/v2/torrents/add
+{"added_torrent_ids":["70bd59dc7fc9a42d12074673e54701f2e8867d10"],"failure_count":0,"pending_count":0,"success_count":1}
+
+$ curl -s "http://127.0.0.1:8080/api/v2/torrents/trackers?hash=70bd59dc7fc9a42d12074673e54701f2e8867d10"
+[{"msg":"","num_downloaded":0,"num_leeches":0,"num_peers":0,"num_seeds":0,"status":2,"tier":-1,"url":"** [DHT] **"},
+ {"msg":"","num_downloaded":0,"num_leeches":0,"num_peers":0,"num_seeds":0,"status":2,"tier":-1,"url":"** [PeX] **"},
+ {"msg":"","num_downloaded":0,"num_leeches":0,"num_peers":0,"num_seeds":0,"status":2,"tier":-1,"url":"** [LSD] **"},
+ {"endpoints":[],"min_announce":0,"msg":"","next_announce":0,"num_downloaded":-1,"num_leeches":-1,"num_peers":-1,"num_seeds":-1,"status":1,"tier":0,"updating":false,"url":"udp://tracker.example.org:6969/announce"}]
+
+$ curl -s -d "hash=70bd…7d10" --data-urlencode "urls=http://tracker2.example.org/announce" \
+    http://127.0.0.1:8080/api/v2/torrents/addTrackers -o /dev/null -w '%{http_code}\n'
+204
+(listing then carries the new url as {"endpoints":[],…,"num_downloaded":-1,…,"num_seeds":-1,"status":1,"tier":0,…,"url":"http://tracker2.example.org/announce"})
+
+$ curl -s -d "hash=70bd…7d10" --data-urlencode "urls=** [DHT] **" \
+    http://127.0.0.1:8080/api/v2/torrents/removeTrackers -o /dev/null -w '%{http_code}\n'
+204        # but the DHT row stays in the next listing: the daemon does NOT refuse it, it no-ops.
+
+$ curl -s -d "hash=70bd…7d10" --data-urlencode "urls=http://tracker2.example.org/announce" \
+    http://127.0.0.1:8080/api/v2/torrents/removeTrackers -o /dev/null -w '%{http_code}\n'
+204        # and the url is gone from the next listing.
+```
+
+Derived from the capture and cross-checked against `release-5.2.3`
+`src/webui/api/torrentscontroller.cpp` (`getStickyTrackers`, `getTrackers`) and `src/base/bittorrent/`
+(`trackerentry.cpp`, `trackerentrystatus.h`):
+
+- Per-row keys: `url`, `tier`, `status`, `msg`, `num_peers`, `num_seeds`, `num_leeches`, `num_downloaded`,
+  plus `updating`, `endpoints`, `next_announce` and `min_announce` on the real tracker rows only — the
+  synthetic DHT/PeX/LSD rows carry none of the latter four. `swarm.go` decodes `url`, `status`, `msg`,
+  `num_seeds`, `num_peers`; the rest are ignored by the decoder.
+- `status` is a **JSON number** — `TrackerEndpointState` (1 not contacted, 2 working, 4 not working,
+  5 tracker error, 6 unreachable; the synthetic rows also use 0 disabled) — rendered as its decimal
+  string and stored verbatim, exactly what the interface contract's "rendered as a string whatever the
+  engine's JSON type is" asked for.
+- `-1` counts are the `TrackerEntryStatus` "unknown" defaults, not values: `Seeds`/`Peers` are nil for a
+  real row that reports them, and for every synthetic row, whose numbers count peers this swarm
+  discovered, not tracker counts.
+- No field of the response is an update timer — `next_announce`/`min_announce` are epoch seconds — so
+  `UpdateTimerSeconds` has no wire source and stays nil; the column is NULL.
+- `addTrackers` `urls` is newline-separated (`parseTrackerEntries` splits on `\n`, an empty line bumps the
+  tier); `removeTrackers` `urls` is pipe-separated and each element is percent-decoded by the daemon, so
+  the adapter percent-encodes each url before joining.
+- The daemon answers `204` to a pseudo-tracker removal and silently keeps the row, which is why step 4's
+  local refusal exists: `RemoveTrackers` detects the bracketed form and returns `ErrNotSupported`
+  without issuing the request.
+
+### Verification block
+
+`make lint`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+```
+
+`make test PKG=./internal/...`:
+
+```
+ok  	github.com/L-K-M/dl-tool/internal/api	73.285s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.126s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.303s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.186s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.295s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.655s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.183s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.122s
+ok  	github.com/L-K-M/dl-tool/internal/store	68.893s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.378s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.084s
+```
+
+(All output above is the final tree, after the review-round-1 to round-6 fixes listed under Scope.)
+
+(One environmental note from an earlier run: `internal/engine`'s `TestClaimTimeClearDeclinesTheGuardedClaim`
+failed once with "temp filesystem has only 1865420800 free bytes; test needs 1992294400 of head-room" —
+this sandbox's disk was full from the capture daemon's scratch directory. After removing the scratch the
+package passes; no code change was involved. The output above is the clean re-run.)
+
+The five named tests:
+
+```
+$ go test ./internal/engine/qbittorrent ./internal/store ./internal/api \
+    -run 'TestTrackersListPseudoRow|TestAddTrackerReturns201|TestRemovePseudoTrackerRejected|TestTrackerURLSSRFBlocked|TestTrackersOnNonBitTorrentTask' -v -count=1
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.016s [no tests to run]
+ok  	github.com/L-K-M/dl-tool/internal/store	0.010s [no tests to run]
+=== RUN   TestTrackersListPseudoRow
+--- PASS: TestTrackersListPseudoRow (0.06s)
+=== RUN   TestAddTrackerReturns201
+--- PASS: TestAddTrackerReturns201 (0.07s)
+=== RUN   TestRemovePseudoTrackerRejected
+--- PASS: TestRemovePseudoTrackerRejected (0.03s)
+=== RUN   TestTrackerURLSSRFBlocked
+--- PASS: TestTrackerURLSSRFBlocked (0.03s)
+=== RUN   TestTrackersOnNonBitTorrentTask
+--- PASS: TestTrackersOnNonBitTorrentTask (0.03s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.428s
+```
+
+The named tests live in `internal/api/tasks_swarm_test.go`; the other two packages match none of the
+`-run` names and print `[no tests to run]`, which is `ok`, as with T032.
+
+Criterion-to-test mapping: pseudo row `seeds: null` → `TestTrackersListPseudoRow`;
+cannot be removed → `TestRemovePseudoTrackerRejected` (422, and no `removeTrackers` request reaches the
+fake daemon); `POST` 201 with the full list → `TestAddTrackerReturns201`; private address refused with
+403 `/problems/ssrf-blocked` → `TestTrackerURLSSRFBlocked` (TEST-NET-1, RFC 1918, `::1` and an
+IPv4-mapped link-local address); non-BitTorrent engine 422 → `TestTrackersOnNonBitTorrentTask`; store
+holds exactly the last listing → `TestTrackersListPseudoRow` and `TestTrackersListingReplacesRows`, and
+no duplicates → `TestReplaceTrackersDeduplicatesRows`.
+
+### Scope check
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/server.go
+internal/api/tasks_swarm.go
+internal/api/tasks_swarm_test.go
+internal/engine/qbittorrent/swarm.go
+internal/store/tasks.go
+web/src/api/schema.d.ts
+```
+
+Exactly the Files table plus the two generated standing exceptions of docs/13 §7.1 (`api/openapi.json`
+and `web/src/api/schema.d.ts`, both `make gen` output). No new dependency, so `go.mod`/`go.sum` are
+untouched.
+
+### Review round 1 (PR #121)
+
+Fixed in this PR's scope: `dnsErrorText` now unwraps `net.DNSError` so the warn line omits the queried
+host (`TestDNSErrorTextOmitsTheHost`); the file header no longer overstates the SSRF guarantee —
+hostname urls are checked best-effort at add time, connect-time enforcement is T123's; `AddTrackers`
+refuses empty or line-break-bearing urls before the form is built (`TestAddTrackersRejectsEmbeddedLineBreaks`);
+`swarmChangeProblem` no longer maps the remove path's pseudo-tracker detail onto a POST;
+`trackerURLsBlocked` resolves each distinct host once; the DELETE url count is capped at 100 like the
+add body (`TestRemoveTrackersCapsURLCount`), the `url` query parameter is `required` in the spec, and
+the absent-`url` DELETE is tested; POST/DELETE descriptions now state the non-BitTorrent 422; the
+wire-fake row splitter uses `encoding/json`; multi-url newline and pipe joins, and the removal hash,
+are asserted (`TestAddTrackerReturns201`, `TestRemoveTrackerRoundTrip`).
+
+Not adopted: renaming `remove-task-tracker` to the plural — the singular operation id is named
+verbatim by this task's `## Steps`. The remaining findings target `openapi.json` shapes owned by
+other tasks (`sort`, `Delta.tasks`, `CreateTasksBody`, `FileSelectionRequest`, `elapsed_ms`, `blob`,
+multipart `payload`, `writeOnly`, trailing newline, bulk `delete_data`); touching them would widen
+this PR beyond its Files table, so they are left for their owning tasks.
+
+### Review round 2 (PR #121)
+
+Fixed in scope: `dnsErrorText` degrades an empty `net.DNSError.Err` to a static, host-free reason
+instead of an empty log field (extended `TestDNSErrorTextOmitsTheHost`).
+
+Not adopted: every remaining round-2 finding targets one shared artifact of the generated spec —
+huma renders every Go slice as `["array","null"]` and routes every error through the `default`
+response — so `ActionsInputBody.ids`, `PatchTaskFilesInputBody.files`, `CreateTasksBody`, the `Delta`
+map, the nullable collections, the explicit 422/403 response entries and the required `url`
+parameter's nullable schema are repo-wide conventions owned by the generator and the tasks that
+registered those operations (T020, T022, T025, T032). The runtime behaviour each finding worries
+about is guarded and tested at the handler level everywhere it applies here (`{"urls":null}` and an
+absent `url` DELETE are both 422, `TestTrackersSchemeRejections`), so the gap is contract typing, not
+behaviour, and belongs to a task that owns the shared spec generation.
+
+### Review round 3, full re-review at the final tree (PR #121)
+
+Fixed in scope — the blocker and the two majors naming this task's files:
+
+- Port-only hosts (`http://:80/announce`, also `udp://:6969/announce` and the userinfo form
+  `http://x@:8080/announce`) slipped `u.Host == ""` and denote loopback to every dialer: the shape
+  check now tests `u.Hostname()`, and `trackerHostBlocked` fails closed on an empty host. All three
+  forms are 422 field errors in `TestTrackersSchemeRejections` (`TestTrackerHostBlockedEmptyHostFailsClosed`
+  pins the guard).
+- Each tracker-host DNS lookup now runs under `trackerHostLookupTimeout` (5 s), so a body of
+  black-holed names cannot pin the request for a resolver's full retry budget.
+- The gate fails closed on every unverifiable resolver answer and stays open only for an
+  authoritative NXDOMAIN (`net.DNSError.IsNotFound`): an attacker-controlled domain can no longer
+  make its add-time lookups time out or SERVFAIL while the daemon later resolves a private record.
+  The header comment keeps the rebinding caveat (connect-time enforcement is T123's).
+
+Also in scope, minor: the dead `if judged` branch of the host-dedupe map removed; a drift-guard test
+  pins the add body's `maxItems` tag to `trackersMaxURLs`; the POST/DELETE descriptions state the
+  100-url cap; a stale test comment ("namespaced engine id") corrected to the bare hash the
+  assertion pins.
+
+Not adopted again: the required-but-nullable-array majors and the openapi.json minors restate the
+  round-2 findings on huma's repo-wide slice rendering and on other tasks' operations (`ids`,
+  `files`, `uris`, `FileSelectionRequest`, the declared-422 convention, `get-sync`'s `rid` default);
+  `results`/`created` nullability is the same generator artifact on response bodies. They belong to
+  the shared generation convention and those tasks, not to this Files table.
+
+### Review round 4 (PR #121)
+
+Fixed in scope: the two tracker descriptions render their url cap from `trackersMaxURLs` instead of a
+hardcoded "100"; the whole block gate runs under one `trackersGateBudget` (30 s), so a hundred
+slow-but-successful lookups cannot stack the per-host timeout into minutes of held request. Huma
+renders no `maxItems` on a repeated query parameter — verified against the generated spec — so the
+DELETE-side cap stays handler-enforced (`TestRemoveTrackersCapsURLCount`) and the drift-guard pins
+the add body's tag alone; the gap is noted on the test.
+
+Not adopted again: the required-but-nullable-array major (fourth restatement) and the openapi.json
+minors (`elapsed_ms`, `CreateTasksBody`, `InspectTasksBody`, `writeOnly`, `Delta.tasks`, the `url`
+parameter's nullable schema) are the same shared generator artifact and other tasks' registered
+operations as rounds 2 and 3 triaged.
+
+### Review round 5 (PR #121)
+
+Fixed in scope: the POST description now discloses that a spent gate budget also answers 403
+/problems/ssrf-blocked — fail-closed is the safe verdict, and the contract says so — and
+`TestTrackerGateBudgetFailsClosedOnExpiry` pins both the gate-context routing and the fail-closed
+verdict on expiry, using an RFC 6761 `.invalid` name so the expired-budget path is deterministic.
+
+### Review round 6 (PR #121)
+
+Fixed in scope: the POST description's 403 clause no longer reads as though an NXDOMAIN-within-budget
+were refused ("one the block gate cannot finish checking before its budget expires"); the expiry
+test's comment states that its gate-context discrimination needs a resolver that answers `.invalid`
+authoritatively, and that in DNS-less CI it proves only fail-closed-on-error; and `dnsErrorText`
+allow-lists the three address-free `net.DNSError.Err` spellings — the native resolver wraps
+transport failures verbatim into Err, embedding the local address and the resolver's — so the warn
+line leaks no topology (`TestDNSErrorTextOmitsTheHost` pins the transport-shaped case).
+
+Not adopted again: the nullable-array, `CreateTasksBody`, `InspectTasksBody`, `blob`, `elapsed_ms`,
+`FileSelection`, `Delta`, `url`-schema and 404-in-prose findings are the same shared-generator and
+other-task triage as rounds 2 to 5; the NXDOMAIN-advisory item restates the documented rebinding
+caveat whose durable fix is T123's dialer guard.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
