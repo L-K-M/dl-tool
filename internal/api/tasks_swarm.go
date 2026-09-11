@@ -4,7 +4,10 @@
 // urls and DELETE removes them. Pseudo-tracker rows are listed and can
 // never be removed; every added url is scheme-checked and run past the
 // block list of docs/12-security-and-threat-model.md section 2.1, so a
-// tracker cannot address a private host.
+// literal-address tracker url cannot address a private host. A hostname
+// url is checked the same way at add time, best-effort: the engine's
+// daemon re-resolves at announce time, and connect-time enforcement
+// belongs to the dialer-level guard of T123, not to this endpoint.
 package api
 
 import (
@@ -38,10 +41,15 @@ const (
 	trackersDetailNotAdmitted   = "the task has not been handed to its engine yet"
 	trackersDetailPseudoRemoval = "a pseudo-tracker (DHT, PeX, LSD) cannot be removed"
 	trackersDetailNoURLs        = "the request names no tracker urls"
+	trackersDetailTooManyURLs   = "the request names more tracker urls than one call may carry"
 	trackersDetailInvalidURL    = "the tracker urls hold entries that failed validation"
 	trackersDetailUnknownScheme = "a tracker url must carry a host and one of the http, https, udp, ws and wss schemes"
 	trackersDetailBlockedHost   = "a tracker url resolves to an address dl-tool refuses to contact"
 )
+
+// trackersMaxURLs bounds one request's url count on both the add and the
+// remove path; the add side's maxItems schema tag carries the same 100.
+const trackersMaxURLs = 100
 
 // trackerSchemes is the announce vocabulary of docs/05 section 5.9: the
 // schemes a BitTorrent announce url may carry.
@@ -137,7 +145,7 @@ type AddTaskTrackersOutput struct {
 // RemoveTaskTrackerInput addresses one task and the urls to remove.
 type RemoveTaskTrackerInput struct {
 	ID  string   `path:"id" doc:"The tsk_ id of the task"`
-	URL []string `query:"url,explode" doc:"The announce urls to remove; repeat the parameter for several"`
+	URL []string `query:"url,explode" required:"true" doc:"The announce urls to remove; repeat the parameter for several"`
 }
 
 // RemoveTaskTrackerOutput is the bodiless 204 answer.
@@ -188,7 +196,7 @@ func (h *TaskHandlers) AddTaskTrackers(ctx context.Context, in *AddTaskTrackersI
 	}
 
 	if err := swarm.AddTrackers(ctx, engineTaskID(task.Engine, task.EngineRef), in.Body.URLs); err != nil {
-		return nil, swarmChangeProblem(err)
+		return nil, swarmChangeProblem(err, "")
 	}
 
 	entries, err := h.refreshTrackers(ctx, task, swarm)
@@ -212,13 +220,18 @@ func (h *TaskHandlers) RemoveTaskTracker(ctx context.Context, in *RemoveTaskTrac
 	}
 
 	// An empty url set decodes to a nil or empty slice no schema tag can
-	// distinguish from an absent parameter, so this backstop owns it.
+	// distinguish from an absent parameter, so this backstop owns it; the
+	// upper bound mirrors the add side's 100-url schema cap, because a
+	// repeated query parameter has no schema tag of its own.
 	if len(in.URL) == 0 {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, trackersDetailNoURLs)
 	}
+	if len(in.URL) > trackersMaxURLs {
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, trackersDetailTooManyURLs)
+	}
 
 	if err := swarm.RemoveTrackers(ctx, engineTaskID(task.Engine, task.EngineRef), in.URL); err != nil {
-		return nil, swarmChangeProblem(err)
+		return nil, swarmChangeProblem(err, trackersDetailPseudoRemoval)
 	}
 
 	if _, err := h.refreshTrackers(ctx, task, swarm); err != nil {
@@ -289,12 +302,15 @@ func (h *TaskHandlers) refreshTrackers(ctx context.Context, task store.Task, swa
 	return entries, nil
 }
 
-// swarmChangeProblem maps one engine mutation failure: ErrNotSupported is
-// the pseudo-tracker refusal, everything else is the 503 of a daemon that
-// could not take the change.
-func swarmChangeProblem(err error) error {
-	if errors.Is(err, engine.ErrNotSupported) {
-		return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, trackersDetailPseudoRemoval)
+// swarmChangeProblem maps one engine mutation failure. ErrNotSupported
+// becomes the 422 named by notSupportedDetail — the remove path's
+// pseudo-tracker refusal; an empty detail leaves an unsupported engine
+// on the 503, the answer a caller that could not take the change
+// deserves. Everything else is the 503 of a daemon that could not take
+// the change.
+func swarmChangeProblem(err error, notSupportedDetail string) error {
+	if notSupportedDetail != "" && errors.Is(err, engine.ErrNotSupported) {
+		return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, notSupportedDetail)
 	}
 
 	return Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, trackersDetailChangeFailed)
@@ -345,9 +361,12 @@ func validateTrackerURLShapes(urls []string) []*huma.ErrorDetail {
 }
 
 // trackerURLsBlocked reports whether any added url addresses a host the
-// block list denies. It runs after the shape check, so a refused url is
-// always one a tracker could legally carry.
+// block list denies. Each distinct host is resolved once: the body's cap
+// is 100 urls, and repeated hosts must not become repeated lookups. It
+// runs after the shape check, so a refused url is always one a tracker
+// could legally carry.
 func trackerURLsBlocked(ctx context.Context, urls []string) bool {
+	resolved := make(map[string]bool, len(urls))
 	for _, raw := range urls {
 		u, err := url.Parse(raw)
 		if err != nil {
@@ -355,7 +374,18 @@ func trackerURLsBlocked(ctx context.Context, urls []string) bool {
 			// function total on its own.
 			return true
 		}
-		if trackerHostBlocked(ctx, u.Hostname()) {
+		host := u.Hostname()
+		if judged, seen := resolved[host]; seen {
+			if judged {
+				return true
+			}
+
+			continue
+		}
+
+		judged := trackerHostBlocked(ctx, host)
+		resolved[host] = judged
+		if judged {
 			return true
 		}
 	}
@@ -438,11 +468,17 @@ func trackerHostBlocked(ctx context.Context, host string) bool {
 	return false
 }
 
-// dnsErrorText renders a resolver failure, or the no-addresses case a nil
-// error reports.
+// dnsErrorText renders a resolver failure without the queried host: a
+// net.DNSError's own text embeds the host name (and the resolver's
+// address), and an announce host can be user-identifying.
 func dnsErrorText(err error) string {
 	if err == nil {
 		return "no addresses"
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.Err
 	}
 
 	return err.Error()

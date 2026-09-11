@@ -155,12 +155,19 @@ func toTrackerEntries(rows []trackerJSON) []TrackerEntry {
 }
 
 // AddTrackers posts torrents/addTrackers with hash and a newline-separated
-// urls field. An empty list is a caller bug: the API layer requires at
-// least one url, and an empty request would tell the daemon nothing while
-// answering success.
+// urls field. An empty list is a caller bug — the API layer requires at
+// least one url — and so is an empty url or one carrying a line break:
+// the daemon splits the field on newlines and an embedded one would add
+// announce urls the caller never named.
 func (c *Client) AddTrackers(ctx context.Context, id string, urls []string) error {
 	if len(urls) == 0 {
 		return fmt.Errorf("qbittorrent: %s of %q: empty url list", pathAddTrackers, id)
+	}
+	for _, raw := range urls {
+		if raw == "" || strings.ContainsAny(raw, "\r\n") {
+			return fmt.Errorf("qbittorrent: %s of %q: url %q is empty or carries a line break",
+				pathAddTrackers, id, raw)
+		}
 	}
 
 	form := url.Values{

@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -292,8 +294,9 @@ func (e swarmWireEngine) SetShareLimits(context.Context, string, *float64, *int6
 // BitTorrent capability.
 type swarmTestEnv struct {
 	*actionsTestEnv
-	wire  *swarmWireFake
-	aria2 *actionEngine
+	wire        *swarmWireFake
+	aria2       *actionEngine
+	qbittorrent swarmWireEngine
 }
 
 func newSwarmTestEnv(t *testing.T) *swarmTestEnv {
@@ -316,7 +319,7 @@ func newSwarmTestEnv(t *testing.T) *swarmTestEnv {
 	aria2 := newActionEngine(engine.NameAria2, acceptsAria2Lanes)
 	env := newActionsTestEnvWithEngines(t, qbittorrentEngine, aria2)
 
-	return &swarmTestEnv{actionsTestEnv: env, wire: wire, aria2: aria2}
+	return &swarmTestEnv{actionsTestEnv: env, wire: wire, aria2: aria2, qbittorrent: qbittorrentEngine}
 }
 
 // seedSwarmTask writes one downloading task the qbittorrent adapter and
@@ -468,23 +471,27 @@ func intPtrEqual(got, want *int) bool {
 }
 
 // TestAddTrackerReturns201 pins the POST answer: the engine receives
-// torrents/addTrackers with a newline-joined urls form, and the 201 body
-// is the full updated listing with the new url in it.
+// torrents/addTrackers with the urls newline-joined in one form field —
+// two urls here, so the separator itself is pinned — and the 201 body is
+// the full updated listing with both new urls in it.
 func TestAddTrackerReturns201(t *testing.T) {
 	env := newSwarmTestEnv(t)
 	id := env.seedSwarmTask(t)
 
-	response := env.postTrackers(t, id, []string{"udp://8.8.8.8:6969/announce"})
+	added := []string{"udp://8.8.8.8:6969/announce", "http://tracker.example.org/announce"}
+	response := env.postTrackers(t, id, added)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
 	}
 
 	trackers := trackersBody(t, response)
-	if len(trackers) != 4 {
-		t.Fatalf("trackers = %+v, want the four-row post-add listing", trackers)
+	if len(trackers) != 5 {
+		t.Fatalf("trackers = %+v, want the five-row post-add listing", trackers)
 	}
-	if added := trackers[3]; added.URL != "udp://8.8.8.8:6969/announce" || added.Status != "1" {
-		t.Errorf("added row = %+v, want the new url at status \"1\"", added)
+	for i, url := range added {
+		if row := trackers[3+i]; row.URL != url || row.Status != "1" {
+			t.Errorf("added row %d = %+v, want %q at status \"1\"", i, row, url)
+		}
 	}
 
 	// The engine saw one addTrackers with hash and the newline-joined urls.
@@ -501,19 +508,22 @@ func TestAddTrackerReturns201(t *testing.T) {
 	if add.Form.Get("hash") != swarmHash {
 		t.Errorf("addTrackers hash = %q, want the bare hash", add.Form.Get("hash"))
 	}
-	if want := "udp://8.8.8.8:6969/announce"; add.Form.Get("urls") != want {
-		t.Errorf("addTrackers urls = %q, want %q", add.Form.Get("urls"), want)
+	if want := "udp://8.8.8.8:6969/announce\nhttp://tracker.example.org/announce"; add.Form.Get("urls") != want {
+		t.Errorf("addTrackers urls = %q, want the newline-joined %q", add.Form.Get("urls"), want)
 	}
 
-	// The store holds the updated listing, new row included.
-	found := false
-	for _, row := range env.storedTrackers(t, id) {
-		if row.URL == "udp://8.8.8.8:6969/announce" {
-			found = true
+	// The store holds the updated listing, both new rows included.
+	stored := env.storedTrackers(t, id)
+	for _, url := range added {
+		found := false
+		for _, row := range stored {
+			if row.URL == url {
+				found = true
+			}
 		}
-	}
-	if !found {
-		t.Errorf("stored rows hold no udp://8.8.8.8 row after the add")
+		if !found {
+			t.Errorf("stored rows hold no %s row after the add", url)
+		}
 	}
 }
 
@@ -525,13 +535,15 @@ func TestRemoveTrackerRoundTrip(t *testing.T) {
 	env := newSwarmTestEnv(t)
 	id := env.seedSwarmTask(t)
 
-	response := env.deleteTrackers(t, id, "udp://tracker.example.org:6969/announce")
+	removed := []string{"udp://tracker.example.org:6969/announce", "http://9.9.9.9/announce"}
+	response := env.deleteTrackers(t, id, removed...)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusNoContent, response.Body.String())
 	}
 
-	// The removal reached the daemon escaped: no literal ':' or '/' rides
-	// the urls field, only the pipe separator is plain.
+	// The removal reached the daemon under the bare hash and escaped: no
+	// literal ':' or '/' rides the urls field, only the pipe separator is
+	// plain — two urls here, so the separator itself is pinned.
 	calls := env.wire.trackerCalls()
 	var remove *swarmRequest
 	for i := range calls {
@@ -542,20 +554,28 @@ func TestRemoveTrackerRoundTrip(t *testing.T) {
 	if remove == nil {
 		t.Fatalf("tracker calls = %+v, want one removeTrackers call", calls)
 	}
-	if want := "udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce"; remove.Form.Get("urls") != want {
-		t.Errorf("removeTrackers urls = %q, want the percent-encoded %q", remove.Form.Get("urls"), want)
+	if remove.Form.Get("hash") != swarmHash {
+		t.Errorf("removeTrackers hash = %q, want the bare hash", remove.Form.Get("hash"))
+	}
+	want := "udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce|http%3A%2F%2F9.9.9.9%2Fannounce"
+	if remove.Form.Get("urls") != want {
+		t.Errorf("removeTrackers urls = %q, want the percent-encoded, pipe-joined %q", remove.Form.Get("urls"), want)
 	}
 
-	// The listing no longer carries the url, and neither does the store.
+	// The listing no longer carries either url, and neither does the store.
 	trackers := trackersBody(t, env.getTrackers(t, id))
 	for _, row := range trackers {
-		if row.URL == "udp://tracker.example.org:6969/announce" {
-			t.Errorf("listing still carries the removed url: %+v", trackers)
+		for _, url := range removed {
+			if row.URL == url {
+				t.Errorf("listing still carries the removed url %s: %+v", url, trackers)
+			}
 		}
 	}
 	for _, row := range env.storedTrackers(t, id) {
-		if row.URL == "udp://tracker.example.org:6969/announce" {
-			t.Errorf("task_trackers still holds the removed url: %+v", row)
+		for _, url := range removed {
+			if row.URL == url {
+				t.Errorf("task_trackers still holds the removed url %s: %+v", url, row)
+			}
 		}
 	}
 }
@@ -657,6 +677,12 @@ func TestTrackersSchemeRejections(t *testing.T) {
 		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 	})
 
+	// A DELETE that names no url at all is the same refusal.
+	t.Run("absent remove urls", func(t *testing.T) {
+		response := env.api.Delete("/tasks/"+id+"/trackers", "Authorization: Bearer "+env.bearer)
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	})
+
 	if calls := env.wire.trackerCalls(); len(calls) != 0 {
 		t.Errorf("engine was contacted: %+v", calls)
 	}
@@ -730,7 +756,8 @@ func TestTrackersNotAdmitted(t *testing.T) {
 
 // TestTrackersListingReplacesRows pins the replace semantics of
 // ReplaceTrackers: a second listing with fewer rows leaves no stale row
-// behind, and a duplicated url is stored once.
+// behind. Duplicate handling is pinned by
+// TestReplaceTrackersDeduplicatesRows.
 func TestTrackersListingReplacesRows(t *testing.T) {
 	env := newSwarmTestEnv(t)
 	id := env.seedSwarmTask(t)
@@ -782,6 +809,76 @@ func TestReplaceTrackersDeduplicatesRows(t *testing.T) {
 	}
 	if stored = env.storedTrackers(t, id); len(stored) != 1 || stored[0].URL != "udp://8.8.8.8:6969/announce" {
 		t.Errorf("stored rows = %+v, want exactly the last listing's row", stored)
+	}
+}
+
+// TestAddTrackersRejectsEmbeddedLineBreaks pins the adapter-side guard
+// of the add path: a url that is empty or carries a line break would be
+// split by the daemon into announce urls the caller never named, so the
+// client refuses it without issuing the request.
+func TestAddTrackersRejectsEmbeddedLineBreaks(t *testing.T) {
+	env := newSwarmTestEnv(t)
+	id := "qbittorrent:" + swarmHash
+
+	for name, urls := range map[string][]string{
+		"newline injection": {"udp://a.example/announce\nudp://b.example/announce"},
+		"trailing newline":  {"udp://a.example/announce\n"},
+		"empty url":         {""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := env.qbittorrent.AddTrackers(t.Context(), id, urls)
+			if err == nil {
+				t.Fatalf("AddTrackers(%q) = nil, want the refusal", urls)
+			}
+		})
+	}
+
+	for _, call := range env.wire.trackerCalls() {
+		if call.Path == "/api/v2/torrents/addTrackers" {
+			t.Errorf("addTrackers reached the daemon: %+v", call)
+		}
+	}
+}
+
+// TestRemoveTrackersCapsURLCount pins the remove-side bound: a repeated
+// query parameter has no schema tag of its own, so the handler mirrors
+// the add side's 100-url cap itself.
+func TestRemoveTrackersCapsURLCount(t *testing.T) {
+	env := newSwarmTestEnv(t)
+	id := env.seedSwarmTask(t)
+
+	urls := make([]string, trackersMaxURLs+1)
+	for i := range urls {
+		urls[i] = "udp://8.8.8.8:6969/announce"
+	}
+
+	assertProblem(t, env.deleteTrackers(t, id, urls...), http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	for _, call := range env.wire.trackerCalls() {
+		if call.Path == "/api/v2/torrents/removeTrackers" {
+			t.Errorf("removeTrackers reached the daemon: %+v", call)
+		}
+	}
+}
+
+// TestDNSErrorTextOmitsTheHost pins the log-hygiene rule of doc 14
+// section 3.3 on the block check's warn line: a net.DNSError renders the
+// queried host in its own text, and an announce host can be
+// user-identifying.
+func TestDNSErrorTextOmitsTheHost(t *testing.T) {
+	err := &net.DNSError{Err: "no such host", Name: "tracker.example.org", Server: "10.0.0.1:53"}
+
+	if text := dnsErrorText(err); strings.Contains(text, "tracker.example.org") {
+		t.Errorf("dnsErrorText = %q, want the host omitted", text)
+	}
+	if text := dnsErrorText(err); !strings.Contains(text, "no such host") {
+		t.Errorf("dnsErrorText = %q, want the resolver's reason kept", text)
+	}
+	if text := dnsErrorText(nil); text != "no addresses" {
+		t.Errorf("dnsErrorText(nil) = %q, want the no-addresses answer", text)
+	}
+	if text := dnsErrorText(errors.New("boom")); text != "boom" {
+		t.Errorf("dnsErrorText(non-dns) = %q, want the error's own text", text)
 	}
 }
 

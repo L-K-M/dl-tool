@@ -250,19 +250,21 @@ All matched files use Prettier code style!
 `make test PKG=./internal/...`:
 
 ```
-ok  	github.com/L-K-M/dl-tool/internal/api	71.383s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.128s
-ok  	github.com/L-K-M/dl-tool/internal/engine	20.767s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.208s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.288s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.028s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.389s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.187s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.076s
-ok  	github.com/L-K-M/dl-tool/internal/store	69.052s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.380s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.081s
+ok  	github.com/L-K-M/dl-tool/internal/api	73.834s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.118s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.155s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.211s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.299s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.602s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.184s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.212s
+ok  	github.com/L-K-M/dl-tool/internal/store	69.008s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.393s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.084s
 ```
+
+(All output above is the final tree, after the review-round-1 fixes listed under Scope.)
 
 (One environmental note from an earlier run: `internal/engine`'s `TestClaimTimeClearDeclinesTheGuardedClaim`
 failed once with "temp filesystem has only 1865420800 free bytes; test needs 1992294400 of head-room" —
@@ -316,6 +318,25 @@ web/src/api/schema.d.ts
 Exactly the Files table plus the two generated standing exceptions of docs/13 §7.1 (`api/openapi.json`
 and `web/src/api/schema.d.ts`, both `make gen` output). No new dependency, so `go.mod`/`go.sum` are
 untouched.
+
+### Review round 1 (PR #121)
+
+Fixed in this PR's scope: `dnsErrorText` now unwraps `net.DNSError` so the warn line omits the queried
+host (`TestDNSErrorTextOmitsTheHost`); the file header no longer overstates the SSRF guarantee —
+hostname urls are checked best-effort at add time, connect-time enforcement is T123's; `AddTrackers`
+refuses empty or line-break-bearing urls before the form is built (`TestAddTrackersRejectsEmbeddedLineBreaks`);
+`swarmChangeProblem` no longer maps the remove path's pseudo-tracker detail onto a POST;
+`trackerURLsBlocked` resolves each distinct host once; the DELETE url count is capped at 100 like the
+add body (`TestRemoveTrackersCapsURLCount`), the `url` query parameter is `required` in the spec, and
+the absent-`url` DELETE is tested; POST/DELETE descriptions now state the non-BitTorrent 422; the
+wire-fake row splitter uses `encoding/json`; multi-url newline and pipe joins, and the removal hash,
+are asserted (`TestAddTrackerReturns201`, `TestRemoveTrackerRoundTrip`).
+
+Not adopted: renaming `remove-task-tracker` to the plural — the singular operation id is named
+verbatim by this task's `## Steps`. The remaining findings target `openapi.json` shapes owned by
+other tasks (`sort`, `Delta.tasks`, `CreateTasksBody`, `FileSelectionRequest`, `elapsed_ms`, `blob`,
+multipart `payload`, `writeOnly`, trailing newline, bulk `delete_data`); touching them would widen
+this PR beyond its Files table, so they are left for their owning tasks.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
