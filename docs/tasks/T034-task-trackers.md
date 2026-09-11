@@ -250,21 +250,21 @@ All matched files use Prettier code style!
 `make test PKG=./internal/...`:
 
 ```
-ok  	github.com/L-K-M/dl-tool/internal/api	78.700s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.252s
-ok  	github.com/L-K-M/dl-tool/internal/engine	23.236s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.249s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.298s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.023s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.921s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.185s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.167s
-ok  	github.com/L-K-M/dl-tool/internal/store	71.977s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.390s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.065s
+ok  	github.com/L-K-M/dl-tool/internal/api	73.758s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.124s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.190s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.194s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.280s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.033s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.722s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.183s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.043s
+ok  	github.com/L-K-M/dl-tool/internal/store	68.266s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.385s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.069s
 ```
 
-(All output above is the final tree, after the review-round-1 and round-2 fixes listed under Scope.)
+(All output above is the final tree, after the review-round-1 to round-3 fixes listed under Scope.)
 
 (One environmental note from an earlier run: `internal/engine`'s `TestClaimTimeClearDeclinesTheGuardedClaim`
 failed once with "temp filesystem has only 1865420800 free bytes; test needs 1992294400 of head-room" —
@@ -279,15 +279,15 @@ $ go test ./internal/engine/qbittorrent ./internal/store ./internal/api \
 ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.016s [no tests to run]
 ok  	github.com/L-K-M/dl-tool/internal/store	0.010s [no tests to run]
 === RUN   TestTrackersListPseudoRow
---- PASS: TestTrackersListPseudoRow (0.13s)
+--- PASS: TestTrackersListPseudoRow (0.06s)
 === RUN   TestAddTrackerReturns201
---- PASS: TestAddTrackerReturns201 (0.08s)
+--- PASS: TestAddTrackerReturns201 (0.07s)
 === RUN   TestRemovePseudoTrackerRejected
---- PASS: TestRemovePseudoTrackerRejected (0.07s)
+--- PASS: TestRemovePseudoTrackerRejected (0.03s)
 === RUN   TestTrackerURLSSRFBlocked
---- PASS: TestTrackerURLSSRFBlocked (0.07s)
+--- PASS: TestTrackerURLSSRFBlocked (0.03s)
 === RUN   TestTrackersOnNonBitTorrentTask
---- PASS: TestTrackersOnNonBitTorrentTask (0.05s)
+--- PASS: TestTrackersOnNonBitTorrentTask (0.03s)
 ok  	github.com/L-K-M/dl-tool/internal/api	0.428s
 ```
 
@@ -352,6 +352,33 @@ registered those operations (T020, T022, T025, T032). The runtime behaviour each
 about is guarded and tested at the handler level everywhere it applies here (`{"urls":null}` and an
 absent `url` DELETE are both 422, `TestTrackersSchemeRejections`), so the gap is contract typing, not
 behaviour, and belongs to a task that owns the shared spec generation.
+
+### Review round 3, full re-review at the final tree (PR #121)
+
+Fixed in scope — the blocker and the two majors naming this task's files:
+
+- Port-only hosts (`http://:80/announce`, also `udp://:6969/announce` and the userinfo form
+  `http://x@:8080/announce`) slipped `u.Host == ""` and denote loopback to every dialer: the shape
+  check now tests `u.Hostname()`, and `trackerHostBlocked` fails closed on an empty host. All three
+  forms are 422 field errors in `TestTrackersSchemeRejections` (`TestTrackerHostBlockedEmptyHostFailsClosed`
+  pins the guard).
+- Each tracker-host DNS lookup now runs under `trackerHostLookupTimeout` (5 s), so a body of
+  black-holed names cannot pin the request for a resolver's full retry budget.
+- The gate fails closed on every unverifiable resolver answer and stays open only for an
+  authoritative NXDOMAIN (`net.DNSError.IsNotFound`): an attacker-controlled domain can no longer
+  make its add-time lookups time out or SERVFAIL while the daemon later resolves a private record.
+  The header comment keeps the rebinding caveat (connect-time enforcement is T123's).
+
+Also in scope, minor: the dead `if judged` branch of the host-dedupe map removed; a drift-guard test
+  pins the add body's `maxItems` tag to `trackersMaxURLs`; the POST/DELETE descriptions state the
+  100-url cap; a stale test comment ("namespaced engine id") corrected to the bare hash the
+  assertion pins.
+
+Not adopted again: the required-but-nullable-array majors and the openapi.json minors restate the
+  round-2 findings on huma's repo-wide slice rendering and on other tasks' operations (`ids`,
+  `files`, `uris`, `FileSelectionRequest`, the declared-422 convention, `get-sync`'s `rid` default);
+  `results`/`created` nullability is the same generator artifact on response bodies. They belong to
+  the shared generation convention and those tasks, not to this Files table.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

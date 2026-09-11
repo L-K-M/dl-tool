@@ -329,12 +329,12 @@ export interface paths {
     put?: never;
     /**
      * Add trackers to the task
-     * @description Adds http, https, udp, ws and wss announce urls to the swarm and answers with the full updated listing. A url resolving to a blocked address is refused with 403 /problems/ssrf-blocked. 422 when the task is not a BitTorrent task.
+     * @description Adds http, https, udp, ws and wss announce urls to the swarm — at most 100 per request — and answers with the full updated listing. A url resolving to a blocked address is refused with 403 /problems/ssrf-blocked. 422 when the task is not a BitTorrent task.
      */
     post: operations["add-task-trackers"];
     /**
      * Remove trackers from the task
-     * @description Removes the named announce urls from the swarm. A pseudo-tracker row (DHT, PeX, LSD) cannot be removed and answers 422. 422 when the task is not a BitTorrent task.
+     * @description Removes the named announce urls — at most 100 per request — from the swarm. A pseudo-tracker row (DHT, PeX, LSD) cannot be removed and answers 422. 422 when the task is not a BitTorrent task.
      */
     delete: operations["remove-task-tracker"];
     options?: never;

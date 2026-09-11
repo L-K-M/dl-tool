@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -430,7 +432,8 @@ func TestTrackersListPseudoRow(t *testing.T) {
 		t.Errorf("never-contacted row seeds/peers = %v/%v, want null/null (the -1 unknowns)", trackers[1].Seeds, trackers[1].Peers)
 	}
 
-	// The listing was asked for under the namespaced engine id.
+	// The listing was asked for under the bare engine hash, stripped of the
+	// qbittorrent: namespace the handler passed down.
 	calls := env.wire.trackerCalls()
 	if len(calls) != 1 || calls[0].Form.Get("hash") != swarmHash {
 		t.Errorf("tracker calls = %+v, want one listing under the bare hash", calls)
@@ -655,6 +658,12 @@ func TestTrackersSchemeRejections(t *testing.T) {
 	for name, raw := range map[string]string{
 		"ftp scheme": "ftp://tracker.example.org/announce",
 		"no host":    "udp:///announce",
+		// A port-only host is not a host: url.Parse accepts ":6969", every
+		// dialer reads an empty host as loopback, and the block gate
+		// cannot verify an empty name — the round-4 review's blocker.
+		"port only":          "http://:80/announce",
+		"port only, udp":     "udp://:6969/announce",
+		"userinfo port only": "http://x@:8080/announce",
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := env.postTrackers(t, id, []string{raw})
@@ -886,6 +895,28 @@ func TestDNSErrorTextOmitsTheHost(t *testing.T) {
 	empty := &net.DNSError{Err: "", Name: "tracker.example.org"}
 	if text := dnsErrorText(empty); text != dnsFailureReason {
 		t.Errorf("dnsErrorText(empty DNSError) = %q, want %q", text, dnsFailureReason)
+	}
+}
+
+// TestTrackerHostBlockedEmptyHostFailsClosed pins the guard's totality:
+// an empty host denotes loopback to every dialer, so it is blocked even
+// though the shape check should have refused such a url already.
+func TestTrackerHostBlockedEmptyHostFailsClosed(t *testing.T) {
+	if !trackerHostBlocked(t.Context(), "") {
+		t.Error("trackerHostBlocked(\"\") = false, want the fail-closed true")
+	}
+}
+
+// TestAddTaskTrackersMaxItemsMatchesConstant pins the add body's schema
+// tag to the constant the remove path enforces in code, so the two caps
+// cannot drift apart silently.
+func TestAddTaskTrackersMaxItemsMatchesConstant(t *testing.T) {
+	field, ok := reflect.TypeOf(AddTaskTrackersInput{}.Body).FieldByName("URLs")
+	if !ok {
+		t.Fatal("URLs field not found on the add body")
+	}
+	if got := field.Tag.Get("maxItems"); got != strconv.Itoa(trackersMaxURLs) {
+		t.Fatalf("maxItems tag = %q, want %d (trackersMaxURLs)", got, trackersMaxURLs)
 	}
 }
 

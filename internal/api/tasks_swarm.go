@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -44,7 +45,7 @@ const (
 	trackersDetailTooManyURLs   = "the request names more tracker urls than one call may carry"
 	trackersDetailInvalidURL    = "the tracker urls hold entries that failed validation"
 	trackersDetailUnknownScheme = "a tracker url must carry a host and one of the http, https, udp, ws and wss schemes"
-	trackersDetailBlockedHost   = "a tracker url resolves to an address dl-tool refuses to contact"
+	trackersDetailBlockedHost   = "a tracker url resolves to an address dl-tool refuses to contact, or to no verifiable address at all"
 )
 
 // dnsFailureReason is the static, host-free reason a net.DNSError with
@@ -52,8 +53,14 @@ const (
 const dnsFailureReason = "dns lookup failed"
 
 // trackersMaxURLs bounds one request's url count on both the add and the
-// remove path; the add side's maxItems schema tag carries the same 100.
+// remove path; the add side's maxItems schema tag carries the same 100,
+// pinned to this constant by TestAddTaskTrackersMaxItemsMatchesConstant.
 const trackersMaxURLs = 100
+
+// trackerHostLookupTimeout bounds one tracker-host DNS lookup, so a body
+// of many black-holed names cannot pin a request for each resolver's
+// full retry budget.
+const trackerHostLookupTimeout = 5 * time.Second
 
 // trackerSchemes is the announce vocabulary of docs/05 section 5.9: the
 // schemes a BitTorrent announce url may carry.
@@ -339,7 +346,9 @@ func trackerDTOs(entries []qbittorrent.TrackerEntry) []TrackerDTO {
 
 // validateTrackerURLShapes checks every added url's shape: the scheme
 // must be one of the announce vocabulary's and the url must carry a
-// host. The per-url reason rides errors[] with its location, and the
+// host — a name, not just a port, because url.Parse accepts
+// ":6969" as a host and an empty host denotes loopback to every
+// dialer. The per-url reason rides errors[] with its location, and the
 // check runs before any engine call.
 func validateTrackerURLShapes(urls []string) []*huma.ErrorDetail {
 	fieldErrs := make([]*huma.ErrorDetail, 0)
@@ -347,7 +356,7 @@ func validateTrackerURLShapes(urls []string) []*huma.ErrorDetail {
 		location := fmt.Sprintf("body.urls[%d]", i)
 
 		u, err := url.Parse(raw)
-		if err != nil || u.Host == "" {
+		if err != nil || u.Hostname() == "" {
 			fieldErrs = append(fieldErrs, &huma.ErrorDetail{
 				Message: trackersDetailUnknownScheme, Location: location,
 			})
@@ -365,12 +374,14 @@ func validateTrackerURLShapes(urls []string) []*huma.ErrorDetail {
 }
 
 // trackerURLsBlocked reports whether any added url addresses a host the
-// block list denies. Each distinct host is resolved once: the body's cap
-// is 100 urls, and repeated hosts must not become repeated lookups. It
-// runs after the shape check, so a refused url is always one a tracker
-// could legally carry.
+// block list denies, or one whose address cannot be verified. Each
+// distinct host is resolved once: the body's cap is 100 urls, and
+// repeated hosts must not become repeated lookups. A blocked first
+// verdict returns immediately, so only allowed verdicts are ever
+// revisited. The check runs after the shape check, so a refused url is
+// always one a tracker could legally carry.
 func trackerURLsBlocked(ctx context.Context, urls []string) bool {
-	resolved := make(map[string]bool, len(urls))
+	allowed := make(map[string]struct{}, len(urls))
 	for _, raw := range urls {
 		u, err := url.Parse(raw)
 		if err != nil {
@@ -379,19 +390,14 @@ func trackerURLsBlocked(ctx context.Context, urls []string) bool {
 			return true
 		}
 		host := u.Hostname()
-		if judged, seen := resolved[host]; seen {
-			if judged {
-				return true
-			}
-
+		if _, seen := allowed[host]; seen {
 			continue
 		}
 
-		judged := trackerHostBlocked(ctx, host)
-		resolved[host] = judged
-		if judged {
+		if trackerHostBlocked(ctx, host) {
 			return true
 		}
+		allowed[host] = struct{}{}
 	}
 
 	return false
@@ -443,25 +449,43 @@ func trackerIPBlocked(ip netip.Addr) bool {
 	return false
 }
 
-// trackerHostBlocked reports whether host addresses a blocked address. A
-// literal address is judged directly; a name is resolved and judged on
-// every answer, so any private record refuses it. A name that does not
-// resolve is allowed: the daemon resolves again at announce time, this
-// gate is advisory against private hosts, not a liveness probe, and a
-// temporarily unresolvable tracker would otherwise be unaddable.
+// trackerHostBlocked reports whether host addresses a blocked address,
+// or no address dl-tool can verify. A literal address is judged directly;
+// a name is resolved and judged on every answer, so any private record
+// refuses it. The gate fails closed on every resolver answer but one
+// authoritative NXDOMAIN — a tracker whose domain does not exist yet
+// stays addable — because an attacker-controlled domain can make its
+// add-time lookups time out or SERVFAIL while the engine's daemon later
+// resolves a private record at announce time; only a name that provably
+// does not exist carries no such window. Even a resolved public answer
+// remains advisory: the daemon re-resolves at announce time, and
+// connect-time enforcement is the dialer guard of T123.
 func trackerHostBlocked(ctx context.Context, host string) bool {
+	// An empty host denotes loopback to every dialer; the shape check
+	// refuses it for added urls, and this guard keeps the function total
+	// for any other caller.
+	if host == "" {
+		return true
+	}
+
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return trackerIPBlocked(ip)
 	}
 
-	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil || len(addrs) == 0 {
-		// The reason is logged without the host: an announce url can carry
-		// a secret in its userinfo.
-		logFromContext(ctx).Warn("tracker host could not be resolved; the block check allows it",
-			slog.String("reason", dnsErrorText(err)))
+	lookupCtx, cancel := context.WithTimeout(ctx, trackerHostLookupTimeout)
+	defer cancel()
 
-		return false
+	addrs, err := net.DefaultResolver.LookupNetIP(lookupCtx, "ip", host)
+	if err != nil || len(addrs) == 0 {
+		// An empty answer is as unverifiable as a failed one; only an
+		// authoritative NXDOMAIN stays addable. The reason is logged
+		// without the host: an announce url can carry a secret in its
+		// userinfo.
+		allowed := isNotFound(err)
+		logFromContext(ctx).Warn("tracker host could not be resolved to a verifiable address",
+			slog.String("reason", dnsErrorText(err)), slog.Bool("allowed", allowed))
+
+		return !allowed
 	}
 	for _, addr := range addrs {
 		if trackerIPBlocked(addr) {
@@ -470,6 +494,15 @@ func trackerHostBlocked(ctx context.Context, host string) bool {
 	}
 
 	return false
+}
+
+// isNotFound reports whether err is one authoritative NXDOMAIN answer:
+// the only resolver failure the block gate treats as a name that simply
+// does not exist yet, rather than an unverifiable answer.
+func isNotFound(err error) bool {
+	var dnsErr *net.DNSError
+
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
 // dnsErrorText renders a resolver failure without the queried host: a
