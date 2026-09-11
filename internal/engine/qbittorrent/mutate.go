@@ -150,7 +150,11 @@ func (c *Client) Rename(ctx context.Context, id, name string) error {
 // comma-separated values. The diff runs against the tags the maindata
 // cache holds, so an unchanged tag set issues no request at all. A side
 // with nothing in it is never sent: the daemon's removeTags with an
-// empty tags value removes every tag, not none.
+// empty tags value removes every tag, not none. The applied set is
+// written back to the cache on full success — only then — so a second
+// call inside one poll interval diffs against what the daemon now
+// holds; a failed add side leaves the cache stale so a retry recomputes
+// the same diff and converges (the remove is then a no-op).
 func (c *Client) SetTags(ctx context.Context, id string, tags []string) error {
 	current, err := c.cachedTags(id)
 	if err != nil {
@@ -176,6 +180,8 @@ func (c *Client) SetTags(ctx context.Context, id string, tags []string) error {
 			return notFoundOr(err, pathAddTags)
 		}
 	}
+
+	c.rememberCacheField(ref(id), "tags", strings.Join(tags, tagListSeparator))
 
 	return nil
 }
@@ -233,7 +239,10 @@ func tagDiff(held, wanted []string) (drop, add []string) {
 // endpoint is a toggle, not a setter: calling it unconditionally would
 // flip a torrent that already matches, so the cached value is the guard
 // and a cache miss is engine.ErrNotFound — without a known current value
-// there is nothing safe to post.
+// there is nothing safe to post. A successful toggle writes the requested
+// value back into the cache, so a retry after a lost reply — the daemon
+// applied a toggle the caller never saw succeed — finds the guard
+// matching and does not flip the torrent back.
 func (c *Client) SetSequential(ctx context.Context, id string, sequential bool) error {
 	current, err := c.cachedSequential(id)
 	if err != nil {
@@ -243,9 +252,27 @@ func (c *Client) SetSequential(ctx context.Context, id string, sequential bool) 
 		return nil
 	}
 
-	_, err = c.do(ctx, http.MethodPost, pathToggleSeq, hashesForm(ref(id)))
+	if _, err := c.do(ctx, http.MethodPost, pathToggleSeq, hashesForm(ref(id))); err != nil {
+		return notFoundOr(err, pathToggleSeq)
+	}
 
-	return notFoundOr(err, pathToggleSeq)
+	c.rememberCacheField(ref(id), "seq_dl", sequential)
+
+	return nil
+}
+
+// rememberCacheField stores one applied mutation into the merged cache
+// so the read-then-act guards stay coherent until the next poll reports
+// the daemon's own value. A hash the cache does not hold is left alone:
+// the callers only reach here through a cache hit, and a dropped hash
+// will be rebuilt by the next full sync regardless.
+func (c *Client) rememberCacheField(hash, name string, value any) {
+	c.md.mu.Lock()
+	defer c.md.mu.Unlock()
+
+	if fields, held := c.md.cache.fields[hash]; held {
+		fields[name] = value
+	}
 }
 
 // cachedSequential reads the seq_dl flag of one cached torrent, false

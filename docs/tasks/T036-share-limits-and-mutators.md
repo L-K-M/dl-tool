@@ -183,9 +183,37 @@ The five named tests, re-run individually on the final tree:
 --- PASS: TestNilLimitsSendGlobalSentinel (0.00s)
 --- PASS: TestSeedTimeRoundsUpToMinutes (0.00s)
 --- PASS: TestSequentialToggleGuard (0.00s)
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.025s
---- PASS: TestPatchRollsBackOnEngineFailure (0.09s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.109s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.026s
+--- PASS: TestPatchRollsBackOnEngineFailure (0.37s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.385s
+```
+
+The same run after the review round, on the final commit:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+ok  	github.com/L-K-M/dl-tool/internal/api	85.585s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.242s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.166s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.290s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.393s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.029s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.871s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.197s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.381s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.980s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.380s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.067s
 ```
 
 Scope:
@@ -235,6 +263,52 @@ agree with each other; only the contract block's parameter *name* differs):
   `engine.ErrNotFound` for a hash the cache does not hold. The five hashes-carried mutations the daemon
   silently skips for unknown hashes (`applyToTorrents` in release-5.2.3) cannot be reported by it at all,
   so `notFoundOr` maps the 404 the two hash-addressed endpoints (`rename`) do answer.
+
+### Review round 1 (GLM 5.3, commit 7a7cbd4)
+
+Addressed:
+
+- `SetSequential` now writes the applied value back into the maindata cache after a successful toggle
+  (`rememberCacheField`), so a retry after a lost reply — or a repeat of the same request inside one poll
+  interval — cannot flip the torrent to the opposite of what was asked. Pinned by the extended
+  `TestSequentialToggleGuard`.
+- `SetTags` writes the applied set back on full success only, so consecutive patches inside one poll
+  interval diff against what the daemon now holds instead of silently unioning; a failed add side leaves
+  the cache stale so a retry converges. Pinned by the new `TestSetTagsWriteback`.
+- The destination pre-gate: an admitted task whose state cannot enter moving is refused with 422 before
+  the first engine call, so `SetLocation` is never issued for a request destined to fail. The moving-entry
+  set lives beside the gate as `movingEntryStates`, named against the store's transition table (the store
+  exports no legality probe and `internal/store/tasks.go` is outside this task's Files table).
+  `applyDestination`'s illegal-transition mapping stays as the compare-and-set backstop. Pinned by the
+  "a state that cannot enter moving is 422 before the engine call" subtest.
+- The `tagMutator`/`sequentialEngine` narrowing refusals are hoisted before the first engine call, so a
+  body mixing a supported field with an unsupported one cannot leave the engine half-mutated behind a
+  422.
+- `SetLocation`'s engine-side guard now matches the row-write guard (`body.Destination != nil`), not the
+  resolved string.
+- `TestPatchRollsBackOnEngineFailure` now covers all five mutators (the relocation case also pins the
+  state, the destination column and the empty event log); the one-sided share subtest pins the nil half
+  of the first call; `TestPatchDestination` gained the non-normalized in-root path (stored cleaned) and
+  the pre-gate subtests; `TestActionStandInCapsMatchAdapters` fails if the stand-in capability lists
+  drift from the real adapters.
+
+Declined, with reasons:
+
+- Schema `minimum: 0` on the four limit fields: the negative-limit 422 of doc 05 §5.5 is already
+  enforced and tested at the handler (`buildTaskPatch` field errors), before any engine call; moving the
+  check into huma's schema validation would change the documented problem shape
+  (`/problems/validation-failed` with `errors[]`) for no behavioural gain, and the fields predate this
+  task (T022).
+- The remaining `api/openapi.json` schema findings (tags/urls maxItems, rid required, blob
+  contentEncoding, untyped Delta maps, SSE id format, trailing newline, `elapsed_ms` minimum, and the
+  FileSelection duplication): all are pre-existing properties of operations and structs owned by other
+  tasks, reach the spec only through their source structs, and `api/openapi.json` is generated — editing
+  it by hand is forbidden and touching the owning source files is outside this task's Files table.
+- The doc 05 §5.5 sentence about engine-side partial application after a 503: `docs/05-api-contract.md`
+  is outside the Files table; the clarification lives in `applyPatchMutators`' doc comment instead.
+- The T037 index mismatch claim: per-task rate limits are wired since T022
+  (`TestPatchTaskAppliesRateLimit` pins `SetRateLimits` on a running task); T037 owns the qBittorrent
+  adapter's own rate-limit calls, not this endpoint.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

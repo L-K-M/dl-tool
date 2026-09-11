@@ -119,6 +119,19 @@ const pauseLeaseWait = 5 * time.Second
 // taskActions is the action vocabulary actionEnum spells out.
 var taskActions = strings.Split(actionEnum, ",")
 
+// movingEntryStates is the moving-entry edge set of the store's transition
+// table (docs/04-data-model.md section 8.1; internal/store exports no
+// legality probe). The destination pre-gate reads it so a relocation that
+// cannot enter moving is refused before the engine is ever told — that
+// keeps SetLocation side-effect free for a request destined to fail.
+// Keep it in step with the table.
+var movingEntryStates = []string{
+	string(engine.StateChecking),
+	string(engine.StateCompleted),
+	string(engine.StateExtracting),
+	string(engine.StateSeeding),
+}
+
 // ActionsInput is the body of POST /tasks/actions (docs/05-api-contract.md
 // section 5.7).
 type ActionsInput struct {
@@ -765,6 +778,14 @@ func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetT
 		if err != nil {
 			return nil, destinationRejected(*in.Body.Destination)
 		}
+		// An admitted task whose state cannot enter moving would otherwise
+		// have the engine relocate its data and only then fail the
+		// transition; the legality is decided here, before the first
+		// engine call, so the refusal touches nothing. Unadmitted tasks
+		// own no data yet and enter no state.
+		if task.EngineRef != nil && !slices.Contains(movingEntryStates, task.State) {
+			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailIllegalState)
+		}
 	}
 
 	// The live applications run in the order of the mutator block below,
@@ -970,7 +991,10 @@ func (h *TaskHandlers) applyLiveRateLimits(ctx context.Context, task store.Task,
 // no engine holds yet persists everything and applies it at admission
 // time instead. The share limits are sent as the merge of the patch with
 // the stored row — the daemon takes both limits on every call, and an
-// omitted field is untouched, never reset to the global default.
+// omitted field is untouched, never reset to the global default. The 503
+// promise covers the stored row: engines are not transactional, so a
+// failure on a later mutator can leave an earlier one applied engine-side
+// until the poller reconciles the drift.
 func (h *TaskHandlers) applyPatchMutators(
 	ctx context.Context,
 	task store.Task,
@@ -988,6 +1012,21 @@ func (h *TaskHandlers) applyPatchMutators(
 
 	id := engineTaskID(task.Engine, task.EngineRef)
 
+	// The narrowing failures are static facts about the registered engine,
+	// so they are decided before the first engine call: a body mixing a
+	// supported field with an unsupported one must not leave the engine
+	// half-mutated behind a 422.
+	if body.Tags != nil {
+		if _, ok := e.(tagMutator); !ok {
+			return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailMutatorUnsupported)
+		}
+	}
+	if body.Sequential != nil {
+		if _, ok := e.(sequentialEngine); !ok {
+			return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailMutatorUnsupported)
+		}
+	}
+
 	if body.Category != nil {
 		if err := e.SetCategory(ctx, id, *body.Category); err != nil {
 			return patchEngineProblem(ctx, task.ID, err)
@@ -995,23 +1034,13 @@ func (h *TaskHandlers) applyPatchMutators(
 	}
 
 	if body.Tags != nil {
-		tagger, ok := e.(tagMutator)
-		if !ok {
-			// The engine declares tags but carries no setter — the same
-			// class of refusal as a missing capability.
-			return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailMutatorUnsupported)
-		}
-		if err := tagger.SetTags(ctx, id, body.Tags); err != nil {
+		if err := e.(tagMutator).SetTags(ctx, id, body.Tags); err != nil {
 			return patchEngineProblem(ctx, task.ID, err)
 		}
 	}
 
 	if body.Sequential != nil {
-		seq, ok := e.(sequentialEngine)
-		if !ok {
-			return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailMutatorUnsupported)
-		}
-		if err := seq.SetSequential(ctx, id, *body.Sequential); err != nil {
+		if err := e.(sequentialEngine).SetSequential(ctx, id, *body.Sequential); err != nil {
 			return patchEngineProblem(ctx, task.ID, err)
 		}
 	}
@@ -1035,7 +1064,7 @@ func (h *TaskHandlers) applyPatchMutators(
 		}
 	}
 
-	if destination != "" {
+	if body.Destination != nil {
 		if err := e.SetLocation(ctx, id, destination); err != nil {
 			return patchEngineProblem(ctx, task.ID, err)
 		}
@@ -1064,9 +1093,10 @@ func patchEngineProblem(ctx context.Context, taskID string, err error) error {
 // reports its post-move state (docs/04-data-model.md section 8.1). The
 // write runs only after SetLocation succeeded, so an engine that could
 // not take the new location leaves the row untouched. An unadmitted task
-// owns no data yet and enters no state; a task whose state cannot enter
-// moving keeps the new destination and answers 422 — the state machine
-// refused the transition, not the relocation.
+// owns no data yet and enters no state. The illegal-transition mapping is
+// the backstop for a state that changed under the request: PatchTask's
+// pre-gate refused every state that cannot enter moving before the first
+// engine call, so only a compare-and-set miss lands here.
 func (h *TaskHandlers) applyDestination(ctx context.Context, id, destination string, admitted bool) error {
 	result, err := h.db.ExecContext(ctx, querySetTaskDestination, destination, time.Now().UnixMilli(), id)
 	if err != nil {

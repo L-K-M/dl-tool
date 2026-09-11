@@ -23,6 +23,8 @@ import (
 
 	"github.com/L-K-M/dl-tool/internal/config"
 	"github.com/L-K-M/dl-tool/internal/engine"
+	"github.com/L-K-M/dl-tool/internal/engine/aria2"
+	"github.com/L-K-M/dl-tool/internal/engine/qbittorrent"
 	"github.com/L-K-M/dl-tool/internal/fsx"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
@@ -1220,9 +1222,12 @@ VALUES (?, 'linux', '/data/linux', 0, 0)`, store.NewID(store.PrefixCategory)); e
 			t.Fatalf("status %d, body %s", response.Code, response.Body.String())
 		}
 		calls := env.qbittorrent.recorded()
+		// The first call pinned the ratio half alone with the time half
+		// nil — the stored column is NULL — so the second carrying the
+		// stored 2.5 is a real merge, not a coincidence of defaults.
 		want := "SetShareLimits qbittorrent:" + qbtHash + " 2.5 3600"
-		if len(calls) != 2 || calls[1] != want {
-			t.Errorf("qbittorrent calls = %v, want the second to carry the stored ratio [%s]", calls, want)
+		if len(calls) != 2 || calls[0] != "SetShareLimits qbittorrent:"+qbtHash+" 2.5 nil" || calls[1] != want {
+			t.Errorf("qbittorrent calls = %v, want [%s 2.5 nil] then [%s]", calls, "SetShareLimits", want)
 		}
 	})
 
@@ -1267,8 +1272,9 @@ func TestPatchSequentialUnsupported(t *testing.T) {
 // TestPatchDestination pins the relocation flow: the engine is told the
 // resolved location before the row changes, the row then carries it and
 // an admitted task enters moving with one task.moved event, an
-// unadmitted task just changes its destination, and a path outside every
-// root is the 403 that touches nothing.
+// unadmitted task just changes its destination, a path outside every
+// root is the 403 that touches nothing, and a state that cannot enter
+// moving is refused before the engine is ever told.
 func TestPatchDestination(t *testing.T) {
 	destinationInside := func(t *testing.T, env *actionsTestEnv) string {
 		t.Helper()
@@ -1355,45 +1361,160 @@ func TestPatchDestination(t *testing.T) {
 			t.Errorf("destination = %q, want the untouched /data", stored)
 		}
 	})
+
+	t.Run("a state that cannot enter moving is 422 before the engine call", func(t *testing.T) {
+		env := newActionsTestEnv(t)
+		id := env.seedBitTorrentTask(t, nil) // downloading: no moving edge
+
+		response := env.patchTask(t, id,
+			map[string]any{"destination": filepath.Join(env.dataRoot, "linux")})
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+		env.qbittorrent.assertNoCalls(t)
+		if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+			t.Errorf("state = %q, want the unchanged downloading", state)
+		}
+		var stored string
+		if err := env.db.GetContext(t.Context(), &stored,
+			`SELECT destination FROM tasks WHERE id = ?`, id); err != nil {
+			t.Fatalf("read destination: %v", err)
+		}
+		if stored != "/data" {
+			t.Errorf("destination = %q, want the untouched /data", stored)
+		}
+	})
+
+	t.Run("a non-normalized in-root destination is stored cleaned", func(t *testing.T) {
+		env := newActionsTestEnv(t)
+		id := env.seedBitTorrentTask(t, func(task *store.Task) { task.State = "seeding" })
+
+		// Built by concatenation so nothing cleans it before the handler.
+		messy := env.dataRoot + "/linux/../linux"
+		response := env.patchTask(t, id, map[string]any{"destination": messy})
+		if response.Code != http.StatusOK {
+			t.Fatalf("status %d, body %s", response.Code, response.Body.String())
+		}
+
+		want := filepath.Join(env.dataRoot, "linux")
+		if calls := env.qbittorrent.recorded(); !slices.Equal(calls,
+			[]string{"SetLocation qbittorrent:" + qbtHash + " " + want}) {
+			t.Errorf("qbittorrent calls = %v, want the cleaned %s", calls, want)
+		}
+		if task := decodeTaskBody(t, response); task.Destination != want {
+			t.Errorf("destination = %q, want the cleaned %q", task.Destination, want)
+		}
+	})
 }
 
-// TestPatchRollsBackOnEngineFailure pins the 503 of doc 05 section 5.5:
-// when the engine cannot take a patched field, nothing is persisted and
-// the row keeps both its columns and its event log untouched.
+// TestPatchRollsBackOnEngineFailure pins the 503 of doc 05 section 5.5 for
+// every mutator: when the engine cannot take a patched field, nothing is
+// persisted and the row keeps its columns and its event log untouched —
+// for the relocation, also the state and the destination it would have
+// moved.
 func TestPatchRollsBackOnEngineFailure(t *testing.T) {
-	env := newActionsTestEnv(t)
-	env.qbittorrent.categoryErr = engine.ErrUnavailable
+	for _, tc := range []struct {
+		name  string
+		fail  func(*actionEngine)
+		body  map[string]any
+		state string // the seeded state; the relocation needs a moving-entry one
+	}{
+		{
+			name: "category",
+			fail: func(e *actionEngine) { e.categoryErr = engine.ErrUnavailable },
+			body: map[string]any{"name": "renamed fixture", "category": "linux"},
+		},
+		{
+			name: "tags",
+			fail: func(e *actionEngine) { e.tagsErr = engine.ErrUnavailable },
+			body: map[string]any{"tags": []string{"iso"}},
+		},
+		{
+			name: "sequential",
+			fail: func(e *actionEngine) { e.sequentialErr = engine.ErrUnavailable },
+			body: map[string]any{"sequential": true},
+		},
+		{
+			name: "share limits",
+			fail: func(e *actionEngine) { e.shareErr = engine.ErrUnavailable },
+			body: map[string]any{"ratio_limit": 2.5},
+		},
+		{
+			name:  "location",
+			fail:  func(e *actionEngine) { e.locationErr = engine.ErrUnavailable },
+			state: "seeding",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newActionsTestEnv(t)
+			tc.fail(env.qbittorrent)
 
-	if _, err := env.db.ExecContext(t.Context(),
-		`INSERT INTO categories (id, name, save_path, created_at, updated_at)
+			if _, err := env.db.ExecContext(t.Context(),
+				`INSERT INTO categories (id, name, save_path, created_at, updated_at)
 VALUES (?, 'linux', '/data/linux', 0, 0)`, store.NewID(store.PrefixCategory)); err != nil {
-		t.Fatalf("seed category: %v", err)
+				t.Fatalf("seed category: %v", err)
+			}
+
+			state := string(engine.StateDownloading)
+			if tc.state != "" {
+				state = tc.state
+			}
+			id := env.seedBitTorrentTask(t, func(task *store.Task) { task.State = state })
+
+			body := tc.body
+			if body == nil {
+				body = map[string]any{"destination": filepath.Join(env.dataRoot, "linux")}
+			}
+			response := env.patchTask(t, id, body)
+			assertProblem(t, response, http.StatusServiceUnavailable, SlugEngineUnavailable)
+
+			if calls := env.qbittorrent.recorded(); len(calls) != 1 {
+				t.Errorf("qbittorrent calls = %v, want the one failed call", calls)
+			}
+
+			var stored struct {
+				Name        string  `db:"name"`
+				CategoryID  *string `db:"category_id"`
+				State       string  `db:"state"`
+				Destination string  `db:"destination"`
+			}
+			if err := env.db.GetContext(t.Context(), &stored,
+				`SELECT name, category_id, state, destination FROM tasks WHERE id = ?`, id); err != nil {
+				t.Fatalf("read row: %v", err)
+			}
+			if stored.Name != "actions-fixture" || stored.CategoryID != nil ||
+				stored.State != state || stored.Destination != "/data" {
+				t.Errorf("row = %+v, want the untouched seeded values", stored)
+			}
+			if codes := env.taskEventCodes(t, id); len(codes) != 0 {
+				t.Errorf("event codes = %v, want none", codes)
+			}
+		})
+	}
+}
+
+// TestActionStandInCapsMatchAdapters fails when the stand-in capability
+// lists stop mirroring the real adapters: the capability gates under
+// test must keep answering production's verdicts, and a drifted list
+// renders yesterday's instead. Both constructors perform no I/O, so the
+// comparison needs no daemon.
+func TestActionStandInCapsMatchAdapters(t *testing.T) {
+	aria2Real, err := aria2.New(aria2.Config{URL: "http://aria2:6800/jsonrpc"}, nil)
+	if err != nil {
+		t.Fatalf("build aria2 adapter: %v", err)
+	}
+	qbtReal, err := qbittorrent.New(qbittorrent.Config{BaseURL: "http://qbittorrent:8080"}, nil)
+	if err != nil {
+		t.Fatalf("build qbittorrent adapter: %v", err)
 	}
 
-	id := env.seedBitTorrentTask(t, nil)
-
-	response := env.patchTask(t, id, map[string]any{"name": "renamed fixture", "category": "linux"})
-	assertProblem(t, response, http.StatusServiceUnavailable, SlugEngineUnavailable)
-
-	if calls := env.qbittorrent.recorded(); !slices.Equal(calls,
-		[]string{"SetCategory qbittorrent:" + qbtHash + " linux"}) {
-		t.Errorf("qbittorrent calls = %v, want the one failed call", calls)
+	env := newActionsTestEnv(t)
+	if !slices.Equal(env.aria2.Capabilities(), aria2Real.Capabilities()) {
+		t.Errorf("aria2 stand-in caps = %v, real = %v",
+			env.aria2.Capabilities(), aria2Real.Capabilities())
 	}
-
-	var stored struct {
-		Name       string  `db:"name"`
-		CategoryID *string `db:"category_id"`
-		State      string  `db:"state"`
-	}
-	if err := env.db.GetContext(t.Context(), &stored,
-		`SELECT name, category_id, state FROM tasks WHERE id = ?`, id); err != nil {
-		t.Fatalf("read row: %v", err)
-	}
-	if stored.Name != "actions-fixture" || stored.CategoryID != nil || stored.State != string(engine.StateDownloading) {
-		t.Errorf("row = %+v, want the untouched seeded values", stored)
-	}
-	if codes := env.taskEventCodes(t, id); len(codes) != 0 {
-		t.Errorf("event codes = %v, want none", codes)
+	if !slices.Equal(env.qbittorrent.Capabilities(), qbtReal.Capabilities()) {
+		t.Errorf("qbittorrent stand-in caps = %v, real = %v",
+			env.qbittorrent.Capabilities(), qbtReal.Capabilities())
 	}
 }
 

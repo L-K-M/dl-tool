@@ -233,8 +233,10 @@ func TestSeedTimeRoundsUpToMinutes(t *testing.T) {
 }
 
 // TestSequentialToggleGuard pins the read-then-toggle rule: the endpoint
-// flips, so it is posted only when the cached seq_dl differs, and a hash
-// the cache does not hold errors instead of toggling blind.
+// flips, so it is posted only when the cached seq_dl differs, a hash the
+// cache does not hold errors instead of toggling blind, and a successful
+// toggle writes the requested value back so a retry cannot flip the
+// torrent to the opposite of what was asked.
 func TestSequentialToggleGuard(t *testing.T) {
 	f := newMutateFake(t, nil)
 	c := newMutateClient(t, f)
@@ -245,19 +247,24 @@ func TestSequentialToggleGuard(t *testing.T) {
 	require.Len(t, calls, 1)
 	require.Equal(t, url.Values{"hashes": {testHash}}, calls[0].Form)
 
-	// The cached value still reads false until the next poll reports the
-	// toggle, so a second true request would toggle again — the guard's
-	// whole point — and a matching request must issue nothing.
-	fresh := newMutateClient(t, f)
-	seedMutateCache(t, fresh, mutateTorrentBody("", true))
-	require.NoError(t, fresh.SetSequential(context.Background(), engine.NameQBittorrent+":"+testHash, true))
-	require.Len(t, f.callsTo(pathToggleSeq), 1, "a matching seq_dl must not toggle")
+	// A repeat of the same request inside one poll interval must not
+	// toggle again: the cache now holds the applied value.
+	require.NoError(t, c.SetSequential(context.Background(), engine.NameQBittorrent+":"+testHash, true))
+	require.Len(t, f.callsTo(pathToggleSeq), 1, "a repeat of the same value must not toggle")
+
+	// The opposite request does toggle, and lands the new value in the
+	// cache the same way.
+	require.NoError(t, c.SetSequential(context.Background(), engine.NameQBittorrent+":"+testHash, false))
+	calls = f.callsTo(pathToggleSeq)
+	require.Len(t, calls, 2)
+	require.NoError(t, c.SetSequential(context.Background(), engine.NameQBittorrent+":"+testHash, false))
+	require.Len(t, f.callsTo(pathToggleSeq), 2, "the written-back false must hold")
 
 	// A hash the cache does not hold: nothing safe to post.
 	unknown := newMutateClient(t, f)
 	err := unknown.SetSequential(context.Background(), engine.NameQBittorrent+":"+otherHash, true)
 	require.ErrorIs(t, err, engine.ErrNotFound)
-	require.Len(t, f.callsTo(pathToggleSeq), 1)
+	require.Len(t, f.callsTo(pathToggleSeq), 2)
 }
 
 // TestSetLocationForm pins torrents/setLocation: hashes plus the
@@ -345,6 +352,50 @@ func TestSetTagsDiff(t *testing.T) {
 	require.ErrorIs(t, err, engine.ErrNotFound)
 	require.Len(t, f.callsTo(pathRemoveTags), 2)
 	require.Len(t, f.callsTo(pathAddTags), 1)
+}
+
+// TestSetTagsWriteback pins the cache write-back: the applied set is what
+// the next diff inside one poll interval sees, and a failed add side
+// leaves the cache stale so a retry recomputes the same diff.
+func TestSetTagsWriteback(t *testing.T) {
+	f := newMutateFake(t, nil)
+	c := newMutateClient(t, f)
+	seedMutateCache(t, c, mutateTorrentBody("", false))
+
+	// a, then b, inside one poll interval: the second diff must run
+	// against the applied {a}, so it drops a and adds b — not a silent
+	// union {a, b}.
+	require.NoError(t, c.SetTags(context.Background(), engine.NameQBittorrent+":"+testHash, []string{"a"}))
+	require.NoError(t, c.SetTags(context.Background(), engine.NameQBittorrent+":"+testHash, []string{"b"}))
+	drops := f.callsTo(pathRemoveTags)
+	require.Len(t, drops, 1)
+	require.Equal(t, "a", drops[0].Form.Get("tags"))
+	adds := f.callsTo(pathAddTags)
+	require.Len(t, adds, 2)
+	require.Equal(t, "a", adds[0].Form.Get("tags"))
+	require.Equal(t, "b", adds[1].Form.Get("tags"))
+
+	// A repeat of the applied set issues nothing on either side.
+	require.NoError(t, c.SetTags(context.Background(), engine.NameQBittorrent+":"+testHash, []string{"b"}))
+	require.Len(t, f.callsTo(pathRemoveTags), 1)
+	require.Len(t, f.callsTo(pathAddTags), 2)
+
+	// A failed add leaves the cache at the last fully applied set: the
+	// retry recomputes the same diff and converges.
+	failing := newMutateFake(t, func(fake *mutateFake) {
+		fake.status = map[string]int{"/api/v2/torrents/addTags": http.StatusInternalServerError}
+	})
+	failingClient := newMutateClient(t, failing)
+	seedMutateCache(t, failingClient, mutateTorrentBody("", false))
+	err := failingClient.SetTags(context.Background(), engine.NameQBittorrent+":"+testHash, []string{"x"})
+	require.Error(t, err)
+	failedAdds := failing.callsTo(pathAddTags)
+	require.Len(t, failedAdds, 1)
+
+	failing.status["/api/v2/torrents/addTags"] = 0
+	require.NoError(t, failingClient.SetTags(context.Background(), engine.NameQBittorrent+":"+testHash, []string{"x"}))
+	require.Len(t, failing.callsTo(pathRemoveTags), 0)
+	require.Len(t, failing.callsTo(pathAddTags), 2)
 }
 
 // TestShareLimitsNotFoundMap pins the 404 mapping of the hashes-carried
