@@ -56,6 +56,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/engine/enginetest"
 	"github.com/L-K-M/dl-tool/internal/engine/qbittorrent"
 	"github.com/L-K-M/dl-tool/internal/secure"
+	"github.com/L-K-M/dl-tool/internal/store"
 	"github.com/L-K-M/dl-tool/internal/uri"
 )
 
@@ -1398,6 +1399,98 @@ func (f *inspectFake) lastCall(path string) recordedCall {
 // wires: a configured WebUI endpoint builds the client and registers it in
 // the engine registry, an empty URL leaves it absent, and a malformed URL
 // fails server construction loudly.
+func TestConformBootCorrection(t *testing.T) {
+	daemon := startDaemon(t)
+	session := newDaemonSession(t, daemon.baseURL)
+	preferences := func() map[string]any {
+		status, body := session.do(http.MethodGet, "app/preferences", nil)
+		require.Equal(t, http.StatusOK, status)
+		var prefs map[string]any
+		require.NoError(t, json.Unmarshal(body, &prefs))
+		return prefs
+	}
+	observed := make(map[string]any)
+	for key, value := range preferences() {
+		if strings.Contains(key, "queue") || strings.Contains(key, "max_active") {
+			observed[key] = value
+		}
+	}
+	excerpt, err := json.Marshal(observed)
+	require.NoError(t, err)
+	t.Logf("GET app/preferences queueing excerpt: %s", excerpt)
+
+	// Seed a stopped foreign torrent; boot and correction must leave it alone.
+	client := daemonClient(t, daemon.baseURL)
+	torrent := buildFixtureTorrent(t, fetchFixtureBody(t, mustFixtureURL(t), mustFixtureSHA(t)), "conformance-foreign.bin", mustFixtureURL(t))
+	hash, err := client.Add(t.Context(), engine.AddRequest{Blob: torrent.blob, BlobKind: "torrent", StartPaused: true})
+	require.NoError(t, err)
+	before := session.visibleTorrentHashes(hash)
+	enableATM := func() {
+		status, body := session.do(http.MethodPost, "app/setPreferences", url.Values{"json": {`{"auto_tmm_enabled":true}`}})
+		require.Equal(t, http.StatusOK, status, "%s", body)
+		require.Equal(t, true, preferences()["auto_tmm_enabled"])
+	}
+	enableATM()
+
+	root := t.TempDir()
+	cfg := &config.Config{ConfigDir: root, DataRoots: []string{root}, SessionTTL: time.Hour,
+		QBittorrentURL: daemon.baseURL, QBittorrentUser: qbtAdminUser, QBittorrentPass: secure.Secret(qbtAdminPass)}
+	db, err := store.Open(t.Context(), filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	server, err := api.NewServer(cfg, db, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	registered, ok := server.Engines.Get(engine.NameQBittorrent)
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, registered.Close()) })
+	require.Equal(t, false, preferences()["auto_tmm_enabled"], "boot must force ATM off")
+
+	// Authenticate through setup, then use the public list/correction operations.
+	token, err := os.ReadFile(filepath.Join(root, "setup-token"))
+	require.NoError(t, err)
+	payload, err := json.Marshal(map[string]string{"setup_token": string(token), "username": qbtAdminUser, "password": qbtAdminPass})
+	require.NoError(t, err)
+	setup := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/setup", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	server.Router.ServeHTTP(setup, req)
+	require.Equal(t, http.StatusCreated, setup.Code, "%s", setup.Body.String())
+	var auth struct {
+		CSRF string `json:"csrf_token"`
+	}
+	require.NoError(t, json.Unmarshal(setup.Body.Bytes(), &auth))
+	response := setup.Result()
+	defer func() { require.NoError(t, response.Body.Close()) }()
+	call := func(method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/api/v1"+path, nil)
+		for _, cookie := range response.Cookies() {
+			req.AddCookie(cookie)
+		}
+		req.Header.Set("X-DLTOOL-CSRF", auth.CSRF)
+		recorder := httptest.NewRecorder()
+		server.Router.ServeHTTP(recorder, req)
+		require.Equal(t, http.StatusOK, recorder.Code, "%s", recorder.Body.String())
+		return recorder
+	}
+	listed := call(http.MethodGet, "/engines")
+	require.Contains(t, listed.Body.String(), "auto_tmm_enabled")
+	enableATM()
+	corrected := call(http.MethodPost, "/engines/eng_qbittorrent/test")
+	require.Contains(t, corrected.Body.String(), `"ok":true`)
+	require.Equal(t, false, preferences()["auto_tmm_enabled"])
+	require.Equal(t, before, session.torrentHashes())
+	status, body := session.do(http.MethodGet, "torrents/info", url.Values{"hashes": {hash}})
+	require.Equal(t, http.StatusOK, status)
+	var transfers []struct {
+		State   string `json:"state"`
+		AutoTMM bool   `json:"auto_tmm"`
+	}
+	require.NoError(t, json.Unmarshal(body, &transfers))
+	require.Len(t, transfers, 1)
+	require.Equal(t, "stoppedDL", transfers[0].State)
+	require.False(t, transfers[0].AutoTMM)
+}
+
 func TestNewServerRegistersQBittorrent(t *testing.T) {
 	discard := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
