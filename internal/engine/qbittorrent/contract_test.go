@@ -141,8 +141,15 @@ func seededConfPath(t *testing.T) string {
 		"Downloads\\TempPath=/downloads/incomplete/",
 		"WebUI\\Address=*",
 		"WebUI\\ServerDomains=*",
+		// The tests dial the daemon through Docker's mapped port, so the
+		// Host header carries that port, not 8080 — and qBittorrent
+		// rejects a Host whose port differs from its listening port
+		// outright (validateHostHeader, release-5.2.3 webapplication.cpp),
+		// the trap docs/06 section 5.2 names. This WebUI is dl-tool's own
+		// test fixture, so the validation is off.
+		"WebUI\\HostHeaderValidation=false",
 		"WebUI\\AuthSubnetWhitelistEnabled=true",
-		"WebUI\\AuthSubnetWhitelist=0.0.0.0/0",
+		"WebUI\\AuthSubnetWhitelist=0.0.0.0/0, ::/0",
 		"WebUI\\Username=" + qbtAdminUser,
 		"WebUI\\Password_PBKDF2=\"@ByteArray(" + secret + ")\"",
 		"",
