@@ -195,8 +195,98 @@ omits untracked files.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-No implementation evidence yet. This PR repairs the plan only; T101 and both index rows remain `todo`.
-Task Verification and `make ci` were not run locally for this documentation repair.
+### Implementation attempt on a62659bc897ee0d934f616645cfa1e28fc755f70
+
+Stopped before implementation: no Docker executable, Docker socket or `qbittorrent-nox` was found.
+No live queueing preferences were observed. T101 and both index rows remain `todo`; all acceptance
+boxes remain unchecked.
+
+Observed output:
+
+```text
+$ docker version --format '{{.Server.Version}}'
+/bin/bash: line 1: docker: command not found
+$ test -S /var/run/docker.sock; printf 'Docker socket check exit: %s\n' "$?"
+Docker socket check exit: 1
+```
+
+`make test-integration` exited 2. Failure excerpts:
+
+```text
+go test -tags=integration -count=1 -timeout=20m ./internal/engine/...
+--- FAIL: TestAria2Contract (0.05s)
+```
+
+```text
+get provider: rootless Docker not found, failed to create Docker provider
+```
+
+```text
+--- FAIL: TestQBittorrentContract (0.00s)
+```
+
+```text
+rootless Docker not found, failed to create Docker provider
+```
+
+`make ci` exited 2:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+sh: 1: eslint: not found
+make: *** [Makefile:25: lint] Error 127
+```
+
+The remaining Verification commands were not run. These are baseline failures, not implementation
+verification. Resume with Docker access and installed development dependencies.
+
+### Prerequisite investigation, 2026-09-12
+
+In the source checkout, `(cd web && npm ci && npm run lint)` exited 0.
+The earlier missing `eslint` was an uninstalled worktree dependency, not a code defect.
+Each fresh worktree still needs its dependencies installed.
+
+The container has no Docker executable/socket, no configured Docker environment keys and no sudo.
+A rootless namespace probe failed:
+
+```text
+$ unshare -Ur true
+unshare: unshare failed: Operation not permitted
+```
+
+PR #129 CI run [34688548897](https://github.com/L-K-M/dl-tool/actions/runs/34688548897) also exposed
+failures independent of this documentation-only change:
+
+```text
+--- FAIL: TestOwnershipResetRejectsStaleResponse/wire (2.01s)
+    sync_test.go:1507: Condition never satisfied
+    the forced full resync never ran
+--- FAIL: TestInspectMagnetLeavesNoHandle/daemon_primary_path (5.35s)
+    contract_test.go:878: expected: 0, actual: 1
+    InspectMagnet must leave torrents/info exactly as it found it
+```
+
+A focused local reproduction attempt did not fail:
+
+```text
+$ go test -race -count=100 ./internal/engine/qbittorrent -run '^TestOwnershipResetRejectsStaleResponse/wire$'
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 23.637s
+```
+
+This does not invalidate the CI failure or establish a fix. The live-daemon failure cannot be
+reproduced here without Docker. Neither failure has been repaired; no assertion was weakened.
+
+### Prior plan-repair validation
+
+No implementation evidence was recorded by the plan-repair PR. Task Verification and `make ci` were
+not run locally for that repair.
 
 Recovery validation:
 
@@ -215,3 +305,15 @@ The scope blockers recorded in PR #128 are resolved by the Files table and
 [Engines §9](../06-download-engines.md#9-engine-conformance-at-boot): configured-root wiring, boot/test
 orchestration, colocated unit/API tests and the ADR-required real-daemon test are now in scope.
 Implementation must still observe the queueing keys as directed above.
+
+The current workspace lacks Docker and a local qBittorrent daemon. The required pre-implementation
+live preference observation and integration verification cannot run; `make test-integration` confirms
+Docker provider failures. Provide an authorized Docker-capable workspace or isolated remote test
+daemon reachable from this container before resuming. Installing only the CLI is insufficient, and
+rootless Docker cannot start with the current namespace restrictions. Do not expose an unauthenticated
+Docker API; host Docker access is privileged.
+
+The unrelated CI failures above may require changes to `internal/engine/qbittorrent/sync_test.go`
+and `internal/engine/qbittorrent/inspect.go`, outside this task's Files table. Any such fix needs a
+separately authorized repair scope; do not silently add it to T101 or weaken its tests. T101 remains
+unimplemented and `todo`; this draft must not merge as task completion.
