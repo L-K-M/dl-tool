@@ -1470,6 +1470,11 @@ func TestOwnershipResetRejectsStaleResponse(t *testing.T) {
 	})
 
 	t.Run("wire", func(t *testing.T) {
+		const heldRequestIndex = 1
+		const resyncRequestIndex = heldRequestIndex + 1
+		const observationTimeout = 2 * time.Second
+		const observationTick = 2 * time.Millisecond
+
 		// The whole loop: a request held mid-flight while a source
 		// replacement lands is discarded, and the install's forced
 		// resync follows on the wire.
@@ -1481,7 +1486,7 @@ func TestOwnershipResetRejectsStaleResponse(t *testing.T) {
 				return http.StatusOK, fullBody(1, map[string]string{
 					testHash: torrentBodySpeed(testHash, "downloading", 111),
 				})
-			case step == 2:
+			case step == heldRequestIndex+1:
 				// Exactly the held request: a sentinel the cache
 				// must never accept.
 				return http.StatusOK, `{"rid":2,"torrents":{"` + testHash + `":{"dlspeed":999}}}`
@@ -1494,20 +1499,31 @@ func TestOwnershipResetRejectsStaleResponse(t *testing.T) {
 		require.NoError(t, err)
 		c.md.pollEvery = 5 * time.Millisecond
 		c.SetOwnershipFilter(staticSource(setOf(testHash)))
+		// Arm before Connect starts polling; release on failure before closing.
+		gateReached, gateRelease := f.armGate(heldRequestIndex)
+		releaseGate := sync.OnceFunc(func() { close(gateRelease) })
+		t.Cleanup(func() {
+			releaseGate()
+			require.NoError(t, c.Close())
+		})
 		require.NoError(t, c.Connect(context.Background()))
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
-
-		gateReached, gateRelease := f.armGate(1) // hold request #2
-		<-gateReached
+		select {
+		case <-gateReached:
+		case <-time.After(observationTimeout):
+			t.Fatal("the held delta request never arrived")
+		}
 		c.SetOwnershipFilter(staticSource(setOf(testHash))) // epoch bump mid-flight
-		close(gateRelease)
+		releaseGate()
 
-		// The install's forced resync runs on the wire, and the sentinel
-		// never lands.
+		// Let the following delta pass before observing the resync. A busy
+		// runner can miss the brief window where rid=0 is the latest request.
 		require.Eventually(t, func() bool {
-			seen := f.ridsSeen()
-			return len(seen) >= 3 && seen[len(seen)-1] == "0"
-		}, 2*time.Second, 2*time.Millisecond, "the forced full resync never ran")
+			return len(f.ridsSeen()) > resyncRequestIndex+1
+		}, observationTimeout, observationTick, "the delta after resync never ran")
+
+		// Assert the exact successor, not whichever request is latest now.
+		require.Equal(t, "0", f.ridsSeen()[resyncRequestIndex],
+			"the first request after the stale response must force a full resync")
 
 		require.Never(t, func() bool {
 			info, err := c.Get(context.Background(), engine.NameQBittorrent+":"+testHash)

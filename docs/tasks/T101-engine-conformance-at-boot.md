@@ -29,6 +29,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
+| `.github/workflows/task-verification.yml` | create | Provide the Docker-capable verification runner defined in Step 13. |
 | `internal/api/server.go` | modify | Supply aria2 data roots and wire the bounded boot probe. |
 | `internal/api/settings.go` | modify | Share the boot/test probe and record its outcome in `engines.last_error`. |
 | `internal/api/settings_test.go` | modify | Observe boot, configured roots and test/list outcomes through `NewServer`. |
@@ -142,6 +143,13 @@ aria2 checks, exactly these:
     ATM enabled, boot through `NewServer`, observe the named warning and read back the forced setting.
     Re-enable ATM, invoke `POST /engines/{id}/test` as the correction action and read back false again.
     Record the live queueing preference excerpt here before implementing writes.
+13. Add the scoped verification workflow on GitHub-hosted runners, triggered by task-branch pushes or
+    `workflow_dispatch`, never `pull_request_target`. Grant only `contents: read`, disable checkout
+    credential persistence and expose no repository secrets. Select a task through a validated task
+    ID, not an arbitrary path or shell command. Extract the first `bash` fence under its exact
+    `## Verification` heading; missing, empty or ambiguous task/heading selection and malformed fences
+    must fail, never produce a green no-op. Run the extracted block with `bash -euo pipefail`, then
+    `make ci`. Record the actual checked-out commit SHA and task ID in the run log and summary.
 
 ## Acceptance criteria
 - [ ] `rss_processing_enabled`, `scheduler_enabled` and `auto_tmm_enabled` are all false after `Conform`
@@ -283,6 +291,25 @@ ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 23.637s
 This does not invalidate the CI failure or establish a fix. The live-daemon failure cannot be
 reproduced here without Docker. Neither failure has been repaired; no assertion was weakened.
 
+### Prerequisite repairs, 2026-09-12
+
+The earlier failures above are superseded by merged repairs:
+
+- [PR #130](https://github.com/L-K-M/dl-tool/pull/130) waits for torrent visibility before inspection
+  baselines and fixture configuration. Immediate count/hash and completion assertions remain.
+  [CI at c2dc3d7](https://github.com/L-K-M/dl-tool/actions/runs/34718709266) passed, including real
+  container integration. Local regressions failed before the repair, then passed.
+- [PR #131](https://github.com/L-K-M/dl-tool/pull/131) asserts the exact forced-resync request after
+  a deliberately delayed observation. The old assertion failed under that delay; 100 race-enabled
+  repetitions passed after repair. [CI at 2c9e3dd](https://github.com/L-K-M/dl-tool/actions/runs/34719396365)
+  passed, including real container integration.
+- [PR #132](https://github.com/L-K-M/dl-tool/pull/132) authorizes the CI execution route in Step 13.
+  It neither implements the workflow nor completes T101.
+
+No production adapter repair was needed. No live queueing excerpt has been observed for T101 yet.
+Task Verification and acceptance criteria remain pending; use the scoped CI route, not Docker
+provisioning on this host.
+
 ### Prior plan-repair validation
 
 No implementation evidence was recorded by the plan-repair PR. Task Verification and `make ci` were
@@ -300,20 +327,24 @@ Recovery validation:
 🔍 2389 Total (in 187ms) 🔗 561 Unique ✅ 2374 OK 🚫 0 Errors 👻 15 Excluded
 ```
 
+CI execution scope repair, 2026-09-12: no implementation or completion claim. Task Verification was not
+run. With the development tools on `PATH`, `make doclint` exited 0:
+
+```text
+./scripts/doclint.sh
+🔍 2389 Total (in 189ms) 🔗 561 Unique ✅ 2374 OK 🚫 0 Errors 👻 15 Excluded
+```
+
+`git diff --check` exited 0. Only this task file changed; both index rows remain `todo`.
+
 ## Blocked
 The scope blockers recorded in PR #128 are resolved by the Files table and
 [Engines §9](../06-download-engines.md#9-engine-conformance-at-boot): configured-root wiring, boot/test
 orchestration, colocated unit/API tests and the ADR-required real-daemon test are now in scope.
 Implementation must still observe the queueing keys as directed above.
 
-The current workspace lacks Docker and a local qBittorrent daemon. The required pre-implementation
-live preference observation and integration verification cannot run; `make test-integration` confirms
-Docker provider failures. Provide an authorized Docker-capable workspace or isolated remote test
-daemon reachable from this container before resuming. Installing only the CLI is insufficient, and
-rootless Docker cannot start with the current namespace restrictions. Do not expose an unauthenticated
-Docker API; host Docker access is privileged.
-
-The unrelated CI failures above may require changes to `internal/engine/qbittorrent/sync_test.go`
-and `internal/engine/qbittorrent/inspect.go`, outside this task's Files table. Any such fix needs a
-separately authorized repair scope; do not silently add it to T101 or weaken its tests. T101 remains
-unimplemented and `todo`; this draft must not merge as task completion.
+The owner declined local or remote Docker provisioning. Existing CI runs the integration suite but
+not this task's separate verbose boot/correction command. The Files table now authorizes a CI workflow
+defined in Step 13. Required observations, assertions and completion criteria are unchanged. The
+workflow remains to be built. Earlier requests for Docker access are superseded; use GitHub-hosted
+execution. T101 remains unimplemented and `todo`; this draft must not merge as task completion.
