@@ -176,7 +176,14 @@ func startDaemon(t *testing.T) string {
 	defer cancel()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        qbtImage,
+			Image: qbtImage,
+			// Without a /downloads volume the image's download directory
+			// stays root-owned while qbittorrent-nox runs as the abc user,
+			// so the very first piece write fails with a file error. The
+			// image's documented switch for self-managed permissions runs
+			// the daemon as root instead; a throwaway CI container with no
+			// data worth protecting is exactly that case.
+			Env:          map[string]string{"LSIO_NON_ROOT_USER": "1"},
 			ExposedPorts: []string{qbtWebUIPort},
 			// The readiness probe is the unauthenticated app/version GET
 			// the seeded subnet whitelist admits with a 200.
@@ -614,14 +621,14 @@ func TestQBittorrentDaemonLimitReadback(t *testing.T) {
 	require.Equal(t, requested, s.session.downloadLimit(id),
 		"the daemon must report the limit the adapter set")
 	s.session.injectDownloadLimit(id, wrongThreeQuarters)
-	require.Equal(t, wrongThreeQuarters, s.session.downloadLimit(id),
+	require.Equal(t, int64(wrongThreeQuarters), s.session.downloadLimit(id),
 		"the readback must query the daemon, not echo the adapter's request")
 
 	// Global: the same two steps through the daemon's global options.
 	require.NoError(t, s.SetRateLimits(ctx, "", &requested, nil))
 	require.Equal(t, requested, s.session.downloadLimit(""))
 	s.session.injectDownloadLimit("", wrongThreeQuarters)
-	require.Equal(t, wrongThreeQuarters, s.session.downloadLimit(""))
+	require.Equal(t, int64(wrongThreeQuarters), s.session.downloadLimit(""))
 }
 
 // TestQBittorrentMetadataEndpointsProbe is the live probe T038's step 1
@@ -704,10 +711,11 @@ func TestQBittorrentMetadataEndpointsProbe(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &parsed))
 	require.Len(t, parsed, 1)
 
-	// No file part is the documented refusal.
+	// An invalid uploaded part is the BadData refusal: 415 with the
+	// daemon's own message — the observed shape, recorded verbatim.
 	status, body = session.doMultipart("torrents/parseMetadata", "nothing", "empty", nil)
-	t.Logf("probe: POST torrents/parseMetadata <no torrent part> -> %d %s", status, body)
-	require.Equal(t, http.StatusBadRequest, status)
+	t.Logf("probe: POST torrents/parseMetadata <invalid part> -> %d %s", status, body)
+	require.Equal(t, http.StatusUnsupportedMediaType, status)
 }
 
 // mustFixtureURL returns just the fixture URL.
