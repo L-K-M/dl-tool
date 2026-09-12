@@ -203,6 +203,13 @@ func startDaemon(t *testing.T) string {
 	t.Cleanup(func() {
 		terminateCtx, cancel := context.WithTimeout(context.Background(), containerTimeout)
 		defer cancel()
+		// The daemon's own log is the ground truth a failed subtest needs:
+		// stop, finish and web-seed events all land here with timestamps.
+		if logs, logErr := container.Logs(terminateCtx); logErr == nil {
+			if data, readErr := io.ReadAll(logs); readErr == nil {
+				t.Logf("daemon log:\n%s", data)
+			}
+		}
 		require.NoError(t, container.Terminate(terminateCtx))
 	})
 
@@ -577,11 +584,41 @@ func (s *suiteEngine) Add(ctx context.Context, req engine.AddRequest) (string, e
 	s.owned[strings.TrimPrefix(id, engine.NameQBittorrent+":")] = struct{}{}
 	s.mu.Unlock()
 
+	added := time.Now()
 	require.Eventually(s.t, func() bool {
 		_, err := s.Get(ctx, id)
 		return err == nil
 	}, addVisibilityTimeout, 100*time.Millisecond, "the engine's own Get never observed task %s", id)
+	s.t.Logf("suite wiring: add visible after %s (%s)", time.Since(added), id)
 	return id, nil
+}
+
+// Pause, Resume and SetRateLimits are timed pass-throughs: the suite's
+// phases are what the throttle assertions measure, so their boundaries
+// belong in the test log.
+func (s *suiteEngine) Pause(ctx context.Context, id string) error {
+	at := time.Now()
+	err := s.Client.Pause(ctx, id)
+	s.t.Logf("suite wiring: Pause -> %v after %s (%s)", err, time.Since(at), id)
+	return err
+}
+
+func (s *suiteEngine) Resume(ctx context.Context, id string) error {
+	at := time.Now()
+	err := s.Client.Resume(ctx, id)
+	s.t.Logf("suite wiring: Resume -> %v after %s (%s)", err, time.Since(at), id)
+	return err
+}
+
+func (s *suiteEngine) SetRateLimits(ctx context.Context, id string, down, up *int64) error {
+	at := time.Now()
+	err := s.Client.SetRateLimits(ctx, id, down, up)
+	limit := int64(-1)
+	if down != nil {
+		limit = *down
+	}
+	s.t.Logf("suite wiring: SetRateLimits(%d) -> %v after %s (%s)", limit, err, time.Since(at), id)
+	return err
 }
 
 // DaemonDownloadLimit implements the suite's readback: the daemon's
