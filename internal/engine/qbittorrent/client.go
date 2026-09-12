@@ -939,13 +939,59 @@ func (c *Client) rememberLifecycle(pair lifecyclePair) {
 // data — the engine.Engine spelling. An id the maindata cache does not
 // hold answers engine.ErrNotFound before any daemon call, because the
 // daemon's own delete answer is a silent no-op for an unknown hash. The
-// remove-with-data switch of docs/06 section 5.7 is removeTorrent, the
-// unexported form the delete action reaches through its own wiring.
+// return waits for the cache to observe the removal too: Get reads the
+// same cache, so a caller that removes and immediately re-reads must not
+// see the task that is already gone. The remove-with-data switch of
+// docs/06 section 5.7 is removeTorrent, the unexported form the delete
+// action reaches through its own wiring.
 func (c *Client) Remove(ctx context.Context, id string) error {
 	if err := c.requireOwned(id); err != nil {
 		return err
 	}
-	return c.removeTorrent(ctx, id, false)
+	if err := c.removeTorrent(ctx, id, false); err != nil {
+		return err
+	}
+	c.awaitCacheDrop(ctx, ref(id))
+	return nil
+}
+
+// removalLagBudget bounds how long Remove waits for its own sync/maindata
+// cache to observe a removal: two ordinary poll intervals plus a restart
+// of a failed poll, enough that the wait is a wait and not a timeout.
+const removalLagBudget = 3 * time.Second
+
+// awaitCacheDrop waits until the merged cache no longer holds hash, so a
+// cache-backed Get cannot answer for a task the daemon has removed. The
+// daemon already accepted the removal when this runs, so an exhausted
+// budget or a cancelled caller logs a warning and returns success — the
+// next poll drops the hash either way, and a succeeded removal must not
+// be reported as failed.
+func (c *Client) awaitCacheDrop(ctx context.Context, hash string) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for c.holdsHash(hash) {
+		select {
+		case <-ctx.Done():
+			slog.Debug("qbittorrent: remove wait cut short by the caller's context",
+				"engine", engine.NameQBittorrent, "hash", hash)
+			return
+		case <-time.After(removalLagBudget):
+			slog.Warn("qbittorrent: removed task still held by the sync/maindata cache",
+				"engine", engine.NameQBittorrent, "hash", hash)
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// holdsHash reports whether the merged cache still holds one hash.
+func (c *Client) holdsHash(hash string) bool {
+	c.md.mu.Lock()
+	defer c.md.mu.Unlock()
+
+	_, held := c.md.cache.fields[hash]
+	return held
 }
 
 // removeTorrent deletes a torrent, optionally with its data. It is
