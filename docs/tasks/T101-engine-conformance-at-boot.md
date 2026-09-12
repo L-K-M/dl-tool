@@ -166,7 +166,28 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Blocker documentation only. `make doclint` output:
+
+```text
+./scripts/doclint.sh
+🔍 2385 Total (in 192ms) 🔗 560 Unique ✅ 2370 OK 🚫 0 Errors 👻 15 Excluded
+```
+
+`git diff --check` exited 0 with no output. Task Verification and `make ci` were not run.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Stopped before implementation:
+
+1. The aria2 `dir` check requires configured data roots, but `internal/engine/aria2/client.go` stores
+   none, and `internal/api/server.go` passes none to either `aria2.New` or `NewSettingsHandlers`.
+   `Conform(ctx, maxActiveTotal)` has no roots argument. Files excludes both the client configuration
+   and composition root needed to supply `cfg.DataRoots`. Add those paths and define how the roots
+   reach the probe; do not re-read environment variables or hardcode a root.
+2. Verification requires `TestConformRaisesAria2Concurrency`, but Files permits only
+   `internal/engine/qbittorrent/conform_test.go` as a test file.
+   [Testing §1](../13-testing-and-verification.md#1-test-pyramid) requires tests beside their source.
+   Add `internal/engine/aria2/conform_test.go` to Files before implementing the aria2 check. Also scope
+   an API test file for the required `NewServer` and `GET /engines` acceptance coverage rather than
+   placing cross-package tests in the qBittorrent adapter.
+
+No implementation was attempted. Task status and both index rows remain `todo`.
