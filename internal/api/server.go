@@ -27,6 +27,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/config"
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/engine/aria2"
+	"github.com/L-K-M/dl-tool/internal/engine/qbittorrent"
 	"github.com/L-K-M/dl-tool/internal/obs"
 	"github.com/L-K-M/dl-tool/internal/store"
 	"github.com/L-K-M/dl-tool/internal/sync"
@@ -53,6 +54,12 @@ const (
 	// aria2CallTimeout bounds every aria2 JSON-RPC call of the process-wide
 	// adapter, including the boot Connect and the /engines probe.
 	aria2CallTimeout = 10 * time.Second
+
+	// qbittorrentCallTimeout bounds every qBittorrent WebAPI call of the
+	// process-wide adapter, login and the boot Connect included — the
+	// same budget aria2 gets, so one black-holed engine can hold the boot
+	// sweep for at most one window, not per engine.
+	qbittorrentCallTimeout = 10 * time.Second
 
 	// admissionPollInterval is the admission pass cadence: the same 1 Hz
 	// as the reconciler's poll, so a freed slot or returned disk space
@@ -200,6 +207,33 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		// UI by an engine that is down.
 		if db != nil {
 			connectEngine(store.NewSettingsStore(db), aria2Engine, engine.NameAria2, cfg.Aria2URL, log)
+		}
+	}
+
+	// The qBittorrent adapter joins the same way when its WebUI endpoint is
+	// configured — the engine every magnet, .torrent and BitTorrent
+	// submission routes to (docs/06 section 2), and the one POST
+	// /tasks/inspect resolves magnet metadata through. An empty URL leaves
+	// it unregistered and those submissions answer 503, exactly like an
+	// absent aria2. A malformed URL is a configuration error and fails
+	// construction loudly, never a silent 503.
+	if cfg.QBittorrentURL != "" {
+		qbittorrentEngine, err := qbittorrent.New(qbittorrent.Config{
+			BaseURL:  cfg.QBittorrentURL,
+			Username: cfg.QBittorrentUser,
+			Password: cfg.QBittorrentPass.Reveal(),
+			Timeout:  qbittorrentCallTimeout,
+		}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build qbittorrent engine: %w", err)
+		}
+		engines.Register(qbittorrentEngine)
+
+		// The same engines-row and boot-probe wiring aria2 gets, behind the
+		// same nil-db guard: the openapi subcommand's stdout stays a pure
+		// document, and a down daemon is a warn, never a boot failure.
+		if db != nil {
+			connectEngine(store.NewSettingsStore(db), qbittorrentEngine, engine.NameQBittorrent, cfg.QBittorrentURL, log)
 		}
 	}
 

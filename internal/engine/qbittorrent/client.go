@@ -2,9 +2,9 @@
 // qBittorrent WebAPI v2 of docs/06-download-engines.md section 5: the login
 // and session cookie, the version probe, torrents/add and the lifecycle
 // calls. State normalisation lives in map.go; the sync/maindata cache and
-// its poll loop live in sync.go. The adapter is not a complete
-// engine.Engine until T038 adds the last methods; it is not registered
-// anywhere yet.
+// its poll loop live in sync.go; magnet metadata resolution lives in
+// inspect.go. The adapter satisfies engine.Engine and is registered by
+// internal/api's composition root whenever DLTOOL_QBITTORRENT_URL is set.
 package qbittorrent
 
 import (
@@ -154,6 +154,33 @@ type Client struct {
 	// lifecycle. Its zero value is an idle tracker over an empty,
 	// default-deny cache.
 	md maindataTracker
+}
+
+// The adapter is a complete engine.Engine: the compile-time assertion T038
+// pins. No method exists only to satisfy it — each one is the pinned
+// contract of docs/06-download-engines.md section 1.
+var _ engine.Engine = (*Client)(nil)
+
+// requireOwned answers engine.ErrNotFound for an id the maindata cache
+// does not hold — the same existence rule Get answers from. The daemon's
+// torrents/stop, torrents/start and torrents/delete silently skip unknown
+// hashes (applyToTorrents, release-5.2.3 torrentscontroller.cpp), so the
+// cache is the only existence signal those mutations have: a 2xx answer
+// from them proves nothing. The gate also keeps foreign torrents — the
+// probe handle of InspectMagnet included — unreachable through the
+// mutation surface, which is why the probe reads and removes its handle
+// through its own raw calls.
+func (c *Client) requireOwned(id string) error {
+	hash := ref(id)
+
+	c.md.mu.Lock()
+	_, held := c.md.cache.fields[hash]
+	c.md.mu.Unlock()
+
+	if !held {
+		return fmt.Errorf("qbittorrent: %s: %w", id, engine.ErrNotFound)
+	}
+	return nil
 }
 
 // New returns a Client ready for Connect. It performs no I/O. The injected
@@ -851,12 +878,15 @@ func decodeAddResult(status int, body []byte, req engine.AddRequest, expected st
 }
 
 // Pause stops a torrent, probing the 5.x spelling first and caching whichever
-// pair the daemon answers (docs/06 section 5.7).
+// pair the daemon answers (docs/06 section 5.7). An id the maindata cache
+// does not hold answers engine.ErrNotFound before any daemon call, because
+// the daemon's own stop answer is a silent no-op for an unknown hash.
 func (c *Client) Pause(ctx context.Context, id string) error {
 	return c.lifecycle(ctx, id, stopOf)
 }
 
-// Resume starts a stopped torrent through the same probed pair as Pause.
+// Resume starts a stopped torrent through the same probed pair as Pause,
+// with the same not-found rule.
 func (c *Client) Resume(ctx context.Context, id string) error {
 	return c.lifecycle(ctx, id, startOf)
 }
@@ -868,6 +898,10 @@ func startOf(p lifecyclePair) string { return p.start }
 // spelling; a 404 falls back to the 4.x one once, and whichever answers is
 // cached, so every later call goes straight to the daemon's own pair.
 func (c *Client) lifecycle(ctx context.Context, id string, pick func(lifecyclePair) string) error {
+	if err := c.requireOwned(id); err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	known := c.life
 	c.mu.Unlock()
@@ -901,11 +935,23 @@ func (c *Client) rememberLifecycle(pair lifecyclePair) {
 	c.life = &pair
 }
 
-// Remove deletes a torrent, optionally with its data. engine.Engine's
-// Remove(id) always retains data; the deleteData switch exists for the
-// remove-with-data task action, the only caller allowed to pass true
-// (docs/06 section 5.7).
-func (c *Client) Remove(ctx context.Context, id string, deleteData bool) error {
+// Remove removes the task from the daemon, always retaining its payload
+// data — the engine.Engine spelling. An id the maindata cache does not
+// hold answers engine.ErrNotFound before any daemon call, because the
+// daemon's own delete answer is a silent no-op for an unknown hash. The
+// remove-with-data switch of docs/06 section 5.7 is removeTorrent, the
+// unexported form the delete action reaches through its own wiring.
+func (c *Client) Remove(ctx context.Context, id string) error {
+	if err := c.requireOwned(id); err != nil {
+		return err
+	}
+	return c.removeTorrent(ctx, id, false)
+}
+
+// removeTorrent deletes a torrent, optionally with its data. It is
+// ungated on purpose: the InspectMagnet probe deletes its deliberately
+// unowned temporary handle through it under a fresh context.
+func (c *Client) removeTorrent(ctx context.Context, id string, deleteData bool) error {
 	form := hashesForm(ref(id))
 	form.Set("deleteFiles", strconv.FormatBool(deleteData))
 	_, err := c.do(ctx, http.MethodPost, pathTorrentsDel, form)

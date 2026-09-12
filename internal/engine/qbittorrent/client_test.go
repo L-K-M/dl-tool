@@ -324,6 +324,7 @@ func TestRetriesOnceOn401(t *testing.T) {
 		f.refuseOnce["/api/v2/torrents/stop"] = true
 	})
 	c := connectedClient(t, f)
+	seedCache(c, testHash)
 
 	// The first stop is refused with 401; the client must re-login exactly
 	// once and retry the stop exactly once, never loop.
@@ -1106,6 +1107,7 @@ func testAddBlob(t *testing.T, blob, wantHash string) {
 func TestPauseFallsBackTo4x(t *testing.T) {
 	f := newFakeServer(t, func(f *fakeServer) { f.legacyAPI = true })
 	c := connectedClient(t, f)
+	seedCache(c, testHash)
 
 	// First call probes torrents/stop, gets 404, retries torrents/pause.
 	require.NoError(t, c.Pause(context.Background(), engine.NameQBittorrent+":"+testHash))
@@ -1125,21 +1127,38 @@ func TestPauseFallsBackTo4x(t *testing.T) {
 
 	// A fresh client still probes the 5.x spelling on its first Resume.
 	fresh := connectedClient(t, f)
+	seedCache(fresh, testHash)
 	require.NoError(t, fresh.Resume(context.Background(), engine.NameQBittorrent+":"+testHash))
 	require.Equal(t, 1, f.count("torrents/start"))
 	require.Equal(t, 2, f.count("torrents/resume"))
 }
 
+// seedCache installs hashes into the maindata cache the not-found gate
+// of Pause, Resume and Remove consults. The fake daemon serves no
+// sync/maindata, so the tests that drive the gated mutations seed the
+// cache directly — the same state a real poll would have merged.
+func seedCache(c *Client, hashes ...string) {
+	c.md.mu.Lock()
+	defer c.md.mu.Unlock()
+	if c.md.cache.fields == nil {
+		c.md.cache.fields = make(map[string]map[string]any, len(hashes))
+	}
+	for _, hash := range hashes {
+		c.md.cache.fields[hash] = map[string]any{"hash": hash}
+	}
+}
+
 func TestRemoveSendsDeleteFiles(t *testing.T) {
 	f := newFakeServer(t, nil)
 	c := connectedClient(t, f)
+	seedCache(c, testHash)
 
-	require.NoError(t, c.Remove(context.Background(), engine.NameQBittorrent+":"+testHash, true))
+	require.NoError(t, c.removeTorrent(context.Background(), engine.NameQBittorrent+":"+testHash, true))
 	del := f.call("torrents/delete")
 	require.Equal(t, []string{testHash}, del.Form["hashes"])
 	require.Equal(t, []string{"true"}, del.Form["deleteFiles"])
 
-	require.NoError(t, c.Remove(context.Background(), testHash, false))
+	require.NoError(t, c.removeTorrent(context.Background(), testHash, false))
 	del = f.call("torrents/delete")
 	require.Equal(t, []string{testHash}, del.Form["hashes"])
 	require.Equal(t, []string{"false"}, del.Form["deleteFiles"])
