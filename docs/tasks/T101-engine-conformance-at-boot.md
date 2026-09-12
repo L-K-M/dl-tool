@@ -29,6 +29,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
+| `.github/workflows/task-verification.yml` | create | Provide the Docker-capable verification runner defined in Step 13. |
 | `internal/api/server.go` | modify | Supply aria2 data roots and wire the bounded boot probe. |
 | `internal/api/settings.go` | modify | Share the boot/test probe and record its outcome in `engines.last_error`. |
 | `internal/api/settings_test.go` | modify | Observe boot, configured roots and test/list outcomes through `NewServer`. |
@@ -142,6 +143,13 @@ aria2 checks, exactly these:
     ATM enabled, boot through `NewServer`, observe the named warning and read back the forced setting.
     Re-enable ATM, invoke `POST /engines/{id}/test` as the correction action and read back false again.
     Record the live queueing preference excerpt here before implementing writes.
+13. Add the scoped verification workflow on GitHub-hosted runners, triggered by task-branch pushes or
+    `workflow_dispatch`, never `pull_request_target`. Grant only `contents: read`, disable checkout
+    credential persistence and expose no repository secrets. Select a task through a validated task
+    ID, not an arbitrary path or shell command. Extract the first `bash` fence under its exact
+    `## Verification` heading; missing, empty or ambiguous task/heading selection and malformed fences
+    must fail, never produce a green no-op. Run the extracted block with `bash -euo pipefail`, then
+    `make ci`. Record the actual checked-out commit SHA and task ID in the run log and summary.
 
 ## Acceptance criteria
 - [ ] `rss_processing_enabled`, `scheduler_enabled` and `auto_tmm_enabled` are all false after `Conform`
@@ -210,8 +218,23 @@ Recovery validation:
 🔍 2389 Total (in 187ms) 🔗 561 Unique ✅ 2374 OK 🚫 0 Errors 👻 15 Excluded
 ```
 
+CI execution scope repair, 2026-09-12: no implementation or completion claim. Task Verification was not
+run. With the development tools on `PATH`, `make doclint` exited 0:
+
+```text
+./scripts/doclint.sh
+🔍 2389 Total (in 189ms) 🔗 561 Unique ✅ 2374 OK 🚫 0 Errors 👻 15 Excluded
+```
+
+`git diff --check` exited 0. Only this task file changed; both index rows remain `todo`.
+
 ## Blocked
 The scope blockers recorded in PR #128 are resolved by the Files table and
 [Engines §9](../06-download-engines.md#9-engine-conformance-at-boot): configured-root wiring, boot/test
 orchestration, colocated unit/API tests and the ADR-required real-daemon test are now in scope.
 Implementation must still observe the queueing keys as directed above.
+
+The owner declined local or remote Docker provisioning. Existing CI runs the integration suite but
+not this task's separate verbose boot/correction command. The Files table now authorizes a CI workflow
+defined in Step 13. Required observations, assertions and completion criteria are unchanged. The
+workflow remains to be built.
