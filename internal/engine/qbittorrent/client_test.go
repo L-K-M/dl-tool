@@ -1422,6 +1422,34 @@ func TestRemoveWaitsForTheCacheToObserveTheRemoval(t *testing.T) {
 	require.Equal(t, 1, f.count("torrents/delete"))
 }
 
+// TestGatePropagatesDaemonUnavailability pins the gate's error mapping:
+// when the daemon-truth probe itself fails — the daemon is down here —
+// the refusal must answer that failure, never engine.ErrNotFound, which
+// would report a live task as missing.
+func TestGatePropagatesDaemonUnavailability(t *testing.T) {
+	f := newFakeServer(t, nil)
+	c := connectedClient(t, f)
+	f.srv.Close() // the daemon goes down after Connect
+
+	err := c.Pause(context.Background(), engine.NameQBittorrent+":"+testHash)
+	require.ErrorIs(t, err, engine.ErrUnavailable)
+	require.NotErrorIs(t, err, engine.ErrNotFound)
+}
+
+// TestGatePropagatesCorruptDaemonTruth is the decode spelling of the same
+// rule: a torrents/info reply the client cannot parse is a daemon fault,
+// not proof the torrent is gone.
+func TestGatePropagatesCorruptDaemonTruth(t *testing.T) {
+	f := newFakeServer(t, func(f *fakeServer) { f.infoBody = "{" })
+	c := connectedClient(t, f)
+
+	err := c.Remove(context.Background(), engine.NameQBittorrent+":"+testHash)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, engine.ErrNotFound)
+	require.ErrorContains(t, err, "decode")
+	require.Zero(t, f.count("torrents/delete"), "no mutation may leave the gate")
+}
+
 // TestRemoveUnownedAnswersNotFound is the Remove spelling of the gate
 // test: a cold cache plus a daemon without the torrent, and not one
 // torrents/delete request.
