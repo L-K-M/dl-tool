@@ -44,6 +44,7 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/L-K-M/dl-tool/internal/api"
@@ -94,15 +95,16 @@ const (
 	// expose.
 	wrongThreeQuarters = 3 * (1 << 20) / 4
 
-	// fixturePieceBytes is the generated torrent's piece length: one piece
-	// spanning the whole 8 MiB body, a power of two well inside
-	// libtorrent's max_piece_size. One whole-file range is also the single
-	// HTTP shape the shared fixture server answers correctly — it ignores
-	// Range headers and always writes the full body with a 200, which
-	// libtorrent's web-seed range check accepts only for a request that
-	// starts at byte zero and covers the file (web_peer_connection.cpp,
-	// get_range + the range_start/range_end comparison).
-	fixturePieceBytes = 8 << 20
+	// fixtureBytes and fixturePieceBytes shape the generated torrent: the
+	// shared 8 MiB fixture body in regular 256 KiB pieces, so a transfer's
+	// progress and rate are observable piece by piece and a 1048576 B/s
+	// cap keeps it in flight for several seconds.
+	fixtureBytes      = 8 << 20
+	fixturePieceBytes = 256 << 10
+
+	// qbtListenPort is the daemon's BitTorrent listen port; the seeded
+	// configuration pins Connection\PortRangeMin to it.
+	qbtListenPort = "6881"
 
 	// magnetProbeTimeout bounds the live timeout subtest: short enough to
 	// keep the suite quick, long enough for several 500 ms polls.
@@ -160,10 +162,19 @@ func seededConfPath(t *testing.T) string {
 	return path
 }
 
-// startDaemon boots one throwaway qBittorrent 5.2.3 and returns its mapped
-// base URL. The fixture server must already exist so its port can be
-// tunneled in for the web-seeded downloads the contract suite runs.
-func startDaemon(t *testing.T) string {
+// startedDaemon is one booted daemon: its mapped base URL and the
+// container handle the seeder wiring needs the IP of.
+type startedDaemon struct {
+	baseURL   string
+	container testcontainers.Container
+}
+
+// startDaemon boots one throwaway qBittorrent 5.2.3 and returns its
+// mapped base URL, optionally joined to caller-owned networks (the suite
+// runs a second container beside it). The fixture server must already
+// exist so its port can be tunneled in for the web-seeded fetches the
+// seeder container runs.
+func startDaemon(t *testing.T, networks ...string) startedDaemon {
 	t.Helper()
 
 	// enginetest.Fixture is per-t; calling it here also makes the suite's
@@ -185,6 +196,7 @@ func startDaemon(t *testing.T) string {
 			// data worth protecting is exactly that case.
 			Env:          map[string]string{"LSIO_NON_ROOT_USER": "1"},
 			ExposedPorts: []string{qbtWebUIPort},
+			Networks:     networks,
 			// The readiness probe is the unauthenticated app/version GET
 			// the seeded subnet whitelist admits with a 200.
 			WaitingFor: wait.ForHTTP("/api/v2/app/version").WithPort(qbtWebUIPort),
@@ -203,11 +215,13 @@ func startDaemon(t *testing.T) string {
 	t.Cleanup(func() {
 		terminateCtx, cancel := context.WithTimeout(context.Background(), containerTimeout)
 		defer cancel()
-		// The daemon's own log is the ground truth a failed subtest needs:
-		// stop, finish and web-seed events all land here with timestamps.
-		if logs, logErr := container.Logs(terminateCtx); logErr == nil {
-			if data, readErr := io.ReadAll(logs); readErr == nil {
-				t.Logf("daemon log:\n%s", data)
+		// The daemon's own log is the ground truth a failed subtest
+		// needs; passing subtests stay quiet.
+		if t.Failed() {
+			if logs, logErr := container.Logs(terminateCtx); logErr == nil {
+				if data, readErr := io.ReadAll(logs); readErr == nil {
+					t.Logf("daemon log:\n%s", data)
+				}
 			}
 		}
 		require.NoError(t, container.Terminate(terminateCtx))
@@ -217,7 +231,10 @@ func startDaemon(t *testing.T) string {
 	require.NoError(t, err)
 	mapped, err := container.MappedPort(ctx, qbtWebUIPort)
 	require.NoError(t, err)
-	return "http://" + net.JoinHostPort(host, mapped.Port())
+	return startedDaemon{
+		baseURL:   "http://" + net.JoinHostPort(host, mapped.Port()),
+		container: container,
+	}
 }
 
 // daemonClient returns a connected adapter for one started daemon.
@@ -413,15 +430,20 @@ func (s *daemonSession) daemonRemove(hash string, deleteFiles bool) {
 	require.Equal(s.t, http.StatusOK, status, "remove the torrent: %s", body)
 }
 
-// fixtureTorrent is a locally generated single-file torrent whose only
-// source is the shared fixture server as a web seed — no tracker, no
-// public host, nothing outside the test.
+// fixtureTorrent is a locally generated single-file torrent whose bytes
+// come only from the shared fixture server — no tracker, no public host,
+// nothing outside the test.
 type fixtureTorrent struct {
-	blob   []byte
-	magnet string
-	hash   string
-	name   string
-	size   int64
+	// blob is the plain spelling: no sources inside, bytes arrive from
+	// real BitTorrent peers alone.
+	blob []byte
+	// seedBlob is the same info dict with the fixture URL as a web seed,
+	// the spelling the seeder container fetches the body through.
+	seedBlob []byte
+	magnet   string
+	hash     string
+	name     string
+	size     int64
 }
 
 // fetchFixtureBody downloads the fixture body over loopback — the fixture
@@ -448,52 +470,76 @@ func fetchFixtureBody(t *testing.T, fixtureURL, wantSHA256 string) []byte {
 	return body
 }
 
-// buildFixtureTorrent bencodes one single-file v1 torrent of the body: one
-// piece spanning the whole file (fixturePieceBytes) and a url-list web
-// seed pointing at the fixture URL. The local parser cross-checks the
-// infohash and size, so the magnet derived from the same bytes cannot
-// disagree with what the daemon will add.
+// buildFixtureTorrent bencodes one single-file v1 torrent of the body
+// with regular fixturePieceBytes pieces, so a transfer's progress and
+// rate are observable piece by piece. Two spellings share one infohash:
+// seedBlob carries the fixture URL as a url-list web seed — the seeder
+// container pulls the body through it — and plainBlob carries none, so
+// the downloader under test can only take the bytes from real BitTorrent
+// peers. The local parser cross-checks the infohash and size, so the
+// magnet derived from the same bytes cannot disagree with what the
+// daemon will add.
 func buildFixtureTorrent(t *testing.T, body []byte, name, webSeed string) fixtureTorrent {
 	t.Helper()
 
-	require.Len(t, body, fixturePieceBytes, "the fixture body must be exactly one piece")
+	require.Len(t, body, fixtureBytes, "the fixture body must be whole pieces")
 
-	piece := sha1.Sum(body)
+	var pieces []byte
+	for offset := 0; offset < len(body); offset += fixturePieceBytes {
+		piece := sha1.Sum(body[offset : offset+fixturePieceBytes])
+		pieces = append(pieces, piece[:]...)
+	}
 	info := map[string]any{
 		"length":       int64(len(body)),
 		"name":         name,
 		"piece length": int64(fixturePieceBytes),
-		"pieces":       piece[:],
+		"pieces":       pieces,
 	}
 	infoBytes, err := bencode.Marshal(info)
 	require.NoError(t, err)
 	hashSum := sha1.Sum(infoBytes)
 	hash := hex.EncodeToString(hashSum[:])
 
-	blob, err := bencode.Marshal(map[string]any{"info": info, "url-list": []string{webSeed}})
+	plain, err := bencode.Marshal(map[string]any{"info": info})
+	require.NoError(t, err)
+	seeded, err := bencode.Marshal(map[string]any{"info": info, "url-list": []string{webSeed}})
 	require.NoError(t, err)
 
-	manifest, err := uri.InspectTorrent(blob)
+	manifest, err := uri.InspectTorrent(seeded)
 	require.NoError(t, err, "the local parser must accept the generated torrent")
 	require.Equal(t, hash, manifest.InfohashV1)
 	require.EqualValues(t, len(body), manifest.TotalSize)
 
 	return fixtureTorrent{
-		blob:   blob,
-		magnet: "magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(name),
-		hash:   hash,
-		name:   name,
-		size:   int64(len(body)),
+		blob:     plain,
+		seedBlob: seeded,
+		magnet:   "magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(name),
+		hash:     hash,
+		name:     name,
+		size:     int64(len(body)),
 	}
 }
 
-// suiteEngine lifts the adapter onto the surface the contract suite needs:
-// the suite's fixture-URL adds become locally generated web-seeded
-// torrents (torrents/add cannot fetch a plain HTTP URL), every add waits
-// for the engine's own Get to observe it (the suite reads state straight
-// after Add), the ownership filter the composition root's reconciler
-// installs in production is supplied from the ids added here, and the
-// suite's DownloadLimitReadback rides an independent session.
+// suiteEngine lifts the adapter onto the surface the contract suite
+// needs. The suite's fixture-URL adds become locally generated torrents —
+// torrents/add cannot fetch a plain HTTP URL — whose bytes reach the
+// daemon under test over real BitTorrent from a second, seeder container
+// on a private network: the seeder pulls the fixture body through the
+// torrent's web seed, and the downloader's own torrent spelling carries
+// no web seed at all, so the transfer under assertion is genuine peer
+// traffic. This is not the web-seeded download T038's step 9 sketched:
+// the pinned image excludes web-seed payload from dlspeed, completed and
+// progress until a whole piece lands (observed on CI, see the task's
+// Evidence), so a web-seeded transfer can never satisfy the suite's
+// growth and rate assertions. Two local containers keep the promise that
+// actually matters: no public tracker, no distribution mirror, nothing
+// outside the test.
+//
+// Every add also waits for the engine's own Get to observe it (the suite
+// reads state straight after Add), the ownership filter the composition
+// root's reconciler installs in production is supplied from the ids added
+// here, and the suite's DownloadLimitReadback rides an independent
+// session.
 type suiteEngine struct {
 	*qbittorrent.Client
 
@@ -505,32 +551,49 @@ type suiteEngine struct {
 	body       []byte
 	// session is the independent readback, logged in once per daemon.
 	session *daemonSession
-
-	mu   sync.Mutex
-	adds int
+	// seederSession drives the seeder container's own daemon, and
+	// seederAddr is its listen address on the shared network, handed to
+	// the downloader as a static peer so no tracker or DHT is involved.
+	seederSession *daemonSession
+	seederAddr    string
+	mu            sync.Mutex
+	adds          int
 	// owned holds bare hashes: the ownership snapshot is keyed on
 	// engine_refs, not namespaced ids.
 	owned map[string]struct{}
 }
 
-// newSuiteEngine starts one daemon and returns the wired engine; it is the
-// suite's newEngine, so every subtest gets its own daemon.
+// newSuiteEngine starts the seeder and the daemon under test on one
+// private network and returns the wired engine; it is the suite's
+// newEngine, so every subtest gets its own pair.
 func newSuiteEngine(t *testing.T) *suiteEngine {
 	t.Helper()
 
-	baseURL := startDaemon(t)
-	client := daemonClient(t, baseURL)
+	ctx := context.Background()
+	swarm, err := network.New(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, swarm.Remove(ctx)) })
+
+	seeder := startDaemon(t, swarm.Name)
+	seederSession := newDaemonSession(t, seeder.baseURL)
+	seederIP, err := seeder.container.ContainerIP(ctx)
+	require.NoError(t, err)
+
+	underTest := startDaemon(t, swarm.Name)
+	client := daemonClient(t, underTest.baseURL)
 	fixtureURL, fixtureSHA := enginetest.Fixture(t)
 
 	s := &suiteEngine{
-		Client:     client,
-		t:          t,
-		baseURL:    baseURL,
-		fixtureURL: fixtureURL,
-		fixtureSHA: fixtureSHA,
-		body:       fetchFixtureBody(t, fixtureURL, fixtureSHA),
-		owned:      map[string]struct{}{},
-		session:    newDaemonSession(t, baseURL),
+		Client:        client,
+		t:             t,
+		baseURL:       underTest.baseURL,
+		fixtureURL:    fixtureURL,
+		fixtureSHA:    fixtureSHA,
+		body:          fetchFixtureBody(t, fixtureURL, fixtureSHA),
+		owned:         map[string]struct{}{},
+		session:       newDaemonSession(t, underTest.baseURL),
+		seederSession: seederSession,
+		seederAddr:    net.JoinHostPort(seederIP, qbtListenPort),
 	}
 	client.SetOwnershipFilter(s.snapshot)
 	return s
@@ -550,13 +613,15 @@ func (s *suiteEngine) snapshot() map[string]struct{} {
 }
 
 // Add translates the suite's fixture-URL submission into the locally
-// generated single-file torrent web-seeded from that URL — the download
-// still comes from enginetest.Fixture, never a public host — then applies
-// the two wirings the suite's assertions need: a zero share ratio, so the
-// daemon stops a finished download and the suite's completed-state poll
-// can ever return (a seeding torrent would stay StateSeeding forever), and
-// the ownership + visibility wait, so List and Get observe the add before
-// Add returns.
+// generated torrent pair: the seeder gets the web-seeded spelling and
+// fetches the fixture body through it, and the daemon under test gets the
+// plain spelling plus the seeder as a static peer, so the transfer the
+// suite observes is real peer traffic. The add then applies the two
+// wirings the suite's assertions need: a zero share ratio, so the daemon
+// stops a finished download and the suite's completed-state poll can ever
+// return (a seeding torrent would stay StateSeeding forever), and the
+// ownership + visibility wait, so List and Get observe the add before Add
+// returns.
 func (s *suiteEngine) Add(ctx context.Context, req engine.AddRequest) (string, error) {
 	if len(req.Blob) == 0 && len(req.URIs) == 1 && req.URIs[0] == s.fixtureURL {
 		s.mu.Lock()
@@ -565,6 +630,8 @@ func (s *suiteEngine) Add(ctx context.Context, req engine.AddRequest) (string, e
 		s.mu.Unlock()
 
 		torrent := buildFixtureTorrent(s.t, s.body, name, s.fixtureURL)
+		s.seedThroughSeeder(torrent)
+
 		req.URIs = nil
 		req.Blob = torrent.blob
 		req.BlobKind = "torrent"
@@ -575,54 +642,52 @@ func (s *suiteEngine) Add(ctx context.Context, req engine.AddRequest) (string, e
 		return "", err
 	}
 
+	// The seeder as a static peer: no tracker, no DHT, one deterministic
+	// hop on the private network.
+	hash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
+	status, body := s.session.do(http.MethodPost, "torrents/addPeers",
+		url.Values{"hashes": {hash}, "peers": {s.seederAddr}}, "")
+	require.Equal(s.t, http.StatusOK, status, "add the seeder as a static peer: %s", body)
+
 	zeroRatio := 0.0
 	if err := s.SetShareLimits(ctx, id, &zeroRatio, nil); err != nil {
 		return "", err
 	}
 
 	s.mu.Lock()
-	s.owned[strings.TrimPrefix(id, engine.NameQBittorrent+":")] = struct{}{}
+	s.owned[hash] = struct{}{}
 	s.mu.Unlock()
 
-	added := time.Now()
 	require.Eventually(s.t, func() bool {
 		_, err := s.Get(ctx, id)
 		return err == nil
 	}, addVisibilityTimeout, 100*time.Millisecond, "the engine's own Get never observed task %s", id)
-	s.t.Logf("suite wiring: add visible after %s (%s)", time.Since(added), id)
 	return id, nil
 }
 
-// Pause, Resume and SetRateLimits are timed pass-throughs: the suite's
-// phases are what the throttle assertions measure, so their boundaries
-// belong in the test log.
-func (s *suiteEngine) Pause(ctx context.Context, id string) error {
-	at := time.Now()
-	err := s.Client.Pause(ctx, id)
-	s.t.Logf("suite wiring: Pause -> %v after %s (%s)", err, time.Since(at), id)
-	return err
+// seedThroughSeeder makes the seeder fetch and hold one torrent's body:
+// the web-seeded spelling is uploaded there directly, and this returns
+// only when the seeder reports the torrent complete, so the downloader
+// never waits on an empty swarm.
+func (s *suiteEngine) seedThroughSeeder(torrent fixtureTorrent) {
+	s.t.Helper()
+
+	status, body := s.seederSession.doMultipart("torrents/add", "torrents", torrent.hash+".torrent", torrent.seedBlob)
+	require.Equal(s.t, http.StatusOK, status, "the seeder must accept the torrent: %s", body)
+
+	require.Eventually(s.t, func() bool {
+		status, body := s.seederSession.do(http.MethodGet, "torrents/info",
+			url.Values{"hashes": {torrent.hash}}, "")
+		if status != http.StatusOK {
+			return false
+		}
+		var rows []struct {
+			Progress float64 `json:"progress"`
+		}
+		return json.Unmarshal(body, &rows) == nil && len(rows) == 1 && rows[0].Progress >= 1
+	}, containerTimeout, 250*time.Millisecond, "the seeder never completed the fixture body")
 }
 
-func (s *suiteEngine) Resume(ctx context.Context, id string) error {
-	at := time.Now()
-	err := s.Client.Resume(ctx, id)
-	s.t.Logf("suite wiring: Resume -> %v after %s (%s)", err, time.Since(at), id)
-	return err
-}
-
-func (s *suiteEngine) SetRateLimits(ctx context.Context, id string, down, up *int64) error {
-	at := time.Now()
-	err := s.Client.SetRateLimits(ctx, id, down, up)
-	limit := int64(-1)
-	if down != nil {
-		limit = *down
-	}
-	s.t.Logf("suite wiring: SetRateLimits(%d) -> %v after %s (%s)", limit, err, time.Since(at), id)
-	return err
-}
-
-// DaemonDownloadLimit implements the suite's readback: the daemon's
-// configured download limit for one task or globally, read through the
 // independent session — never the adapter's own bookkeeping.
 func (s *suiteEngine) DaemonDownloadLimit(ctx context.Context, id string) (int64, error) {
 	return s.session.downloadLimit(id), nil
@@ -675,9 +740,9 @@ func TestQBittorrentDaemonLimitReadback(t *testing.T) {
 // test's output. The assertions pin the observed contract the adapter's
 // primary path is built on.
 func TestQBittorrentMetadataEndpointsProbe(t *testing.T) {
-	baseURL := startDaemon(t)
-	client := daemonClient(t, baseURL)
-	session := newDaemonSession(t, baseURL)
+	daemon := startDaemon(t)
+	client := daemonClient(t, daemon.baseURL)
+	session := newDaemonSession(t, daemon.baseURL)
 	ctx, cancel := context.WithTimeout(context.Background(), containerTimeout)
 	defer cancel()
 
@@ -779,9 +844,9 @@ func mustFixtureSHA(t *testing.T) string {
 // no-handle property without a container.
 func TestInspectMagnetLeavesNoHandle(t *testing.T) {
 	t.Run("daemon primary path", func(t *testing.T) {
-		baseURL := startDaemon(t)
-		client := daemonClient(t, baseURL)
-		session := newDaemonSession(t, baseURL)
+		daemon := startDaemon(t)
+		client := daemonClient(t, daemon.baseURL)
+		session := newDaemonSession(t, daemon.baseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), containerTimeout)
 		defer cancel()
 
@@ -815,9 +880,9 @@ func TestInspectMagnetLeavesNoHandle(t *testing.T) {
 	})
 
 	t.Run("daemon timeout", func(t *testing.T) {
-		baseURL := startDaemon(t)
-		client := daemonClient(t, baseURL)
-		session := newDaemonSession(t, baseURL)
+		daemon := startDaemon(t)
+		client := daemonClient(t, daemon.baseURL)
+		session := newDaemonSession(t, daemon.baseURL)
 
 		// A magnet no swarm can resolve: metadata never arrives.
 		unknown := "magnet:?xt=urn:btih:89abcdef0123456789abcdef0123456789abcdef&dn=never-resolves"
@@ -1172,79 +1237,6 @@ func (f *inspectFake) lastCall(path string) recordedCall {
 // wires: a configured WebUI endpoint builds the client and registers it in
 // the engine registry, an empty URL leaves it absent, and a malformed URL
 // fails server construction loudly.
-// TestZZThrottleDiagnosis is a temporary diagnostic for the throttle
-// question: it samples the daemon's own view every 500 ms through an
-// independent session and dumps qBittorrent's event log, so one CI run
-// settles whether the per-task limit throttles a web-seeded transfer,
-// what dlspeed reports while it runs, and what stop does mid-flight.
-// It asserts nothing beyond add succeeding; it is removed once the
-// contract subtests pass.
-func TestZZThrottleDiagnosis(t *testing.T) {
-	baseURL := startDaemon(t)
-	client := daemonClient(t, baseURL)
-	session := newDaemonSession(t, baseURL)
-	ctx, cancel := context.WithTimeout(context.Background(), containerTimeout)
-	defer cancel()
-
-	torrent := buildFixtureTorrent(t,
-		fetchFixtureBody(t, mustFixtureURL(t), mustFixtureSHA(t)), "enginetest-diag.bin", mustFixtureURL(t))
-	id, err := client.Add(ctx, engine.AddRequest{Blob: torrent.blob, BlobKind: "torrent", StartPaused: true})
-	require.NoError(t, err)
-
-	limit := enginetest.RateLimitBytesPerSecond
-	require.NoError(t, client.SetRateLimits(ctx, id, &limit, nil))
-	t.Logf("diag: daemon limit readback: %d", session.downloadLimit(id))
-
-	// Start through the daemon itself — the adapter's gate is not under
-	// diagnosis here.
-	hash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
-	status, body := session.do(http.MethodPost, "torrents/start", url.Values{"hashes": {hash}}, "")
-	require.Equal(t, http.StatusOK, status, "start: %s", body)
-	started := time.Now()
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-	paused := false
-	for range 60 {
-		status, body := session.do(http.MethodGet, "torrents/info",
-			url.Values{"hashes": {hash}}, "")
-		require.Equal(t, http.StatusOK, status)
-		t.Logf("diag: t=%s %s", time.Since(started).Round(10*time.Millisecond), body)
-
-		// Stop the transfer once a third of the body has arrived.
-		if !paused {
-			var rows []struct {
-				State    string  `json:"state"`
-				Progress float64 `json:"progress"`
-			}
-			require.NoError(t, json.Unmarshal(body, &rows))
-			if len(rows) == 1 && rows[0].Progress >= 0.3 {
-				status, resp := session.do(http.MethodPost, "torrents/stop", url.Values{"hashes": {hash}}, "")
-				t.Logf("diag: stop at t=%s progress=%.2f -> %d %s",
-					time.Since(started).Round(10*time.Millisecond), rows[0].Progress, status, resp)
-				paused = true
-			}
-		}
-
-		var rows []struct {
-			State string `json:"state"`
-		}
-		require.NoError(t, json.Unmarshal(body, &rows))
-		if len(rows) == 1 && (rows[0].State == "stoppedUP" || rows[0].State == "stoppedDL") {
-			break
-		}
-		<-ticker.C
-	}
-
-	// qBittorrent's own events, with its timestamps.
-	logStatus, logBody := session.do(http.MethodGet, "log/main", url.Values{"last_known_id": {"-1"}}, "")
-	t.Logf("diag: daemon event log (status %d): %s", logStatus, logBody)
-
-	// The suite runs without -v, so a passing test's logs are discarded;
-	// fail on purpose to surface the samples above. Removed with the rest
-	// of this diagnostic.
-	t.Errorf("diagnosis artifacts above")
-}
-
 func TestNewServerRegistersQBittorrent(t *testing.T) {
 	discard := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
