@@ -178,18 +178,25 @@ probe: POST torrents/parseMetadata <torrent file part> -> 200 [{"comment":"",…
 probe: POST torrents/parseMetadata <invalid part> -> 415 'empty' is not a valid torrent file.
 ```
 
-### `make test-integration` (GitHub Actions `integration` job, ubuntu-latest, commit 16cd08a — the final tree)
+### `make test-integration` (GitHub Actions `integration` job, ubuntu-latest, commit c30e15b — the final tree)
 
 Non-verbose runner (T028's condition); subtest `--- FAIL:` lines print at this verbosity, and every
 genuinely failing round of this PR named its failing subtests here, so the quiet `ok` below is every
 subtest passing:
 
 ```
-ok  	github.com/L-K-M/dl-tool/internal/engine	2.372s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	72.613s
-ok  	github.com/L-K-M/dl-tool/internal/engine/enginetest	16.109s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	129.834s
+ok  	github.com/L-K-M/dl-tool/internal/engine	2.364s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	73.817s
+ok  	github.com/L-K-M/dl-tool/internal/engine/enginetest	16.160s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	131.531s
 ```
+
+(The two `daemon_*` subtests of `TestInspectMagnetLeavesNoHandle` and every `TestQBittorrentContract`
+subtest run in that `ok`; earlier rounds' `--- FAIL:` lines named each of them when they genuinely
+failed — run 34666362650 shows the full list — and the final run prints none. One earlier run of the
+same tree failed with `No such image: lscr.io/linuxserver/qbittorrent:5.2.3` — a Docker Hub pull
+limit on the shared runner IP, not a test result; the rerun on a different runner is the output
+above.)
 
 Failing rounds for contrast (same job): `TestQBittorrentContract/AddURL/Progress/Pause/Resume/Remove`,
 `/SpeedLimitRoundTrips`, `TestQBittorrentDaemonLimitReadback`, `TestQBittorrentMetadataEndpointsProbe`
@@ -206,19 +213,21 @@ $ go test -tags=integration -count=1 -run 'TestInspectMagnetLeavesNoHandle' ./in
 
 (the two `daemon_*` subtests need the CI Docker lane and pass there).
 
-### Local gates (final tree, commit 16cd08a)
+### Local gates (final tree, commit c30e15b, re-run after the review fixes)
 
 ```
 $ make lint
 0 issues.  (eslint clean, prettier clean)
 $ make vet && make test
 go vet ./... ; go test -race -count=1 ./... → ok (all packages) ; vitest run → pass
+$ go test -tags=integration -count=1 -run TestInspectMagnetLeavesNoHandle ./internal/engine/qbittorrent/
+the four Docker-free subtests PASS; the two daemon_* subtests need the CI lane (they pass there)
 $ make gen && git status --porcelain api/openapi.json web/src/api/schema.d.ts
 (no output — no drift; the task registers no Huma operations)
 $ go mod tidy && git status --porcelain go.mod go.sum
 (no output — crypto/pbkdf2 is stdlib, no new dependency)
 $ make doclint
-🔍 2384 Total 🔗 560 Unique ✅ 2369 OK 🚫 0 Errors
+🔍 2383 Total 🔗 559 Unique ✅ 2368 OK 🚫 0 Errors
 ```
 
 ### Scope check
