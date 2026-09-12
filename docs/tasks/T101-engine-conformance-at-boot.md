@@ -195,8 +195,62 @@ omits untracked files.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-No implementation evidence yet. This PR repairs the plan only; T101 and both index rows remain `todo`.
-Task Verification and `make ci` were not run locally for this documentation repair.
+### Implementation attempt on a62659bc897ee0d934f616645cfa1e28fc755f70
+
+Stopped before implementation: no Docker executable, Docker socket or `qbittorrent-nox` was found.
+No live queueing preferences were observed. T101 and both index rows remain `todo`; all acceptance
+boxes remain unchecked.
+
+Observed output:
+
+```text
+$ docker version --format '{{.Server.Version}}'
+/bin/bash: line 1: docker: command not found
+$ test -S /var/run/docker.sock; printf 'Docker socket check exit: %s\n' "$?"
+Docker socket check exit: 1
+```
+
+`make test-integration` exited 2. Failure excerpts:
+
+```text
+go test -tags=integration -count=1 -timeout=20m ./internal/engine/...
+--- FAIL: TestAria2Contract (0.05s)
+```
+
+```text
+get provider: rootless Docker not found, failed to create Docker provider
+```
+
+```text
+--- FAIL: TestQBittorrentContract (0.00s)
+```
+
+```text
+rootless Docker not found, failed to create Docker provider
+```
+
+`make ci` exited 2:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+sh: 1: eslint: not found
+make: *** [Makefile:25: lint] Error 127
+```
+
+The remaining Verification commands were not run. These are baseline failures, not implementation
+verification. Resume with Docker access and installed development dependencies.
+
+### Prior plan-repair validation
+
+No implementation evidence was recorded by the plan-repair PR. Task Verification and `make ci` were
+not run locally for that repair.
 
 Recovery validation:
 
@@ -215,3 +269,7 @@ The scope blockers recorded in PR #128 are resolved by the Files table and
 [Engines §9](../06-download-engines.md#9-engine-conformance-at-boot): configured-root wiring, boot/test
 orchestration, colocated unit/API tests and the ADR-required real-daemon test are now in scope.
 Implementation must still observe the queueing keys as directed above.
+
+The current workspace lacks Docker and a local qBittorrent daemon. The required pre-implementation
+live preference observation and integration verification cannot run; `make test-integration` confirms
+Docker provider failures. Provide Docker access before resuming. No implementation or merge attempted.
