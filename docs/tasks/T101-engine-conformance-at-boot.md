@@ -29,6 +29,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
+| `.github/workflows/task-verification.yml` | create | Execute the task file's Verification block on Docker-capable CI and identify the tested revision. |
 | `internal/api/server.go` | modify | Supply aria2 data roots and wire the bounded boot probe. |
 | `internal/api/settings.go` | modify | Share the boot/test probe and record its outcome in `engines.last_error`. |
 | `internal/api/settings_test.go` | modify | Observe boot, configured roots and test/list outcomes through `NewServer`. |
@@ -210,8 +211,23 @@ Recovery validation:
 🔍 2389 Total (in 187ms) 🔗 561 Unique ✅ 2374 OK 🚫 0 Errors 👻 15 Excluded
 ```
 
+CI execution scope repair, 2026-09-12: no implementation or completion claim. Task Verification was not
+run. With the development tools on `PATH`, `make doclint` exited 0:
+
+```text
+./scripts/doclint.sh
+🔍 2389 Total (in 189ms) 🔗 561 Unique ✅ 2374 OK 🚫 0 Errors 👻 15 Excluded
+```
+
+`git diff --check` exited 0. Only this task file changed; both index rows remain `todo`.
+
 ## Blocked
 The scope blockers recorded in PR #128 are resolved by the Files table and
 [Engines §9](../06-download-engines.md#9-engine-conformance-at-boot): configured-root wiring, boot/test
 orchestration, colocated unit/API tests and the ADR-required real-daemon test are now in scope.
 Implementation must still observe the queueing keys as directed above.
+
+The owner declined local or remote Docker provisioning. Existing CI runs the integration suite but
+not this task's separate verbose boot/correction command. The Files table now authorizes a CI workflow
+that reads the Verification commands from the task file, rather than duplicating them. Required
+observations, assertions and completion criteria are unchanged. The workflow remains to be built.
