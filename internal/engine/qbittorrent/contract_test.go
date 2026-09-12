@@ -1172,6 +1172,72 @@ func (f *inspectFake) lastCall(path string) recordedCall {
 // wires: a configured WebUI endpoint builds the client and registers it in
 // the engine registry, an empty URL leaves it absent, and a malformed URL
 // fails server construction loudly.
+// TestZZThrottleDiagnosis is a temporary diagnostic for the throttle
+// question: it samples the daemon's own view every 500 ms through an
+// independent session and dumps qBittorrent's event log, so one CI run
+// settles whether the per-task limit throttles a web-seeded transfer,
+// what dlspeed reports while it runs, and what stop does mid-flight.
+// It asserts nothing beyond add succeeding; it is removed once the
+// contract subtests pass.
+func TestZZThrottleDiagnosis(t *testing.T) {
+	baseURL := startDaemon(t)
+	client := daemonClient(t, baseURL)
+	session := newDaemonSession(t, baseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), containerTimeout)
+	defer cancel()
+
+	torrent := buildFixtureTorrent(t,
+		fetchFixtureBody(t, mustFixtureURL(t), mustFixtureSHA(t)), "enginetest-diag.bin", mustFixtureURL(t))
+	id, err := client.Add(ctx, engine.AddRequest{Blob: torrent.blob, BlobKind: "torrent", StartPaused: true})
+	require.NoError(t, err)
+
+	limit := enginetest.RateLimitBytesPerSecond
+	require.NoError(t, client.SetRateLimits(ctx, id, &limit, nil))
+	t.Logf("diag: daemon limit readback: %d", session.downloadLimit(id))
+
+	require.NoError(t, client.Resume(ctx, id))
+	started := time.Now()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	paused := false
+	for range 60 {
+		status, body := session.do(http.MethodGet, "torrents/info",
+			url.Values{"hashes": {strings.TrimPrefix(id, engine.NameQBittorrent+":")}}, "")
+		require.Equal(t, http.StatusOK, status)
+		t.Logf("diag: t=%s %s", time.Since(started).Round(10*time.Millisecond), body)
+
+		// Stop the transfer once a third of the body has arrived.
+		if !paused {
+			var rows []struct {
+				State     string  `json:"state"`
+				Completed int64   `json:"completed"`
+				Dlspeed   int64   `json:"dlspeed"`
+				Progress  float64 `json:"progress"`
+			}
+			require.NoError(t, json.Unmarshal(body, &rows))
+			if len(rows) == 1 && rows[0].Progress >= 0.3 {
+				err := client.Pause(ctx, id)
+				t.Logf("diag: Pause at t=%s progress=%.2f -> %v",
+					time.Since(started).Round(10*time.Millisecond), rows[0].Progress, err)
+				paused = true
+			}
+		}
+
+		var rows []struct {
+			State string `json:"state"`
+		}
+		require.NoError(t, json.Unmarshal(body, &rows))
+		if len(rows) == 1 && (rows[0].State == "stoppedUP" || rows[0].State == "stoppedDL") {
+			break
+		}
+		<-ticker.C
+	}
+
+	// qBittorrent's own events, with its timestamps.
+	status, body := session.do(http.MethodGet, "log/main", url.Values{"last_known_id": {"-1"}}, "")
+	t.Logf("diag: daemon event log (status %d): %s", status, body)
+}
+
 func TestNewServerRegistersQBittorrent(t *testing.T) {
 	discard := slog.New(slog.NewJSONHandler(io.Discard, nil))
 
