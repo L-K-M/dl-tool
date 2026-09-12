@@ -34,6 +34,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -394,12 +395,22 @@ func (s *daemonSession) inspectionBaseline(hash string) []string {
 
 	// Add acknowledges submission before torrents/info necessarily exposes it.
 	// Capture the baseline only once it includes the fixture's own seed.
-	var hashes []string
-	require.Eventually(s.t, func() bool {
-		hashes = s.torrentHashes()
-		return slices.Contains(hashes, hash)
-	}, addVisibilityTimeout, inspectionVisibilityPoll, "the seeded torrent never became visible")
-	return hashes
+	deadline := time.NewTimer(addVisibilityTimeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(inspectionVisibilityPoll)
+	defer poll.Stop()
+	for {
+		hashes := s.torrentHashes()
+		if slices.Contains(hashes, hash) {
+			return hashes
+		}
+		select {
+		case <-deadline.C:
+			s.t.Fatal("the seeded torrent never became visible")
+			return nil
+		case <-poll.C:
+		}
+	}
 }
 
 // downloadLimit reads the daemon's configured download limit: one hash's
@@ -878,14 +889,18 @@ func TestInspectionBaselineWaitsForSeed(t *testing.T) {
 		t.Run(initial.name, func(t *testing.T) {
 			var reads atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.Equal(t, http.MethodGet, r.Method)
-				require.Equal(t, "/api/v2/"+inspectPathInfo, r.URL.Path)
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v2/"+inspectPathInfo {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+					return
+				}
 				body := `[{"hash":"` + unrelatedHash + `"},{"hash":"` + inspectHash + `"}]`
 				if reads.Add(1) == 1 {
 					body = initial.body
 				}
-				_, err := io.WriteString(w, body)
-				require.NoError(t, err)
+				if _, err := io.WriteString(w, body); err != nil {
+					t.Errorf("write response: %v", err)
+				}
 			}))
 			defer srv.Close()
 			session := &daemonSession{t: t, base: srv.URL, hc: srv.Client()}
@@ -895,6 +910,31 @@ func TestInspectionBaselineWaitsForSeed(t *testing.T) {
 			require.GreaterOrEqual(t, reads.Load(), int32(2), "the accepted add is not visible on the first read")
 		})
 	}
+}
+
+func TestInspectionBaselineReportsReadFailure(t *testing.T) {
+	const probeEnv = "DLTOOL_TEST_INSPECTION_READ_FAILURE"
+	const failureTimeout = 5 * time.Second
+	if os.Getenv(probeEnv) == "1" {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "fixture read failed", http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+		session := &daemonSession{t: t, base: srv.URL, hc: srv.Client()}
+		session.inspectionBaseline(inspectHash)
+		return
+	}
+
+	// A fixture assertion must fail on the test goroutine, not strand a poll
+	// callback until the visibility deadline. Isolate the expected fatal error.
+	ctx, cancel := context.WithTimeout(context.Background(), failureTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestInspectionBaselineReportsReadFailure$")
+	cmd.Env = append(os.Environ(), probeEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, ctx.Err(), "fixture failure waited for the visibility deadline: %s", output)
+	require.Error(t, err, "a bad daemon response must fail the fixture")
+	require.Contains(t, string(output), "read torrents/info")
 }
 
 // TestInspectMagnetLeavesNoHandle pins T038's central acceptance
