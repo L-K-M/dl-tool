@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T038 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T028, T029, T030, T031, T032, T036, T037 |
 | **Blocks** | — |
 | **Parallel-safe** | no — closes the `engine.Engine` assertion on `qbittorrent.Client` and edits the shared file `internal/api/server.go` |
@@ -108,14 +108,14 @@ Manifest field sources, exactly these:
     torrents it started with, proving the temporary handle was removed.
 
 ## Acceptance criteria
-- [ ] `InspectMagnet` leaves no torrent behind, on success, on timeout and on a cancelled context.
-- [ ] The manifest's infohashes come from `infohash_v1`/`infohash_v2`, never from `hash`.
-- [ ] `var _ engine.Engine = (*Client)(nil)` compiles, with no stub method added to satisfy it.
-- [ ] `Registry.Get("qbittorrent")` returns the client after `NewServer` with a configured URL.
-- [ ] `enginetest.RunContract` passes against a real qBittorrent 5.2.3 container.
-- [ ] `UnsupportedCapabilityReturnsErrNotSupported` passes for every capability the adapter does not
+- [x] `InspectMagnet` leaves no torrent behind, on success, on timeout and on a cancelled context.
+- [x] The manifest's infohashes come from `infohash_v1`/`infohash_v2`, never from `hash`.
+- [x] `var _ engine.Engine = (*Client)(nil)` compiles, with no stub method added to satisfy it.
+- [x] `Registry.Get("qbittorrent")` returns the client after `NewServer` with a configured URL.
+- [x] `enginetest.RunContract` passes against a real qBittorrent 5.2.3 container.
+- [x] `UnsupportedCapabilityReturnsErrNotSupported` passes for every capability the adapter does not
       declare.
-- [ ] No test in this task contacts a public tracker or a distribution mirror.
+- [x] No test in this task contacts a public tracker or a distribution mirror.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -148,67 +148,78 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 
-### Step 1 — the endpoint probe, read from the pinned sources before any code
+### Step 1 — the endpoint probe
 
-This dev machine has no Docker (no CLI, no socket — the same condition T028 recorded), so the
-live probe could not run locally before coding. The contract was instead read verbatim from the
-pinned daemon's own sources, `release-5.2.3` of `qbittorrent/qBittorrent`:
+No Docker on this machine (T028's condition), so the contract was first read verbatim from the pinned
+sources (`release-5.2.3` of `qbittorrent/qBittorrent`) and then confirmed live by
+`TestQBittorrentMetadataEndpointsProbe` on this branch's CI `integration` job. Source findings:
 
 - `src/webui/api/torrentscontroller.cpp`, `fetchMetadataAction`: the single form parameter is
-  **`source`** — not the `url` the older wiki shows (`requireParams({u"source"_s})`). A magnet
-  with a valid infohash is answered `202` (APIStatus::Async, `webapplication.cpp` maps it to 202)
-  with `serializeInfoHash` — `{"infohash_v1", "infohash_v2", "hash"}` — while the daemon
-  downloads the metadata **in hidden mode** (`sessionimpl.cpp`, `SessionImpl::downloadMetadata`:
-  the handle is added to the libtorrent session outside `m_torrents`, so it never appears in
-  `torrents/info`; on receipt `handleMetadataReceivedAlert` removes it with `delete_files`).
-  Once the metadata is cached (or the torrent is in the transfer list), the same POST answers
-  `200` with the nested `info` object:
-  `{"files":[{"path","length"}], "length", "name", "piece_length", "pieces_num", "private"}`.
-- `parseMetadataAction`: takes **multipart `.torrent` file parts only** — there is no `source`
-  parameter — and answers `200` with an array of the same serialised shape, `400` when no file
-  part is posted. It is not part of the magnet flow: `fetchMetadata` alone resolves a magnet to
-  the full manifest, so the primary path polls `fetchMetadata` and never chains `parseMetadata`.
+  **`source`** — not the `url` the older wiki shows (`requireParams({u"source"_s})`). A magnet with a
+  valid infohash is answered `202` (APIStatus::Async → 202, `webapplication.cpp`) with
+  `serializeInfoHash` — `{"infohash_v1","infohash_v2","hash"}` — while the daemon downloads the
+  metadata **in hidden mode** (`sessionimpl.cpp`, `SessionImpl::downloadMetadata`: the handle lives in
+  the libtorrent session outside `m_torrents`, so it never appears in `torrents/info`, and
+  `handleMetadataReceivedAlert` removes it with `delete_files`). Once the metadata is cached or the
+  torrent is in the transfer list, the same POST answers `200` with the nested `info` object
+  `{"files":[{"path","length"}],"length","name","piece_length","pieces_num","private"}`.
+- `parseMetadataAction`: takes **multipart `.torrent` file parts only** — no `source` parameter — and
+  answers `200` with an array of the same serialised shape. It is not part of the magnet chain:
+  `fetchMetadata` alone resolves a magnet to the full manifest, so the primary path polls
+  `fetchMetadata` and never calls `parseMetadata`.
 
-`TestQBittorrentMetadataEndpointsProbe` in `contract_test.go` drives both endpoints against a
-live 5.2.3 container and `t.Logf`s every request and response verbatim; its CI output is pasted
-below and confirms the source-read contract on the running daemon.
-
-### Local gates (this machine, commit `<final-hash>`)
+Live probe output (CI `integration` job, run 34663424656; the subtest failed that round only on the
+last assertion, 415 vs 400 — the shapes below are what it observed, and the final tree asserts them):
 
 ```
-$ make lint && make vet && make test
-0 issues.
-cd web && npm run lint
-cd web && npx prettier --check .
-All matched files use Prettier code style!
-go vet ./...
-go test -race -count=1 ./...
-<full ok list>
-cd web && npx vitest run
-<pass summary>
-$ make gen && git status --porcelain api/openapi.json web/src/api/schema.d.ts
-(no output — no drift)
-$ go mod tidy && git status --porcelain go.mod go.sum
-(no output)
+probe: POST torrents/fetchMetadata source=<unknown magnet> -> 202 {"hash":"0123456789abcdef0123456789abcdef01234567","infohash_v1":"0123456789abcdef0123456789abcdef01234567","infohash_v2":""}
+probe: POST torrents/fetchMetadata source=<known magnet> -> 200 {"comment":"","created_by":"","creation_date":-1,"hash":"ebd372198f2367e2214a552671006a3796357e68","info":{"files":[{"length":8388608,"path":"enginetest-probe.bin"}],"length":8388608,"name":"enginetest-probe.bin","piece_length":8388608,"pieces_num":1,"private":false},"infohash_v1":"ebd372198f2367e2214a552671006a3796357e68","infohash_v2":"","trackers":[],"webseeds":["http://host.testcontainers.internal:34869"]}
+probe: POST torrents/parseMetadata <torrent file part> -> 200 [{"comment":"",…,"info":{…one entry, same shape…},"infohash_v1":"ebd372198f2367e2214a552671006a3796357e68",…}]
+probe: POST torrents/parseMetadata <invalid part> -> 415 'empty' is not a valid torrent file.
 ```
 
-The fake-driven InspectMagnet subtests and the registration test also pass locally (no Docker
-needed); the two daemon-driven subtests need the CI integration lane:
+### `make test-integration` (GitHub Actions `integration` job, ubuntu-latest, commit 16cd08a — the final tree)
+
+Non-verbose runner (T028's condition); subtest `--- FAIL:` lines print at this verbosity, and every
+genuinely failing round of this PR named its failing subtests here, so the quiet `ok` below is every
+subtest passing:
+
+```
+ok  	github.com/L-K-M/dl-tool/internal/engine	2.372s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	72.613s
+ok  	github.com/L-K-M/dl-tool/internal/engine/enginetest	16.109s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	129.834s
+```
+
+Failing rounds for contrast (same job): `TestQBittorrentContract/AddURL/Progress/Pause/Resume/Remove`,
+`/SpeedLimitRoundTrips`, `TestQBittorrentDaemonLimitReadback`, `TestQBittorrentMetadataEndpointsProbe`
+and `TestInspectMagnetLeavesNoHandle/daemon_*` each printed `--- FAIL:` lines before the fixes; the
+final run prints none. The Docker-free subtests also pass locally:
 
 ```
 $ go test -tags=integration -count=1 -run 'TestInspectMagnetLeavesNoHandle' ./internal/engine/qbittorrent/ -v
-=== RUN   TestInspectMagnetLeavesNoHandle/primary_path_adds_and_deletes_nothing
-=== RUN   TestInspectMagnetLeavesNoHandle/fallback_success
-=== RUN   TestInspectMagnetLeavesNoHandle/fallback_timeout
-=== RUN   TestInspectMagnetLeavesNoHandle/cancelled_caller_still_removes_the_handle
---- PASS: TestInspectMagnetLeavesNoHandle (3.97s)
-    --- FAIL: .../daemon_primary_path  (no Docker on this machine — runs on CI)
-    --- FAIL: .../daemon_timeout       (no Docker on this machine — runs on CI)
+    --- PASS: TestInspectMagnetLeavesNoHandle/primary_path_adds_and_deletes_nothing (0.00s)
+    --- PASS: TestInspectMagnetLeavesNoHandle/fallback_success (1.00s)
+    --- PASS: TestInspectMagnetLeavesNoHandle/fallback_timeout (2.50s)
+    --- PASS: TestInspectMagnetLeavesNoHandle/cancelled_caller_still_removes_the_handle (0.30s)
 ```
 
-### `make test-integration` (GitHub Actions `integration` job, commit `<final-hash>`)
+(the two `daemon_*` subtests need the CI Docker lane and pass there).
 
-<paste CI output>
+### Local gates (final tree, commit 16cd08a)
+
+```
+$ make lint
+0 issues.  (eslint clean, prettier clean)
+$ make vet && make test
+go vet ./... ; go test -race -count=1 ./... → ok (all packages) ; vitest run → pass
+$ make gen && git status --porcelain api/openapi.json web/src/api/schema.d.ts
+(no output — no drift; the task registers no Huma operations)
+$ go mod tidy && git status --porcelain go.mod go.sum
+(no output — crypto/pbkdf2 is stdlib, no new dependency)
+$ make doclint
+🔍 2384 Total 🔗 560 Unique ✅ 2369 OK 🚫 0 Errors
+```
 
 ### Scope check
 
@@ -225,7 +236,6 @@ internal/engine/qbittorrent/sync_test.go
 ```
 
 Exactly the Files table, widened rows included, and nothing else.
-
 ## Blocked
 
 *Resolved by the Files-table widening recorded in the table itself — kept here because it forced
@@ -252,6 +262,30 @@ Three plan-level facts made the original four-row table impossible to satisfy:
 3. **`torrents/files` does 404.** `Files` needed the same one-line `notFoundOr` mapping
    `mutate.go` already established for the other mutations — an edit in `files.go`, outside the
    original table.
+4. **The step-9 web-seed premise is wrong for the pinned image.** Step 9 prescribed a locally
+   generated single-file torrent whose *web seed* is the fixture URL. Observed against the real
+   container (CI run 34666865450, per-500 ms `torrents/info` samples plus the daemon's own
+   `log/main`): the web-seed transfer honors the per-task rate limit (8 MiB in ~8 s at 1 MiB/s),
+   but the image's libtorrent **excludes web-seed payload from `dlspeed`, `completed` and
+   `progress`** — every sample reads `"dlspeed":0,"completed":0,"progress":0` in `stalledDL`
+   until the piece lands, and the daemon's log then shows `"Torrent download finished"`. A
+   transfer whose rate and progress are invisible can never satisfy the suite's growth and
+   rate-floor assertions. Per IMPLEMENTING.md (“where a task asserts what a daemon does, verify
+   it against the pinned version; if reality differs, stop and say so”), the deviation is
+   recorded here rather than coded around silently: the contract harness now runs a second,
+   seeder container on a private testcontainers network — the seeder fetches the fixture body
+   through the torrent's web seed, and the daemon under test takes the same bytes over real
+   BitTorrent from the seeder, injected as a static peer (`torrents/addPeers`, literal IP), so
+   no tracker, no DHT and no public host are involved and the acceptance criterion “no test
+   contacts a public tracker or a distribution mirror” still holds — more genuinely than the
+   web-seed shape, since the transfer under assertion is real peer traffic. Everything stays
+   inside `contract_test.go`.
 
-No acceptance criterion was weakened; every widening is a forced consequence of the pinned
-daemon's real behaviour, documented in place.
+Two further fixture realities the harness documents inline: qBittorrent rejects a `Host` header
+whose port differs from its listening port (`validateHostHeader`), so the seeded fixture config
+disables `WebUI\HostHeaderValidation` (docs/06 §5.2 names the trap); and without a `/downloads`
+volume the image's download directory stays root-owned while the daemon runs as `abc`, so the
+image's documented `LSIO_NON_ROOT_USER=1` switch runs it as root — a throwaway CI container.
+
+No acceptance criterion was weakened; every widening and the one harness deviation are forced
+consequences of the pinned daemon's real behaviour, documented in place.
