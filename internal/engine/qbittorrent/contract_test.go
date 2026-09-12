@@ -390,11 +390,11 @@ func (s *daemonSession) torrentHashes() []string {
 	return hashes
 }
 
-func (s *daemonSession) inspectionBaseline(hash string) []string {
+func (s *daemonSession) visibleTorrentHashes(hash string) []string {
 	s.t.Helper()
 
 	// Add acknowledges submission before torrents/info necessarily exposes it.
-	// Capture the baseline only once it includes the fixture's own seed.
+	// Wait before taking a baseline or configuring that torrent.
 	deadline := time.NewTimer(addVisibilityTimeout)
 	defer deadline.Stop()
 	poll := time.NewTicker(inspectionVisibilityPoll)
@@ -681,18 +681,11 @@ func (s *suiteEngine) Add(ctx context.Context, req engine.AddRequest) (string, e
 		return "", err
 	}
 
-	// The seeder as a static peer: no tracker, no DHT, one deterministic
-	// hop on the private network.
-	hash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
-	status, body := s.session.do(http.MethodPost, "torrents/addPeers",
-		url.Values{"hashes": {hash}, "peers": {s.seederAddr}})
-	require.Equal(s.t, http.StatusOK, status, "add the seeder as a static peer: %s", body)
-
-	zeroRatio := 0.0
-	if err := s.SetShareLimits(ctx, id, &zeroRatio, nil); err != nil {
+	if err := s.configureTorrent(ctx, id); err != nil {
 		return "", err
 	}
 
+	hash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
 	s.mu.Lock()
 	s.owned[hash] = struct{}{}
 	s.mu.Unlock()
@@ -702,6 +695,59 @@ func (s *suiteEngine) Add(ctx context.Context, req engine.AddRequest) (string, e
 		return err == nil
 	}, addVisibilityTimeout, 100*time.Millisecond, "the engine's own Get never observed task %s", id)
 	return id, nil
+}
+
+// configureTorrent supplies the private peer and stops seeding at completion.
+func (s *suiteEngine) configureTorrent(ctx context.Context, id string) error {
+	hash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
+	s.session.visibleTorrentHashes(hash)
+
+	status, body := s.session.do(http.MethodPost, "torrents/addPeers",
+		url.Values{"hashes": {hash}, "peers": {s.seederAddr}})
+	require.Equal(s.t, http.StatusOK, status, "add the seeder as a static peer: %s", body)
+
+	zeroRatio := 0.0
+	return s.SetShareLimits(ctx, id, &zeroRatio, nil)
+}
+
+func TestSuiteConfigurationWaitsForTorrent(t *testing.T) {
+	var reads, configured atomic.Int32
+	var visible atomic.Bool
+	fake := newInspectFake(t, nil)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/torrents/info":
+			body := "[]"
+			if reads.Add(1) > 1 {
+				visible.Store(true)
+				body = `[{"hash":"` + inspectHash + `"}]`
+			}
+			if _, err := io.WriteString(w, body); err != nil {
+				t.Errorf("write torrent listing: %v", err)
+			}
+		case "/api/v2/torrents/addPeers", "/api/v2/torrents/setShareLimits":
+			// The daemon acknowledges unknown hashes without applying anything.
+			if visible.Load() {
+				configured.Add(1)
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			fake.ServeHTTP(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := qbittorrent.New(qbittorrent.Config{
+		BaseURL: srv.URL, Username: qbtAdminUser, Password: qbtAdminPass,
+	}, nil)
+	require.NoError(t, err)
+	s := &suiteEngine{
+		Client: client, t: t,
+		session:    &daemonSession{t: t, base: srv.URL, hc: srv.Client()},
+		seederAddr: net.JoinHostPort("127.0.0.1", qbtListenPort),
+	}
+	require.NoError(t, s.configureTorrent(context.Background(), engine.NameQBittorrent+":"+inspectHash))
+	require.EqualValues(t, 2, configured.Load(), "peer and share-limit configuration must reach a visible torrent")
 }
 
 // seedThroughSeeder makes the seeder fetch and hold one torrent's body:
@@ -905,7 +951,7 @@ func TestInspectionBaselineWaitsForSeed(t *testing.T) {
 			defer srv.Close()
 			session := &daemonSession{t: t, base: srv.URL, hc: srv.Client()}
 
-			baseline := session.inspectionBaseline(inspectHash)
+			baseline := session.visibleTorrentHashes(inspectHash)
 			require.ElementsMatch(t, []string{unrelatedHash, inspectHash}, baseline)
 			require.GreaterOrEqual(t, reads.Load(), int32(2), "the accepted add is not visible on the first read")
 		})
@@ -915,13 +961,14 @@ func TestInspectionBaselineWaitsForSeed(t *testing.T) {
 func TestInspectionBaselineReportsReadFailure(t *testing.T) {
 	const probeEnv = "DLTOOL_TEST_INSPECTION_READ_FAILURE"
 	const failureTimeout = 5 * time.Second
+	require.Less(t, failureTimeout, addVisibilityTimeout, "the probe must expire before a stranded visibility poll")
 	if os.Getenv(probeEnv) == "1" {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "fixture read failed", http.StatusServiceUnavailable)
 		}))
 		defer srv.Close()
 		session := &daemonSession{t: t, base: srv.URL, hc: srv.Client()}
-		session.inspectionBaseline(inspectHash)
+		session.visibleTorrentHashes(inspectHash)
 		return
 	}
 
@@ -959,7 +1006,7 @@ func TestInspectMagnetLeavesNoHandle(t *testing.T) {
 		require.NoError(t, err)
 
 		seedHash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
-		baseline := session.inspectionBaseline(seedHash)
+		baseline := session.visibleTorrentHashes(seedHash)
 		before := len(baseline)
 		manifest, err := client.InspectMagnet(ctx, torrent.magnet)
 		require.NoError(t, err, "the known magnet must resolve through fetchMetadata")
