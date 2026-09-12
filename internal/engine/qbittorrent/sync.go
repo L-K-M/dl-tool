@@ -46,6 +46,19 @@ const (
 	// maindataPollInterval is the sync/maindata cadence of section 5.4.
 	maindataPollInterval = time.Second
 
+	// infohashFlushBudget bounds one metadata write-back batch's store
+	// calls: the flush runs on the poll goroutine, so a wedged store must
+	// not wedge the poll with it — the ownership listing's
+	// ownershipCheckBudget is the precedent.
+	infohashFlushBudget = 5 * time.Second
+
+	// infohashFlushMaxAttempts is the retry budget of one resolution: a
+	// store that keeps refusing the same pair (a genuinely different
+	// identity for a column that already holds one, a malformed daemon
+	// value) must not reappear in the log every tick for the process
+	// lifetime.
+	infohashFlushMaxAttempts = 5
+
 	// qbtFullSyncInterval is the periodic full-resync cadence of section
 	// 5.4: five minutes after the last accepted full update the shared
 	// force-full flag goes up, so the next request carries rid=0.
@@ -71,6 +84,41 @@ type maindata struct {
 	ServerState json.RawMessage `json:"server_state"`
 }
 
+// InfohashWriter is the store surface the metadata write-back needs: one
+// call per resolved torrent, keyed on the daemon's own hash because that
+// is the value tasks.engine_ref stores verbatim. *store.TaskStore
+// satisfies it; the adapter never names a store type, keeping the
+// layering of docs/03-architecture.md section 5.2 (adapters stop at the
+// engine package).
+type InfohashWriter interface {
+	// ResolveInfohashes lands one resolution: it maps the handle to the
+	// live task, writes both hashes, and pauses the task when the resolved
+	// identity collides with another live task — duplicate reporting that
+	// landing so the caller stops the engine-side transfer too.
+	ResolveInfohashes(ctx context.Context, engineName, ref, v1, v2 string) (duplicate bool, err error)
+}
+
+// infohashPair is one torrent's resolved identity: the 40-hex v1 and the
+// 64-hex v2 from the daemon's infohash_v1/infohash_v2 keys, either empty
+// when that form does not exist.
+type infohashPair struct {
+	v1 string
+	v2 string
+}
+
+// pendingInfohash is one resolution awaiting its write-back, with the
+// consecutive failures it has collected.
+type pendingInfohash struct {
+	pair     infohashPair
+	attempts int
+}
+
+// infohashFlush is one batch entry handed to the writer.
+type infohashFlush struct {
+	hash string // the daemon's TorrentID — never reconstructed, never re-cased
+	pair infohashPair
+}
+
 // mergeDisposition is what one merge proved about its response.
 type mergeDisposition uint8
 
@@ -93,6 +141,18 @@ type cache struct {
 	pendingFull     map[string]struct{}
 	owned           map[string]struct{}
 	ownershipSource func() map[string]struct{}
+
+	// Metadata-resolution bookkeeping of the T100 write-back:
+	// infohashDone holds the last pair each hash successfully landed, so a
+	// resolution fires once and an unchanged torrent never re-enters the
+	// batch; infohashPending holds the pairs awaiting a landing, retried
+	// on every tick until they succeed or exhaust their budget;
+	// infohashDropped holds the pairs that exhausted it, so a permanently
+	// refused resolution drops once instead of resurrecting on every later
+	// merge that touches its torrent.
+	infohashDone    map[string]infohashPair
+	infohashPending map[string]pendingInfohash
+	infohashDropped map[string]infohashPair
 
 	// Recovery state shares the cache mutex so a response cannot consume
 	// a reset: forceFull sends rid=0 until an accepted full update lands,
@@ -126,6 +186,81 @@ func (c *cache) ensureMaps() {
 	if c.pendingFull == nil {
 		c.pendingFull = make(map[string]struct{})
 	}
+	if c.infohashDone == nil {
+		c.infohashDone = make(map[string]infohashPair)
+	}
+	if c.infohashPending == nil {
+		c.infohashPending = make(map[string]pendingInfohash)
+	}
+	if c.infohashDropped == nil {
+		c.infohashDropped = make(map[string]infohashPair)
+	}
+}
+
+// noteInfohash records one merged torrent object's resolved identity: the
+// pair the daemon's infohash_v1/infohash_v2 keys carry — never the map's
+// hash key, which for a v2 torrent is the TorrentID truncation and not the
+// v1 infohash (docs/06-download-engines.md section 3.5). A pair that is
+// empty on both sides is no resolution at all; a pair the writer already
+// landed is not one either. Caller holds md.mu.
+func (c *cache) noteInfohash(hash string, fields map[string]any) {
+	v1, _ := fields["infohash_v1"].(string)
+	v2, _ := fields["infohash_v2"].(string)
+	if v1 == "" && v2 == "" {
+		return
+	}
+
+	pair := infohashPair{v1: v1, v2: v2}
+	if c.infohashDone[hash] == pair {
+		return
+	}
+	if c.infohashDropped[hash] == pair {
+		// The budget already dropped exactly this pair; a later merge
+		// re-reporting it must not resurrect the cycle.
+		return
+	}
+	if pending, held := c.infohashPending[hash]; held && pending.pair == pair {
+		// An unchanged pair keeps its accumulated attempts — an active
+		// torrent is re-noted on nearly every delta, and resetting the
+		// budget each time would make it unreachable.
+		return
+	}
+
+	c.infohashPending[hash] = pendingInfohash{pair: pair}
+}
+
+// takeInfohashFlushes snapshots the resolutions awaiting a write-back and
+// prunes the bookkeeping of hashes the cache no longer holds — their
+// torrents are gone, and a later re-add re-resolves from a clean slate.
+// Entries are returned in hash order so the batch is deterministic.
+// Caller holds md.mu.
+func (c *cache) takeInfohashFlushes() []infohashFlush {
+	for hash := range c.infohashDone {
+		if _, visible := c.fields[hash]; !visible {
+			delete(c.infohashDone, hash)
+		}
+	}
+	for hash := range c.infohashDropped {
+		if _, visible := c.fields[hash]; !visible {
+			delete(c.infohashDropped, hash)
+		}
+	}
+
+	batch := make([]infohashFlush, 0, len(c.infohashPending))
+	for hash := range c.infohashPending {
+		if _, visible := c.fields[hash]; !visible {
+			delete(c.infohashPending, hash)
+			continue
+		}
+		if c.infohashDone[hash] == c.infohashPending[hash].pair {
+			delete(c.infohashPending, hash)
+			continue
+		}
+		batch = append(batch, infohashFlush{hash: hash, pair: c.infohashPending[hash].pair})
+	}
+	slices.SortFunc(batch, func(a, b infohashFlush) int { return strings.Compare(a.hash, b.hash) })
+
+	return batch
 }
 
 // accepted reports whether the stored ownership snapshot owns hash.
@@ -180,6 +315,9 @@ func (c *cache) mergeFull(m maindata) (mergeDisposition, []string, []string) {
 		}
 	}
 	for hash, fields := range fresh {
+		// A complete object carries the daemon's resolved identity whenever
+		// it has one; noteInfohash decides whether that is news.
+		c.noteInfohash(hash, fields)
 		if old, held := c.fields[hash]; !held || len(old) != len(fields) || !torrentFieldsEqual(old, fields) {
 			changed = append(changed, hash)
 		}
@@ -253,6 +391,10 @@ func (c *cache) mergePartial(m maindata) (mergeDisposition, []string, []string) 
 		for name, value := range partial {
 			stored[name] = value
 		}
+		// The merged object is the daemon's word on this torrent's
+		// identity; when this delta is the one that delivered the metadata,
+		// the pair becomes non-empty here for the first time.
+		c.noteInfohash(hash, stored)
 		changed = append(changed, hash)
 	}
 	for _, hash := range m.TorrentsRemoved {
@@ -398,6 +540,10 @@ type maindataTracker struct {
 	stopped   chan struct{} // full Close completion, including subscribers
 	started   bool
 	closed    bool
+	// infohashWriter is the store surface the delta path writes resolved
+	// infohashes through; nil (the zero value, the openapi subcommand's
+	// client) leaves the write-back off and the delta path skips it.
+	infohashWriter InfohashWriter
 }
 
 // startPoll launches the 1 Hz sync/maindata loop on a context the client
@@ -460,6 +606,18 @@ func (m *maindataTracker) stopSignalLocked() chan struct{} {
 		m.stopped = make(chan struct{})
 	}
 	return m.stopped
+}
+
+// SetInfohashWriter installs the store surface the delta path writes
+// resolved infohashes through — the composition root's wiring of the T100
+// write-back, the same shape SetOwnershipFilter has for the ownership
+// filter. It is safe to call before Connect; resolutions collected before
+// the installation land on the next tick.
+func (c *Client) SetInfohashWriter(w InfohashWriter) {
+	c.md.mu.Lock()
+	defer c.md.mu.Unlock()
+
+	c.md.infohashWriter = w
 }
 
 // SetOwnershipFilter installs the snapshot source deciding which
@@ -525,24 +683,34 @@ func (c *Client) ownershipPrepass() bool {
 }
 
 // applyResponse runs the response-time pass and, when the reply is
-// current, merges it and emits its events. The pass snapshots the source
-// and epoch under the cache mutex, compares the request's captured epoch
-// before the source call, invokes the source without the cache mutex,
-// then compares again after re-acquiring it: a reply whose captured epoch
-// no longer matches — including a full_update one — is stale and
-// publishes nothing, no matter what the daemon sent. A partial-response
-// pass reclassifies before merging, so a rejected-to-pending transition
-// found here rejects the payload while the reclassification itself stays
-// published. A full-response pass only stores the snapshot: its merge
-// classifies the complete objects directly.
+// current, merges it, emits its events and hands the metadata resolutions
+// the merge collected to the write-back — the store calls run outside the
+// cache mutex, the same discipline the ownership source keeps. The pass
+// snapshots the source and epoch under the cache mutex, compares the
+// request's captured epoch before the source call, invokes the source
+// without the cache mutex, then compares again after re-acquiring it: a
+// reply whose captured epoch no longer matches — including a full_update
+// one — is stale and publishes nothing, no matter what the daemon sent. A
+// partial-response pass reclassifies before merging, so a
+// rejected-to-pending transition found here rejects the payload while the
+// reclassification itself stays published. A full-response pass only
+// stores the snapshot: its merge classifies the complete objects directly.
 func (c *Client) applyResponse(m maindata, reqEpoch uint64) {
+	batch := c.applyResponseInner(m, reqEpoch)
+	c.flushInfohashes(batch)
+}
+
+// applyResponseInner is applyResponse's body; it manages md.mu itself
+// (unlike the *Locked helpers, which require the caller to hold it), and
+// its result is the metadata-resolution batch the caller flushes.
+func (c *Client) applyResponseInner(m maindata, reqEpoch uint64) []infohashFlush {
 	c.md.mu.Lock()
 	source := c.md.cache.ownershipSource
 	epoch := c.md.cache.ownershipEpoch
 	c.md.mu.Unlock()
 
 	if epoch != reqEpoch {
-		return // stale before the source call: nothing to fetch for
+		return nil // stale before the source call: nothing to fetch for
 	}
 
 	set := make(map[string]struct{})
@@ -554,7 +722,7 @@ func (c *Client) applyResponse(m maindata, reqEpoch uint64) {
 	defer c.md.mu.Unlock()
 
 	if c.md.cache.ownershipEpoch != epoch {
-		return // a reset landed while the source ran
+		return nil // a reset landed while the source ran
 	}
 
 	c.md.cache.owned = set
@@ -564,9 +732,128 @@ func (c *Client) applyResponse(m maindata, reqEpoch uint64) {
 
 	disposition, changed, removed := c.md.cache.merge(m)
 	if disposition != mergeApplied {
-		return
+		return nil
 	}
 	c.emitLocked(c.eventsLocked(changed, removed))
+
+	return c.md.cache.takeInfohashFlushes()
+}
+
+// flushInfohashes hands one merge's resolutions to the write-back: one
+// ResolveInfohashes call per hash, on a context with its own budget
+// because the poll goroutine owns this loop. A landing that succeeded —
+// and a landing whose collision paused the task, which ResolveInfohashes
+// answers with nil too — moves the pair from pending to done; a failure
+// keeps it pending for the next tick until the retry budget runs out, so
+// the write-back can never wedge the poll loop.
+func (c *Client) flushInfohashes(batch []infohashFlush) {
+	if len(batch) == 0 {
+		return
+	}
+
+	c.md.mu.Lock()
+	writer := c.md.infohashWriter
+	c.md.mu.Unlock()
+	if writer == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), infohashFlushBudget)
+	defer cancel()
+
+	for _, flush := range batch {
+		duplicate, err := writer.ResolveInfohashes(ctx, engine.NameQBittorrent, flush.hash, flush.pair.v1, flush.pair.v2)
+		if err != nil && ctx.Err() != nil {
+			// The batch budget expired on this entry's call — still one
+			// failed attempt for the entry that was in flight, while the
+			// remaining entries never got their shot and keep both their
+			// pending slot and their attempts for the next tick.
+			c.chargeFlushAttempt(flush, err)
+			break
+		}
+
+		if err == nil && duplicate {
+			// Project the stop into the cache before the engine call: the
+			// daemon now holds the torrent stopped, but until its next delta
+			// arrives the cached object still says downloading, and a
+			// reconciler sweep whose List predates this moment would adopt the
+			// stale state and un-pause the row — the one write-back decision
+			// no other loop may undo. Projecting first leaves that sweep a
+			// microsecond window instead of the HTTP call's milliseconds; both
+			// paused spellings normalise to paused, and the next delta
+			// confirms or corrects the exact one.
+			c.md.mu.Lock()
+			if fields, held := c.md.cache.fields[flush.hash]; held {
+				// A torrent on the upload side stops into the UP spelling;
+				// both normalise to paused either way, but the cached string
+				// should say what the daemon will say.
+				stopped := stateStoppedDL
+				if state, _ := fields["state"].(string); isUploadSideState(state) {
+					stopped = stateStoppedUP
+				}
+				fields["state"] = stopped
+			}
+			c.md.mu.Unlock()
+
+			// The transfer the store flagged must stop engine-side too, or the
+			// next reconciler sweep would adopt the still-downloading torrent
+			// and un-pause it. torrents/pause retains every byte: nothing is
+			// deleted, on purpose. A failure retries the whole resolution on
+			// the next tick — the store keeps reporting the collision until
+			// the write lands, and PauseDuplicate is idempotent.
+			if pauseErr := c.Pause(ctx, engine.NameQBittorrent+":"+flush.hash); pauseErr != nil {
+				slog.Warn("qbittorrent: duplicate torrent paused in the store but not engine-side",
+					"engine", engine.NameQBittorrent, "hash", flush.hash, "error", pauseErr)
+				err = pauseErr
+			}
+		}
+
+		c.md.mu.Lock()
+		if err == nil {
+			if c.md.cache.infohashPending[flush.hash].pair == flush.pair {
+				delete(c.md.cache.infohashPending, flush.hash)
+				c.md.cache.infohashDone[flush.hash] = flush.pair
+			}
+		} else {
+			c.chargeFlushAttemptLocked(flush, err)
+		}
+		c.md.mu.Unlock()
+	}
+}
+
+// chargeFlushAttempt records one failed write-back attempt: the attempts
+// counter grows, and at the budget's end the pair drops for good — a pair
+// the store keeps refusing must not reappear in the log every tick for
+// the process lifetime.
+func (c *Client) chargeFlushAttempt(flush infohashFlush, err error) {
+	c.md.mu.Lock()
+	defer c.md.mu.Unlock()
+
+	c.chargeFlushAttemptLocked(flush, err)
+}
+
+// chargeFlushAttemptLocked is chargeFlushAttempt for a caller holding
+// md.mu.
+func (c *Client) chargeFlushAttemptLocked(flush infohashFlush, err error) {
+	pending, still := c.md.cache.infohashPending[flush.hash]
+	if !still || pending.pair != flush.pair {
+		// A newer resolution replaced this one; it owns the retry.
+		return
+	}
+
+	pending.attempts++
+	if pending.attempts < infohashFlushMaxAttempts {
+		c.md.cache.infohashPending[flush.hash] = pending
+		slog.Warn("qbittorrent: infohash write-back failed; retrying on the next tick",
+			"engine", engine.NameQBittorrent, "hash", flush.hash, "error", err)
+
+		return
+	}
+
+	delete(c.md.cache.infohashPending, flush.hash)
+	c.md.cache.infohashDropped[flush.hash] = flush.pair
+	slog.Error("qbittorrent: infohash write-back kept failing; dropping the resolution",
+		"engine", engine.NameQBittorrent, "hash", flush.hash, "error", err)
 }
 
 // requestPlan selects the next request's rid and captures the ownership
@@ -803,6 +1090,18 @@ func (c *Client) emitLocked(events []engine.TaskEvent) {
 					"engine", engine.NameQBittorrent, "task_id", event.TaskID, "kind", event.Kind)
 			}
 		}
+	}
+}
+
+// isUploadSideState reports whether a daemon state string is one of the
+// upload-side spellings — a torrent there stops into the UP stopped
+// spelling, not the DL one.
+func isUploadSideState(state string) bool {
+	switch state {
+	case stateUploading, stateForcedUP, stateStalledUP, stateStoppedUP, stateQueuedUP, stateCheckingUP:
+		return true
+	default:
+		return false
 	}
 }
 
