@@ -1205,14 +1205,21 @@ Requirement: [FR-148](02-requirements.md).
 
 ## 9. Engine conformance at boot
 
-At `Connect()` every adapter runs a conformance probe that asserts the engine's own competing automation is
-off, and forces it off where the API allows. Two schedulers or two RSS engines against one feed produce
-irreproducible bugs, and Automatic Torrent Management silently relocates files by category, which would
-override `tasks.destination`.
+During the boot connection sequence, each adapter's conformance probe asserts that the engine's own
+competing automation is off, and forces it off where the API allows. Two schedulers or two RSS engines
+against one feed produce irreproducible bugs, and Automatic Torrent Management silently relocates files
+by category, which would override `tasks.destination`.
 
 **A conformance failure is a visible warning with a "fix it for me" action, never a crash.** dl-tool boots,
 the engine stays usable, `GET /engines` reports every failed check by key name, and the UI offers the
 correction ([FR-147](02-requirements.md#fr-147-assert-engine-conformance-at-boot), task **T101**).
+
+The composition root (`internal/api/server.go`) runs `Conform` after a successful `Connect`/`Health`,
+before serving requests, under the existing bounded boot probe and nil-store guard. The settings handler
+uses the same probe on `POST /engines/{id}/test`; this existing operation is the correction action, not a
+new endpoint. The probe reads `max_active_total` from the settings store on each run. Adapters do not read
+the store or environment, and `Engine` gains no method. Record health and conformance together so a later
+health write cannot erase a warning; `GET /engines` reads the stored summary without probing.
 
 ### 9.1 qBittorrent
 
@@ -1235,6 +1242,10 @@ Also send `torrents/add` with `autoTMM=false` explicitly (§5.3), so a torrent c
 category even if the preference is flipped behind dl-tool's back.
 
 ### 9.2 aria2
+
+`NewServer` supplies `cfg.DataRoots` through `aria2.Config.DataRoots`. `aria2.New` copies the slice into
+private client state; `Conform(ctx, maxActiveTotal)` uses that snapshot for the directory check. No
+hardcoded root or second environment read is allowed.
 
 | Check | Read | Required value | Fix |
 |---|---|---|---|
