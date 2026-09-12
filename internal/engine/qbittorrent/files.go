@@ -55,11 +55,13 @@ type fileJSON struct {
 
 // Files returns one FileEntry per file. Priority is the identity mapping
 // of 06 section 1.1; a returned -1 (Mixed) is passed through as Priority
-// 1 and never treated as an error.
+// 1 and never treated as an error. An unknown id answers
+// engine.ErrNotFound: the daemon's torrents/files throws NotFound for a
+// hash it does not hold, and that answer is mapped here.
 func (c *Client) Files(ctx context.Context, id string) ([]engine.FileEntry, error) {
 	body, err := c.do(ctx, http.MethodGet, pathTorrentsFiles, url.Values{"hash": {ref(id)}})
 	if err != nil {
-		return nil, err
+		return nil, notFoundOr(err, pathTorrentsFiles)
 	}
 
 	var files []fileJSON

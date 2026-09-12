@@ -714,12 +714,6 @@ func (t030Engine) SetShareLimits(context.Context, string, *float64, *int64) erro
 	return engine.ErrNotSupported
 }
 
-// Remove is the engine.Engine spelling, which always retains data; the
-// remove-with-data action calls the embedded three-argument form directly.
-func (e t030Engine) Remove(ctx context.Context, id string) error {
-	return e.Client.Remove(ctx, id, false)
-}
-
 // syncTasks is the engine.TaskWriter surface NewReconciler needs: one
 // engine's owned handles, consulted live by the ownership source, with a
 // switch that makes the listing fail and a counter proving one listing

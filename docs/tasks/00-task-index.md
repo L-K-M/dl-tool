@@ -111,7 +111,7 @@ The qBittorrent adapter, `.torrent`/magnet inspection, file selection, trackers 
 | [T035](T035-task-peers.md) | List a task's connected peers | T029, T030, T034 | done |
 | [T036](T036-share-limits-and-mutators.md) | Apply share limits, sequential download and the location mutators | T022, T029 | done |
 | [T037](T037-qbittorrent-rate-limits.md) | Apply per-task and global rate limits to running qBittorrent tasks | T022, T029, T030 | done |
-| [T038](T038-magnet-metadata-and-contract-call-site.md) | Resolve magnet metadata and complete the qBittorrent adapter | T028, T029, T030, T031, T032, T036, T037 | todo |
+| [T038](T038-magnet-metadata-and-contract-call-site.md) | Resolve magnet metadata and complete the qBittorrent adapter | T028, T029, T030, T031, T032, T036, T037 | done |
 | [T100](T100-infohash-identity-and-duplicates.md) | Record both infohashes and reject duplicate torrents | T017, T020, T029, T030, T031 | todo |
 | [T101](T101-engine-conformance-at-boot.md) | Assert and force engine conformance at boot | T019, T027, T028, T029 | todo |
 
@@ -320,7 +320,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T035 | List a task's connected peers | T029, T030, T034 | no | done | [T035](T035-task-peers.md) |
 | T036 | Apply share limits, sequential download and the location mutators | T022, T029 | yes | done | [T036](T036-share-limits-and-mutators.md) |
 | T037 | Apply per-task and global rate limits to running qBittorrent tasks | T022, T029, T030 | yes | done | [T037](T037-qbittorrent-rate-limits.md) |
-| T038 | Resolve magnet metadata and complete the qBittorrent adapter | T028, T029, T030, T031, T032, T036, T037 | no | todo | [T038](T038-magnet-metadata-and-contract-call-site.md) |
+| T038 | Resolve magnet metadata and complete the qBittorrent adapter | T028, T029, T030, T031, T032, T036, T037 | no | done | [T038](T038-magnet-metadata-and-contract-call-site.md) |
 | T100 | Record both infohashes and reject duplicate torrents | T017, T020, T029, T030, T031 | no | todo | [T100](T100-infohash-identity-and-duplicates.md) |
 | T101 | Assert and force engine conformance at boot | T019, T027, T028, T029 | no | todo | [T101](T101-engine-conformance-at-boot.md) |
 

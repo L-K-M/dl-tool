@@ -295,18 +295,13 @@ func (f *swarmWireFake) failPeers(status int) {
 }
 
 // swarmWireEngine lifts the real qbittorrent client onto the Engine
-// surface: the adapter is not a complete engine.Engine until T038 adds
-// the last methods, and Remove's signature is the one gap. Everything
-// else — Trackers, AddTrackers, RemoveTrackers included — is the real
-// adapter's code, which is the point of this fixture.
+// surface: since T038 the adapter is a complete engine.Engine, so this
+// wrapper exists only to refuse the four mutators the tracker tests
+// never reach — everything else, Trackers, AddTrackers, RemoveTrackers
+// and the lifecycle calls included, is the real adapter's code, which is
+// the point of this fixture.
 type swarmWireEngine struct {
 	*qbittorrent.Client
-}
-
-// Remove keeps payload data: Engine.Remove always retains data, and the
-// deleteData switch belongs to the remove-task action alone.
-func (e swarmWireEngine) Remove(ctx context.Context, id string) error {
-	return e.Client.Remove(ctx, id, false)
 }
 
 // The four mutators below are T036's and T037's; the tracker tests never

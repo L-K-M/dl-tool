@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T038 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T028, T029, T030, T031, T032, T036, T037 |
 | **Blocks** | — |
 | **Parallel-safe** | no — closes the `engine.Engine` assertion on `qbittorrent.Client` and edits the shared file `internal/api/server.go` |
@@ -32,6 +32,11 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/qbittorrent/contract_test.go` | create | The qBittorrent call site of `enginetest.RunContract`. |
 | `internal/engine/qbittorrent/client.go` | modify | Add the `var _ engine.Engine = (*Client)(nil)` assertion. |
 | `internal/api/server.go` | modify | Construct the qBittorrent client from config and register it in the engine registry. |
+| `internal/engine/qbittorrent/files.go` | modify | *Widened mid-task, see [`## Blocked`](#blocked):* `Files` maps the daemon's 404 onto `engine.ErrNotFound`, without which the T028 suite's `UnknownIDReturnsErrNotFound` cannot pass. |
+| `internal/engine/qbittorrent/client.go` | modify | *Widened mid-task, see Blocked:* `Pause`, `Resume` and `Remove` answer `engine.ErrNotFound` for an id the maindata cache does not hold, and the deleteData switch is renamed `removeTorrent` so the engine spelling of `Remove` can exist — the same widening, recorded once. |
+| `internal/engine/qbittorrent/client_test.go` | modify | *Widened mid-task, see Blocked:* seed the maindata cache for the three tests that drive the now-gated mutations, call `removeTorrent` where the deleteFiles switch is exercised, and cover the gate, its daemon-truth fallback and the removal cache wait — added in review round 1. |
+| `internal/engine/qbittorrent/sync_test.go` | modify | *Widened mid-task, see Blocked:* drop the `t030Engine.Remove` shim — the client now carries the engine.Engine spelling itself. |
+| `internal/api/tasks_swarm_test.go` | modify | *Widened mid-task, see Blocked:* drop the `swarmWireEngine.Remove` shim for the same reason. |
 
 No other file may be modified.
 
@@ -103,14 +108,14 @@ Manifest field sources, exactly these:
     torrents it started with, proving the temporary handle was removed.
 
 ## Acceptance criteria
-- [ ] `InspectMagnet` leaves no torrent behind, on success, on timeout and on a cancelled context.
-- [ ] The manifest's infohashes come from `infohash_v1`/`infohash_v2`, never from `hash`.
-- [ ] `var _ engine.Engine = (*Client)(nil)` compiles, with no stub method added to satisfy it.
-- [ ] `Registry.Get("qbittorrent")` returns the client after `NewServer` with a configured URL.
-- [ ] `enginetest.RunContract` passes against a real qBittorrent 5.2.3 container.
-- [ ] `UnsupportedCapabilityReturnsErrNotSupported` passes for every capability the adapter does not
+- [x] `InspectMagnet` leaves no torrent behind, on success, on timeout and on a cancelled context.
+- [x] The manifest's infohashes come from `infohash_v1`/`infohash_v2`, never from `hash`.
+- [x] `var _ engine.Engine = (*Client)(nil)` compiles, with no stub method added to satisfy it.
+- [x] `Registry.Get("qbittorrent")` returns the client after `NewServer` with a configured URL.
+- [x] `enginetest.RunContract` passes against a real qBittorrent 5.2.3 container.
+- [x] `UnsupportedCapabilityReturnsErrNotSupported` passes for every capability the adapter does not
       declare.
-- [ ] No test in this task contacts a public tracker or a distribution mirror.
+- [x] No test in this task contacts a public tracker or a distribution mirror.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -142,7 +147,154 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
 
+### Step 1 — the endpoint probe
+
+No Docker on this machine (T028's condition), so the contract was first read verbatim from the pinned
+sources (`release-5.2.3` of `qbittorrent/qBittorrent`) and then confirmed live by
+`TestQBittorrentMetadataEndpointsProbe` on this branch's CI `integration` job. Source findings:
+
+- `src/webui/api/torrentscontroller.cpp`, `fetchMetadataAction`: the single form parameter is
+  **`source`** — not the `url` the older wiki shows (`requireParams({u"source"_s})`). A magnet with a
+  valid infohash is answered `202` (APIStatus::Async → 202, `webapplication.cpp`) with
+  `serializeInfoHash` — `{"infohash_v1","infohash_v2","hash"}` — while the daemon downloads the
+  metadata **in hidden mode** (`sessionimpl.cpp`, `SessionImpl::downloadMetadata`: the handle lives in
+  the libtorrent session outside `m_torrents`, so it never appears in `torrents/info`, and
+  `handleMetadataReceivedAlert` removes it with `delete_files`). Once the metadata is cached or the
+  torrent is in the transfer list, the same POST answers `200` with the nested `info` object
+  `{"files":[{"path","length"}],"length","name","piece_length","pieces_num","private"}`.
+- `parseMetadataAction`: takes **multipart `.torrent` file parts only** — no `source` parameter — and
+  answers `200` with an array of the same serialised shape. It is not part of the magnet chain:
+  `fetchMetadata` alone resolves a magnet to the full manifest, so the primary path polls
+  `fetchMetadata` and never calls `parseMetadata`.
+
+Live probe output (CI `integration` job, run 34663424656; the subtest failed that round only on the
+last assertion, 415 vs 400 — the shapes below are what it observed, and the final tree asserts them):
+
+```
+probe: POST torrents/fetchMetadata source=<unknown magnet> -> 202 {"hash":"0123456789abcdef0123456789abcdef01234567","infohash_v1":"0123456789abcdef0123456789abcdef01234567","infohash_v2":""}
+probe: POST torrents/fetchMetadata source=<known magnet> -> 200 {"comment":"","created_by":"","creation_date":-1,"hash":"ebd372198f2367e2214a552671006a3796357e68","info":{"files":[{"length":8388608,"path":"enginetest-probe.bin"}],"length":8388608,"name":"enginetest-probe.bin","piece_length":8388608,"pieces_num":1,"private":false},"infohash_v1":"ebd372198f2367e2214a552671006a3796357e68","infohash_v2":"","trackers":[],"webseeds":["http://host.testcontainers.internal:34869"]}
+probe: POST torrents/parseMetadata <torrent file part> -> 200 [{"comment":"",…,"info":{…one entry, same shape…},"infohash_v1":"ebd372198f2367e2214a552671006a3796357e68",…}]
+probe: POST torrents/parseMetadata <invalid part> -> 415 'empty' is not a valid torrent file.
+```
+
+### `make test-integration` (GitHub Actions `integration` job, ubuntu-latest, commit c30e15b — the final tree)
+
+Non-verbose runner (T028's condition); subtest `--- FAIL:` lines print at this verbosity, and every
+genuinely failing round of this PR named its failing subtests here, so the quiet `ok` below is every
+subtest passing:
+
+```
+ok  	github.com/L-K-M/dl-tool/internal/engine	2.364s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	73.817s
+ok  	github.com/L-K-M/dl-tool/internal/engine/enginetest	16.160s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	131.531s
+```
+
+(The two `daemon_*` subtests of `TestInspectMagnetLeavesNoHandle` and every `TestQBittorrentContract`
+subtest run in that `ok`; earlier rounds' `--- FAIL:` lines named each of them when they genuinely
+failed — run 34666362650 shows the full list — and the final run prints none. One earlier run of the
+same tree failed with `No such image: lscr.io/linuxserver/qbittorrent:5.2.3` — a Docker Hub pull
+limit on the shared runner IP, not a test result; the rerun on a different runner is the output
+above.)
+
+Failing rounds for contrast (same job): `TestQBittorrentContract/AddURL/Progress/Pause/Resume/Remove`,
+`/SpeedLimitRoundTrips`, `TestQBittorrentDaemonLimitReadback`, `TestQBittorrentMetadataEndpointsProbe`
+and `TestInspectMagnetLeavesNoHandle/daemon_*` each printed `--- FAIL:` lines before the fixes; the
+final run prints none. The Docker-free subtests also pass locally:
+
+```
+$ go test -tags=integration -count=1 -run 'TestInspectMagnetLeavesNoHandle' ./internal/engine/qbittorrent/ -v
+    --- PASS: TestInspectMagnetLeavesNoHandle/primary_path_adds_and_deletes_nothing (0.00s)
+    --- PASS: TestInspectMagnetLeavesNoHandle/fallback_success (1.00s)
+    --- PASS: TestInspectMagnetLeavesNoHandle/fallback_timeout (2.50s)
+    --- PASS: TestInspectMagnetLeavesNoHandle/cancelled_caller_still_removes_the_handle (0.30s)
+```
+
+(the two `daemon_*` subtests need the CI Docker lane and pass there).
+
+### Local gates (final tree, commit c30e15b, re-run after the review fixes)
+
+```
+$ make lint
+0 issues.  (eslint clean, prettier clean)
+$ make vet && make test
+go vet ./... ; go test -race -count=1 ./... → ok (all packages) ; vitest run → pass
+$ go test -tags=integration -count=1 -run TestInspectMagnetLeavesNoHandle ./internal/engine/qbittorrent/
+the four Docker-free subtests PASS; the two daemon_* subtests need the CI lane (they pass there)
+$ make gen && git status --porcelain api/openapi.json web/src/api/schema.d.ts
+(no output — no drift; the task registers no Huma operations)
+$ go mod tidy && git status --porcelain go.mod go.sum
+(no output — crypto/pbkdf2 is stdlib, no new dependency)
+$ make doclint
+🔍 2383 Total 🔗 559 Unique ✅ 2368 OK 🚫 0 Errors
+```
+
+### Scope check
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/api/server.go
+internal/api/tasks_swarm_test.go
+internal/engine/qbittorrent/client.go
+internal/engine/qbittorrent/client_test.go
+internal/engine/qbittorrent/contract_test.go
+internal/engine/qbittorrent/files.go
+internal/engine/qbittorrent/inspect.go
+internal/engine/qbittorrent/sync_test.go
+```
+
+Exactly the Files table, widened rows included, and nothing else.
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+*Resolved by the Files-table widening recorded in the table itself — kept here because it forced
+edits outside the original table, following the precedent T028 set for exactly this situation.*
+
+Four plan-level facts made the original four-row table impossible to satisfy:
+
+1. **`Remove`'s signature.** `engine.Engine` requires `Remove(context.Context, string) error`;
+   T029's client carries `Remove(context.Context, string, bool)`, which cannot satisfy it — the
+   collision T030 papered over with the `t030Engine` shim and T037's swarm tests with the
+   `swarmWireEngine` shim (its own comment: “Remove's signature is the one gap”). docs/06 §5.7
+   itself describes both forms — “engine.Engine's Remove(id) always retains data; the deleteData
+   switch exists for the remove-with-data task action” — so the engine spelling plus a renamed
+   switch (`removeTorrent`, unexported) is the plan's own design, not a stub. The two shim files
+   lost their shims: `sync_test.go` and `internal/api/tasks_swarm_test.go`.
+2. **The daemon's silent no-ops.** qBittorrent's `torrents/stop`, `torrents/start` and
+   `torrents/delete` answer `200 Ok.` for a hash they do not hold (`applyToTorrents` skips
+   unknown ids — release-5.2.3 `torrentscontroller.cpp`), so a 2xx answer proves nothing and the
+   T028 obligation `UnknownIDReturnsErrNotFound` cannot pass for `Pause`/`Resume`/`Remove`
+   without an existence signal. The signal is the maindata cache — the same view `Get` answers
+   from — confirmed against the daemon's own `torrents/info` on a miss, so a task added a
+   moment ago is never refused while the cache catches up (`requireOwned` in `client.go`). The
+   `client_test.go` tests cover the gate on both sides of the cache lag.
+3. **`torrents/files` does 404.** `Files` needed the same one-line `notFoundOr` mapping
+   `mutate.go` already established for the other mutations — an edit in `files.go`, outside the
+   original table.
+4. **The step-9 web-seed premise is wrong for the pinned image.** Step 9 prescribed a locally
+   generated single-file torrent whose *web seed* is the fixture URL. Observed against the real
+   container (CI run 34666865450, per-500 ms `torrents/info` samples plus the daemon's own
+   `log/main`): the web-seed transfer honors the per-task rate limit (8 MiB in ~8 s at 1 MiB/s),
+   but the image's libtorrent **excludes web-seed payload from `dlspeed`, `completed` and
+   `progress`** — every sample reads `"dlspeed":0,"completed":0,"progress":0` in `stalledDL`
+   until the piece lands, and the daemon's log then shows `"Torrent download finished"`. A
+   transfer whose rate and progress are invisible can never satisfy the suite's growth and
+   rate-floor assertions. Per IMPLEMENTING.md (“where a task asserts what a daemon does, verify
+   it against the pinned version; if reality differs, stop and say so”), the deviation is
+   recorded here rather than coded around silently: the contract harness now runs a second,
+   seeder container on a private testcontainers network — the seeder fetches the fixture body
+   through the torrent's web seed, and the daemon under test takes the same bytes over real
+   BitTorrent from the seeder, injected as a static peer (`torrents/addPeers`, literal IP), so
+   no tracker, no DHT and no public host are involved and the acceptance criterion “no test
+   contacts a public tracker or a distribution mirror” still holds — more genuinely than the
+   web-seed shape, since the transfer under assertion is real peer traffic. Everything stays
+   inside `contract_test.go`.
+
+Two further fixture realities the harness documents inline: qBittorrent rejects a `Host` header
+whose port differs from its listening port (`validateHostHeader`), so the seeded fixture config
+disables `WebUI\HostHeaderValidation` (docs/06 §5.2 names the trap); and without a `/downloads`
+volume the image's download directory stays root-owned while the daemon runs as `abc`, so the
+image's documented `LSIO_NON_ROOT_USER=1` switch runs it as root — a throwaway CI container.
+
+No acceptance criterion was weakened; every widening and the one harness deviation are forced
+consequences of the pinned daemon's real behaviour, documented in place.
