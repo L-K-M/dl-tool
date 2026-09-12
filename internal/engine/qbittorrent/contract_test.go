@@ -35,9 +35,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,7 +89,8 @@ const (
 
 	// addVisibilityTimeout bounds the wait for the engine's own Get to
 	// observe an add: the sync/maindata poll runs at 1 Hz.
-	addVisibilityTimeout = 15 * time.Second
+	addVisibilityTimeout     = 15 * time.Second
+	inspectionVisibilityPoll = 250 * time.Millisecond
 
 	// wrongThreeQuarters is the wrong daemon value the readback test
 	// injects: three quarters of the request, small enough to stay inside
@@ -367,11 +370,36 @@ func (s *daemonSession) doMultipart(apiPath, field, filename string, data []byte
 func (s *daemonSession) torrentCount() int {
 	s.t.Helper()
 
+	return len(s.torrentHashes())
+}
+
+func (s *daemonSession) torrentHashes() []string {
+	s.t.Helper()
+
 	status, body := s.do(http.MethodGet, "torrents/info", nil)
 	require.Equal(s.t, http.StatusOK, status, "read torrents/info: %s", body)
-	var rows []json.RawMessage
+	var rows []struct {
+		Hash string `json:"hash"`
+	}
 	require.NoError(s.t, json.Unmarshal(body, &rows))
-	return len(rows)
+	hashes := make([]string, 0, len(rows))
+	for _, row := range rows {
+		hashes = append(hashes, row.Hash)
+	}
+	return hashes
+}
+
+func (s *daemonSession) inspectionBaseline(hash string) []string {
+	s.t.Helper()
+
+	// Add acknowledges submission before torrents/info necessarily exposes it.
+	// Capture the baseline only once it includes the fixture's own seed.
+	var hashes []string
+	require.Eventually(s.t, func() bool {
+		hashes = s.torrentHashes()
+		return slices.Contains(hashes, hash)
+	}, addVisibilityTimeout, inspectionVisibilityPoll, "the seeded torrent never became visible")
+	return hashes
 }
 
 // downloadLimit reads the daemon's configured download limit: one hash's
@@ -838,6 +866,37 @@ func mustFixtureSHA(t *testing.T) string {
 	return sha
 }
 
+func TestInspectionBaselineWaitsForSeed(t *testing.T) {
+	const unrelatedHash = "89abcdef0123456789abcdef0123456789abcdef"
+	for _, initial := range []struct {
+		name string
+		body string
+	}{
+		{name: "empty", body: `[]`},
+		{name: "unrelated torrent", body: `[{"hash":"` + unrelatedHash + `"}]`},
+	} {
+		t.Run(initial.name, func(t *testing.T) {
+			var reads atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, http.MethodGet, r.Method)
+				require.Equal(t, "/api/v2/"+inspectPathInfo, r.URL.Path)
+				body := `[{"hash":"` + unrelatedHash + `"},{"hash":"` + inspectHash + `"}]`
+				if reads.Add(1) == 1 {
+					body = initial.body
+				}
+				_, err := io.WriteString(w, body)
+				require.NoError(t, err)
+			}))
+			defer srv.Close()
+			session := &daemonSession{t: t, base: srv.URL, hc: srv.Client()}
+
+			baseline := session.inspectionBaseline(inspectHash)
+			require.ElementsMatch(t, []string{unrelatedHash, inspectHash}, baseline)
+			require.GreaterOrEqual(t, reads.Load(), int32(2), "the accepted add is not visible on the first read")
+		})
+	}
+}
+
 // TestInspectMagnetLeavesNoHandle pins T038's central acceptance
 // criterion: an inspection never leaves a torrent behind. The two daemon
 // subtests prove it against a real 5.2.3 through the paths it actually
@@ -859,7 +918,9 @@ func TestInspectMagnetLeavesNoHandle(t *testing.T) {
 		id, err := client.Add(ctx, engine.AddRequest{Blob: torrent.blob, BlobKind: "torrent", StartPaused: true})
 		require.NoError(t, err)
 
-		before := session.torrentCount()
+		seedHash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
+		baseline := session.inspectionBaseline(seedHash)
+		before := len(baseline)
 		manifest, err := client.InspectMagnet(ctx, torrent.magnet)
 		require.NoError(t, err, "the known magnet must resolve through fetchMetadata")
 
@@ -875,10 +936,12 @@ func TestInspectMagnetLeavesNoHandle(t *testing.T) {
 		require.NotNil(t, manifest.Private)
 		require.False(t, *manifest.Private)
 
-		require.Equal(t, before, session.torrentCount(),
+		after := session.torrentHashes()
+		require.Equal(t, before, len(after),
 			"InspectMagnet must leave torrents/info exactly as it found it")
+		require.ElementsMatch(t, baseline, after, "inspection must retain the seeded torrent and add no handles")
 
-		session.daemonRemove(strings.TrimPrefix(id, engine.NameQBittorrent+":"), false)
+		session.daemonRemove(seedHash, false)
 		require.Eventually(t, func() bool { return session.torrentCount() == before-1 },
 			addVisibilityTimeout, 250*time.Millisecond, "the seeded torrent was never removed")
 	})
