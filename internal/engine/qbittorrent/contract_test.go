@@ -1195,30 +1195,32 @@ func TestZZThrottleDiagnosis(t *testing.T) {
 	require.NoError(t, client.SetRateLimits(ctx, id, &limit, nil))
 	t.Logf("diag: daemon limit readback: %d", session.downloadLimit(id))
 
-	require.NoError(t, client.Resume(ctx, id))
+	// Start through the daemon itself — the adapter's gate is not under
+	// diagnosis here.
+	hash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
+	status, body := session.do(http.MethodPost, "torrents/start", url.Values{"hashes": {hash}}, "")
+	require.Equal(t, http.StatusOK, status, "start: %s", body)
 	started := time.Now()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	paused := false
 	for range 60 {
 		status, body := session.do(http.MethodGet, "torrents/info",
-			url.Values{"hashes": {strings.TrimPrefix(id, engine.NameQBittorrent+":")}}, "")
+			url.Values{"hashes": {hash}}, "")
 		require.Equal(t, http.StatusOK, status)
 		t.Logf("diag: t=%s %s", time.Since(started).Round(10*time.Millisecond), body)
 
 		// Stop the transfer once a third of the body has arrived.
 		if !paused {
 			var rows []struct {
-				State     string  `json:"state"`
-				Completed int64   `json:"completed"`
-				Dlspeed   int64   `json:"dlspeed"`
-				Progress  float64 `json:"progress"`
+				State    string  `json:"state"`
+				Progress float64 `json:"progress"`
 			}
 			require.NoError(t, json.Unmarshal(body, &rows))
 			if len(rows) == 1 && rows[0].Progress >= 0.3 {
-				err := client.Pause(ctx, id)
-				t.Logf("diag: Pause at t=%s progress=%.2f -> %v",
-					time.Since(started).Round(10*time.Millisecond), rows[0].Progress, err)
+				status, resp := session.do(http.MethodPost, "torrents/stop", url.Values{"hashes": {hash}}, "")
+				t.Logf("diag: stop at t=%s progress=%.2f -> %d %s",
+					time.Since(started).Round(10*time.Millisecond), rows[0].Progress, status, resp)
 				paused = true
 			}
 		}
@@ -1234,8 +1236,8 @@ func TestZZThrottleDiagnosis(t *testing.T) {
 	}
 
 	// qBittorrent's own events, with its timestamps.
-	status, body := session.do(http.MethodGet, "log/main", url.Values{"last_known_id": {"-1"}}, "")
-	t.Logf("diag: daemon event log (status %d): %s", status, body)
+	logStatus, logBody := session.do(http.MethodGet, "log/main", url.Values{"last_known_id": {"-1"}}, "")
+	t.Logf("diag: daemon event log (status %d): %s", logStatus, logBody)
 }
 
 func TestNewServerRegistersQBittorrent(t *testing.T) {
