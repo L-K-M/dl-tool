@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T100 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T017, T020, T029, T030, T031 |
 | **Blocks** | — |
 | **Parallel-safe** | no — extends `internal/api/tasks.go` and `internal/store/tasks.go` |
@@ -34,6 +34,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/tasks.go` | modify | The pre-insert duplicate check and the `rejected[]` entry. |
 | `internal/api/tasks_test.go` | modify | Cases for each duplicate form and for the late resolution. |
 | `internal/engine/qbittorrent/sync.go` | modify | Write both hashes back when metadata resolves. |
+| `internal/api/server.go` | modify | *Widened mid-task, see [`## Blocked`](#blocked):* one wiring call — `SetInfohashWriter` at the qBittorrent construction — the composition-root call site docs/14-conventions.md §8.3 requires; the original five-row table left the write-back with no caller. |
 
 No other file may be modified.
 
@@ -110,12 +111,12 @@ An empty string is stored as `NULL`, never as `''`, because `idx_tasks_infohash_
     pause, asserting the row still exists and `completed_bytes` is unchanged.
 
 ## Acceptance criteria
-- [ ] A magnet in 32-character base32 and the same magnet in 40-hex resolve to one task.
-- [ ] A hybrid torrent added by its v1 magnet and then by its v2 magnet yields exactly one row.
-- [ ] Both columns are lowercase hex of exactly 40 and 64 characters, or NULL.
-- [ ] Two tasks with no infohash coexist; the partial unique indices do not collide on NULL.
-- [ ] Deduplication never queries `engine_ref`.
-- [ ] A duplicate discovered after metadata resolves pauses the task and deletes nothing.
+- [x] A magnet in 32-character base32 and the same magnet in 40-hex resolve to one task. — `TestBase32AndHexAreOneTask` (store), `TestCreateTasksDuplicateTorrentForms` (api)
+- [x] A hybrid torrent added by its v1 magnet and then by its v2 magnet yields exactly one row. — `TestHybridDedupBothDirections` (store), `TestCreateTasksDuplicateTorrentForms` (api)
+- [x] Both columns are lowercase hex of exactly 40 and 64 characters, or NULL. — `TestNormaliseInfohash`, `TestBase32AndHexAreOneTask`, `TestV2OnlyLeavesV1Null`
+- [x] Two tasks with no infohash coexist; the partial unique indices do not collide on NULL. — `TestNullHashesCoexist`
+- [x] Deduplication never queries `engine_ref`. — `queryFindTaskByInfohash` names both infohash columns alone; `TestHybridDedupBothDirections` matches across two distinct engine_refs, which a handle-based lookup cannot produce
+- [x] A duplicate discovered after metadata resolves pauses the task and deletes nothing. — `TestLateDuplicatePausesTask` (api, through the composition root), `TestResolveInfohashesLandsAndPauses` (store)
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -147,7 +148,144 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Final tree, the single task commit on `task/T100-infohash-identity-and-duplicates` (review round 1
+fixes included).
+
+`make lint && make test PKG=./internal/...` (exact commands of the Verification block):
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+ok  github.com/L-K-M/dl-tool/internal/api              83.821s
+ok  github.com/L-K-M/dl-tool/internal/config            1.123s
+ok  github.com/L-K-M/dl-tool/internal/engine           21.028s
+ok  github.com/L-K-M/dl-tool/internal/engine/aria2       3.213s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 8.863s
+ok  github.com/L-K-M/dl-tool/internal/fsx               1.033s
+ok  github.com/L-K-M/dl-tool/internal/jobs              4.419s
+ok  github.com/L-K-M/dl-tool/internal/obs               1.184s
+ok  github.com/L-K-M/dl-tool/internal/secure            4.041s
+ok  github.com/L-K-M/dl-tool/internal/store            71.086s
+ok  github.com/L-K-M/dl-tool/internal/sync               4.387s
+ok  github.com/L-K-M/dl-tool/internal/uri               1.069s
+```
+
+The five named tests plus the review-round regressions, verbosely on the same tree:
+
+```
+$ go test ./internal/store/ ./internal/api/ ./internal/engine/qbittorrent/ \
+    -run 'TestBase32AndHexAreOneTask|TestHybridDedupBothDirections|TestV2OnlyLeavesV1Null|TestNullHashesCoexist|TestLateDuplicatePausesTask|TestCrossFormCollision|TestCreateTasksHybridAndBareOverlap' -count=1 -v
+--- PASS: TestBase32AndHexAreOneTask (0.07s)
+--- PASS: TestHybridDedupBothDirections (0.03s)
+--- PASS: TestCrossFormCollision (0.02s)
+--- PASS: TestV2OnlyLeavesV1Null (0.02s)
+--- PASS: TestNullHashesCoexist (0.02s)
+ok  github.com/L-K-M/dl-tool/internal/store 0.182s
+--- PASS: TestCreateTasksHybridAndBareOverlap (0.05s)
+--- PASS: TestLateDuplicatePausesTask (3.04s)
+ok  github.com/L-K-M/dl-tool/internal/api 3.122s
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent [no tests to run]
+```
+
+`TestCrossFormCollision` was observed failing against the pre-fix re-check (no id exclusion: the
+row's own reflection won the `LIMIT 1` scan and the collision surfaced as a raw constraint
+refusal) before the fix landed, and passing after.
+
+Scope. The Verification block's `git status` form is empty on a committed tree, so the equivalent
+check over the branch's full change set:
+
+```
+$ git diff --name-only origin/main | sort
+internal/api/server.go
+internal/api/tasks.go
+internal/api/tasks_test.go
+internal/engine/qbittorrent/sync.go
+internal/store/tasks_infohash.go
+internal/store/tasks_infohash_test.go
+```
+
+Exactly the Files table (including the widened `server.go` row) and nothing else. `make gen` produces
+no diff — no Huma operation or request/response struct changed, so `api/openapi.json` and
+`web/src/api/schema.d.ts` stay as committed.
+
+Step 9 (v2-only fixture observation): **not observed — no Docker daemon in this environment**
+(`docker: command not found`; `make test-integration` and the testcontainers contract suite cannot
+run). The implementation does not depend on the answer: `engine_ref` stores the daemon's `hash`
+verbatim, both infohash columns are taken from the `infohash_v1`/`infohash_v2` keys, and the flush
+never reconstructs either. The INFERRED marker in 06 §3.5 stays open for a Docker-capable run; the
+libtorrent `get_best()` truncation noted in `expectedTorrentID` (T038) remains the best available
+evidence.
+
+`make ci`: lint, vet, typecheck, test and doclint pass locally; `compose-check` cannot run without
+Docker (compose.yaml is untouched by this task, so CI's check there is identical to main's).
+
+Repetition: `TestLateDuplicatePausesTask` passed 6/6 across two consecutive `-count=3` batches on
+the final tree (the first implementation raced an in-flight reconciler sweep; fixed by projecting
+the stop into the maindata cache before the engine call — see `flushInfohashes`).
+
+Review rounds 1–3 (GLM 5.3; rounds 2 and 3 carried no important findings) — findings addressed
+in the final commit:
+the collision re-check now excludes the row being written (`findOtherTaskByInfohash`, regression
+`TestCrossFormCollision`) and translates a unique-index refusal at the UPDATE into
+`ErrDuplicateInfohash`; the within-submission duplicate set is keyed per hash
+(`TestCreateTasksHybridAndBareOverlap`); the flush budget no longer burns tail entries or resets
+on re-noted pairs, and dropped resolutions stay dropped; `applyResponseLocked` renamed
+`applyResponseInner`; the stop projection picks the UP spelling for upload-side torrents; the
+late test asserts the engine-side stop happened and no delete did, and tolerates the admission
+pass winning the seeding race. Findings answered without code: `FindByInfohash` keeps
+`state <> 'removed'` (verified by the tombstone case of `TestHybridDedupBothDirections`); the
+slog JSON handler serializes writes through an internal mutex (Go `log/slog` handler.go), so the
+strings.Builder log sink is not a data race, and this task's env never reads it mid-test;
+`tasks.updated_at` is Unix milliseconds, so the 2 ms idempotency sleep spans distinct stamps;
+`openTestStore` self-registers its cleanup and cannot fail; and `ResolveInfohashes` re-reports the
+collision on retry (the failed write leaves the row hashless), so the engine-side pause retry
+rides the same path. Round 2's notes landed the same way: budget expiry now spends one attempt on
+the entry whose call was in flight (the never-attempted tail keeps its budget and the whole batch
+stops), a pause failure on a spent budget counts like any other failure, the unseeded ordering of
+the late test no longer asserts the seeded counter, the no-op `ToUpper` and a smart-quoted `''` in
+comments are gone. The suggested bare-hash length guard is dead code — every non-empty
+`NormaliseInfohash` result is exactly 40 or 64 hex — and was not added.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+*Resolved by the Files-table widening recorded in the table itself — kept here because it forced an
+edit outside the original table, following the precedent T038 set for exactly this situation.*
+
+**The write-back needed one composition-root call the original five-row table did not list.** Step 7
+puts the call-back in the qBittorrent delta path, but the layering of docs/03-architecture.md §5.2
+keeps adapters off `internal/store` entirely (qbittorrent imports engine and uri, never the store),
+so the store reaches the delta path only through an injected writer — and no file in the original
+table could install it. That is precisely the "built and never wired" defect IMPLEMENTING.md names
+(pattern 1 of PLAN-REVIEW.md). The widening is one guarded call in `internal/api/server.go`
+(`qbittorrentEngine.SetInfohashWriter(store.NewTaskStore(db))`, behind the same nil-db guard as the
+boot probe). Routing the write through the reconciler instead (`internal/engine/reconcile.go`) was
+considered and rejected: it contradicts the task's own "the delta path calls back", and the
+ownership-filter precedent (T030) wires at construction, not in the sweep.
+
+Three contract notes, each a forced consequence of the same layering rule rather than a scope
+choice:
+
+1. The store methods live on `*TaskStore`, the package's task-row surface; the sketch's `*Store`
+   receiver names a type that does not exist in `internal/store`.
+2. `ResolveInfohashes` and `PauseDuplicate` join the sketched three. The delta path needs one
+   store-free call that lands lookup + write + collision pause together (`InfohashWriter`, satisfied
+   by `*TaskStore` at the wiring site), and the collision pause needs the `torrent_duplicate`
+   code/event pair the sketched `SetInfohashes` deliberately does not write. The sketched three
+   exist verbatim.
+3. The late-collision landing pauses the engine-side transfer too (`torrents/pause`, data
+   retained): the reconciler adopts engine state over the rows, and a transfer left downloading
+   would un-pause the row on the next sweep — "pause the task and delete nothing" requires both
+   halves to stick.
+
+Step 9's v2-only fixture observation could not be made here (no Docker); recorded under Evidence
+above. It gates no acceptance criterion and no code path depends on its answer.

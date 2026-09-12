@@ -55,11 +55,11 @@ VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING`
 	engineUnavailableFmt      = "the %s engine is required for this submission but is not registered"
 	uriRejectedDetail         = "the uri scheme is not supported in v1"
 	engineRefusesURIFmt       = "engine %q does not accept this uri"
-	duplicateDetail           = "a task for this torrent already exists"
-
-	queryTaskIDByInfohash = `SELECT id FROM tasks
-WHERE state <> 'removed' AND ((? <> '' AND infohash_v1 = ?) OR (? <> '' AND infohash_v2 = ?))
-LIMIT 1`
+	// duplicateDetail is the conflict detail of a duplicate torrent; the
+	// full detail names the live task that holds the identity.
+	duplicateDetail       = "a task for this torrent already exists"
+	duplicateDetailFormat = "%s: %s"
+	duplicateRepeatDetail = "this torrent appears twice in this submission"
 
 	queryCategoryNamesByIDs = `SELECT id, name FROM categories WHERE id IN (?)`
 
@@ -495,16 +495,14 @@ func (h *TaskHandlers) planTorrentPart(
 		InfohashV2:  manifest.InfohashV2,
 	}
 
-	duplicate, err := h.duplicateInfohash(ctx, normalized, seen)
+	duplicate, err := h.duplicateRejection(ctx, normalized, seen, part.name)
 	if err != nil {
 		return nil, nil, err
 	}
-	if duplicate {
-		rejection := RejectedURI{URI: part.name, Type: SlugConflict, Detail: duplicateDetail}
-
-		return nil, &rejection, nil
+	if duplicate != nil {
+		return nil, duplicate, nil
 	}
-	seen[normaliseInfohashKey(normalized)] = true
+	markPlanned(seen, normalized)
 
 	p := &plannedTask{
 		normalized:  normalized,
@@ -635,7 +633,7 @@ func (h *TaskHandlers) planURIs(
 	// planning, so an uploaded .torrent and its magnet are one duplicate too.
 
 	for _, raw := range body.URIs {
-		n, err := uri.Normalize(raw)
+		n, err := normaliseSubmission(raw)
 		if err != nil {
 			rejected = append(rejected, rejectURI(raw, err))
 
@@ -676,16 +674,16 @@ func (h *TaskHandlers) planURIs(
 			return nil, nil, engineUnavailable(engineName)
 		}
 
-		duplicate, err := h.duplicateInfohash(ctx, n, seen)
+		duplicate, err := h.duplicateRejection(ctx, n, seen, raw)
 		if err != nil {
 			return nil, nil, err
 		}
-		if duplicate {
-			rejected = append(rejected, RejectedURI{URI: raw, Type: SlugConflict, Detail: duplicateDetail})
+		if duplicate != nil {
+			rejected = append(rejected, *duplicate)
 
 			continue
 		}
-		seen[normaliseInfohashKey(n)] = true
+		markPlanned(seen, n)
 
 		planned = append(planned, plannedTask{normalized: n, engine: engineName, destination: destination})
 	}
@@ -860,35 +858,104 @@ func (h *TaskHandlers) linkTags(ctx context.Context, taskID string, names []stri
 	return nil
 }
 
-// duplicateInfohash reports whether a live task already carries n's
-// infohash, or the same submission already planned it. The lookup mirrors
-// the partial unique indexes on infohash_v1/infohash_v2; the check is
-// advisory — a concurrent create can still lose the INSERT race.
-func (h *TaskHandlers) duplicateInfohash(ctx context.Context, n uri.Normalized, seen map[string]bool) (bool, error) {
+// duplicateRejection reports whether a live task already carries n's
+// infohash or the same submission already planned it, as the rejected[]
+// entry the response carries: /problems/conflict — the slug registry of
+// doc 05 section 1.3 is closed — with a detail naming the existing task
+// id, or naming the submission itself when the duplicate is its own
+// repeat and no row exists yet to name. The lookup is the store's
+// FindByInfohash: both columns together, never one at a time, never
+// engine_ref.
+func (h *TaskHandlers) duplicateRejection(ctx context.Context, n uri.Normalized, seen map[string]bool, display string) (*RejectedURI, error) {
 	if n.InfohashV1 == "" && n.InfohashV2 == "" {
-		return false, nil
+		return nil, nil
 	}
-	if seen[normaliseInfohashKey(n)] {
-		return true, nil
+	if plannedAlready(seen, n) {
+		entry := RejectedURI{URI: display, Type: SlugConflict, Detail: duplicateRepeatDetail}
+
+		return &entry, nil
 	}
 
-	var id string
-	err := h.db.GetContext(ctx, &id, queryTaskIDByInfohash,
-		n.InfohashV1, n.InfohashV1, n.InfohashV2, n.InfohashV2)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+	existing, err := h.tasks.FindByInfohash(ctx, n.InfohashV1, n.InfohashV2)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
 	}
 	if err != nil {
-		return false, internalFailure(ctx, "check duplicate torrent", err)
+		return nil, internalFailure(ctx, "check duplicate torrent", err)
 	}
 
-	return true, nil
+	entry := RejectedURI{
+		URI:    display,
+		Type:   SlugConflict,
+		Detail: fmt.Sprintf(duplicateDetailFormat, duplicateDetail, existing.ID),
+	}
+
+	return &entry, nil
 }
 
-// normaliseInfohashKey keys the within-submission duplicate set on whichever
-// infohash the submission carries.
-func normaliseInfohashKey(n uri.Normalized) string {
-	return n.InfohashV1 + "|" + n.InfohashV2
+// markPlanned records a planned torrent's identity in the
+// within-submission duplicate set, one key per hash: a hybrid torrent
+// planned in full form (both hashes) and then submitted by its bare v1 or
+// v2 hash alone — or the reverse — must collide on the hash they share,
+// not slip past on the one they do not.
+func markPlanned(seen map[string]bool, n uri.Normalized) {
+	if n.InfohashV1 != "" {
+		seen[seenKeyV1+n.InfohashV1] = true
+	}
+	if n.InfohashV2 != "" {
+		seen[seenKeyV2+n.InfohashV2] = true
+	}
+}
+
+// plannedAlready reports whether the duplicate set already holds either
+// of n's hashes.
+func plannedAlready(seen map[string]bool, n uri.Normalized) bool {
+	if n.InfohashV1 != "" && seen[seenKeyV1+n.InfohashV1] {
+		return true
+	}
+
+	return n.InfohashV2 != "" && seen[seenKeyV2+n.InfohashV2]
+}
+
+// The two within-submission duplicate-set key prefixes, one per column.
+const (
+	seenKeyV1 = "v1|"
+	seenKeyV2 = "v2|"
+)
+
+// normaliseSubmission classifies one submitted URI, resolving its
+// BitTorrent identity before any routing decision: a magnet through
+// uri.ParseMagnet (inside uri.Normalize), a bare infohash through
+// store.NormaliseInfohash — the fourth shape of the routing table's row 2
+// (docs/06-download-engines.md section 2), which carries no scheme for
+// uri.Normalize to classify, so it becomes the magnet of its own hash and
+// enters the same path a magnet submission takes.
+func normaliseSubmission(raw string) (uri.Normalized, error) {
+	if hash, err := store.NormaliseInfohash(raw); err == nil && hash != "" {
+		return magnetOfBareInfohash(hash), nil
+	}
+
+	return uri.Normalize(raw)
+}
+
+// magnetOfBareInfohash rebuilds the submit URI of a bare infohash from its
+// normalised form: the v1 hash rides urn:btih, the v2 hash the
+// urn:btmh multihash whose digest it is. The column width tells the forms
+// apart — 40 hex is a v1 identity, 64 a v2.
+func magnetOfBareInfohash(hash string) uri.Normalized {
+	if len(hash) == 40 {
+		return uri.Normalized{
+			Kind:       uri.KindMagnet,
+			URI:        "magnet:?xt=urn:btih:" + hash,
+			InfohashV1: hash,
+		}
+	}
+
+	return uri.Normalized{
+		Kind:       uri.KindMagnet,
+		URI:        "magnet:?xt=urn:btmh:1220" + hash,
+		InfohashV2: hash,
+	}
 }
 
 // rejectURI renders one rejected[] entry for a URI that normalising or

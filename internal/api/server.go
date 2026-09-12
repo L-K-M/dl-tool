@@ -229,6 +229,16 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		}
 		engines.Register(qbittorrentEngine)
 
+		// The T100 metadata write-back: the sync/maindata delta path calls
+		// back into the task store whenever a torrent's infohash_v1/v2
+		// becomes non-empty — the moment a magnet's metadata arrives — and
+		// the store lands a late collision as the torrent_duplicate pause.
+		// The same nil-db guard as the boot probe: the openapi subcommand's
+		// client never writes tasks.
+		if db != nil {
+			qbittorrentEngine.SetInfohashWriter(store.NewTaskStore(db))
+		}
+
 		// The same engines-row and boot-probe wiring aria2 gets, behind the
 		// same nil-db guard: the openapi subcommand's stdout stays a pure
 		// document, and a down daemon is a warn, never a boot failure.

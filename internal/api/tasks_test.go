@@ -3,6 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+
+	"github.com/stretchr/testify/require"
 	"io"
 	"log/slog"
 	"maps"
@@ -626,17 +629,167 @@ func TestCreateTasksDuplicateTorrent(t *testing.T) {
 	if len(body.Rejected) != 1 || body.Rejected[0].Type != SlugConflict {
 		t.Fatalf("rejected = %+v, want one conflict entry", body.Rejected)
 	}
+	if body.Rejected[0].Detail != duplicateRepeatDetail {
+		t.Errorf("repeat detail = %q, want %q", body.Rejected[0].Detail, duplicateRepeatDetail)
+	}
 
 	// The same magnet in a later submission hits the live row the same way;
 	// with every URI refused it answers the all-rejected 422, its detail
-	// carrying the conflict reason.
+	// naming the existing task id (doc 05 section 5.2's conflict rule).
 	response = env.createTasks(t, map[string]any{"uris": []string{mixedMagnet}})
 	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugUnsupportedScheme)
-	if problem.Detail != duplicateDetail {
-		t.Errorf("detail = %q, want %q", problem.Detail, duplicateDetail)
+	existingID := body.Created[0].ID
+	if !strings.Contains(problem.Detail, duplicateDetail) || !strings.Contains(problem.Detail, existingID) {
+		t.Errorf("detail = %q, want %q naming task %q", problem.Detail, duplicateDetail, existingID)
 	}
 	if env.countTasks(t) != 1 {
 		t.Errorf("%d tasks after duplicate submissions, want 1", env.countTasks(t))
+	}
+}
+
+// The two spellings of one v1 identity and a hybrid's second identity:
+// every duplicate form the create path must recognise (FR-023).
+const (
+	// mixedMagnet's hash in the 32-character base32 form BEP 9 permits.
+	duplicateBase32 = "R6ODUKY5JZPWA4MCSOSLLRWX5D42BMOC"
+
+	fixtureV2Hash = "5a7f9c3b1d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5061728394a5b6c7d8e"
+)
+
+// TestCreateTasksDuplicateTorrentForms walks every duplicate form of
+// FR-023 through the create endpoint: the base32 spelling of a v1 magnet,
+// a hybrid's v2 magnet, and the bare-hash forms of both — each rejected
+// with /problems/conflict naming the row that holds the identity.
+func TestCreateTasksDuplicateTorrentForms(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	// The winner: a task created from the hex magnet.
+	created := decodeCreateBody(t, env.createTasks(t, map[string]any{"uris": []string{mixedMagnet}}))
+	require.Len(t, created.Created, 1)
+	winner := created.Created[0]
+
+	// A hybrid of a second identity: a different v1 hash and the fixture's
+	// v2, created once, so the v2-only forms below have a row to hit.
+	hybridMagnet := "magnet:?xt=urn:btih:" + strings.Repeat("e", 40) + "&xt=urn:btmh:1220" + fixtureV2Hash
+	hybrid := decodeCreateBody(t, env.createTasks(t, map[string]any{"uris": []string{hybridMagnet}}))
+	require.Len(t, hybrid.Created, 1)
+	if hybrid.Created[0].InfohashV1 == nil || hybrid.Created[0].InfohashV2 == nil {
+		t.Fatalf("hybrid = %+v, want both hashes stored", hybrid.Created[0])
+	}
+
+	forms := []struct {
+		name  string
+		uri   string
+		owner string // the task the detail must name
+	}{
+		{name: "base32 magnet", uri: "magnet:?xt=urn:btih:" + duplicateBase32, owner: winner.ID},
+		{name: "v2 magnet", uri: "magnet:?xt=urn:btmh:1220" + fixtureV2Hash, owner: hybrid.Created[0].ID},
+		{name: "bare v1", uri: strings.ToUpper(mixedMagnet[len(mixedMagnet)-40:]), owner: winner.ID},
+		{name: "bare v2", uri: fixtureV2Hash, owner: hybrid.Created[0].ID},
+	}
+	uris := make([]string, 0, len(forms))
+	for _, form := range forms {
+		uris = append(uris, form.uri)
+	}
+
+	// One submission carrying every duplicate form plus a fresh https URI:
+	// partial success — one task, four conflicts.
+	body := decodeCreateBody(t, env.createTasks(t, map[string]any{"uris": append(uris, mixedHTTPS)}))
+	if len(body.Created) != 1 {
+		t.Fatalf("created %d tasks, want 1 (the https uri)", len(body.Created))
+	}
+	if len(body.Rejected) != len(forms) {
+		t.Fatalf("rejected %d entries, want %d", len(body.Rejected), len(forms))
+	}
+	byURI := map[string]RejectedURI{}
+	for _, entry := range body.Rejected {
+		byURI[entry.URI] = entry
+	}
+	for _, form := range forms {
+		entry, ok := byURI[form.uri]
+		if !ok {
+			t.Errorf("form %s (%q) has no rejected entry", form.name, form.uri)
+			continue
+		}
+		if entry.Type != SlugConflict {
+			t.Errorf("form %s: type = %q, want %q", form.name, entry.Type, SlugConflict)
+		}
+		if !strings.Contains(entry.Detail, form.owner) {
+			t.Errorf("form %s: detail = %q, want it to name task %q", form.name, entry.Detail, form.owner)
+		}
+	}
+
+	// Three rows: the winner, the hybrid, the https task — no fourth.
+	if count := env.countTasks(t); count != 3 {
+		t.Errorf("%d tasks after every duplicate form, want 3", count)
+	}
+}
+
+// TestCreateTasksHybridAndBareOverlap pins the within-submission set's
+// per-hash keying: one submission holding a hybrid magnet and the same
+// torrent's bare v1 hash — keys that share one hash but not both — is a
+// duplicate, not a constraint failure at insert time.
+func TestCreateTasksHybridAndBareOverlap(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	hybridV1 := strings.Repeat("e", 40)
+	hybrid := "magnet:?xt=urn:btih:" + hybridV1 + "&xt=urn:btmh:1220" + fixtureV2Hash
+
+	body := decodeCreateBody(t, env.createTasks(t, map[string]any{
+		"uris": []string{hybrid, hybridV1, fixtureV2Hash},
+	}))
+	if len(body.Created) != 1 {
+		t.Fatalf("created %d tasks, want 1", len(body.Created))
+	}
+	if len(body.Rejected) != 2 {
+		t.Fatalf("rejected %d entries, want 2", len(body.Rejected))
+	}
+	for _, entry := range body.Rejected {
+		if entry.Type != SlugConflict || entry.Detail != duplicateRepeatDetail {
+			t.Errorf("entry = %+v, want a within-submission conflict", entry)
+		}
+	}
+	if count := env.countTasks(t); count != 1 {
+		t.Errorf("%d tasks, want 1", count)
+	}
+}
+
+// TestCreateTasksBareInfohash pins the bare-infohash lane of routing-table
+// row 2 (docs/06 section 2): a bare 40-hex or 64-hex submission becomes a
+// magnet task of its own hash, stored lowercase, routed to qBittorrent.
+func TestCreateTasksBareInfohash(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	body := decodeCreateBody(t, env.createTasks(t, map[string]any{
+		"uris": []string{strings.ToUpper(mixedMagnet[len(mixedMagnet)-40:]), fixtureV2Hash},
+	}))
+	if len(body.Created) != 2 {
+		t.Fatalf("created %d tasks, want 2", len(body.Created))
+	}
+
+	v1Task, v2Task := body.Created[0], body.Created[1]
+	if v1Task.Engine != engine.NameQBittorrent || v1Task.SourceKind != "magnet" {
+		t.Errorf("bare v1 task = %s/%s, want qbittorrent/magnet", v1Task.Engine, v1Task.SourceKind)
+	}
+	if v1Task.InfohashV1 == nil || *v1Task.InfohashV1 != mixedMagnet[len(mixedMagnet)-40:] {
+		t.Errorf("bare v1 infohash = %v, want the lowercase hash", v1Task.InfohashV1)
+	}
+	if v1Task.InfohashV2 != nil {
+		t.Errorf("bare v1 task carries a v2 hash: %v", *v1Task.InfohashV2)
+	}
+	if v1Task.SourceURI == nil || *v1Task.SourceURI != mixedMagnet {
+		t.Errorf("bare v1 source = %v, want the rebuilt magnet %q", v1Task.SourceURI, mixedMagnet)
+	}
+
+	if v2Task.InfohashV2 == nil || *v2Task.InfohashV2 != fixtureV2Hash {
+		t.Errorf("bare v2 infohash = %v, want %q", v2Task.InfohashV2, fixtureV2Hash)
+	}
+	if v2Task.InfohashV1 != nil {
+		t.Errorf("bare v2 task carries a v1 hash: %v", *v2Task.InfohashV1)
+	}
+	wantV2Source := "magnet:?xt=urn:btmh:1220" + fixtureV2Hash
+	if v2Task.SourceURI == nil || *v2Task.SourceURI != wantV2Source {
+		t.Errorf("bare v2 source = %v, want %q", v2Task.SourceURI, wantV2Source)
 	}
 }
 
@@ -1090,5 +1243,357 @@ func TestListAndGetHideFTPPassword(t *testing.T) {
 	single := env.getTask(t, created[0].ID)
 	if strings.Contains(single.Body.String(), ftpPassword) {
 		t.Errorf("task response leaks the ftp password: %s", single.Body.String())
+	}
+}
+
+// minimalTorrentBytes is one minimal, valid v1 .torrent: a single 1 KiB
+// file, one all-'A' piece hash. An Add-time identity fetch of a .torrent
+// URL parses it; its actual hash value is irrelevant to the test — the
+// mirror daemon reports the identity, never the bytes.
+const minimalTorrentBytes = "d4:infod6:lengthi1024e4:name8:file.bin12:piece lengthi16384e6:pieces20:AAAAAAAAAAAAAAAAAAAAee"
+
+// mirroredTask is one live qbittorrent row the mirror daemon reports.
+type mirroredTask struct {
+	EngineRef string `db:"engine_ref"`
+	State     string `db:"state"`
+}
+
+// qbMirrorDaemon is a stand-in qBittorrent daemon for the late-resolution
+// test. It answers the probes Connect makes, the admission pass's mutating
+// calls, and serves minimal torrent bytes for an Add-time identity fetch.
+// Its sync/maindata reports one torrent per live engine_ref whose resolved
+// identity is the collision hash — the shape FR-023's late half needs —
+// with the state the DAEMON holds: a torrent it was told to stop stays
+// stopped no matter what the row does, because a real daemon's state is
+// its own, never a mirror of dl-tool's rows (mirroring the row back would
+// let a transient row flip erase an engine-side pause).
+type qbMirrorDaemon struct {
+	srv *httptest.Server
+	db  *sqlx.DB
+	// collision is the infohash_v1 every mirrored torrent reports.
+	collision string
+	// stopped holds the hashes the daemon was told to stop and deleted the
+	// ones it was told to remove, so a test can assert a duplicate was
+	// stopped, never deleted. Only a start call clears a stop. Guarded by
+	// mu.
+	mu      sync.Mutex
+	stopped map[string]bool
+	deleted map[string]bool
+}
+
+// newQBMirrorDaemon starts the daemon over db.
+func newQBMirrorDaemon(t *testing.T, db *sqlx.DB, collision string) *qbMirrorDaemon {
+	t.Helper()
+
+	f := &qbMirrorDaemon{db: db, collision: collision, stopped: map[string]bool{}, deleted: map[string]bool{}}
+	f.srv = httptest.NewServer(f)
+	t.Cleanup(f.srv.Close)
+
+	return f
+}
+
+// ServeHTTP routes one WebAPI call. Unknown paths under /api/v2/torrents/
+// answer Ok. — the mutating family the admission pass may call.
+func (f *qbMirrorDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.URL.Path == "/api/v2/auth/login":
+		http.SetCookie(w, &http.Cookie{Name: "SID", Value: "late-dup", Path: "/"})
+		w.WriteHeader(http.StatusNoContent)
+	case r.URL.Path == "/api/v2/app/version":
+		_, _ = w.Write([]byte("v5.2.3"))
+	case r.URL.Path == "/api/v2/app/webapiVersion":
+		_, _ = w.Write([]byte("2.11.2"))
+	case r.URL.Path == "/api/v2/sync/maindata":
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(f.maindataBody()))
+	case r.URL.Path == "/api/v2/torrents/add":
+		// A pending add: the client keeps the identity it resolved itself.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"success_count":0,"pending_count":1,"failure_count":0}`))
+	case strings.HasPrefix(r.URL.Path, "/api/v2/torrents/"):
+		// The mutating family: stop records the daemon-side stop, start
+		// clears it, everything else is a silent Ok. The hashes travel
+		// form-encoded, so ParseForm, not the query string.
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/stop") || strings.HasSuffix(r.URL.Path, "/pause") {
+			for _, hash := range pipeJoinedHashes(r) {
+				f.setStopped(hash, true)
+			}
+		}
+		if strings.HasSuffix(r.URL.Path, "/start") || strings.HasSuffix(r.URL.Path, "/resume") {
+			for _, hash := range pipeJoinedHashes(r) {
+				f.setStopped(hash, false)
+			}
+		}
+		if strings.HasSuffix(r.URL.Path, "/delete") {
+			for _, hash := range pipeJoinedHashes(r) {
+				f.mu.Lock()
+				f.deleted[hash] = true
+				f.mu.Unlock()
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Ok."))
+	case strings.HasSuffix(strings.ToLower(r.URL.Path), ".torrent"):
+		w.Header().Set("Content-Type", "application/x-bittorrent")
+		_, _ = w.Write([]byte(minimalTorrentBytes))
+	default:
+		http.Error(w, "Not Found", http.StatusNotFound)
+	}
+}
+
+// pipeJoinedHashes splits the hashes form value the daemon's mutators
+// carry: one pipe-joined string per the WebAPI, not one value per hash.
+func pipeJoinedHashes(r *http.Request) []string {
+	var hashes []string
+	for _, joined := range r.Form["hashes"] {
+		hashes = append(hashes, strings.Split(joined, "|")...)
+	}
+
+	return hashes
+}
+
+// setStopped records one hash's daemon-side stop state.
+func (f *qbMirrorDaemon) setStopped(hash string, stopped bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.stopped[hash] = stopped
+}
+
+// isStopped reports one hash's daemon-side stop state.
+func (f *qbMirrorDaemon) isStopped(hash string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.stopped[hash]
+}
+
+// isDeleted reports whether the daemon was ever told to remove the hash.
+func (f *qbMirrorDaemon) isDeleted(hash string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.deleted[hash]
+}
+
+// mirrorDaemonState maps a task row's state onto the daemon state string
+// that normalises back to it (docs/06-download-engines.md section 5.6);
+// a hash the daemon was told to stop reports stoppedDL whatever the row
+// says — the daemon's state is its own.
+func mirrorDaemonState(rowState string) string {
+	switch rowState {
+	case "paused":
+		return "pausedDL"
+	case "seeding":
+		return "stalledUP"
+	case "checking", "extracting", "moving":
+		return "checkingDL"
+	default:
+		// queued and downloading both report metadata downloading.
+		return "metaDL"
+	}
+}
+
+// maindataBody renders one full_update over the live rows.
+func (f *qbMirrorDaemon) maindataBody() string {
+	var rows []mirroredTask
+	// A read failure mirrors as an empty daemon: the poll keeps its last
+	// accepted state and retries, which the test tolerates.
+	_ = f.db.Select(&rows, `SELECT engine_ref, state FROM tasks
+WHERE engine = 'qbittorrent' AND engine_ref IS NOT NULL AND state NOT IN ('completed', 'removed', 'error')
+ORDER BY engine_ref`)
+
+	parts := make([]string, 0, len(rows))
+	for _, row := range rows {
+		state := mirrorDaemonState(row.State)
+		if f.isStopped(row.EngineRef) {
+			state = "stoppedDL"
+		}
+		parts = append(parts, fmt.Sprintf(
+			`%q:{"hash":%q,"name":"m-%s","state":%q,"progress":0.5,"dlspeed":0,"completed":4096,"size":4096,"total_size":4096,"infohash_v1":%q,"infohash_v2":""}`,
+			row.EngineRef, row.EngineRef, row.EngineRef[:6], state, f.collision,
+		))
+	}
+
+	return `{"full_update":true,"rid":1,"torrents":{` + strings.Join(parts, ",") + `}}`
+}
+
+// newLateResolutionEnv builds the server against the mirror daemon: a real
+// qBittorrent adapter constructed, registered and infohash-wired by
+// NewServer itself, so the test observes the write-back through the
+// composition root. No recording stand-in takes the qBittorrent lane.
+func newLateResolutionEnv(t *testing.T) (*tasksTestEnv, *qbMirrorDaemon) {
+	t.Helper()
+
+	root := t.TempDir()
+	dataRoot := filepath.Join(root, "data")
+	if err := os.Mkdir(dataRoot, 0o755); err != nil {
+		t.Fatalf("make data root: %v", err)
+	}
+	configDir := filepath.Join(root, "config")
+	db, err := store.Open(t.Context(), filepath.Join(configDir, "dl-tool.db"), filepath.Join(root, "backups"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	daemon := newQBMirrorDaemon(t, db, mixedMagnet[len(mixedMagnet)-40:])
+
+	logs := &strings.Builder{}
+	server, err := NewServer(
+		&config.Config{
+			ConfigDir:       configDir,
+			SessionTTL:      time.Hour,
+			DataRoots:       []string{dataRoot},
+			QBittorrentURL:  daemon.srv.URL,
+			QBittorrentUser: "admin",
+			QBittorrentPass: secure.Secret("adminadmin"),
+		},
+		db,
+		slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	env := &tasksTestEnv{
+		api:      humatest.Wrap(t, server.API),
+		db:       db,
+		logs:     logs,
+		dataRoot: dataRoot,
+	}
+	// No recording stand-in for any lane: the real qBittorrent adapter the
+	// server built is the only engine this test submits to.
+
+	user := seedUser(t, db)
+	env.bearer = seedLiveAPIToken(t, db, user.ID)
+
+	return env, daemon
+}
+
+// TestLateDuplicatePausesTask pins FR-023's late half end to end, through
+// the composition root: a task created from a .torrent URL carries no
+// identity, and when the daemon's delta later resolves it onto a hash a
+// live task already holds, the write-back pauses the task in place —
+// error_code torrent_duplicate, one event row, the row and its counters
+// intact, the winner untouched, and the engine-side transfer stopped
+// rather than deleted.
+func TestLateDuplicatePausesTask(t *testing.T) {
+	env, daemon := newLateResolutionEnv(t)
+	tasks := store.NewTaskStore(env.db)
+
+	// The winner: created from the magnet, so it owns the identity already.
+	winnerBody := decodeCreateBody(t, env.createTasks(t, map[string]any{"uris": []string{mixedMagnet}}))
+	if len(winnerBody.Created) != 1 {
+		t.Fatalf("created %d winner tasks, want 1", len(winnerBody.Created))
+	}
+	winnerID := winnerBody.Created[0].ID
+
+	// The late task: a .torrent URL has no identity at create time.
+	lateBody := decodeCreateBody(t, env.createTasks(t, map[string]any{
+		"uris": []string{daemon.srv.URL + "/fixture.torrent"},
+	}))
+	if len(lateBody.Created) != 1 {
+		t.Fatalf("created %d late tasks, want 1", len(lateBody.Created))
+	}
+	lateID := lateBody.Created[0].ID
+	if lateBody.Created[0].InfohashV1 != nil || lateBody.Created[0].InfohashV2 != nil {
+		t.Fatalf("late task already carries an identity: %+v", lateBody.Created[0])
+	}
+
+	// The late task goes live mid-transfer: a handle and some progress.
+	// The live admission pass races this seeding — it may release the task
+	// (or the write-back may even resolve and pause it) before the seed
+	// lands — so a refusal here is tolerated whenever the row already sits
+	// in the end state the test asserts anyway.
+	lateRef := strings.Repeat("d", 40)
+	if err := tasks.SetEngineRef(t.Context(), lateID, lateRef); err != nil {
+		t.Fatalf("set engine ref: %v", err)
+	}
+	seeded := true
+	if err := tasks.Transition(t.Context(), lateID, "downloading", engine.CodeTaskReconciled, "test move"); err != nil {
+		current, readErr := tasks.Get(t.Context(), lateID)
+		if readErr != nil || current.ErrorCode == nil || *current.ErrorCode != "torrent_duplicate" {
+			t.Fatalf("move to downloading: %v", err)
+		}
+		seeded = false
+	}
+	if seeded {
+		total := int64(4096)
+		if err := tasks.UpdateProgress(t.Context(), lateID, store.Progress{TotalBytes: &total, CompletedBytes: 4096}); err != nil {
+			t.Fatalf("seed progress: %v", err)
+		}
+	}
+
+	// The daemon's delta resolves the late task onto the winner's hash;
+	// the write-back lands the pause. Everything here is 1 Hz, so the
+	// budget is generous but the landing typically takes a few ticks.
+	require.Eventually(t, func() bool {
+		task, err := tasks.Get(t.Context(), lateID)
+		if err != nil {
+			return false
+		}
+		return task.State == "paused" && task.ErrorCode != nil && *task.ErrorCode == "torrent_duplicate"
+	}, 20*time.Second, 100*time.Millisecond, "the late duplicate was never paused")
+
+	// The pause deleted nothing: the row and its counters survive intact.
+	// In the unseeded ordering (the write-back won the seeding race) the
+	// mirror daemon's own reporting supplies the 4096 shortly; the seeded
+	// ordering pinned it exactly.
+	late, err := tasks.Get(t.Context(), lateID)
+	if err != nil {
+		t.Fatalf("the paused duplicate row vanished: %v", err)
+	}
+	if seeded && late.CompletedBytes != 4096 {
+		t.Errorf("completed_bytes = %d, want 4096 unchanged", late.CompletedBytes)
+	}
+	if late.EngineRef == nil || *late.EngineRef == "" {
+		t.Errorf("engine_ref = %v, want the handle kept", late.EngineRef)
+	}
+
+	// Exactly one duplicate-pause event row, beside task.created and the
+	// reconciler's own adoptions.
+	var events []store.TaskEvent
+	if err := env.db.SelectContext(t.Context(), &events,
+		`SELECT id, task_id, at, level, code, message, detail_json, created_at, updated_at
+		 FROM task_events WHERE task_id = ? AND code = ?`,
+		lateID, store.CodeTaskDuplicatePaused); err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("%d duplicate-pause events, want exactly 1", len(events))
+	}
+
+	// The daemon holds the transfer stopped, not deleted: the write-back
+	// paused it engine-side and removed nothing (FR-023's "deletes
+	// nothing" covers the engine side too). The store pause lands before
+	// the engine call completes, so the stop gets its own wait. The row's
+	// engine_ref is the handle whatever seeding won the race.
+	if late.EngineRef == nil || *late.EngineRef == "" {
+		t.Fatalf("engine_ref = %v, want the handle kept", late.EngineRef)
+	}
+	require.Eventually(t, func() bool { return daemon.isStopped(*late.EngineRef) },
+		10*time.Second, 50*time.Millisecond, "the daemon was never told to stop the duplicate transfer")
+	if daemon.isDeleted(*late.EngineRef) {
+		t.Errorf("the daemon was told to delete the duplicate transfer; the write-back must never delete")
+	}
+
+	// The winner is untouched by the collision.
+	winner, err := tasks.Get(t.Context(), winnerID)
+	if err != nil {
+		t.Fatalf("get winner: %v", err)
+	}
+	if winner.State == "paused" || winner.ErrorCode != nil {
+		t.Errorf("winner = %s/%v, want live and unflagged", winner.State, winner.ErrorCode)
 	}
 }
