@@ -179,14 +179,20 @@ func (c *Client) postFetchMetadata(ctx context.Context, magnet string) (fetchMet
 	return reply, nil
 }
 
-// inspectViaTemporaryHandle drives the fallback: one stopped add with
-// stopCondition=MetadataReceived, torrents/files polled until the metadata
-// arrives, then the manifest read from torrents/info and torrents/files of
-// the same handle. The deferred removal is the cleanup contract: it runs
-// on every exit path under its own budget, so a cancelled caller still
-// removes the handle. The handle bypasses Client.Remove on purpose — that
-// method now refuses ids the ownership-filtered cache does not hold, and
-// the probe is deliberately never owned.
+// inspectViaTemporaryHandle drives the fallback: a daemon-held torrent is
+// read where it stands, and only a hash the daemon does not hold gets the
+// probe treatment — one stopped add with stopCondition=MetadataReceived,
+// torrents/files polled until the metadata arrives, then the manifest read
+// from torrents/info and torrents/files of the same handle. The
+// pre-existence check matters because qBittorrent merges a duplicate add
+// into a torrent already in the session and answers the pending path
+// without error, so a probe added over a user's existing torrent would
+// end with the deferred delete removing that torrent and its data. The
+// deferred removal itself is the cleanup contract: it runs on every exit
+// path under its own budget, so a cancelled caller still removes the
+// handle. The handle bypasses Client.Remove on purpose — that method
+// refuses ids the ownership-filtered cache does not hold, and the probe
+// is deliberately never owned.
 func (c *Client) inspectViaTemporaryHandle(ctx context.Context, n uri.Normalized) (uri.Manifest, error) {
 	expected, err := c.uriTorrentID(ctx, n.URI)
 	if err != nil {
@@ -197,6 +203,12 @@ func (c *Client) inspectViaTemporaryHandle(ctx context.Context, n uri.Normalized
 		// unreachable in practice; it keeps decodeAddResult's pending-add
 		// guarantee airtight rather than trusting the parser.
 		return uri.Manifest{}, errors.New("qbittorrent: magnet carries no locally resolvable identity")
+	}
+
+	// A torrent the daemon already holds is read, never probed: the
+	// fallback's add would merge into it and the removal would destroy it.
+	if files, err := c.Files(ctx, engine.NameQBittorrent+":"+expected); err == nil && len(files) > 0 {
+		return c.temporaryHandleManifest(ctx, expected, files)
 	}
 
 	id, err := c.addMetadataProbe(ctx, n.URI, expected)
@@ -302,7 +314,7 @@ func (c *Client) temporaryHandleManifest(ctx context.Context, hash string, files
 	for _, f := range files {
 		size := f.Size
 		if manifest.TotalSize > math.MaxInt64-size {
-			return uri.Manifest{}, fmt.Errorf("qbittorrent: %s: file sizes overflow int64", pathTorrentsInfo)
+			return uri.Manifest{}, fmt.Errorf("qbittorrent: %s: file sizes overflow int64", pathTorrentsFiles)
 		}
 		manifest.TotalSize += size
 		manifest.Files = append(manifest.Files, uri.ManifestFile{

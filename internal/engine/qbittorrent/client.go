@@ -161,23 +161,28 @@ type Client struct {
 // contract of docs/06-download-engines.md section 1.
 var _ engine.Engine = (*Client)(nil)
 
-// requireOwned answers engine.ErrNotFound for an id the maindata cache
-// does not hold — the same existence rule Get answers from. The daemon's
-// torrents/stop, torrents/start and torrents/delete silently skip unknown
-// hashes (applyToTorrents, release-5.2.3 torrentscontroller.cpp), so the
-// cache is the only existence signal those mutations have: a 2xx answer
-// from them proves nothing. The gate also keeps foreign torrents — the
-// probe handle of InspectMagnet included — unreachable through the
-// mutation surface, which is why the probe reads and removes its handle
-// through its own raw calls.
-func (c *Client) requireOwned(id string) error {
+// requireOwned answers engine.ErrNotFound for an id neither the maindata
+// cache nor the daemon holds. The daemon's torrents/stop, torrents/start
+// and torrents/delete silently skip unknown hashes (applyToTorrents,
+// release-5.2.3 torrentscontroller.cpp), so a 2xx answer from them proves
+// nothing and some existence signal is unavoidable. The cache — the same
+// view Get answers from — is the cheap one and covers the steady state;
+// because it lags an add by up to one poll interval, a miss is confirmed
+// against the daemon's own torrents/info before the refusal, so a task
+// added a moment ago is never reported missing. The gate also keeps
+// foreign torrents — the probe handle of InspectMagnet included —
+// unreachable through the mutation surface, which is why the probe reads
+// and removes its handle through its own raw calls.
+func (c *Client) requireOwned(ctx context.Context, id string) error {
 	hash := ref(id)
 
-	c.md.mu.Lock()
-	_, held := c.md.cache.fields[hash]
-	c.md.mu.Unlock()
+	if c.holdsHash(hash) {
+		return nil
+	}
 
-	if !held {
+	// The cache lags; the daemon is the truth. A miss that the daemon
+	// confirms is the genuine not-found.
+	if _, err := c.torrentRow(ctx, hash); err != nil {
 		return fmt.Errorf("qbittorrent: %s: %w", id, engine.ErrNotFound)
 	}
 	return nil
@@ -878,9 +883,9 @@ func decodeAddResult(status int, body []byte, req engine.AddRequest, expected st
 }
 
 // Pause stops a torrent, probing the 5.x spelling first and caching whichever
-// pair the daemon answers (docs/06 section 5.7). An id the maindata cache
-// does not hold answers engine.ErrNotFound before any daemon call, because
-// the daemon's own stop answer is a silent no-op for an unknown hash.
+// pair the daemon answers (docs/06 section 5.7). An id neither the cache nor
+// the daemon holds answers engine.ErrNotFound before any mutating call,
+// because the daemon's own stop answer is a silent no-op for an unknown hash.
 func (c *Client) Pause(ctx context.Context, id string) error {
 	return c.lifecycle(ctx, id, stopOf)
 }
@@ -898,7 +903,7 @@ func startOf(p lifecyclePair) string { return p.start }
 // spelling; a 404 falls back to the 4.x one once, and whichever answers is
 // cached, so every later call goes straight to the daemon's own pair.
 func (c *Client) lifecycle(ctx context.Context, id string, pick func(lifecyclePair) string) error {
-	if err := c.requireOwned(id); err != nil {
+	if err := c.requireOwned(ctx, id); err != nil {
 		return err
 	}
 
@@ -936,16 +941,18 @@ func (c *Client) rememberLifecycle(pair lifecyclePair) {
 }
 
 // Remove removes the task from the daemon, always retaining its payload
-// data — the engine.Engine spelling. An id the maindata cache does not
-// hold answers engine.ErrNotFound before any daemon call, because the
-// daemon's own delete answer is a silent no-op for an unknown hash. The
-// return waits for the cache to observe the removal too: Get reads the
-// same cache, so a caller that removes and immediately re-reads must not
-// see the task that is already gone. The remove-with-data switch of
-// docs/06 section 5.7 is removeTorrent, the unexported form the delete
-// action reaches through its own wiring.
+// data — the engine.Engine spelling. An id neither the cache nor the
+// daemon holds answers engine.ErrNotFound before any mutating call,
+// because the daemon's own delete answer is a silent no-op for an unknown
+// hash. The return waits for the cache to observe the removal too: Get
+// reads the same cache, so a caller that removes and immediately re-reads
+// must not see the task that is already gone. The remove-with-data switch
+// of docs/06 section 5.7 is removeTorrent — deliberately ungated and
+// unwaited, because the InspectMagnet probe deletes its deliberately
+// unowned temporary handle through it; the future delete-with-data action
+// must wrap it with this same gate and cache wait, never call it bare.
 func (c *Client) Remove(ctx context.Context, id string) error {
-	if err := c.requireOwned(id); err != nil {
+	if err := c.requireOwned(ctx, id); err != nil {
 		return err
 	}
 	if err := c.removeTorrent(ctx, id, false); err != nil {
@@ -969,6 +976,10 @@ const removalLagBudget = 3 * time.Second
 func (c *Client) awaitCacheDrop(ctx context.Context, hash string) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	// One timer for the whole wait: a time.After inside the loop's
+	// select would be re-armed on every tick and never mature.
+	budget := time.NewTimer(removalLagBudget)
+	defer budget.Stop()
 
 	for c.holdsHash(hash) {
 		select {
@@ -976,7 +987,7 @@ func (c *Client) awaitCacheDrop(ctx context.Context, hash string) {
 			slog.Debug("qbittorrent: remove wait cut short by the caller's context",
 				"engine", engine.NameQBittorrent, "hash", hash)
 			return
-		case <-time.After(removalLagBudget):
+		case <-budget.C:
 			slog.Warn("qbittorrent: removed task still held by the sync/maindata cache",
 				"engine", engine.NameQBittorrent, "hash", hash)
 			return
@@ -995,8 +1006,10 @@ func (c *Client) holdsHash(hash string) bool {
 }
 
 // removeTorrent deletes a torrent, optionally with its data. It is
-// ungated on purpose: the InspectMagnet probe deletes its deliberately
-// unowned temporary handle through it under a fresh context.
+// ungated and unwaited on purpose: the InspectMagnet probe deletes its
+// deliberately unowned temporary handle through it under a fresh context.
+// Every other caller — the future delete-with-data action included — must
+// go through Remove's gate and cache wait instead.
 func (c *Client) removeTorrent(ctx context.Context, id string, deleteData bool) error {
 	form := hashesForm(ref(id))
 	form.Set("deleteFiles", strconv.FormatBool(deleteData))

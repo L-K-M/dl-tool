@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -72,12 +73,21 @@ type fakeServer struct {
 	refuseOnce    map[string]bool
 	addStatus     int
 	addBody       string
+	// infoBody answers GET torrents/info — the daemon truth the not-found
+	// gate falls back to when the cache is cold. Default: no torrents.
+	infoBody string
+	// maindataBody answers GET sync/maindata for the tests that run past
+	// the poll's first tick. Default: an empty full update.
+	maindataBody string
 }
 
 func newFakeServer(t *testing.T, tune func(*fakeServer)) *fakeServer {
 	t.Helper()
 
-	f := &fakeServer{t: t, refuseOnce: map[string]bool{}, addStatus: http.StatusOK}
+	f := &fakeServer{
+		t: t, refuseOnce: map[string]bool{}, addStatus: http.StatusOK, infoBody: "[]",
+		maindataBody: `{"rid":1,"full_update":true,"torrents":{},"torrents_removed":[]}`,
+	}
 	if tune != nil {
 		tune(f)
 	}
@@ -127,6 +137,22 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = w.Write([]byte(testWebapi))
+
+	case "/api/v2/torrents/info":
+		if !f.sessionOK(r) {
+			http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(f.infoBody))
+
+	case "/api/v2/sync/maindata":
+		if !f.sessionOK(r) {
+			http.Error(w, "401 Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(f.maindataBody))
 
 	case "/api/v2/torrents/add":
 		if !f.sessionOK(r) {
@@ -1335,4 +1361,75 @@ func TestSplitTags(t *testing.T) {
 	require.Equal(t, []string{"tv", "hd", "x"}, splitTags("tv, hd,,x"))
 	require.Empty(t, splitTags(""))
 	require.Empty(t, splitTags(" , "))
+}
+
+// TestUnknownIDIsConfirmedAgainstDaemonAndRefused pins the gate's
+// daemon-truth step: the cache is cold (the fake serves no sync/maindata),
+// so Pause falls back to torrents/info, the daemon confirms the hash is
+// unknown, and the refusal answers engine.ErrNotFound without one
+// mutating request.
+func TestUnknownIDIsConfirmedAgainstDaemonAndRefused(t *testing.T) {
+	f := newFakeServer(t, nil)
+	c := connectedClient(t, f)
+
+	err := c.Pause(context.Background(), engine.NameQBittorrent+":"+testHash)
+	require.ErrorIs(t, err, engine.ErrNotFound)
+	require.Equal(t, 1, f.count("torrents/info"), "the gate probes the daemon exactly once")
+	require.Zero(t, f.count("torrents/stop"), "no mutation may leave the gate")
+	require.Zero(t, f.count("torrents/delete"))
+}
+
+// TestGateWarmsFromTheDaemon pins the race the daemon check exists for: a
+// torrent the daemon holds but the lagging cache has not merged yet is
+// mutatable, not refused.
+func TestGateWarmsFromTheDaemon(t *testing.T) {
+	f := newFakeServer(t, func(f *fakeServer) {
+		f.infoBody = `[{"hash":"` + testHash + `","name":"warm","state":"stoppedDL","progress":0}]`
+	})
+	c := connectedClient(t, f)
+
+	require.NoError(t, c.Resume(context.Background(), engine.NameQBittorrent+":"+testHash))
+	require.Equal(t, 1, f.count("torrents/info"))
+	require.Equal(t, 1, f.count("torrents/start"))
+}
+
+// TestRemoveWaitsForTheCacheToObserveTheRemoval pins the exported Remove's
+// cache wait: the daemon accepts the delete, the cache never learns (no
+// sync/maindata), and Remove still returns — after the bounded budget, not
+// before it, and never hanging past the caller's context.
+func TestRemoveWaitsForTheCacheToObserveTheRemoval(t *testing.T) {
+	f := newFakeServer(t, func(f *fakeServer) {
+		// The daemon keeps reporting the torrent in every full update, so
+		// the cache legitimately never drops it — the budget must lapse.
+		f.maindataBody = `{"rid":1,"full_update":true,"torrents":{"` + testHash +
+			`":{"hash":"` + testHash + `","state":"stoppedDL"}},"torrents_removed":[]}`
+	})
+	c := connectedClient(t, f)
+	seedCache(c, testHash)
+	c.SetOwnershipFilter(func() map[string]struct{} {
+		return map[string]struct{}{testHash: {}}
+	})
+
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), removalLagBudget+2*time.Second)
+	defer cancel()
+	require.NoError(t, c.Remove(ctx, engine.NameQBittorrent+":"+testHash))
+
+	elapsed := time.Since(started)
+	require.GreaterOrEqual(t, elapsed, removalLagBudget,
+		"Remove must not return before the budget lapses when the cache never drops the hash")
+	require.Less(t, elapsed, removalLagBudget+2*time.Second, "Remove must stay bounded")
+	require.Equal(t, 1, f.count("torrents/delete"))
+}
+
+// TestRemoveUnownedAnswersNotFound is the Remove spelling of the gate
+// test: a cold cache plus a daemon without the torrent, and not one
+// torrents/delete request.
+func TestRemoveUnownedAnswersNotFound(t *testing.T) {
+	f := newFakeServer(t, nil)
+	c := connectedClient(t, f)
+
+	err := c.Remove(context.Background(), engine.NameQBittorrent+":"+testHash)
+	require.ErrorIs(t, err, engine.ErrNotFound)
+	require.Zero(t, f.count("torrents/delete"))
 }

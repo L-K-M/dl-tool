@@ -294,7 +294,7 @@ func newDaemonSession(t *testing.T, baseURL string) *daemonSession {
 	s := &daemonSession{t: t, base: baseURL, hc: &http.Client{Jar: jar, Timeout: 30 * time.Second}}
 
 	status, body := s.do(http.MethodPost, "auth/login",
-		url.Values{"username": {qbtAdminUser}, "password": {qbtAdminPass}}, "")
+		url.Values{"username": {qbtAdminUser}, "password": {qbtAdminPass}})
 	require.Contains(t, []int{http.StatusOK, http.StatusNoContent}, status,
 		"login with the seeded credentials: %s", body)
 
@@ -304,22 +304,21 @@ func newDaemonSession(t *testing.T, baseURL string) *daemonSession {
 	return s
 }
 
-// do performs one request: a POST's form is the urlencoded body, a GET's
-// form is the query, and the Referer qBittorrent's CSRF check compares is
-// sent on every call.
-func (s *daemonSession) do(method, apiPath string, form url.Values, contentType string) (int, []byte) {
+// do performs one urlencoded request: a POST's form is the body, a
+// GET's form is the query, and the Referer qBittorrent's CSRF check
+// compares is sent on every call. Multipart posts go through doMultipart.
+func (s *daemonSession) do(method, apiPath string, form url.Values) (int, []byte) {
 	s.t.Helper()
 
 	target := s.base + "/api/v2/" + apiPath
 	var body io.Reader
+	var contentType string
 	if form != nil {
 		if method == http.MethodGet {
 			target += "?" + form.Encode()
-		} else if contentType == "" {
-			body = strings.NewReader(form.Encode())
-			contentType = "application/x-www-form-urlencoded"
 		} else {
 			body = strings.NewReader(form.Encode())
+			contentType = "application/x-www-form-urlencoded"
 		}
 	}
 
@@ -368,7 +367,7 @@ func (s *daemonSession) doMultipart(apiPath, field, filename string, data []byte
 func (s *daemonSession) torrentCount() int {
 	s.t.Helper()
 
-	status, body := s.do(http.MethodGet, "torrents/info", nil, "")
+	status, body := s.do(http.MethodGet, "torrents/info", nil)
 	require.Equal(s.t, http.StatusOK, status, "read torrents/info: %s", body)
 	var rows []json.RawMessage
 	require.NoError(s.t, json.Unmarshal(body, &rows))
@@ -382,7 +381,7 @@ func (s *daemonSession) downloadLimit(id string) int64 {
 	s.t.Helper()
 
 	if id == "" {
-		status, body := s.do(http.MethodGet, "transfer/info", nil, "")
+		status, body := s.do(http.MethodGet, "transfer/info", nil)
 		require.Equal(s.t, http.StatusOK, status, "read transfer/info: %s", body)
 		var info struct {
 			DlRateLimit int64 `json:"dl_rate_limit"`
@@ -392,7 +391,7 @@ func (s *daemonSession) downloadLimit(id string) int64 {
 	}
 
 	hash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
-	status, body := s.do(http.MethodGet, "torrents/downloadLimit", url.Values{"hashes": {hash}}, "")
+	status, body := s.do(http.MethodGet, "torrents/downloadLimit", url.Values{"hashes": {hash}})
 	require.Equal(s.t, http.StatusOK, status, "read torrents/downloadLimit: %s", body)
 	limits := map[string]int64{}
 	require.NoError(s.t, json.Unmarshal(body, &limits))
@@ -407,14 +406,14 @@ func (s *daemonSession) injectDownloadLimit(id string, limit int64) {
 
 	if id == "" {
 		status, body := s.do(http.MethodPost, "transfer/setDownloadLimit",
-			url.Values{"limit": {strconv.FormatInt(limit, 10)}}, "")
+			url.Values{"limit": {strconv.FormatInt(limit, 10)}})
 		require.Equal(s.t, http.StatusOK, status, "inject the global limit: %s", body)
 		return
 	}
 
 	hash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
 	status, body := s.do(http.MethodPost, "torrents/setDownloadLimit",
-		url.Values{"hashes": {hash}, "limit": {strconv.FormatInt(limit, 10)}}, "")
+		url.Values{"hashes": {hash}, "limit": {strconv.FormatInt(limit, 10)}})
 	require.Equal(s.t, http.StatusOK, status, "inject the per-task limit: %s", body)
 }
 
@@ -426,7 +425,7 @@ func (s *daemonSession) daemonRemove(hash string, deleteFiles bool) {
 	status, body := s.do(http.MethodPost, "torrents/delete", url.Values{
 		"hashes":      {hash},
 		"deleteFiles": {strconv.FormatBool(deleteFiles)},
-	}, "")
+	})
 	require.Equal(s.t, http.StatusOK, status, "remove the torrent: %s", body)
 }
 
@@ -461,6 +460,7 @@ func fetchFixtureBody(t *testing.T, fixtureURL, wantSHA256 string) []byte {
 	resp, err := http.Get("http://127.0.0.1:" + port + "/")
 	require.NoError(t, err)
 	defer func() { require.NoError(t, resp.Body.Close()) }()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "the fixture server must serve its body")
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 
@@ -646,7 +646,7 @@ func (s *suiteEngine) Add(ctx context.Context, req engine.AddRequest) (string, e
 	// hop on the private network.
 	hash := strings.TrimPrefix(id, engine.NameQBittorrent+":")
 	status, body := s.session.do(http.MethodPost, "torrents/addPeers",
-		url.Values{"hashes": {hash}, "peers": {s.seederAddr}}, "")
+		url.Values{"hashes": {hash}, "peers": {s.seederAddr}})
 	require.Equal(s.t, http.StatusOK, status, "add the seeder as a static peer: %s", body)
 
 	zeroRatio := 0.0
@@ -677,7 +677,7 @@ func (s *suiteEngine) seedThroughSeeder(torrent fixtureTorrent) {
 
 	require.Eventually(s.t, func() bool {
 		status, body := s.seederSession.do(http.MethodGet, "torrents/info",
-			url.Values{"hashes": {torrent.hash}}, "")
+			url.Values{"hashes": {torrent.hash}})
 		if status != http.StatusOK {
 			return false
 		}
@@ -761,7 +761,7 @@ func TestQBittorrentMetadataEndpointsProbe(t *testing.T) {
 	// the container is torn down; it never appears in torrents/info.
 	unknown := "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=unknown-probe"
 	status, body := session.do(http.MethodPost, "torrents/fetchMetadata",
-		url.Values{"source": {unknown}}, "")
+		url.Values{"source": {unknown}})
 	t.Logf("probe: POST torrents/fetchMetadata source=<unknown magnet> -> %d %s", status, body)
 	require.Equal(t, http.StatusAccepted, status, "a fresh magnet must answer 202")
 	var pending struct {
@@ -774,12 +774,10 @@ func TestQBittorrentMetadataEndpointsProbe(t *testing.T) {
 	require.Equal(t, pending.InfohashV1, pending.Hash, "a v1 magnet's TorrentID is its v1 hash")
 
 	// The known magnet: the transfer-list branch answers the full info
-	// object on the first call.
-	status, body = session.do(http.MethodPost, "torrents/fetchMetadata",
-		url.Values{"source": {torrent.magnet}}, "")
-	t.Logf("probe: POST torrents/fetchMetadata source=<known magnet> -> %d %s", status, body)
-	require.Equal(t, http.StatusOK, status, "a magnet the daemon knows must answer 200")
-
+	// object. The add completed synchronously (a blob add with metadata
+	// lands in the session before torrents/add answers), so the first
+	// call already resolves — but wait for it rather than assume, so a
+	// slower daemon registers as 202-then-200 instead of a failure.
 	var resolved struct {
 		InfohashV1 string `json:"infohash_v1"`
 		InfohashV2 string `json:"infohash_v2"`
@@ -794,7 +792,13 @@ func TestQBittorrentMetadataEndpointsProbe(t *testing.T) {
 			} `json:"files"`
 		} `json:"info"`
 	}
-	require.NoError(t, json.Unmarshal(body, &resolved))
+	require.Eventually(t, func() bool {
+		status, body = session.do(http.MethodPost, "torrents/fetchMetadata",
+			url.Values{"source": {torrent.magnet}})
+		t.Logf("probe: POST torrents/fetchMetadata source=<known magnet> -> %d %s", status, body)
+		return status == http.StatusOK && json.Unmarshal(body, &resolved) == nil && resolved.Info.Name != ""
+	}, addVisibilityTimeout, 250*time.Millisecond, "a magnet the daemon knows must answer 200")
+	require.Equal(t, http.StatusOK, status, "a magnet the daemon knows must answer 200")
 	require.Equal(t, torrent.hash, resolved.InfohashV1)
 	require.Equal(t, torrent.name, resolved.Info.Name)
 	require.Equal(t, torrent.size, resolved.Info.Length)
@@ -931,7 +935,7 @@ func TestInspectMagnetLeavesNoHandle(t *testing.T) {
 		// The infohashes come from torrents/info's infohash_v1/infohash_v2
 		// keys, never from hash, which here deliberately differs.
 		require.Equal(t, "0123456789abcdef0123456789abcdef01234567", manifest.InfohashV1)
-		require.Equal(t, "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedc", manifest.InfohashV2)
+		require.Equal(t, "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", manifest.InfohashV2)
 		require.Len(t, manifest.Files, 2)
 		require.Equal(t, 0, manifest.Files[0].Index)
 		require.Equal(t, 1, manifest.Files[1].Index)
@@ -1119,10 +1123,17 @@ func (f *inspectFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			`"progress":0,"priority":1,"availability":1,"piece_range":[0,0]}]`))
 
 	case "/api/v2/torrents/info":
+		if rec.Form.Get("hashes") != inspectHash {
+			// Any other hash is unknown to the fake: the not-found gate's
+			// daemon check must find nothing for a hash never added.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[{"hash":"` + inspectHash + `",` +
 			`"infohash_v1":"0123456789abcdef0123456789abcdef01234567",` +
-			`"infohash_v2":"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedc",` +
+			`"infohash_v2":"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",` +
 			`"name":"fallback name","state":"metaDL","progress":0,` +
 			`"private":null,"total_size":3072,"size":3072}]`))
 

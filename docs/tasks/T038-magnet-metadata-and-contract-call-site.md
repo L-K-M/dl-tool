@@ -34,7 +34,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/server.go` | modify | Construct the qBittorrent client from config and register it in the engine registry. |
 | `internal/engine/qbittorrent/files.go` | modify | *Widened mid-task, see [`## Blocked`](#blocked):* `Files` maps the daemon's 404 onto `engine.ErrNotFound`, without which the T028 suite's `UnknownIDReturnsErrNotFound` cannot pass. |
 | `internal/engine/qbittorrent/client.go` | modify | *Widened mid-task, see Blocked:* `Pause`, `Resume` and `Remove` answer `engine.ErrNotFound` for an id the maindata cache does not hold, and the deleteData switch is renamed `removeTorrent` so the engine spelling of `Remove` can exist — the same widening, recorded once. |
-| `internal/engine/qbittorrent/client_test.go` | modify | *Widened mid-task, see Blocked:* seed the maindata cache for the three tests that drive the now-gated mutations, and call `removeTorrent` where the deleteFiles switch is exercised. |
+| `internal/engine/qbittorrent/client_test.go` | modify | *Widened mid-task, see Blocked:* seed the maindata cache for the three tests that drive the now-gated mutations, call `removeTorrent` where the deleteFiles switch is exercised, and cover the gate, its daemon-truth fallback and the removal cache wait — added in review round 1. |
 | `internal/engine/qbittorrent/sync_test.go` | modify | *Widened mid-task, see Blocked:* drop the `t030Engine.Remove` shim — the client now carries the engine.Engine spelling itself. |
 | `internal/api/tasks_swarm_test.go` | modify | *Widened mid-task, see Blocked:* drop the `swarmWireEngine.Remove` shim for the same reason. |
 
@@ -241,7 +241,7 @@ Exactly the Files table, widened rows included, and nothing else.
 *Resolved by the Files-table widening recorded in the table itself — kept here because it forced
 edits outside the original table, following the precedent T028 set for exactly this situation.*
 
-Three plan-level facts made the original four-row table impossible to satisfy:
+Four plan-level facts made the original four-row table impossible to satisfy:
 
 1. **`Remove`'s signature.** `engine.Engine` requires `Remove(context.Context, string) error`;
    T029's client carries `Remove(context.Context, string, bool)`, which cannot satisfy it — the
@@ -256,9 +256,9 @@ Three plan-level facts made the original four-row table impossible to satisfy:
    unknown ids — release-5.2.3 `torrentscontroller.cpp`), so a 2xx answer proves nothing and the
    T028 obligation `UnknownIDReturnsErrNotFound` cannot pass for `Pause`/`Resume`/`Remove`
    without an existence signal. The signal is the maindata cache — the same view `Get` answers
-   from — so those three methods now refuse an id the cache does not hold (`requireOwned` in
-   `client.go`). The three `client_test.go` tests that drive the gated mutations seed the cache
-   directly (the fake serves no `sync/maindata`).
+   from — confirmed against the daemon's own `torrents/info` on a miss, so a task added a
+   moment ago is never refused while the cache catches up (`requireOwned` in `client.go`). The
+   `client_test.go` tests cover the gate on both sides of the cache lag.
 3. **`torrents/files` does 404.** `Files` needed the same one-line `notFoundOr` mapping
    `mutate.go` already established for the other mutations — an edit in `files.go`, outside the
    original table.
