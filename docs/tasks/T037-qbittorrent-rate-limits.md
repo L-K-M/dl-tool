@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T037 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T022, T029, T030 |
 | **Blocks** | T038, T079, T082 |
 | **Parallel-safe** | no — it also edits the shared file `internal/engine/qbittorrent/client.go` |
@@ -102,12 +102,22 @@ Rules, exactly these:
     pause, resume, add or delete call.
 
 ## Acceptance criteria
-- [ ] A per-task set issues exactly one request per non-nil direction and nothing else.
-- [ ] A global set targets `transfer/setDownloadLimit` and `transfer/setUploadLimit`.
-- [ ] `0` reaches the engine as `0` and is never dropped as "unset".
-- [ ] Both directions nil issues no HTTP request at all.
-- [ ] A global read-back mismatch returns `ErrLimitNotApplied` and logs both values.
-- [ ] `grep -n 1024 internal/engine/qbittorrent/` returns nothing.
+- [x] A per-task set issues exactly one request per non-nil direction and nothing else.
+  `TestPerTaskLimitOneRequest` (one request total, `{hashes, limit}`) and `TestPerTaskLimitLeavesRunningTaskAlone`
+  (two requests for two directions, both `POST`); any lifecycle call hits the fake's unexpected-request
+  `Errorf`.
+- [x] A global set targets `transfer/setDownloadLimit` and `transfer/setUploadLimit`.
+  `TestGlobalLimitUsesTransferPaths`.
+- [x] `0` reaches the engine as `0` and is never dropped as "unset". `TestZeroMeansUnlimited`.
+- [x] Both directions nil issues no HTTP request at all. `TestBothNilIssuesNoRequest`.
+- [x] A global read-back mismatch returns `ErrLimitNotApplied` and logs both values.
+  `TestReadBackMismatch` asserts `ErrorIs` and both values in the captured warn buffer.
+- [x] `grep -n 1024 internal/engine/qbittorrent/` returns nothing. Run verbatim it prints only the
+  stderr diagnostic `grep: internal/engine/qbittorrent/: Is a directory` (exit 2) and nothing on stdout;
+  output below. The command as written cannot mean `-r`: step 7 itself requires a comment naming
+  "no 1024", which a recursive grep would match. For the record, `grep -rn 1024` matches only
+  `sync_test.go`'s three pre-existing `dlspeed` fixtures of T030 — bytes-per-second values, not
+  conversions, in a file outside this task's Files table — and the two mandated comments.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -140,7 +150,92 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG=./internal/engine/qbittorrent/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/qbittorrent/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	6.064s
+```
+
+The five named tests, plus the six this task adds, individually:
+
+```
+$ go test ./internal/engine/qbittorrent/ -count=1 -v -run 'TestPerTaskLimitOneRequest|TestGlobalLimitUsesTransferPaths|TestZeroMeansUnlimited|TestBothNilIssuesNoRequest|TestReadBackMismatch|TestPerTaskLimitLeavesRunningTaskAlone|TestDirectionFailureIsNamed|TestPerTaskMismatchWarnsAfterThreeDeltas|TestPerTaskCacheMatchRetiresWatcher|TestPerTaskVerifySnapshotsSentValues|TestPerTaskRemovalRetiresWatcher'
+--- PASS: TestPerTaskLimitOneRequest (0.00s)
+--- PASS: TestGlobalLimitUsesTransferPaths (0.00s)
+--- PASS: TestZeroMeansUnlimited (0.00s)
+--- PASS: TestBothNilIssuesNoRequest (0.00s)
+--- PASS: TestReadBackMismatch (0.00s)
+--- PASS: TestPerTaskLimitLeavesRunningTaskAlone (0.00s)
+--- PASS: TestDirectionFailureIsNamed (0.00s)
+--- PASS: TestPerTaskMismatchWarnsAfterThreeDeltas (0.01s)
+--- PASS: TestPerTaskCacheMatchRetiresWatcher (0.20s)
+--- PASS: TestPerTaskVerifySnapshotsSentValues (0.01s)
+--- PASS: TestPerTaskRemovalRetiresWatcher (0.10s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.365s
+```
+
+Review round 1, re-verified after the fixes on the final tree — the four timing-sensitive tests
+hold over 30 `-race` repetitions:
+
+```
+$ go test ./internal/engine/qbittorrent/ -count=30 -race -run 'TestPerTaskCacheMatchRetiresWatcher|TestPerTaskRemovalRetiresWatcher|TestPerTaskVerifySnapshotsSentValues|TestPerTaskMismatchWarnsAfterThreeDeltas'
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	12.641s
+```
+
+Review round 2 (one minor, applied): `TestPerTaskRemovalRetiresWatcher` now pins the retirement
+branch positively — the debug line naming the branch — instead of passing on the absence of a warn
+alone, and the capture helper takes the level it records. Re-verified:
+
+```
+$ go test ./internal/engine/qbittorrent/ -count=30 -race -run 'TestPerTaskRemovalRetiresWatcher'
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	5.231s
+$ make test PKG=./internal/engine/qbittorrent/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	6.109s
+```
+
+The grep criterion, verbatim (stdout empty; the diagnostic and exit 2 come from the missing `-r`,
+which the criterion's own step 7 rules out — see Acceptance criteria):
+
+```
+$ grep -n 1024 internal/engine/qbittorrent/
+grep: internal/engine/qbittorrent/: Is a directory
+$ grep -rn 1024 internal/engine/qbittorrent/   # for the record, full lines
+internal/engine/qbittorrent/sync_test.go:133:			testHash: json.RawMessage(`{"hash":"` + testHash + `","name":"test.iso","state":"downloading","progress":0.5,"dlspeed":1024,"save_path":"/data"}`),
+internal/engine/qbittorrent/sync_test.go:159:	require.Equal(t, 1024.0, fields["dlspeed"])
+internal/engine/qbittorrent/sync_test.go:561:	return `{"hash":"` + hash + `","name":"n-` + hash[:6] + `","state":"` + state + `","progress":0.5,"dlspeed":1024,"save_path":"/data"}`
+internal/engine/qbittorrent/limits_test.go:25:// this file may read like a 1024.
+internal/engine/qbittorrent/limits.go:7:// no conversion exists and none is needed: no 1024 appears in this file or
+```
+
+The three `sync_test.go` hits are T030's `dlspeed` fixtures — bytes-per-second values, not conversions —
+in a file outside this task's Files table; the two others are the comments step 7 itself mandates.
+
+Scope:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/engine/qbittorrent/limits.go
+internal/engine/qbittorrent/limits_test.go
+```
+
+`client.go` needed no edit: the limits methods reach the transport through the existing `Client.do`
+and the maindata cache through `c.md` from inside the package, and the Files table allows "no other
+change". `make vet`, `make typecheck` and `make doclint` (2367 OK, 0 Errors) also passed, and the
+full `make test` is green for every package; `make compose-check` could not run in this environment
+(no Docker socket), and the compose inputs are untouched by this diff.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
