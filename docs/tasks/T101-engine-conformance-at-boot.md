@@ -10,12 +10,12 @@
 | **Parallel-safe** | no — extends `internal/engine/engine.go` and `internal/api/settings.go` |
 | **Implements** | [FR-147](../02-requirements.md#fr-147-assert-engine-conformance-at-boot) |
 | **Decisions** | [ADR-0017](../decisions/0017-exclusive-control-of-engines.md), [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |
-| **Est. size** | 3 new files, ~390 LOC |
+| **Est. size** | 4 new files, 6 modified files, ~650 LOC |
 
 ## Goal
-On `Connect`, each adapter asserts that the engine's own competing automation is off, forces it off where
-the API allows, and reports every check by key name. A conformance failure is a visible warning, never a
-crash and never an exit.
+During the boot connection sequence, each adapter asserts that the engine's own competing automation is
+off, forces it off where the API allows, and reports every check by key name. A conformance failure is a
+visible warning, never a crash and never an exit.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
@@ -29,13 +29,19 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
+| `internal/api/server.go` | modify | Supply aria2 data roots and wire the bounded boot probe. |
+| `internal/api/settings.go` | modify | Share the boot/test probe and record its outcome in `engines.last_error`. |
+| `internal/api/settings_test.go` | modify | Observe boot, configured roots and test/list outcomes through `NewServer`. |
+| `internal/engine/aria2/client.go` | modify | Accept configured data roots and copy them into private client state. |
+| `internal/engine/aria2/conform.go` | create | The `getGlobalOption` checks and the concurrency raise. |
+| `internal/engine/aria2/conform_test.go` | create | Concurrency, directory and session checks, including failures. |
+| `internal/engine/engine.go` | modify | Add `ConformanceCheck` beside the existing types. |
 | `internal/engine/qbittorrent/conform.go` | create | The preference reads, the forced writes and the plugin check. |
 | `internal/engine/qbittorrent/conform_test.go` | create | One case per check, plus the never-crash case. |
-| `internal/engine/aria2/conform.go` | create | The `getGlobalOption` checks and the concurrency raise. |
-| `internal/engine/engine.go` | modify | Add `ConformanceCheck` beside the existing types. |
-| `internal/api/settings.go` | modify | Run the probe and record its outcome in `engines.last_error`. |
+| `internal/engine/qbittorrent/contract_test.go` | modify | Real-daemon boot/correction coverage required by ADR-0017; reuse its fixture. |
 
-No other file may be modified.
+No other file may be modified, except the standing generated-file rules in
+[Testing §7.1](../13-testing-and-verification.md#71-gate-1--generated-artefacts-cannot-drift).
 
 ## Interface contract
 
@@ -101,7 +107,10 @@ aria2 checks, exactly these:
 ## Steps
 1. Edit `internal/engine/engine.go` to add `ConformanceCheck` exactly as above. Do not add a method to the
    `Engine` interface and do not change any existing type.
-2. Read `max_active_total` from the `settings` table and pass it in; never hardcode a ceiling.
+2. Wire the probe lifecycle and configured data-root snapshot as defined in
+   [Engines §9](../06-download-engines.md#9-engine-conformance-at-boot) and
+   [§9.2](../06-download-engines.md#92-aria2). Read `max_active_total` from the settings store on every
+   probe and pass it in; never hardcode a ceiling or give an adapter database access.
 3. Create `internal/engine/qbittorrent/conform.go`. Read `GET app/preferences` once and decode it into
    `map[string]any` so an unknown key is neither lost nor required.
 4. Build one `setPreferences` call carrying only the keys that need changing, as a single `json` form
@@ -112,9 +121,11 @@ aria2 checks, exactly these:
    empty; never call any other `search/*` endpoint and never uninstall anything.
 7. Create `internal/engine/aria2/conform.go` with the three checks, raising
    `max-concurrent-downloads` through `aria2.changeGlobalOption` with the value encoded as a string.
-8. Edit `internal/api/settings.go` to run `Conform` for every registered engine that implements it, at
-   `NewServer` time and again on `POST /engines/{id}/test`, and to write a single-line summary of the
-   non-`ok` rows into `engines.last_error` through `TouchEngine`, so `GET /engines` surfaces it.
+8. Share the probe in `internal/api/settings.go` and call it from `internal/api/server.go` during boot
+   and from `POST /engines/{id}/test`. Run `Conform` for each reachable registered engine that implements
+   it. Write a single-line summary of non-`ok` rows into `engines.last_error` through `TouchEngine`, so
+   `GET /engines` surfaces it. Preserve the existing boot deadline, nil-store guard and health outcome;
+   do not overwrite the summary with a subsequent health-only write.
 9. Log every non-`ok` row once at warn with the engine name, the key, the wanted value and the observed
    value. A failed probe must not stop `NewServer` from returning and must not exit the process.
 10. Create `internal/engine/qbittorrent/conform_test.go` with an `httptest` server covering: all keys
@@ -122,6 +133,15 @@ aria2 checks, exactly these:
     non-empty plugin list producing exactly one `warn` row and no write; a `500` from `app/preferences`
     returning rows with `Severity = "warn"` and no error that stops boot; and an unreachable daemon
     returning `engine.ErrUnavailable`.
+11. Add aria2 unit tests for concurrency raises, clean no-write behavior, configured-root containment
+    (including a sibling sharing the root's prefix), missing session persistence and RPC failures.
+    Add API tests through `NewServer` proving the configured roots reach the probe, warnings survive
+    boot, and the test endpoint reruns conformance with the current stored concurrency setting.
+12. Extend the existing qBittorrent integration fixture for
+    [ADR-0017's confirmation](../decisions/0017-exclusive-control-of-engines.md#confirmation): start with
+    ATM enabled, boot through `NewServer`, observe the named warning and read back the forced setting.
+    Re-enable ATM, invoke `POST /engines/{id}/test` as the correction action and read back false again.
+    Record the live queueing preference excerpt here before implementing writes.
 
 ## Acceptance criteria
 - [ ] `rss_processing_enabled`, `scheduler_enabled` and `auto_tmm_enabled` are all false after `Conform`
@@ -131,29 +151,38 @@ aria2 checks, exactly these:
 - [ ] The queueing keys written are the ones observed in `app/preferences`, recorded under Evidence.
 - [ ] A conformance failure never exits the process and never fails `NewServer`.
 - [ ] `GET /engines` shows the failure summary in `last_error` for the affected engine.
+- [ ] aria2 uses the configured data roots through `NewServer`; a prefix-sharing sibling warns.
+- [ ] aria2 raises concurrency only when needed and warns on missing session persistence or RPC failure.
+- [ ] `POST /engines/{id}/test` reruns conformance using the current stored `max_active_total`.
+- [ ] The real qBittorrent boot/correction scenario in Step 12 passes without changing foreign transfers.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && make test PKG=./internal/...
+go test -race -count=1 -v ./internal/engine/qbittorrent ./internal/engine/aria2 ./internal/api -run '^TestConform'
+make test-integration
+go test -tags=integration -count=1 -timeout=20m -v ./internal/engine/qbittorrent -run '^TestConformBootCorrection$'
 ```
-Expected: `make lint` prints nothing, then `ok` for
-`github.com/L-K-M/dl-tool/internal/engine/qbittorrent`, `.../internal/engine/aria2` and
-`.../internal/api`, with `TestConformNoWriteWhenClean`, `TestConformForcesAutoTMMOff`,
-`TestConformWarnsOnSearchPlugin`, `TestConformNeverFailsBoot` and `TestConformRaisesAria2Concurrency`
-all `PASS`. No `FAIL`.
+Expected: all commands exit 0, with no `FAIL`. The verbose unit run shows
+`TestConformNoWriteWhenClean`, `TestConformForcesAutoTMMOff`, `TestConformWarnsOnSearchPlugin`,
+`TestConformNeverFailsBoot`, `TestConformRaisesAria2Concurrency`, `TestConformConfiguredRoots`,
+`TestConformAria2Warnings` and `TestConformTestEndpoint` as `PASS`. The verbose integration run shows
+`TestConformBootCorrection` as `PASS` and prints the observed queueing preference excerpt.
 
 Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
-`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
+Expected: the sorted Files table paths, plus any required generated files under Testing §7.1, and
+nothing else. Run before committing, including new files. Use `git status`, not `git diff`: the latter
+omits untracked files.
 
 ## Out of scope — do NOT
 - Do NOT add a `conformance` field to `EngineDTO` or a "fix it" endpoint; the response shape is owned by
   [`05-api-contract.md` §11.3](../05-api-contract.md#113-get-engines-and-post-enginesidtest) and does not
-  define one. The settings screen that surfaces this is T053.
+  define one. Reuse the test operation for correction as defined in Engines §9. The settings screen
+  that surfaces this is T053.
 - Do NOT uninstall a qBittorrent search plugin or call any other `search/*` or `rss/*` endpoint.
 - Do NOT enforce `max_active_total` here; T098 owns admission control and this task only moves the
   engine's own ceiling out of its way.
@@ -166,7 +195,23 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+No implementation evidence yet. This PR repairs the plan only; T101 and both index rows remain `todo`.
+Task Verification and `make ci` were not run locally for this documentation repair.
+
+Recovery validation:
+
+- A Node assertion reproduced the missing five scope paths before the repair and passed afterward:
+  `Missing T101 scope: []`.
+- `git diff --check` exited 0 with no output.
+- `make doclint` exited 0:
+
+```text
+./scripts/doclint.sh
+🔍 2389 Total (in 187ms) 🔗 561 Unique ✅ 2374 OK 🚫 0 Errors 👻 15 Excluded
+```
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+The scope blockers recorded in PR #128 are resolved by the Files table and
+[Engines §9](../06-download-engines.md#9-engine-conformance-at-boot): configured-root wiring, boot/test
+orchestration, colocated unit/API tests and the ADR-required real-daemon test are now in scope.
+Implementation must still observe the queueing keys as directed above.
