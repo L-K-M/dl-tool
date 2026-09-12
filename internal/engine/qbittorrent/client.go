@@ -186,7 +186,7 @@ func (c *Client) requireOwned(ctx context.Context, id string) error {
 	// daemon fault is never reported as a missing task.
 	if _, err := c.torrentRow(ctx, hash); err != nil {
 		if !errors.Is(err, engine.ErrNotFound) {
-			return err
+			return fmt.Errorf("qbittorrent: %s: %w", id, err)
 		}
 		return fmt.Errorf("qbittorrent: %s: %w", id, engine.ErrNotFound)
 	}
