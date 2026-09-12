@@ -1238,6 +1238,11 @@ func TestZZThrottleDiagnosis(t *testing.T) {
 	// qBittorrent's own events, with its timestamps.
 	logStatus, logBody := session.do(http.MethodGet, "log/main", url.Values{"last_known_id": {"-1"}}, "")
 	t.Logf("diag: daemon event log (status %d): %s", logStatus, logBody)
+
+	// The suite runs without -v, so a passing test's logs are discarded;
+	// fail on purpose to surface the samples above. Removed with the rest
+	// of this diagnostic.
+	t.Errorf("diagnosis artifacts above")
 }
 
 func TestNewServerRegistersQBittorrent(t *testing.T) {
