@@ -180,9 +180,14 @@ func (c *Client) requireOwned(ctx context.Context, id string) error {
 		return nil
 	}
 
-	// The cache lags; the daemon is the truth. A miss that the daemon
-	// confirms is the genuine not-found.
+	// The cache lags; the daemon is the truth. Only a miss the daemon
+	// confirms is the genuine not-found — any other failure of the probe
+	// itself (transport, decode, cancellation) propagates untouched, so a
+	// daemon fault is never reported as a missing task.
 	if _, err := c.torrentRow(ctx, hash); err != nil {
+		if !errors.Is(err, engine.ErrNotFound) {
+			return fmt.Errorf("qbittorrent: %s: %w", id, err)
+		}
 		return fmt.Errorf("qbittorrent: %s: %w", id, engine.ErrNotFound)
 	}
 	return nil
