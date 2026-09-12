@@ -203,6 +203,28 @@ omits untracked files.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Resumed implementation
+
+PR #129 remains draft. The scoped workflow and live boot/correction regression are committed;
+local integration compilation passed. The first CI run will supply the live preference observation.
+
+Aria2 test-first check:
+
+```text
+$ go test -race -count=1 -v ./internal/engine/aria2 -run '^TestConform'
+Messages: adapter must implement Conform
+FAIL
+```
+
+After implementing the probe, the same command passed:
+
+```text
+--- PASS: TestConformRaisesAria2Concurrency (0.01s)
+```
+
+The complete local output is pending replacement with final-tree Verification evidence.
+`make lint` exited 0. No task completion is claimed.
+
 ### Implementation attempt on a62659bc897ee0d934f616645cfa1e28fc755f70
 
 Stopped before implementation: no Docker executable, Docker socket or `qbittorrent-nox` was found.

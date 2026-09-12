@@ -16,6 +16,16 @@ var (
 	ErrUnavailable  = errors.New("engine: daemon unreachable or session refused")
 )
 
+// ConformanceCheck reports an engine preference by its native key name.
+type ConformanceCheck struct {
+	Key      string
+	Want     string
+	Got      string
+	Forced   bool
+	Warn     bool
+	Severity string // "ok" | "forced" | "warn"
+}
+
 // TaskState is the canonical state. Same values as tasks.state (DB) and `state` (API).
 // No adapter ever returns StateExtracting or StateMoving: those two belong to
 // dl-tool's post-processing jobs, which overwrite the engine state while a job
