@@ -107,7 +107,8 @@ Providers, outermost first: `QueryClientProvider` (`@tanstack/react-query`) → 
 5. After login navigate to `safeNext(searchParams.get('next'))`, defaulting to `/`.
 6. Edit `web/src/locales/en/common.json` with the auth strings; every visible string goes through `t()`.
 7. Edit `web/src/main.tsx` to render `<App />`. Update `web/src/main.test.ts` to mount the real app
-   with MSW, reject unhandled requests, await the authenticated layout and clean up handlers and mounts.
+   with MSW (`GET /auth/me` → `200`), reject unhandled requests, await the authenticated layout and
+   clean up handlers and mounts.
    Preserve its root-rendering coverage; follow [doc 13 §1](../13-testing-and-verification.md#1-test-pyramid).
 8. Create `web/src/App.test.tsx` with `msw` handlers: `/auth/me` → `401 /problems/setup-required` renders
    the wizard; `401 /problems/unauthenticated` renders the login form; `200` renders the layout;
@@ -126,11 +127,11 @@ Providers, outermost first: `QueryClientProvider` (`@tanstack/react-query`) → 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-make lint && make typecheck && make test-web && echo AUTH_UI_OK
+make lint && make typecheck && make test-web &&
+  (cd web && npx vitest run --reporter=verbose) && echo AUTH_UI_OK
 ```
-Expected: Vitest reports `Test Files  4 passed (4)` including `src/App.test.tsx`, every test named above
-passes, and the final line of stdout is exactly `AUTH_UI_OK`.
-Also run `(cd web && npx vitest run --reporter=verbose)` to show each named assertion.
+Expected: both Vitest runs report `Test Files  4 passed (4)` including `src/App.test.tsx`, the verbose
+run shows every test named above passing, and the final line of stdout is exactly `AUTH_UI_OK`.
 
 Also confirm scope:
 ```bash
@@ -282,13 +283,28 @@ the expected count (three existing files plus `App.test.tsx`), both `todo` rows,
 T040_PLAN_REPAIR_OK: entrypoint scope, four-file expectation, both todo rows, docs-only diff
 ```
 
-## Blocked
-The planning blockers are repaired: the Files table authorizes the entrypoint test's MSW setup,
-and Verification accounts for the existing theme tests. No implementation is included in this repair.
+The review fix puts verbose output inside the same command chain, before the success sentinel.
+Executed that exact chain on the unchanged baseline; exit 0, final stdout excerpt:
 
-Retry notes: the withdrawn attempt's `TestLoginStoresCsrfToken` exposed a login redirect race:
+```text
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+   Start at  21:48:15
+   Duration  2.05s (transform 423ms, setup 0ms, import 1.44s, tests 868ms, environment 686ms)
+
+AUTH_UI_OK
+```
+
+This validates command ordering, not T040 acceptance or its future four-file suite.
+
+### Retry notes
+
+The withdrawn attempt's `TestLoginStoresCsrfToken` exposed a login redirect race:
 the session update let the authenticated login gate override `next` with `/`. Six further failures
 asserted `/dl-tool/`, while router navigation produced `/dl-tool`. Preserve regression coverage when
 resuming; validate navigation against [doc 09 §2.1](../09-web-ui-spec.md#21-routes) and the required
 `basename={basePath()}`. The repair does not claim these implementation failures are fixed.
 Run all task verification, record fresh Evidence and complete review before marking T040 done.
+
+## Blocked
+None. This plan-only repair resolves the scope and count blockers; T040 remains unimplemented.
