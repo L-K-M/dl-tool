@@ -142,8 +142,10 @@ export function initI18n(): typeof i18next;
    On every test run, execute the build module-graph audit programmatically with the installed Vite
    (`write: false`), using the actual application entry and build configuration, without network access.
    Inspect every emitted JavaScript chunk's module IDs; allow the CSS subpath, not tool JavaScript.
-   Include a negative fixture with a used `zod` import and assert the same audit rejects it. Record
-   output alongside the CSS audit below. Exercise the local `cn` with conditional classes and
+   Include a negative fixture with a used `zod` import and assert the same audit rejects it. Generate
+   it at test time as a temporary entry or virtual module, using the installed transitive dependency;
+   never add it to application source, the manifest or lockfile, or exempt it from the source ban.
+   Record output alongside the CSS audit below. Exercise the local `cn` with conditional classes and
    conflicting utilities.
    Inspect the built CSS to confirm primary, accent, foreground, border, ring and open/closed-state
    utilities resolve through the bridge in both themes; record that audit alongside the copy-in diff.
@@ -282,7 +284,20 @@ ok 3 - repair leaves task unimplemented
 # fail 1
 ```
 
-After clarification, all three plan checks passed. Re-ran the isolated executable audit:
+After clarification, all three plan checks passed:
+
+```text
+ok 1 - canonical contract bounds the existing build-tool dependency
+ok 2 - verification preserves existing tests and requires the new test
+ok 3 - repair leaves task unimplemented
+# pass 3
+# fail 0
+```
+
+The next review requested explicit fixture placement. Added a temporary plan assertion for test-time
+entry generation without manifest/source changes; it reproduced the same failure above. Clarified
+that placement and re-ran all three checks, obtaining the same passing output. Re-ran the isolated
+audit, which creates its fixture outside the repository:
 
 ```text
 CSS_ONLY_BUILD_EXCLUDES_TOOL_JAVASCRIPT
