@@ -235,7 +235,85 @@ ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.036s [no tests to ru
 
 Extended the live correction scenario to read back all four native unlimited ceilings. Handler
 assertions now fail nonfatally on their goroutine; baseline polling runs on the test goroutine.
-Final-tree CI evidence for this review fix is pending; the completed runs below precede it.
+[Run 34751574390](https://github.com/L-K-M/dl-tool/actions/runs/34751574390) passed exact Verification
+and `make ci` on the review-fix implementation. This evidence update changes documentation only;
+its head must also pass checks and receive completed review before merge. Verbatim output excerpts:
+
+```text
+Task: T101
+Checked-out SHA: e457187a7d217aba845fdbf59273a2768c371d52
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	90.367s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.093s
+ok  	github.com/L-K-M/dl-tool/internal/engine	26.159s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.158s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.765s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.010s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.925s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.150s
+ok  	github.com/L-K-M/dl-tool/internal/secure	6.069s
+ok  	github.com/L-K-M/dl-tool/internal/store	83.854s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.360s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.084s
+--- PASS: TestConformNoWriteWhenClean (0.00s)
+--- PASS: TestConformForcesAutoTMMOff (0.02s)
+--- PASS: TestConformBatchesChanges (0.00s)
+--- PASS: TestConformWarnsOnSearchPlugin (0.00s)
+--- PASS: TestConformNeverFailsBoot (0.01s)
+--- PASS: TestConformPreservesNativeUnlimited (0.00s)
+--- PASS: TestConformUnlimitedDisablesQueueing (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.057s
+--- PASS: TestConformRaisesAria2Concurrency (0.01s)
+--- PASS: TestConformConfiguredRoots (0.01s)
+--- PASS: TestConformAria2Warnings (0.01s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	1.045s
+--- PASS: TestConformConfiguredRoots (0.58s)
+--- PASS: TestConformNeverFailsBoot (0.29s)
+--- PASS: TestConformTestEndpoint (0.31s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	2.199s
+go test -tags=integration -count=1 -timeout=20m ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	2.496s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	70.978s
+ok  	github.com/L-K-M/dl-tool/internal/engine/enginetest	16.141s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	134.168s
+    contract_test.go:1419: GET app/preferences queueing excerpt: {"add_to_top_of_queue":false,"disk_queue_size":1048576,"max_active_checking_torrents":1,"max_active_downloads":3,"max_active_torrents":5,"max_active_uploads":3,"queueing_enabled":true,"request_queue_size":500}
+--- PASS: TestConformBootCorrection (6.05s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	6.070s
+```
+
+Repository CI also passed lint, vet, typecheck, all Go/Vitest tests, Compose and doclint:
+
+```text
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./...
+ok  	github.com/L-K-M/dl-tool/internal/api	89.270s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.084s
+ok  	github.com/L-K-M/dl-tool/internal/engine	25.352s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.185s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.785s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.016s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.014s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.166s
+ok  	github.com/L-K-M/dl-tool/internal/secure	6.014s
+ok  	github.com/L-K-M/dl-tool/internal/store	83.323s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.383s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.070s
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2398 Total (in 57ms) 🔗 571 Unique ✅ 2373 OK 🚫 0 Errors 👻 25 Excluded
+```
 
 ### Completed implementation verification
 
