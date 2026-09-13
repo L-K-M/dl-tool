@@ -274,6 +274,76 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Resume preflight: scanner blocker persists
+
+Resumed draft PR #141 at `64f38111574d6cb350361f63d153041194d6d6d6` after fetch and
+fast-forward-only pull. Both current `origin/main` index rows remain `todo`; its contract has no
+repair for the active blocker. The PR has no reviews or comments; its reviewer job was skipped.
+No implementation changes were made.
+
+Re-ran the first Verification block verbatim, including the fresh dependency install. Exit 1:
+
+```text
+added 637 packages, and audited 638 packages in 5s
+
+181 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+
+> build
+> tsc --noEmit -p tsconfig.json && vite build
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 16 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.39 kB │ gzip:  0.26 kB
+dist/assets/index-B4tCSVnN.css   52.05 kB │ gzip:  8.93 kB
+dist/assets/index-DtoeS2ZM.js   190.85 kB │ gzip: 60.16 kB
+
+✓ built in 253ms
+URL_SCAN_REGRESSIONS_OK
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: web/dist/assets/index-B4tCSVnN.css
++ actual - expected
+
++ [
++   'https://tailwindcss.com'
++ ]
+- []
+
+    at scan (file:///home/paseo/.paseo/worktrees/0a6udotz/task-t039-ui-stack-1789328787/[eval1]:44:10)
+    at scanDirectory (file:///home/paseo/.paseo/worktrees/0a6udotz/task-t039-ui-stack-1789328787/[eval1]:55:5)
+    at file:///home/paseo/.paseo/worktrees/0a6udotz/task-t039-ui-stack-1789328787/[eval1]:59:1
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:282:26)
+    at async ModuleLoader.executeModuleJob (node:internal/modules/esm/loader:278:20)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [ 'https://tailwindcss.com' ],
+  expected: [],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.23.2
+```
+
+Stopped at the unchanged contract contradiction. Lint, tests and `make ci` were not re-run in this
+resume; their earlier results below are historical. No acceptance, review or merge is claimed.
+
 ### Current implementation: blocked on Tailwind license URL
 
 Partial work: installed the stack, configured both aliases, acquired twelve primitives in a scratch
@@ -2048,6 +2118,8 @@ Hosted CI must verify Compose before merge.
 
 ## Blocked
 ### Active: required Tailwind output fails the exact URL scan
+
+Reconfirmed on resume against the unchanged `origin/main` contract; see the fresh Evidence above.
 
 The required `tailwindcss` 4.3.3 build emits its license URL in a CSS comment. The exact Verification
 block rejects `https://tailwindcss.com` before lint/tests, as reproduced in current Evidence above.
