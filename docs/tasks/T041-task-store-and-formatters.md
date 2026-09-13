@@ -115,8 +115,9 @@ export function formatAbsolute(rfc3339: string, locale?: string): string;
 2. Create `web/src/lib/format.test.ts` asserting: `formatBytes(442381537280)` is `412 GB`;
    `formatBytes(null)` and `formatBytes(0)` are `—`; `formatRate(0)` is `—`; `formatEta(null)` is `∞`;
    `formatRatio(10000)` is `∞`; and these assertions pass with the locale forced to `en`.
-   Add `TestFormatAbsoluteUsesLocale`: for the same RFC 3339 input, compare `formatAbsolute` in `en`
-   and `de` against `Intl.DateTimeFormat` using the options in doc 09 §10.2. Assert the outputs differ.
+   Add `TestFormatAbsoluteUsesLocale`: for the same RFC 3339 input, assert that `formatAbsolute`
+   in `en` and in `de` each match `Intl.DateTimeFormat` with the options in doc 09 §10.2,
+   and that the two `formatAbsolute` outputs differ from each other.
 3. Create `web/src/store/useTasks.ts` with the state, the reducer and the selectors above, using
    `zustand`'s `create` with no middleware.
 4. Implement `applySync` exactly as the merge table specifies, and keep it pure — no fetch, no timer.
@@ -199,7 +200,8 @@ DATE_CONTRACT_OK; T041 remains todo in task and both index rows
 
 After `npm ci --prefix web`, `PATH=/tmp/t039-tools:$PATH make ci` exited 0
 using the existing Docker CLI. An initial 120-second tool timeout interrupted Go tests;
-the complete rerun passed. Excerpts:
+the complete rerun passed. The same checks passed after clarifying the locale-test assertions.
+Latest excerpts:
 
 ```text
 0 issues.
@@ -209,7 +211,7 @@ All matched files use Prettier code style!
 docker compose -f compose.yaml config -q
 docker compose -f compose.yaml -f compose.dev.yaml config -q
 ./scripts/doclint.sh
-🔍 2425 Total (in 221ms) 🔗 572 Unique ✅ 2399 OK 🚫 0 Errors 👻 26 Excluded
+🔍 2425 Total (in 235ms) 🔗 572 Unique ✅ 2399 OK 🚫 0 Errors 👻 26 Excluded
 ```
 
 Task Verification remains pending: the two T041 suites do not exist yet.
