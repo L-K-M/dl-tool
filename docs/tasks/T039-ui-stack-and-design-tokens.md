@@ -135,9 +135,11 @@ export function initI18n(): typeof i18next;
    `applyTheme('dark')` adds the class and `applyTheme('light')` removes it; a corrupt stored value yields
    `'system'`. In the same test file, mock the `sonner` module and render the adapter with
    `React.createElement` to prove it forwards `light`, `dark` and `system`, including a prop change
-   after mounting (`TestSonnerForwardsThemeChoice`). Add `TestSonnerPreservesIcons` to verify
-   [doc 09 §1's icon normalization contract](../09-web-ui-spec.md#1-frontend-stack), including all five
-   icon identities/classes and preserved toast options/styles. Add `TestShadcnIntegrationContract` in the same
+   after mounting (`TestSonnerForwardsThemeChoice`). Add `TestSonnerPreservesIcons` in the same file,
+   under that same mocked `sonner`: assert each forwarded icon element's component identity and
+   `className` per [doc 09 §1's icon normalization contract](../09-web-ui-spec.md#1-frontend-stack),
+   including the spinner's animation class, plus unchanged toast options/styles.
+   Add `TestShadcnIntegrationContract` in the same
    file: check all thirteen token values in both themes, the canonical alias/mapping declarations,
    required CSS imports, and absence of font imports, package `cn` and forbidden dependencies in
    source/manifest/lockfile, enforcing every condition of [doc 09 §1's build-tool exception](../09-web-ui-spec.md#1-frontend-stack).
@@ -492,7 +494,9 @@ UI_STACK_OK
 
 This is not acceptance: the required third test file and implementation are absent. The emitted
 scaffold asset is unchanged from the earlier audit below; no new resource-loading or CSS audit is
-claimed. No advisory repair was attempted. `make ci` passed lint, vet, typecheck, Go tests and the
+claimed. No advisory repair was attempted; the two high-severity advisories affect only the reverted
+dependency step's install output and must be re-audited if that step is reinstated.
+`make ci` passed lint, vet, typecheck, Go tests and the
 13 scaffold web tests, then exited 2:
 
 ```text
@@ -501,10 +505,9 @@ docker compose -f compose.yaml config -q
 make: *** [Makefile:60: compose-check] Error 127
 ```
 
-The dependency/resolver step was already committed and pushed before discovering the blocker, so the
-Verification scope command now prints no uncommitted non-doc paths. The complete partial branch scope
-is `web/package.json`, `web/package-lock.json`, `web/vite.config.ts`, `web/tsconfig.json` and this task
-file. All are authorized; the remaining Files-table entries have not been implemented.
+The dependency/resolver step was committed and pushed before the blocker was discovered; the recovery
+reverted it, so the merged diff of this PR is docs-only (`docs/09-web-ui-spec.md` and this task
+file). The remaining Files-table entries have not been implemented.
 `git diff --check` passed. Documentation check:
 
 ```text
