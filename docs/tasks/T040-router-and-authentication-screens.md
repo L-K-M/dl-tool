@@ -365,40 +365,39 @@ GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
 
  Test Files  4 passed (4)
       Tests  71 passed (71)
-   Start at  22:16:27
-   Duration  2.25s (transform 679ms, setup 0ms, import 1.93s, tests 2.40s, environment 968ms)
+   Start at  22:19:56
+   Duration  2.26s (transform 501ms, setup 0ms, import 1.89s, tests 2.47s, environment 956ms)
 
 
  RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t040-1-1789337309/web
 
- ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > apiUrl('/tasks') resolves under base  4ms
+ ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > apiUrl('/tasks') resolves under base  6ms
  ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > apiUrl('/tasks') resolves under base /dl-tool 1ms
  ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > eventsUrl() resolves under base  1ms
- ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > eventsUrl() resolves under base /dl-tool 0ms
- ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > GET carries X-DLTOOL-CSRF: false 2ms
- ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > POST carries X-DLTOOL-CSRF: true 0ms
- ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > PATCH carries X-DLTOOL-CSRF: true 0ms
+ ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > eventsUrl() resolves under base /dl-tool 1ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > GET carries X-DLTOOL-CSRF: false 3ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > POST carries X-DLTOOL-CSRF: true 1ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > PATCH carries X-DLTOOL-CSRF: true 1ms
  ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > DELETE carries X-DLTOOL-CSRF: true 0ms
  ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > a POST with no stored token sends no header 1ms
- ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > an empty token is treated as absent 0ms
- ✓ src/api/client.test.ts > TestApiClientResolvesUnderInjectedBase 1ms
- ✓ src/api/client.test.ts > TestCredentialsSameOrigin 0ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > an empty token is treated as absent 1ms
+ ✓ src/api/client.test.ts > TestApiClientResolvesUnderInjectedBase 2ms
+ ✓ src/api/client.test.ts > TestCredentialsSameOrigin 1ms
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
- ✓ src/main.test.ts > renders the application root 485ms
- ✓ src/App.test.tsx > TestBootRoutesToSetupWizard 110ms
- ✓ src/App.test.tsx > TestBootRoutesToLogin 20ms
- ✓ src/App.test.tsx > TestBootRendersLayout 19ms
+ ✓ src/App.test.tsx > TestBootRoutesToSetupWizard 138ms
+ ✓ src/App.test.tsx > TestBootRoutesToLogin 28ms
+ ✓ src/App.test.tsx > TestBootRendersLayout 21ms
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+ ✓ src/main.test.ts > renders the application root 484ms
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
  ✓ src/lib/theme.test.ts > TestResolveThemeFollowsSystem 3ms
  ✓ src/lib/theme.test.ts > TestApplyThemeTogglesClass 1ms
  ✓ src/lib/theme.test.ts > TestReadStoredThemeFallsBackToSystem 1ms
  ✓ src/lib/theme.test.ts > TestStoreThemePreservesPreferences 1ms
-GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
- ✓ src/App.test.tsx > TestLoginStoresCsrfToken 57ms
+ ✓ src/App.test.tsx > TestLoginStoresCsrfToken 56ms
  ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative //evil.example 0ms
  ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative https://x 0ms
  ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative \\x 0ms
@@ -407,69 +406,70 @@ GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
  1ms
  ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative  0ms
  ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative null 0ms
- ✓ src/App.test.tsx > TestLoginRedirectUnderBase /search?query=linux#results 33ms
- ✓ src/App.test.tsx > TestLoginRedirectUnderBase //evil.example 29ms
- ✓ src/App.test.tsx > TestLoginRedirectUnderBase https://x 26ms
- ✓ src/App.test.tsx > TestLoginRedirectUnderBase /\\evil.example 24ms
- ✓ src/App.test.tsx > TestSafeNextPreservesLocalRoute 0ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase / 12ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/all 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/downloading 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/completed 16ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/active 22ms
+ ✓ src/App.test.tsx > TestLoginRedirectUnderBase /search?query=linux#results 36ms
+ ✓ src/App.test.tsx > TestLoginRedirectUnderBase //evil.example 36ms
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+ ✓ src/App.test.tsx > TestLoginRedirectUnderBase https://x 30ms
+ ✓ src/App.test.tsx > TestLoginRedirectUnderBase /\\evil.example 32ms
+ ✓ src/App.test.tsx > TestSafeNextPreservesLocalRoute 1ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase / 20ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/all 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/downloading 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/completed 17ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/active 14ms
  ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/inactive 15ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/stopped 12ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/error 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/category/Linux 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/tag/archive 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /search 14ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /rss/feeds 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /rss/rules 10ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/general 10ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/stopped 14ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/error 17ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/category/Linux 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/tag/archive 19ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /search 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /rss/feeds 13ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /rss/rules 20ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/general 15ms
  ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/connection 10ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/bandwidth 10ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/bittorrent 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/downloads 13ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/rss 10ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/indexers 10ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/users 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/notifications 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/advanced 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /logs 11ms
- ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /unknown 12ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/bandwidth 17ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/bittorrent 17ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/downloads 20ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/rss 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/indexers 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/users 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/notifications 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/advanced 16ms
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /logs 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /unknown 15ms
+ ✓ src/App.test.tsx > TestAuthenticatedPublicRoute /login 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedPublicRoute /setup 15ms
+ ✓ src/App.test.tsx > TestSetupUnavailableAfterConfiguration 12ms
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
 POST http://localhost:3000/api/v1/auth/setup 409 (Conflict)
- ✓ src/App.test.tsx > TestAuthenticatedPublicRoute /login 11ms
- ✓ src/App.test.tsx > TestAuthenticatedPublicRoute /setup 11ms
- ✓ src/App.test.tsx > TestSetupUnavailableAfterConfiguration 12ms
- ✓ src/App.test.tsx > TestSetupValidationAndCsrf 48ms
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
 POST http://localhost:3000/api/v1/auth/login 401 (Unauthorized)
+ ✓ src/App.test.tsx > TestSetupValidationAndCsrf 54ms
+ ✓ src/App.test.tsx > TestSetupAlreadyCompleteRedirectsWithToast 74ms
 GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
 POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
 GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
- ✓ src/App.test.tsx > TestSetupAlreadyCompleteRedirectsWithToast 46ms
- ✓ src/App.test.tsx > TestLoginError 401 30ms
- ✓ src/App.test.tsx > TestLoginError 429 30ms
- ✓ src/App.test.tsx > TestBootFailureOffersRetryWithoutGuessingAuth 41ms
+ ✓ src/App.test.tsx > TestLoginError 401 58ms
+ ✓ src/App.test.tsx > TestLoginError 429 37ms
+ ✓ src/App.test.tsx > TestBootFailureOffersRetryWithoutGuessingAuth 36ms
 stdout | src/lib/theme.test.ts > TestShadcnIntegrationContract
 APPLICATION_BUILD_EXCLUDES_TOOL_JAVASCRIPT
 RUNTIME_ZOD_IMPORT_REJECTED
 CSS_URL_SCAN_REGRESSIONS_AND_LICENSE_AUDIT_OK
 BUILT_CSS_TOKEN_BRIDGE_AND_STATE_UTILITIES_OK
 
- ✓ src/lib/theme.test.ts > TestThemeAppliedBeforeRootCreation 120ms
- ✓ src/lib/theme.test.ts > TestSonnerForwardsThemeChoice 11ms
- ✓ src/lib/theme.test.ts > TestSonnerPreservesIcons 2ms
- ✓ src/lib/theme.test.ts > TestBundledI18nAndClassMerging 9ms
- ✓ src/lib/theme.test.ts > TestShadcnIntegrationContract 929ms
+ ✓ src/lib/theme.test.ts > TestThemeAppliedBeforeRootCreation 147ms
+ ✓ src/lib/theme.test.ts > TestSonnerForwardsThemeChoice 17ms
+ ✓ src/lib/theme.test.ts > TestSonnerPreservesIcons 3ms
+ ✓ src/lib/theme.test.ts > TestBundledI18nAndClassMerging 15ms
+ ✓ src/lib/theme.test.ts > TestShadcnIntegrationContract 1032ms
 
  Test Files  4 passed (4)
       Tests  71 passed (71)
-   Start at  22:16:30
-   Duration  2.27s (transform 490ms, setup 0ms, import 1.86s, tests 2.43s, environment 968ms)
+   Start at  22:19:59
+   Duration  2.50s (transform 537ms, setup 0ms, import 2.03s, tests 2.83s, environment 1.11s)
 
 AUTH_UI_OK
 ```
@@ -505,18 +505,18 @@ go vet ./...
 cd web && npx tsc --noEmit -p tsconfig.json
 go test -race -count=1 ./...
 ?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/api	87.555s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.117s
-ok  	github.com/L-K-M/dl-tool/internal/engine	21.385s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.227s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.891s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.027s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.601s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.189s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.307s
-ok  	github.com/L-K-M/dl-tool/internal/store	73.006s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.387s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.074s
+ok  	github.com/L-K-M/dl-tool/internal/api	94.758s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.266s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.613s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.239s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.959s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.881s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.190s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.246s
+ok  	github.com/L-K-M/dl-tool/internal/store	74.496s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.390s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.080s
 ?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
 cd web && npx vitest run
 
@@ -541,8 +541,8 @@ GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
 
  Test Files  4 passed (4)
       Tests  71 passed (71)
-   Start at  22:18:27
-   Duration  2.28s (transform 722ms, setup 0ms, import 2.01s, tests 2.50s, environment 990ms)
+   Start at  22:21:52
+   Duration  2.27s (transform 695ms, setup 0ms, import 1.96s, tests 2.48s, environment 967ms)
 
 docker compose -f compose.yaml config -q
 docker compose -f compose.yaml -f compose.dev.yaml config -q
