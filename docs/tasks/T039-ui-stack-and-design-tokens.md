@@ -14,7 +14,8 @@
 
 ## Goal
 `npm run build` produces a bundle that loads Tailwind 4, the shadcn/ui primitives M3 needs, and one token
-sheet defining every colour in light and dark, and references no external origin. `applyTheme` puts
+sheet defining every colour in light and dark, and loads no external runtime asset per
+[NFR-022](../02-requirements.md#nfr-022-load-no-third-party-runtime-assets). `applyTheme` puts
 `class="dark"` on `<html>` from the stored choice before first paint.
 
 ## Context you need
@@ -128,15 +129,79 @@ export function initI18n(): typeof i18next;
 - [ ] `web/package.json` carries every version string from doc 09 §1 unchanged and no forbidden package.
 - [ ] `web/src/index.css` defines all thirteen token names in `:root` and redefines all thirteen in `.dark`.
 - [ ] `TestApplyThemeTogglesClass` and `TestReadStoredThemeFallsBackToSystem` pass in `theme.test.ts`.
-- [ ] `npm run build` emits an `index.html` and bundles referencing no `http://` or `https://` origin.
+- [ ] `npm run build` emits an `index.html` and bundles passing the NFR-022 URL scan below; the
+  resource-loading audit confirms NFR-022, including every allowlisted occurrence.
 - [ ] `web/src/components/ui/` holds exactly the twelve primitives from step 5 and nothing hand-written.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-cd web && npm ci && npm run build && ! grep -rEq "https?://[a-z]" dist/index.html dist/assets && cd .. && make lint && make typecheck && make test-web && echo UI_STACK_OK
+set -euo pipefail
+npm ci --prefix web
+npm run build --prefix web
+node --input-type=module <<'JS'
+import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+
+// Exact identifiers, not asset hosts. Their uses require the audit below.
+const identifiers = new Set([
+  'http://www.w3.org/2000/svg',
+  'http://www.w3.org/1998/Math/MathML',
+  'http://www.w3.org/1999/xlink',
+  'http://www.w3.org/XML/1998/namespace',
+  'https://react.dev/errors/',
+]);
+const unexpectedURLs = text =>
+  [...text.matchAll(/https?:\/\/[^\s"'`<>\\)]+/gi)]
+    .map(match => match[0])
+    .filter(url => !identifiers.has(url));
+
+// Match individually: a namespace must not hide an asset on the same minified line.
+for (const identifier of identifiers) {
+  assert.deepEqual(unexpectedURLs(`"${identifier}"`), []);
+  const external = 'https://cdn.example/app.js';
+  assert.deepEqual(unexpectedURLs(`"${identifier}";"${external}"`), [external]);
+  for (const suffix of ['/asset.js', '?asset=1', '#asset']) {
+    assert.deepEqual(unexpectedURLs(`"${identifier}${suffix}"`), [`${identifier}${suffix}`]);
+  }
+}
+assert.deepEqual(unexpectedURLs('document.createElementNS("http://www.w3.org/2000/svg", "svg")'), []);
+assert.deepEqual(unexpectedURLs('"HTTP://CDN.example/app.js"'), ['HTTP://CDN.example/app.js']);
+assert.deepEqual(unexpectedURLs('url(https://cdn.example/font.woff2)'), ['https://cdn.example/font.woff2']);
+assert.deepEqual(unexpectedURLs('"./assets/app.js"'), []);
+console.log('URL_SCAN_REGRESSIONS_OK');
+
+function scan(file) {
+  assert.deepEqual(unexpectedURLs(readFileSync(file, 'utf8')), [], file);
+}
+function scanDirectory(directory) {
+  const entries = readdirSync(directory, { withFileTypes: true });
+  assert.ok(entries.length > 0, `empty asset directory: ${directory}`);
+  for (const entry of entries) {
+    const file = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) {
+      scanDirectory(file);
+      continue;
+    }
+    scan(file);
+  }
+}
+scan('web/dist/index.html');
+scanDirectory('web/dist/assets');
+console.log('RUNTIME_ASSET_URL_SCAN_OK');
+JS
+make lint
+make typecheck
+make test-web
+echo UI_STACK_OK
 ```
-Expected: the build prints `built in`, the grep finds no external origin, Vitest reports
+The scan is conservative, not a JavaScript evaluator. Complete the resource-loading audit required by
+[NFR-022](../02-requirements.md#nfr-022-load-no-third-party-runtime-assets) on the built output and
+corresponding source. Record locations and uses in Evidence; green scanner output alone is insufficient.
+Do not exclude entire hosts, files or lines, or expand the allowlist to accommodate a runtime asset.
+
+Expected: the build prints `built in`, the scanner prints `URL_SCAN_REGRESSIONS_OK` and
+`RUNTIME_ASSET_URL_SCAN_OK`, Vitest reports
 `Test Files  2 passed (2)` including `src/lib/theme.test.ts`, and the final line of stdout is exactly
 `UI_STACK_OK`.
 
@@ -161,6 +226,84 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### URL-check plan repair
+
+Plan repair only. T039 and both index rows remain `todo`; no implementation or pins changed.
+The former grep rejected a non-fetching `createElementNS` fixture before this repair:
+
+```text
+AssertionError [ERR_ASSERTION]: NFR-022 must allow namespace identifiers that do not fetch assets
+
+0 !== 1
+```
+
+After `npm ci --prefix web` and `npm run build --prefix web`, the original grep also returned 0
+on the actual scaffold bundle, so its negated verification failed. The replacement scanner, extracted
+verbatim from Verification, passed that bundle and isolated nested-directory fixtures:
+
+```text
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+namespace: exit 0 (expected 0)
+same-line external script: exit 1 (expected 1)
+namespace suffix: exit 1 (expected 1)
+external stylesheet: exit 1 (expected 1)
+external font: exit 1 (expected 1)
+external icon: exit 1 (expected 1)
+```
+
+Audited all 20 allowlisted occurrences in `dist/assets/index-Vp0XYip_.js` against the installed
+`react-dom/cjs` production sources:
+
+- SVG (5) and MathML (3): `createElementNS` arguments and namespace comparisons.
+- XLink (7) and XML (3): namespace arguments to `setAttributeNS`, directly or through
+  `setValueForNamespacedAttribute`; the identifier is not the attribute value.
+- React diagnostic prefix (2): `formatProdErrorMessage` constructs returned error text in
+  `react-dom.production.js` and `react-dom-client.production.js`; neither function fetches it.
+
+The scaffold HTML loads only `./assets/index-Vp0XYip_.js`; its app renders static text.
+This audit covers the scaffold, not the future T039 bundle, which must be audited again.
+
+The full revised Verification command was run. Build and scanner passed; lint then failed on
+an existing generated-output issue. It did not reach `UI_STACK_OK`:
+
+```text
+✓ built in 170ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+```
+
+```text
+[warn] dist/assets/index-Vp0XYip_.js
+[warn] Code style issues found in the above file. Run Prettier with --write to fix.
+make: *** [Makefile:26: lint] Error 1
+```
+
+After moving the generated `web/dist` outside the worktree, `make ci` passed lint, vet, typecheck,
+Go tests and all 13 web tests, then failed because Docker is unavailable locally:
+
+```text
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+```
+
+```text
+docker compose -f compose.yaml config -q
+/bin/bash: line 1: docker: command not found
+make: *** [Makefile:60: compose-check] Error 127
+```
+
+`npm ci` reported two high-severity dependency advisories; no pins were changed.
+`git diff --check` passed. Documentation check:
+
+```text
+$ make doclint
+./scripts/doclint.sh
+🔍 2402 Total (in 224ms) 🔗 572 Unique ✅ 2376 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+### Earlier mobile-sheet plan repair
+
 Plan repair only; this is not T039 implementation evidence.
 
 `npm ci --prefix web` succeeded. `git diff --check` passed. Documentation check:
@@ -183,7 +326,12 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
-Resolved by using the mobile-sheet primitive specified in
+The URL-check contradiction is resolved by the scan and audit above. The same build now exposes
+an independent blocker: `make lint` runs Prettier over generated `web/dist/assets/*.js` and fails.
+The Files table does not authorize a formatter-ignore file or Makefile changes. This repair does
+not change that scope or fix that separate concern. T039 is not ready for full Verification yet.
+
+Earlier blocker resolved by using the mobile-sheet primitive specified in
 [doc 09 §1](../09-web-ui-spec.md#1-frontend-stack). Step 5 previously required
 `drawer`, whose `vaul` import contradicted the dependency ban.
 
