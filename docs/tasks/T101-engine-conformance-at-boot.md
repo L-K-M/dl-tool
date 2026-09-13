@@ -218,6 +218,43 @@ The new fixture compared an adapter-qualified ID with native hashes. Strip the e
 waiting; retain the foreign-torrent assertion. No conformance writes existed at observation time.
 The boot assertion still needs a red/green live run. Repository CI was not reached in this run.
 
+### Recovery regression, 2026-09-13
+
+[Task verification run 34748360754](https://github.com/L-K-M/dl-tool/actions/runs/34748360754),
+checked-out SHA `74e1a937125d813feb004dc7bbd144edfeb5f3eb`, reached the live boot assertion:
+
+```text
+--- FAIL: TestConformBootCorrection (4.74s)
+Error: Not equal: expected: bool(false), actual: bool(true)
+Messages: boot must force ATM off
+```
+
+Recovered the preserved qBittorrent tests before copying its implementation. Local regression output:
+
+```text
+$ go test -race -count=1 ./internal/engine/qbittorrent -run '^TestConform'
+--- FAIL: TestConformNoWriteWhenClean (0.00s)
+Messages: adapter must implement Conform
+FAIL
+$ go test -tags=integration ./internal/engine/aria2 -run '^$'
+internal/engine/aria2/contract_test.go:46:2: methodGetGlobalOption redeclared in this block
+internal/engine/aria2/conform.go:15:2: other declaration of methodGetGlobalOption
+FAIL
+```
+
+After restoring qBittorrent conformance and renaming the colliding production constant:
+
+```text
+$ go test -tags=integration ./internal/engine/... -run '^$'
+ok github.com/L-K-M/dl-tool/internal/engine 0.006s [no tests to run]
+ok github.com/L-K-M/dl-tool/internal/engine/aria2 0.026s [no tests to run]
+ok github.com/L-K-M/dl-tool/internal/engine/enginetest 0.027s [no tests to run]
+ok github.com/L-K-M/dl-tool/internal/engine/qbittorrent 0.027s [no tests to run]
+```
+
+Compilation only, not live integration acceptance. The race-enabled conformance unit run and
+`make lint` exited 0. Final Verification remains pending.
+
 ### Resumed implementation
 
 PR #129 remains draft. The scoped workflow and live boot/correction regression are committed;

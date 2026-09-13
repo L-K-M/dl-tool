@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	methodGetGlobalOption     = "aria2.getGlobalOption"
+	methodConformGlobalOption = "aria2.getGlobalOption"
 	optMaxConcurrentDownloads = "max-concurrent-downloads"
 	optSaveSession            = "save-session"
 	conformanceOK             = "ok"
@@ -27,7 +27,7 @@ func (c *Client) Conform(ctx context.Context, maxActiveTotal int) ([]engine.Conf
 		{Key: optDir, Want: strings.Join(c.dataRoots, ", "), Severity: conformanceOK},
 		{Key: optSaveSession, Want: "non-empty", Severity: conformanceOK},
 	}
-	raw, err := c.call(ctx, methodGetGlobalOption)
+	raw, err := c.call(ctx, methodConformGlobalOption)
 	if errors.Is(err, engine.ErrUnavailable) {
 		for i := range checks {
 			checks[i].Got = "unavailable"

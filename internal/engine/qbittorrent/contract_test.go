@@ -1395,10 +1395,7 @@ func (f *inspectFake) lastCall(path string) recordedCall {
 	return recordedCall{}
 }
 
-// TestNewServerRegistersQBittorrent pins the composition-root branch T038
-// wires: a configured WebUI endpoint builds the client and registers it in
-// the engine registry, an empty URL leaves it absent, and a malformed URL
-// fails server construction loudly.
+// Boot and correction must disable automation without changing foreign transfers.
 func TestConformBootCorrection(t *testing.T) {
 	daemon := startDaemon(t)
 	session := newDaemonSession(t, daemon.baseURL)
@@ -1426,12 +1423,22 @@ func TestConformBootCorrection(t *testing.T) {
 	require.NoError(t, err)
 	hash = strings.TrimPrefix(hash, engine.NameQBittorrent+":")
 	before := session.visibleTorrentHashes(hash)
-	enableATM := func() {
-		status, body := session.do(http.MethodPost, "app/setPreferences", url.Values{"json": {`{"auto_tmm_enabled":true}`}})
+	automationKeys := []string{"rss_processing_enabled", "scheduler_enabled", "auto_tmm_enabled"}
+	enableAutomation := func() {
+		status, body := session.do(http.MethodPost, "app/setPreferences", url.Values{"json": {`{"rss_processing_enabled":true,"scheduler_enabled":true,"auto_tmm_enabled":true}`}})
 		require.Equal(t, http.StatusOK, status, "%s", body)
-		require.Equal(t, true, preferences()["auto_tmm_enabled"])
+		prefs := preferences()
+		for _, key := range automationKeys {
+			require.Equal(t, true, prefs[key], key)
+		}
 	}
-	enableATM()
+	assertAutomationOff := func() {
+		prefs := preferences()
+		for _, key := range automationKeys {
+			require.Equal(t, false, prefs[key], key)
+		}
+	}
+	enableAutomation()
 
 	root := t.TempDir()
 	cfg := &config.Config{ConfigDir: root, DataRoots: []string{root}, SessionTTL: time.Hour,
@@ -1445,6 +1452,7 @@ func TestConformBootCorrection(t *testing.T) {
 	require.True(t, ok)
 	t.Cleanup(func() { require.NoError(t, registered.Close()) })
 	require.Equal(t, false, preferences()["auto_tmm_enabled"], "boot must force ATM off")
+	assertAutomationOff()
 
 	// Authenticate through setup, then use the public list/correction operations.
 	token, err := os.ReadFile(filepath.Join(root, "setup-token"))
@@ -1475,10 +1483,11 @@ func TestConformBootCorrection(t *testing.T) {
 	}
 	listed := call(http.MethodGet, "/engines")
 	require.Contains(t, listed.Body.String(), "auto_tmm_enabled")
-	enableATM()
+	enableAutomation()
 	corrected := call(http.MethodPost, "/engines/eng_qbittorrent/test")
 	require.Contains(t, corrected.Body.String(), `"ok":true`)
 	require.Equal(t, false, preferences()["auto_tmm_enabled"])
+	assertAutomationOff()
 	require.Equal(t, before, session.torrentHashes())
 	status, body := session.do(http.MethodGet, "torrents/info", url.Values{"hashes": {hash}})
 	require.Equal(t, http.StatusOK, status)
