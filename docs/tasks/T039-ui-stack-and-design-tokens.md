@@ -274,6 +274,641 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Current implementation: blocked on Tailwind license URL
+
+Partial work: installed the stack, configured both aliases, acquired twelve primitives in a scratch
+scaffold, normalized their imports and Sonner, and added tokens, theme, i18n and nine tests. No router,
+provider or toaster mount was added. Existing pins are unchanged. Both index rows remain `todo`;
+acceptance boxes remain unchecked. This supersedes earlier scaffold-only evidence, not acceptance.
+
+The prescribed build succeeds. Its CSS starts with:
+
+```css
+/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */
+```
+
+That URL is license metadata, not a resource load. The exact Verification scanner nevertheless rejects
+it. No allowlist, emitted asset, license comment or assertion was changed to bypass the failure.
+Resource-loading acceptance and the complete CSS audit are not claimed.
+
+Unprescribed versions: `@dnd-kit/core` 6.3.1, `@dnd-kit/sortable` 10.0.0,
+`react-resizable-panels` 4.12.4, `radix-ui` 1.6.7, `tw-animate-css` 1.4.0, `sonner` 2.0.8.
+The install still reports two high-severity advisories; no advisory repair was attempted.
+
+Ran the first Verification block verbatim on this implementation; exit 1:
+
+```text
+
+added 637 packages, and audited 638 packages in 5s
+
+181 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+
+> build
+> tsc --noEmit -p tsconfig.json && vite build
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 16 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.39 kB │ gzip:  0.26 kB
+dist/assets/index-B4tCSVnN.css   52.05 kB │ gzip:  8.93 kB
+dist/assets/index-DtoeS2ZM.js   190.85 kB │ gzip: 60.16 kB
+
+✓ built in 189ms
+URL_SCAN_REGRESSIONS_OK
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: web/dist/assets/index-B4tCSVnN.css
++ actual - expected
+
++ [
++   'https://tailwindcss.com'
++ ]
+- []
+
+    at scan (file:///home/paseo/.paseo/worktrees/0a6udotz/loop-t039-1-1789328787/[eval1]:44:10)
+    at scanDirectory (file:///home/paseo/.paseo/worktrees/0a6udotz/loop-t039-1-1789328787/[eval1]:55:5)
+    at file:///home/paseo/.paseo/worktrees/0a6udotz/loop-t039-1-1789328787/[eval1]:59:1
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:282:26)
+    at async ModuleLoader.executeModuleJob (node:internal/modules/esm/loader:278:20)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [ 'https://tailwindcss.com' ],
+  expected: [],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.23.2
+```
+
+`make ci` exited 2. It passed lint, vet, typecheck and Go tests, then failed the new CSS URL
+assertion. Selected output (the assertion's full CSS dump is omitted):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./...
+?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/api	97.049s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.120s
+ok  	github.com/L-K-M/dl-tool/internal/engine	24.892s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.222s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.941s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.038s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.916s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.203s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.086s
+ok  	github.com/L-K-M/dl-tool/internal/store	77.496s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.371s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.089s
+?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t039-1-1789328787/web
+
+stdout | src/lib/theme.test.ts > TestShadcnIntegrationContract
+APPLICATION_BUILD_EXCLUDES_TOOL_JAVASCRIPT
+RUNTIME_ZOD_IMPORT_REJECTED
+
+ ❯ src/lib/theme.test.ts (9 tests | 1 failed) 738ms
+   × TestShadcnIntegrationContract 700ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/theme.test.ts > TestShadcnIntegrationContract
+AssertionError: expected '/*! tailwindcss v4.3.3 | MIT License …' not to match /@font-face|https?:\/\//\
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  1 failed | 21 passed (22)
+   Start at  19:56:32
+   Duration  1.91s (transform 302ms, setup 0ms, import 1.27s, tests 781ms, environment 681ms)
+
+make: *** [Makefile:44: test-web] Error 1
+```
+
+The module-graph positive and negative audits passed before the CSS assertion failed. All thirteen
+source tokens in both themes, bridge aliases, resolver mappings, dependency restrictions, twelve
+primitive names and open/closed built selectors passed their preceding assertions. The eight other
+new tests passed, including theme application before root creation and both Sonner tests. This is not
+a passing `TestShadcnIntegrationContract` or task Verification.
+
+Docker was absent from PATH. A Docker client downloaded outside the repository, with the existing
+user-installed Compose plugin, ran `PATH="/tmp/t039-tools:$PATH" make compose-check` successfully:
+
+```text
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+```
+
+No daemon or engine integration run is claimed.
+
+Scratch acquisition used exactly the three commands in steps 4–5, all exit 0. CLI output:
+
+```text
+- Preflight checks.
+✔ Preflight checks.
+- Verifying framework.
+✔ Verifying framework. Found Vite.
+- Validating Tailwind CSS. Found v4.
+✔ Validating Tailwind CSS. Found v4.
+- Validating import alias.
+✔ Validating import alias.
+- Writing components.json.
+✔ Writing components.json.
+- Checking registry.
+✔ Checking registry.
+- Installing dependencies.
+- Installing dependencies.
+✔ Installing dependencies.
+- Updating files.
+✔ Created 2 files:
+  - src/components/ui/button.tsx
+  - src/lib/utils.ts
+- Updating src/index.css
+✔ Updating src/index.css
+
+Project initialization completed.
+You may now add components.
+
+```
+
+````text
+- Checking registry.
+✔ Checking registry.
+- Updating files.
+✔ Created 10 files:
+  - src/components/ui/checkbox.tsx
+  - src/components/ui/input.tsx
+  - src/components/ui/label.tsx
+  - src/components/ui/select.tsx
+  - src/components/ui/popover.tsx
+  - src/components/ui/context-menu.tsx
+  - src/components/ui/tabs.tsx
+  - src/components/ui/tooltip.tsx
+  - src/components/ui/dialog.tsx
+  - src/components/ui/sheet.tsx
+ℹ Skipped 1 file: (files might be identical, use --overwrite to overwrite)
+  - src/components/ui/button.tsx
+The `tooltip` component has been added. Remember to wrap your app with the `TooltipProvider` component.
+
+```tsx title="app/layout.tsx"
+import { TooltipProvider } from "@/components/ui/tooltip"
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <TooltipProvider>{children}</TooltipProvider>
+      </body>
+    </html>
+  )
+}
+```
+
+
+````
+
+Raw `view sonner` output:
+
+```json
+[
+  {
+    "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+    "name": "sonner",
+    "dependencies": [
+      "sonner",
+      "next-themes"
+    ],
+    "files": [
+      {
+        "path": "registry/radix-nova/ui/sonner.tsx",
+        "content": "\"use client\"\n\nimport { useTheme } from \"next-themes\"\nimport { Toaster as Sonner, type ToasterProps } from \"sonner\"\n\nimport { IconPlaceholder } from \"@/app/(create)/components/icon-placeholder\"\n\nconst Toaster = ({ ...props }: ToasterProps) => {\n  const { theme = \"system\" } = useTheme()\n\n  return (\n    <Sonner\n      theme={theme as ToasterProps[\"theme\"]}\n      className=\"toaster group\"\n      icons={{\n        success: (\n          <IconPlaceholder\n            lucide=\"CircleCheckIcon\"\n            tabler=\"IconCircleCheck\"\n            hugeicons=\"CheckmarkCircle02Icon\"\n            phosphor=\"CheckCircleIcon\"\n            remixicon=\"RiCheckboxCircleLine\"\n            className=\"size-4\"\n          />\n        ),\n        info: (\n          <IconPlaceholder\n            lucide=\"InfoIcon\"\n            tabler=\"IconInfoCircle\"\n            hugeicons=\"InformationCircleIcon\"\n            phosphor=\"InfoIcon\"\n            remixicon=\"RiInformationLine\"\n            className=\"size-4\"\n          />\n        ),\n        warning: (\n          <IconPlaceholder\n            lucide=\"TriangleAlertIcon\"\n            tabler=\"IconAlertTriangle\"\n            hugeicons=\"Alert02Icon\"\n            phosphor=\"WarningIcon\"\n            remixicon=\"RiErrorWarningLine\"\n            className=\"size-4\"\n          />\n        ),\n        error: (\n          <IconPlaceholder\n            lucide=\"OctagonXIcon\"\n            tabler=\"IconAlertOctagon\"\n            hugeicons=\"MultiplicationSignCircleIcon\"\n            phosphor=\"XCircleIcon\"\n            remixicon=\"RiCloseCircleLine\"\n            className=\"size-4\"\n          />\n        ),\n        loading: (\n          <IconPlaceholder\n            lucide=\"Loader2Icon\"\n            tabler=\"IconLoader\"\n            hugeicons=\"Loading03Icon\"\n            phosphor=\"SpinnerIcon\"\n            remixicon=\"RiLoaderLine\"\n            className=\"size-4 animate-spin\"\n          />\n        ),\n      }}\n      style={\n        {\n          \"--normal-bg\": \"var(--popover)\",\n          \"--normal-text\": \"var(--popover-foreground)\",\n          \"--normal-border\": \"var(--border)\",\n          \"--border-radius\": \"var(--radius)\",\n        } as React.CSSProperties\n      }\n      toastOptions={{\n        classNames: {\n          toast: \"cn-toast\",\n        },\n      }}\n      {...props}\n    />\n  )\n}\n\nexport { Toaster }\n",
+        "type": "registry:ui"
+      }
+    ],
+    "meta": {
+      "links": {
+        "docs": "https://ui.shadcn.com/docs/components/radix/sonner",
+        "examples": "https://ui.shadcn.com/code/apps/v4/registry/bases/radix/examples/sonner-example.tsx",
+        "api": "https://sonner.emilkowal.ski"
+      }
+    },
+    "type": "registry:ui"
+  }
+]
+```
+
+Primitive normalization diff before repository formatting:
+
+```diff
+--- raw/input.tsx
++++ normalized/input.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+
+ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+   return (
+--- raw/label.tsx
++++ normalized/label.tsx
+@@ -1,7 +1,7 @@
+ "use client"
+
+ import * as React from "react"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { Label as LabelPrimitive } from "radix-ui"
+
+ function Label({
+--- raw/button.tsx
++++ normalized/button.tsx
+@@ -1,6 +1,6 @@
+ import * as React from "react"
+ import { cva, type VariantProps } from "class-variance-authority"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { Slot } from "radix-ui"
+
+ const buttonVariants = cva(
+--- raw/sheet.tsx
++++ normalized/sheet.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { Dialog as SheetPrimitive } from "radix-ui"
+
+ import { Button } from "@/components/ui/button"
+--- raw/tabs.tsx
++++ normalized/tabs.tsx
+@@ -2,7 +2,7 @@
+
+ import * as React from "react"
+ import { cva, type VariantProps } from "class-variance-authority"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { Tabs as TabsPrimitive } from "radix-ui"
+
+ function Tabs({
+--- raw/select.tsx
++++ normalized/select.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { Select as SelectPrimitive } from "radix-ui"
+ import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
+
+--- raw/context-menu.tsx
++++ normalized/context-menu.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { ContextMenu as ContextMenuPrimitive } from "radix-ui"
+ import { ChevronRightIcon, CheckIcon } from "lucide-react"
+
+--- raw/dialog.tsx
++++ normalized/dialog.tsx
+@@ -1,7 +1,7 @@
+ "use client"
+
+ import * as React from "react"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { Dialog as DialogPrimitive } from "radix-ui"
+
+ import { Button } from "@/components/ui/button"
+--- raw/checkbox.tsx
++++ normalized/checkbox.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { Checkbox as CheckboxPrimitive } from "radix-ui"
+ import { CheckIcon } from "lucide-react"
+
+--- raw/popover.tsx
++++ normalized/popover.tsx
+@@ -1,7 +1,7 @@
+ "use client"
+
+ import * as React from "react"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { Popover as PopoverPrimitive } from "radix-ui"
+
+ function Popover({
+--- raw/tooltip.tsx
++++ normalized/tooltip.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react"
+-import { cn } from "cn"
++import { cn } from "@/lib/utils"
+ import { Tooltip as TooltipPrimitive } from "radix-ui"
+
+ function TooltipProvider({
+--- raw/sonner.tsx
++++ normalized/sonner.tsx
+@@ -1,67 +1,31 @@
+ "use client"
+
+-import { useTheme } from "next-themes"
++import type { ThemeChoice } from "@/lib/theme"
+ import { Toaster as Sonner, type ToasterProps } from "sonner"
+
+-import { IconPlaceholder } from "@/app/(create)/components/icon-placeholder"
++import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
+
+-const Toaster = ({ ...props }: ToasterProps) => {
+-  const { theme = "system" } = useTheme()
++const Toaster = ({ theme, ...props }: Omit<ToasterProps, "theme"> & { theme: ThemeChoice }) => {
+
+   return (
+     <Sonner
+-      theme={theme as ToasterProps["theme"]}
++      theme={theme}
+       className="toaster group"
+       icons={{
+         success: (
+-          <IconPlaceholder
+-            lucide="CircleCheckIcon"
+-            tabler="IconCircleCheck"
+-            hugeicons="CheckmarkCircle02Icon"
+-            phosphor="CheckCircleIcon"
+-            remixicon="RiCheckboxCircleLine"
+-            className="size-4"
+-          />
++          <CircleCheckIcon className="size-4" />
+         ),
+         info: (
+-          <IconPlaceholder
+-            lucide="InfoIcon"
+-            tabler="IconInfoCircle"
+-            hugeicons="InformationCircleIcon"
+-            phosphor="InfoIcon"
+-            remixicon="RiInformationLine"
+-            className="size-4"
+-          />
++          <InfoIcon className="size-4" />
+         ),
+         warning: (
+-          <IconPlaceholder
+-            lucide="TriangleAlertIcon"
+-            tabler="IconAlertTriangle"
+-            hugeicons="Alert02Icon"
+-            phosphor="WarningIcon"
+-            remixicon="RiErrorWarningLine"
+-            className="size-4"
+-          />
++          <TriangleAlertIcon className="size-4" />
+         ),
+         error: (
+-          <IconPlaceholder
+-            lucide="OctagonXIcon"
+-            tabler="IconAlertOctagon"
+-            hugeicons="MultiplicationSignCircleIcon"
+-            phosphor="XCircleIcon"
+-            remixicon="RiCloseCircleLine"
+-            className="size-4"
+-          />
++          <OctagonXIcon className="size-4" />
+         ),
+         loading: (
+-          <IconPlaceholder
+-            lucide="Loader2Icon"
+-            tabler="IconLoader"
+-            hugeicons="Loading03Icon"
+-            phosphor="SpinnerIcon"
+-            remixicon="RiLoaderLine"
+-            className="size-4 animate-spin"
+-          />
++          <Loader2Icon className="size-4 animate-spin" />
+         ),
+       }}
+       style={
+```
+
+Scratch CSS and utility integration diff (the scratch versions were not copied back):
+
+```diff
+--- scratch/src/index.css
++++ web/src/index.css
+@@ -1,58 +1,85 @@
+ @import "tailwindcss";
+ @import "tw-animate-css";
+ @import "shadcn/tailwind.css";
+-@import "@fontsource-variable/geist";
+ @custom-variant dark (&:is(.dark *));
+
+ :root {
+-  --bg: #f7f7f8;          --bg-elevated: #ffffff;  --fg: #14161a;        --fg-muted: #5b6472;
+-  --border: oklch(0.922 0 0);      --accent: oklch(0.97 0 0);       --accent-fg: #ffffff;
+-  --ok: #15803d;          --warn: #b45309;         --error: #b91c1c;
+-  --progress-track: #e5e7eb; --progress-fill: #2563eb; --focus-ring: #2563eb; --background: oklch(1 0 0); --foreground: oklch(0.145 0 0); --card: oklch(1 0 0); --card-foreground: oklch(0.145 0 0); --popover: oklch(1 0 0); --popover-foreground: oklch(0.145 0 0); --primary: oklch(0.205 0 0); --primary-foreground: oklch(0.985 0 0); --secondary: oklch(0.97 0 0); --secondary-foreground: oklch(0.205 0 0); --muted: oklch(0.97 0 0); --muted-foreground: oklch(0.556 0 0); --accent-foreground: oklch(0.205 0 0); --destructive: oklch(0.577 0.245 27.325); --input: oklch(0.922 0 0); --ring: oklch(0.708 0 0); --chart-1: oklch(0.87 0 0); --chart-2: oklch(0.556 0 0); --chart-3: oklch(0.439 0 0); --chart-4: oklch(0.371 0 0); --chart-5: oklch(0.269 0 0); --radius: 0.625rem; --sidebar: oklch(0.985 0 0); --sidebar-foreground: oklch(0.145 0 0); --sidebar-primary: oklch(0.205 0 0); --sidebar-primary-foreground: oklch(0.985 0 0); --sidebar-accent: oklch(0.97 0 0); --sidebar-accent-foreground: oklch(0.205 0 0); --sidebar-border: oklch(0.922 0 0); --sidebar-ring: oklch(0.708 0 0);
++  --bg: #f7f7f8;
++  --bg-elevated: #ffffff;
++  --fg: #14161a;
++  --fg-muted: #5b6472;
++  --border: #d8dbe0;
++  --accent: #2563eb;
++  --accent-fg: #ffffff;
++  --ok: #15803d;
++  --warn: #b45309;
++  --error: #b91c1c;
++  --progress-track: #e5e7eb;
++  --progress-fill: #2563eb;
++  --focus-ring: #2563eb;
+ }
+ .dark {
+-  --bg: #0f1115;          --bg-elevated: #171a20;  --fg: #e7e9ee;        --fg-muted: #98a1b0;
+-  --border: oklch(1 0 0 / 10%);      --accent: oklch(0.269 0 0);       --accent-fg: #0f1115;
+-  --ok: #4ade80;          --warn: #fbbf24;         --error: #f87171;
+-  --progress-track: #2a2f38; --progress-fill: #60a5fa; --focus-ring: #60a5fa; --background: oklch(0.145 0 0); --foreground: oklch(0.985 0 0); --card: oklch(0.205 0 0); --card-foreground: oklch(0.985 0 0); --popover: oklch(0.205 0 0); --popover-foreground: oklch(0.985 0 0); --primary: oklch(0.922 0 0); --primary-foreground: oklch(0.205 0 0); --secondary: oklch(0.269 0 0); --secondary-foreground: oklch(0.985 0 0); --muted: oklch(0.269 0 0); --muted-foreground: oklch(0.708 0 0); --accent-foreground: oklch(0.985 0 0); --destructive: oklch(0.704 0.191 22.216); --input: oklch(1 0 0 / 15%); --ring: oklch(0.556 0 0); --chart-1: oklch(0.87 0 0); --chart-2: oklch(0.556 0 0); --chart-3: oklch(0.439 0 0); --chart-4: oklch(0.371 0 0); --chart-5: oklch(0.269 0 0); --sidebar: oklch(0.205 0 0); --sidebar-foreground: oklch(0.985 0 0); --sidebar-primary: oklch(0.488 0.243 264.376); --sidebar-primary-foreground: oklch(0.985 0 0); --sidebar-accent: oklch(0.269 0 0); --sidebar-accent-foreground: oklch(0.985 0 0); --sidebar-border: oklch(1 0 0 / 10%); --sidebar-ring: oklch(0.556 0 0);
++  --bg: #0f1115;
++  --bg-elevated: #171a20;
++  --fg: #e7e9ee;
++  --fg-muted: #98a1b0;
++  --border: #2a2f38;
++  --accent: #60a5fa;
++  --accent-fg: #0f1115;
++  --ok: #4ade80;
++  --warn: #fbbf24;
++  --error: #f87171;
++  --progress-track: #2a2f38;
++  --progress-fill: #60a5fa;
++  --focus-ring: #60a5fa;
+ }
+-:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
++:root,
++.dark {
++  --background: var(--bg);
++  --foreground: var(--fg);
++  --card-foreground: var(--fg);
++  --popover-foreground: var(--fg);
++  --secondary-foreground: var(--fg);
++  --card: var(--bg-elevated);
++  --popover: var(--bg-elevated);
++  --secondary: var(--bg-elevated);
++  --muted: var(--bg-elevated);
++  --primary: var(--accent);
++  --primary-foreground: var(--accent-fg);
++  --accent-foreground: var(--accent-fg);
++  --muted-foreground: var(--fg-muted);
++  --destructive: var(--error);
++  --input: var(--border);
++  --ring: var(--focus-ring);
++}
++
++:root {
++  --radius: 0.625rem;
++}
+
+ @theme inline {
++  --font-sans:
++    ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
++    "Segoe UI Symbol", "Noto Color Emoji";
+   --font-heading: var(--font-sans);
+-  --font-sans: 'Geist Variable', sans-serif;
+-  --color-sidebar-ring: var(--sidebar-ring);
+-  --color-sidebar-border: var(--sidebar-border);
+-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+-  --color-sidebar-accent: var(--sidebar-accent);
+-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+-  --color-sidebar-primary: var(--sidebar-primary);
+-  --color-sidebar-foreground: var(--sidebar-foreground);
+-  --color-sidebar: var(--sidebar);
+-  --color-chart-5: var(--chart-5);
+-  --color-chart-4: var(--chart-4);
+-  --color-chart-3: var(--chart-3);
+-  --color-chart-2: var(--chart-2);
+-  --color-chart-1: var(--chart-1);
++  --color-background: var(--background);
++  --color-foreground: var(--foreground);
++  --color-card-foreground: var(--card-foreground);
++  --color-popover-foreground: var(--popover-foreground);
++  --color-secondary-foreground: var(--secondary-foreground);
++  --color-card: var(--card);
++  --color-popover: var(--popover);
++  --color-secondary: var(--secondary);
++  --color-muted: var(--muted);
++  --color-primary: var(--primary);
++  --color-primary-foreground: var(--primary-foreground);
++  --color-accent-foreground: var(--accent-foreground);
++  --color-muted-foreground: var(--muted-foreground);
++  --color-destructive: var(--destructive);
++  --color-input: var(--input);
+   --color-ring: var(--ring);
+-  --color-input: var(--input);
+   --color-border: var(--border);
+-  --color-destructive: var(--destructive);
+-  --color-accent-foreground: var(--accent-foreground);
+   --color-accent: var(--accent);
+-  --color-muted-foreground: var(--muted-foreground);
+-  --color-muted: var(--muted);
+-  --color-secondary-foreground: var(--secondary-foreground);
+-  --color-secondary: var(--secondary);
+-  --color-primary-foreground: var(--primary-foreground);
+-  --color-primary: var(--primary);
+-  --color-popover-foreground: var(--popover-foreground);
+-  --color-popover: var(--popover);
+-  --color-card-foreground: var(--card-foreground);
+-  --color-card: var(--card);
+-  --color-foreground: var(--foreground);
+-  --color-background: var(--background);
+   --radius-sm: calc(var(--radius) * 0.6);
+   --radius-md: calc(var(--radius) * 0.8);
+   --radius-lg: var(--radius);
+@@ -72,4 +99,17 @@
+   html {
+     @apply font-sans;
+   }
+-}+}
++
++:focus-visible {
++  outline: 2px solid var(--focus-ring);
++  outline-offset: 2px;
++}
++@media (prefers-reduced-motion: reduce) {
++  *,
++  *::before,
++  *::after {
++    animation: none !important;
++    transition: none !important;
++  }
++}
+--- scratch/src/lib/utils.ts
++++ web/src/lib/utils.ts
+@@ -1 +1,6 @@
+-export { cn } from "cn"
++import { clsx, type ClassValue } from "clsx";
++import { twMerge } from "tailwind-merge";
++
++export function cn(...inputs: ClassValue[]): string {
++  return twMerge(clsx(inputs));
++}
+```
+
+Only `components.json` and the twelve primitives were copied from scratch. Prettier formatted the
+copy-ins afterward. The implementation remains unreviewed and unmerged.
+
+The requested status-based scope command printed these uncommitted files; the four dependency/resolver
+paths were already committed in `c70ec05` and therefore do not appear here:
+
+```text
+web/components.json
+web/src/components/ui/button.tsx
+web/src/components/ui/checkbox.tsx
+web/src/components/ui/context-menu.tsx
+web/src/components/ui/dialog.tsx
+web/src/components/ui/input.tsx
+web/src/components/ui/label.tsx
+web/src/components/ui/popover.tsx
+web/src/components/ui/select.tsx
+web/src/components/ui/sheet.tsx
+web/src/components/ui/sonner.tsx
+web/src/components/ui/tabs.tsx
+web/src/components/ui/tooltip.tsx
+web/src/i18n.ts
+web/src/index.css
+web/src/lib/theme.test.ts
+web/src/lib/theme.ts
+web/src/lib/utils.ts
+web/src/locales/en/common.json
+web/src/main.tsx
+```
+
 ### Implementation stopped: unresolved Sonner icon template
 
 Partial implementation only. Added the prescribed dependencies and both resolver settings; existing
@@ -1412,6 +2047,17 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
+### Active: required Tailwind output fails the exact URL scan
+
+The required `tailwindcss` 4.3.3 build emits its license URL in a CSS comment. The exact Verification
+block rejects `https://tailwindcss.com` before lint/tests, as reproduced in current Evidence above.
+NFR-022 concerns runtime resource loading; this occurrence does not load a resource. The contract
+permits neither this identifier in its scanner nor an explicit license-comment normalization.
+
+The owner must resolve this check/output mismatch. No scan weakening, output stripping or dependency
+change was attempted. Partial implementation is preserved on the draft PR. Both index rows remain
+`todo`, all acceptance boxes remain unchecked, and the PR must not merge while this blocker remains.
+
 ### Resolved: Sonner acquisition returns an unprocessed icon template
 
 Step 5's required `view sonner` output is not a ready-to-copy primitive. Its source imports
