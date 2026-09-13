@@ -246,6 +246,67 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Import-alias scope preflight
+
+No implementation changes. `npm ci --prefix web` succeeded with the existing pins:
+
+```text
+added 188 packages, and audited 189 packages in 2s
+
+54 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+```
+
+Reproduced initialization in a temporary copy of the scaffold, outside the worktree. Installed
+`tailwindcss@4.3.3` and `@tailwindcss/vite@4.3.3`, copied the exact token sheet above, and added
+`tailwindcss()` and the required `@` → `src` Vite alias. Left `tsconfig.json` unchanged. Command:
+
+```bash
+npx --yes shadcn@4.19.1 init --template vite --base radix --preset nova --yes --no-monorepo
+```
+
+Exit 1:
+
+```text
+- Preflight checks.
+✔ Preflight checks.
+- Verifying framework.
+✔ Verifying framework. Found Vite.
+- Validating Tailwind CSS. Found v4.
+✔ Validating Tailwind CSS. Found v4.
+- Validating import alias.
+✖ Validating import alias.
+
+Could not find valid path aliases or package imports for init.
+Configure path aliases in tsconfig.json or imports in package.json, then run init again.
+Learn more at https://ui.shadcn.com/docs/installation/manual#configure-import-aliases.
+```
+
+A separate temporary fixture copied the unchanged `web/tsconfig.json`, created `src/lib/utils.ts`,
+and imported it as `@/lib/utils` from `src/probe.ts`. The installed TypeScript compiler reported:
+
+```text
+../../../../../../tmp/t039-alias-gw8Fd4/src/probe.ts(1,23): error TS2307: Cannot find module '@/lib/utils' or its corresponding type declarations.
+```
+
+Adding only `compilerOptions.paths: {"@/*": ["./src/*"]}` to the temporary config resolved it:
+
+```text
+Unchanged tsconfig exit: 2
+With paths mapping exit: 0
+```
+
+Task Verification and `make ci` were not run: initialization is blocked by the Files table.
+Acceptance boxes and both index rows remain unchanged. No source, dependency or pin changed.
+`git diff --check` passed; the non-doc scope command printed no paths. Documentation check:
+
+```text
+./scripts/doclint.sh
+🔍 2406 Total (in 200ms) 🔗 572 Unique ✅ 2380 OK 🚫 0 Errors 👻 26 Excluded
+```
+
 ### Sonner plan repair
 
 Plan only; no source, dependency, pin or status changes. Re-ran `npm ci --prefix web` and
@@ -592,6 +653,17 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
+### TypeScript alias configuration is outside scope
+
+Step 4 requires the CLI defaults, whose `@/` imports need a TypeScript path mapping.
+The scaffold's `web/tsconfig.json` has none; step 2's Vite alias does not configure TypeScript.
+The isolated preflight and compiler reproduction are recorded above.
+
+`web/tsconfig.json` is absent from the Files table. Authorize that file for the `@/*` mapping,
+or specify a nondefault package-import configuration and its copy-in rules. The CLI advertises
+package imports as an alternative, but substituting them would change the required defaults.
+Stopped without widening scope. T039 and both index rows remain `todo`; do not merge this draft.
+
 ### Resolved Sonner copy-in contradiction
 
 The preflight above reproduced the forbidden `next-themes` import. The
