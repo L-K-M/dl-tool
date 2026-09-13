@@ -1116,8 +1116,11 @@ The dl-tool web UI shall load every script, stylesheet, font and icon from the d
 
 **Verify:** T039 scans the built `index.html` and bundles for absolute HTTP(S) and protocol-relative
 URL literals, allowing only exact, audited non-fetch identifiers (XML namespaces and React diagnostic
-links). Inspect those uses to confirm they do not load resources. An identifier is not a runtime asset;
-external asset loads remain forbidden, including from an otherwise allowlisted URL. Audit
+links). Before scanning CSS only, T039 may remove one exact, audited leading build-tool license comment
+from the scan input, never the emitted file. Match the complete comment, not its URL, host or line;
+scan all remaining text unchanged. Test same-line asset loads, changed comments and occurrences inside
+strings or non-CSS files. Inspect exempted uses to confirm they do not load resources. Metadata is not
+a runtime asset; external asset loads remain forbidden, including from an otherwise allowlisted URL. Audit
 resource-loading code for external loads that a literal scan cannot detect, including escaped and
 dynamically constructed URLs.
 
