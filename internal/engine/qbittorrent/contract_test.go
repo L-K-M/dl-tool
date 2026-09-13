@@ -1397,6 +1397,8 @@ func (f *inspectFake) lastCall(path string) recordedCall {
 
 // Boot and correction must disable automation without changing foreign transfers.
 func TestConformBootCorrection(t *testing.T) {
+	const stoppedState = "stoppedDL"
+
 	daemon := startDaemon(t)
 	session := newDaemonSession(t, daemon.baseURL)
 	preferences := func() map[string]any {
@@ -1423,6 +1425,18 @@ func TestConformBootCorrection(t *testing.T) {
 	require.NoError(t, err)
 	hash = strings.TrimPrefix(hash, engine.NameQBittorrent+":")
 	before := session.visibleTorrentHashes(hash)
+
+	// Visibility precedes resume-data checking; establish the stopped baseline before boot.
+	require.Eventually(t, func() bool {
+		status, body := session.do(http.MethodGet, "torrents/info", url.Values{"hashes": {hash}})
+		require.Equal(t, http.StatusOK, status)
+		var transfers []struct {
+			State string `json:"state"`
+		}
+		require.NoError(t, json.Unmarshal(body, &transfers))
+		return len(transfers) == 1 && transfers[0].State == stoppedState
+	}, addVisibilityTimeout, inspectionVisibilityPoll, "foreign torrent must stop before boot")
+
 	automationKeys := []string{"rss_processing_enabled", "scheduler_enabled", "auto_tmm_enabled"}
 	enableAutomation := func() {
 		status, body := session.do(http.MethodPost, "app/setPreferences", url.Values{"json": {`{"rss_processing_enabled":true,"scheduler_enabled":true,"auto_tmm_enabled":true}`}})
@@ -1497,7 +1511,7 @@ func TestConformBootCorrection(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(body, &transfers))
 	require.Len(t, transfers, 1)
-	require.Equal(t, "stoppedDL", transfers[0].State)
+	require.Equal(t, stoppedState, transfers[0].State)
 	require.False(t, transfers[0].AutoTMM)
 }
 

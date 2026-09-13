@@ -255,6 +255,20 @@ ok github.com/L-K-M/dl-tool/internal/engine/qbittorrent 0.027s [no tests to run]
 Compilation only, not live integration acceptance. The race-enabled conformance unit run and
 `make lint` exited 0. Final Verification remains pending.
 
+The first live green attempt reached the foreign-state assertion but exposed asynchronous fixture
+initialization. [CI run 34749800489](https://github.com/L-K-M/dl-tool/actions/runs/34749800489)
+at `9b6fd6e` printed:
+
+```text
+--- FAIL: TestConformBootCorrection (4.79s)
+    contract_test.go:1500:
+        Error: Not equal:
+            expected: "stoppedDL"
+            actual  : "checkingResumeData"
+```
+
+Wait for the stopped baseline before boot. The immediate post-correction state assertion remains.
+
 ### Resumed implementation
 
 PR #129 remains draft. The scoped workflow and live boot/correction regression are committed;
