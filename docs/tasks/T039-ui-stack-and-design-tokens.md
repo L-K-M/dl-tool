@@ -152,7 +152,7 @@ const identifiers = new Set([
   'https://react.dev/errors/',
 ]);
 const unexpectedURLs = text =>
-  [...text.matchAll(/https?:\/\/[^\s"'`<>\\)]+/gi)]
+  [...text.matchAll(/(?:https?:|(?<=[="'`(]))\/\/[^\s"'`<>\\)]+/gi)]
     .map(match => match[0])
     .filter(url => !identifiers.has(url));
 
@@ -169,6 +169,11 @@ assert.deepEqual(unexpectedURLs('document.createElementNS("http://www.w3.org/200
 assert.deepEqual(unexpectedURLs('"HTTP://CDN.example/app.js"'), ['HTTP://CDN.example/app.js']);
 assert.deepEqual(unexpectedURLs('url(https://cdn.example/font.woff2)'), ['https://cdn.example/font.woff2']);
 assert.deepEqual(unexpectedURLs('"./assets/app.js"'), []);
+for (const external of ['//cdn.example/app.js', '//cdn/app.js', '//[::1]/app.js']) {
+  assert.deepEqual(unexpectedURLs(`src="${external}"`), [external]);
+  assert.deepEqual(unexpectedURLs(`url(${external})`), [external]);
+  assert.deepEqual(unexpectedURLs(`"http://www.w3.org/2000/svg";"${external}"`), [external]);
+}
 console.log('URL_SCAN_REGRESSIONS_OK');
 
 function scan(file) {
@@ -301,6 +306,29 @@ $ make doclint
 ./scripts/doclint.sh
 🔍 2402 Total (in 224ms) 🔗 572 Unique ✅ 2376 OK 🚫 0 Errors 👻 26 Excluded
 ```
+
+Review follow-up: a new protocol-relative fixture first failed with actual `[]`, expected
+`['//cdn.example/app.js']`. The scanner now detects quoted and CSS `url(...)` protocol-relative
+literals, including single-label and IPv6 hosts. Rebuilt the same scaffold asset after `npm ci`:
+
+```text
+✓ built in 156ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+relative local asset: exit 0 (expected 0)
+protocol-relative HTML script: exit 1 (expected 1)
+protocol-relative CSS font: exit 1 (expected 1)
+```
+
+```text
+$ make doclint
+./scripts/doclint.sh
+🔍 2402 Total (in 183ms) 🔗 572 Unique ✅ 2376 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+`git diff --check` passed. Scan scope remains the task's `index.html` and `assets`;
+review's optional whole-dist expansion is deferred until other build outputs exist.
+The generated-output lint blocker remains unresolved; no full-task success is claimed.
 
 ### Earlier mobile-sheet plan repair
 

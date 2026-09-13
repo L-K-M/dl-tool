@@ -1114,11 +1114,12 @@ The dl-tool HTTP server shall send `Content-Security-Policy` with no `unsafe-inl
 ### NFR-022 Load no third-party runtime assets
 The dl-tool web UI shall load every script, stylesheet, font and icon from the dl-tool origin, so the interface works with no internet access and leaks nothing to a content delivery network.
 
-**Verify:** T039 scans the built `index.html` and bundles for absolute HTTP(S) URLs, allowing only
-exact, audited non-fetch identifiers (XML namespaces and React diagnostic links). Inspect those uses
-to confirm they do not load resources. An identifier is not a runtime asset; external asset loads remain
-forbidden, including from an otherwise allowlisted URL. Audit resource-loading code for external loads
-that a literal scan cannot detect, including protocol-relative and dynamically constructed URLs.
+**Verify:** T039 scans the built `index.html` and bundles for absolute HTTP(S) and protocol-relative
+URL literals, allowing only exact, audited non-fetch identifiers (XML namespaces and React diagnostic
+links). Inspect those uses to confirm they do not load resources. An identifier is not a runtime asset;
+external asset loads remain forbidden, including from an otherwise allowlisted URL. Audit
+resource-loading code for external loads that a literal scan cannot detect, including escaped and
+dynamically constructed URLs.
 
 | Covered by | Priority |
 |---|---|
