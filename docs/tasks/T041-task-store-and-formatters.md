@@ -169,4 +169,26 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Blocked on origin/main `6a08ec9`: Verification requires exactly five passing test files,
+but the baseline already has four:
+
+- `web/src/main.test.ts`
+- `web/src/api/client.test.ts`
+- `web/src/lib/theme.test.ts`
+- `web/src/App.test.tsx`
+
+Adding both required suites makes six. Meeting the stated count would require deleting,
+skipping or excluding an existing suite, which is forbidden. The owner must correct
+this task's Verification expectation before implementation can proceed.
+
+After `npm ci --prefix web`, `make test-web` exited 0. Output excerpt:
+
+```text
+ Test Files  4 passed (4)
+      Tests  71 passed (71)
+   Start at  22:41:32
+   Duration  2.30s (transform 556ms, setup 0ms, import 1.97s, tests 2.46s, environment 1.09s)
+```
+
+No implementation changes. Acceptance and both index rows remain unchanged.
+The task Verification block and `make ci` were not run; this is baseline evidence only.
