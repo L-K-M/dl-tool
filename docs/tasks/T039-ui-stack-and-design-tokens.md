@@ -153,6 +153,10 @@ export function initI18n(): typeof i18next;
    conflicting utilities.
    Inspect the built CSS to confirm primary, accent, foreground, border, ring and open/closed-state
    utilities resolve through the bridge in both themes; record that audit alongside the copy-in diff.
+   For its CSS URL assertions, `TestShadcnIntegrationContract` must use the Verification scanner's
+   exact license-comment normalization and rejection fixtures, not a blanket HTTP(S) ban or URL
+   allowlist expansion. Preserve the no-font assertion and audit the exempted comment against the
+   installed build-tool source per [NFR-022](../02-requirements.md#nfr-022-load-no-third-party-runtime-assets).
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -216,10 +220,33 @@ for (const external of ['//cdn.example/app.js', '//cdn/app.js', '//[::1]/app.js'
   }
 }
 assert.deepEqual(unexpectedURLs('\n//# sourceMappingURL=app.js.map'), []);
+// NFR-022 permits only this complete leading CSS comment, not its URL elsewhere.
+const licenseComment = '/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */';
+const unexpectedAssetURLs = (file, text) => unexpectedURLs(
+  file.endsWith('.css') && text.startsWith(licenseComment)
+    ? text.slice(licenseComment.length)
+    : text,
+);
+assert.deepEqual(unexpectedAssetURLs('app.css', `${licenseComment}body{color:red}`), []);
+for (const external of ['https://cdn.example/font.woff2', 'https://tailwindcss.com', '//cdn.example/font.woff2']) {
+  assert.deepEqual(
+    unexpectedAssetURLs('app.css', `${licenseComment}body{background:url(${external})}`),
+    [external],
+  );
+}
+for (const [file, text] of [
+  ['app.css', licenseComment.replace('tailwindcss.com', 'tailwindcss.com/asset')],
+  ['app.css', `a{content:"${licenseComment}"}`],
+  ['app.js', `const text = ${JSON.stringify(licenseComment)};`],
+  ['index.html', licenseComment],
+  ['app.css', `${licenseComment}${licenseComment}`],
+]) {
+  assert.ok(unexpectedAssetURLs(file, text).length > 0, `${file}: ${text}`);
+}
 console.log('URL_SCAN_REGRESSIONS_OK');
 
 function scan(file) {
-  assert.deepEqual(unexpectedURLs(readFileSync(file, 'utf8')), [], file);
+  assert.deepEqual(unexpectedAssetURLs(file, readFileSync(file, 'utf8')), [], file);
 }
 function scanDirectory(directory) {
   const entries = readdirSync(directory, { withFileTypes: true });
@@ -274,6 +301,138 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Recovery: bound the license-comment scan exception
+
+Plan-only recovery of PR #141. The loop stopped after two workers encountered the same scanner
+contradiction. Reproduced the original Verification failure after `npm ci --prefix web`:
+
+```text
+✓ built in 227ms
+URL_SCAN_REGRESSIONS_OK
+AssertionError [ERR_ASSERTION]: web/dist/assets/index-B4tCSVnN.css
++ actual - expected
++ [
++   'https://tailwindcss.com'
++ ]
+- []
+```
+
+The emitted CSS starts with the exact comment now matched by Verification. In installed
+`tailwindcss/dist/lib.mjs:38`, `Ea` prepends it with
+`t.unshift(gt(` followed by the versioned license text. This is a CSS comment, not a resource load.
+The repaired scanner passed the same unmodified output before reverting partial implementation:
+
+```text
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+```
+
+A temporary `node:test` harness extracted the entire scanner from this task and ran it in isolated
+`web/dist` fixtures. Before repair, only the leading-license positive case failed; all eight negative
+cases passed. After repair:
+
+```text
+ok 1 - exact leading CSS license
+ok 2 - same-line asset
+ok 3 - same-host asset
+ok 4 - protocol-relative asset
+ok 5 - modified license
+ok 6 - CSS string
+ok 7 - JavaScript string
+ok 8 - HTML text
+ok 9 - second license
+# tests 9
+# pass 9
+# fail 0
+# skipped 0
+```
+
+The equivalent regression assertions remain executable in Verification. NFR-022 owns the bounded
+exception; step 9 requires future CSS integration assertions to honor it while preserving font and
+resource-loading checks. No URL identifier was added, no emitted file was stripped, and no pin changed.
+
+Reverted all PR implementation changes to `origin/main` in an appended commit, preserving prior
+commits. Work is on local `fix/t039-license-scan`, pushed to the existing PR head to retain PR #141.
+The aggregate diff contains only `docs/02-requirements.md` and this task file. Both index rows remain
+`todo`; no acceptance box is checked. The historical partial implementation below is not shipped.
+
+Ran the first Verification block verbatim on the restored scaffold, exit 0:
+
+```text
+added 188 packages, and audited 189 packages in 2s
+
+54 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+
+> build
+> tsc --noEmit -p tsconfig.json && vite build
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 14 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                  0.31 kB │ gzip:  0.22 kB
+dist/assets/index-Vp0XYip_.js  190.42 kB │ gzip: 59.95 kB
+
+✓ built in 162ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/recovery-dltool-163-1789329676/web
+
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+   Start at  20:05:05
+   Duration  567ms (transform 93ms, setup 0ms, import 277ms, tests 34ms, environment 427ms)
+
+UI_STACK_OK
+```
+
+These are scaffold checks, not T039 acceptance: the third test file and UI implementation remain
+absent. The unchanged scaffold asset's resource audit appears below. The existing two development
+advisories remain outside this repair.
+
+`PATH="/tmp/t039-tools:$PATH" make ci` passed lint, vet, typecheck, all Go packages, the 13 scaffold
+web tests, Compose validation and doclint. The path supplies the previously provisioned Docker CLI;
+no daemon or local engine integration is claimed. Final output:
+
+```text
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+   Start at  20:07:01
+   Duration  578ms (transform 55ms, setup 0ms, import 232ms, tests 28ms, environment 435ms)
+
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2420 Total (in 232ms) 🔗 572 Unique ✅ 2394 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+`git diff --check` passed. The status-based scope command lists only Files-table paths being reverted;
+`git diff --quiet origin/main -- web` exits 0. Hosted integration and current-head review remain
+merge gates, not inferred from these local checks.
+
 ### Resume preflight: scanner blocker persists
 
 Resumed draft PR #141 at `64f38111574d6cb350361f63d153041194d6d6d6` after fetch and
@@ -2117,18 +2276,17 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
-### Active: required Tailwind output fails the exact URL scan
+### Resolved: required Tailwind output fails the exact URL scan
 
-Reconfirmed on resume against the unchanged `origin/main` contract; see the fresh Evidence above.
+The original scanner rejected the required build's license comment, not a resource load.
+[NFR-022](../02-requirements.md#nfr-022-load-no-third-party-runtime-assets) now bounds scan-input
+normalization; Verification matches only the complete leading CSS comment and tests rejection of
+same-line assets, modified comments and non-comment uses. Step 9 requires the same contract in the
+future integration test. Emitted assets, URL identifiers, dependency pins and accepted ADRs are unchanged.
 
-The required `tailwindcss` 4.3.3 build emits its license URL in a CSS comment. The exact Verification
-block rejects `https://tailwindcss.com` before lint/tests, as reproduced in current Evidence above.
-NFR-022 concerns runtime resource loading; this occurrence does not load a resource. The contract
-permits neither this identifier in its scanner nor an explicit license-comment normalization.
-
-The owner must resolve this check/output mismatch. No scan weakening, output stripping or dependency
-change was attempted. Partial implementation is preserved on the draft PR. Both index rows remain
-`todo`, all acceptance boxes remain unchecked, and the PR must not merge while this blocker remains.
+This PR reverts its partial implementation by an appended commit and repairs only the plan.
+T039 and both index rows remain `todo`; acceptance boxes remain unchecked. Earlier implementation
+and failure evidence below the recovery entry is historical, not task completion.
 
 ### Resolved: Sonner acquisition returns an unprocessed icon template
 
