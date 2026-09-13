@@ -152,7 +152,7 @@ const identifiers = new Set([
   'https://react.dev/errors/',
 ]);
 const unexpectedURLs = text =>
-  [...text.matchAll(/(?:https?:|(?<=[="'`(]))\/\/[^\s"'`<>\\)]+/gi)]
+  [...text.matchAll(/(?:https?:|(?<=[="'`(,]\s*))\/\/[^\s"'`<>\\)]+/gi)]
     .map(match => match[0])
     .filter(url => !identifiers.has(url));
 
@@ -173,7 +173,13 @@ for (const external of ['//cdn.example/app.js', '//cdn/app.js', '//[::1]/app.js'
   assert.deepEqual(unexpectedURLs(`src="${external}"`), [external]);
   assert.deepEqual(unexpectedURLs(`url(${external})`), [external]);
   assert.deepEqual(unexpectedURLs(`"http://www.w3.org/2000/svg";"${external}"`), [external]);
+  for (const space of ['', ' ', '  ', '\t', '\n']) {
+    assert.deepEqual(unexpectedURLs(`url(${space}${external} )`), [external]);
+    assert.deepEqual(unexpectedURLs(`srcset="a.png 1x,${space}${external} 2x"`), [external]);
+    assert.deepEqual(unexpectedURLs(`src=${space}${external}`), [external]);
+  }
 }
+assert.deepEqual(unexpectedURLs('\n//# sourceMappingURL=app.js.map'), []);
 console.log('URL_SCAN_REGRESSIONS_OK');
 
 function scan(file) {
@@ -329,6 +335,23 @@ $ make doclint
 `git diff --check` passed. Scan scope remains the task's `index.html` and `assets`;
 review's optional whole-dist expansion is deferred until other build outputs exist.
 The generated-output lint blocker remains unresolved; no full-task success is claimed.
+
+Second review follow-up: srcset and whitespace-separated protocol-relative fixtures first failed
+with actual `[]`, expected `['//cdn.example/app.js']`. After extending the delimiter match, all
+fixtures (including tabs, newlines and a source-map-comment control) and the unchanged build passed:
+
+```text
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+```
+
+```text
+$ make doclint
+./scripts/doclint.sh
+🔍 2402 Total (in 213ms) 🔗 572 Unique ✅ 2376 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+`git diff --check` passed. No additional implementation or scope change.
 
 ### Earlier mobile-sheet plan repair
 
