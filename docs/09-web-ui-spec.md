@@ -96,7 +96,8 @@ acquire the task's primitives there. Preserve the raw output and normalization d
 Copy back only `components.json` and the requested primitives, not the generated manifest, lockfile,
 stylesheet or utility. Keep `radix-nova`, the generated aliases and CSS path in `components.json`.
 
-Normalize the integration as follows; do not change component behavior or markup:
+Normalize the integration as follows; preserve behavior and markup except for the bounded Sonner
+transformations below:
 
 - Implement `cn(...inputs: ClassValue[])` in `src/lib/utils.ts` as `twMerge(clsx(inputs))`, using the
   pinned `clsx` and `tailwind-merge`. Replace only primitive import sources `"cn"` with
@@ -113,15 +114,36 @@ Normalize the integration as follows; do not change component behavior or markup
   upgraded versions. New registry requirements outside this list are a blocker, not permission to
   add dependencies.
 - Repository formatting is allowed after these bounded transformations. No other primitive edits
-  are authorized except the Sonner adapter below.
+  are authorized except the Sonner transformations below.
+
+**Sonner icon normalization:** `view sonner` in the `radix-nova` scratch scaffold may return
+`IconPlaceholder` templates importing `@/app/(create)/components/icon-placeholder`, not runnable JSX.
+Remove that private import and replace only these five placeholders with named imports from the
+already-pinned `lucide-react`, selecting each placeholder's `lucide` attribute:
+
+| Toast slot | Lucide component |
+|---|---|
+| `success` | `CircleCheckIcon` |
+| `info` | `InfoIcon` |
+| `warning` | `TriangleAlertIcon` |
+| `error` | `OctagonXIcon` |
+| `loading` | `Loader2Icon` |
+
+Discard only the icon-library selector attributes (`lucide`, `tabler`, `hugeicons`, `phosphor`,
+`remixicon`); preserve each `className`, including the loading animation. Leave already concrete Lucide JSX unchanged.
+Unknown icon names or extra placeholder props are a blocker. Do not copy the private module, add
+an icon package, change toast slots, or change surrounding markup, styles, options or prop forwarding.
+Record raw acquisition output and the normalization diff. The adapter regression must verify all
+five component identities and classes, including the spinner, and unchanged toast options/styles.
 
 **Sonner theme adapter:** the CLI's `sonner` registry item imports forbidden `next-themes`.
-Copy its source with only this integration change: remove that import and `useTheme` call; accept a
+After icon normalization, remove that import and `useTheme` call; accept a
 required `theme` prop typed as the application's `ThemeChoice` and pass it to Sonner. Preserve the
 remaining generated markup, icons and styling. The mounting application supplies its current choice
 and updates the prop when that choice changes; Sonner handles OS changes for `system`. No second theme
 provider or stored preference is needed. This is the only behavioral hand-edit exception for the T039
-primitives; the initialization boundary above also permits import normalization and formatting.
+primitives; the initialization boundary above also permits import normalization, the bounded icon
+template expansion and formatting.
 Install the registry's `sonner` dependency directly, recording the resolved exact version; do not run
 an unfiltered `shadcn add sonner` or install `next-themes`. No existing pin changes.
 
