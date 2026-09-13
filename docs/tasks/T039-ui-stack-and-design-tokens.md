@@ -248,6 +248,85 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Default initialization preflight
+
+No implementation changes. `npm ci --prefix web` succeeded:
+
+```text
+added 188 packages, and audited 189 packages in 2s
+
+54 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+```
+
+In a temporary scaffold outside the worktree, installed `tailwindcss@4.3.3` and
+`@tailwindcss/vite@4.3.3`, added both canonical aliases and the exact task token sheet.
+Ran:
+
+```bash
+npx --yes shadcn@4.19.1 init --template vite --base radix --preset nova --yes --no-monorepo
+npx --yes shadcn@4.19.1 add button checkbox dialog sheet input label select popover context-menu tabs tooltip
+```
+
+Both exited 0. Selected CLI output:
+
+```text
+✔ Validating import alias.
+✔ Writing components.json.
+✔ Checking registry.
+✔ Installing dependencies.
+✔ Created 2 files:
+  - src/components/ui/button.tsx
+  - src/lib/utils.ts
+✔ Updating src/index.css
+
+Project initialization completed.
+You may now add components.
+
+✔ Created 10 files:
+  - src/components/ui/checkbox.tsx
+  - src/components/ui/input.tsx
+  - src/components/ui/label.tsx
+  - src/components/ui/select.tsx
+  - src/components/ui/popover.tsx
+  - src/components/ui/context-menu.tsx
+  - src/components/ui/tabs.tsx
+  - src/components/ui/tooltip.tsx
+  - src/components/ui/dialog.tsx
+  - src/components/ui/sheet.tsx
+ℹ Skipped 1 file: (files might be identical, use --overwrite to overwrite)
+  - src/components/ui/button.tsx
+```
+
+Assertions against the generated files confirmed:
+
+```text
+DEFAULT_INIT_ADDS_WEB_FONT
+REQUIRED_TOKEN_REPLACED: --border: #d8dbe0
+REQUIRED_TOKEN_REPLACED: --accent: #2563eb
+REQUIRED_TOKEN_REPLACED: --border: #2a2f38
+REQUIRED_TOKEN_REPLACED: --accent: #60a5fa
+GENERATED_UTILS: export { cn } from "cn"
+```
+
+The generated CSS imports `@fontsource-variable/geist`, adds `@theme inline` mappings and
+additional colour definitions, and replaces the four values above with neutral OKLCH values.
+The generated button uses `bg-primary`, `text-primary-foreground` and `border-ring`, relying on
+those added mappings. Simply restoring the exact task stylesheet would remove their definitions.
+`utils.ts` re-exports package `cn`; the generated primitives import that package directly.
+
+Task Verification and `make ci` were not run: the required initialization contradicts the plan.
+No repository source, dependency or pin changed. Acceptance boxes remain unchecked; both index rows
+remain `todo`. `git diff --check` passed; the non-doc scope command printed no paths.
+`make doclint` passed:
+
+```text
+./scripts/doclint.sh
+🔍 2408 Total (in 202ms) 🔗 572 Unique ✅ 2382 OK 🚫 0 Errors 👻 26 Excluded
+```
+
 ### TypeScript alias plan repair
 
 Plan only. Added the missing file scope and linked both resolver settings to doc 09 §1.
@@ -713,6 +792,22 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
+### Default initialization contradicts the stylesheet and utility contracts
+
+The preflight above reproduces three conflicts in the pinned CLI's current registry output:
+
+- Step 4's defaults add a web font, forbidden under this task's Out of scope section.
+- Initialization replaces step 3's exact token values and adds a separate palette and Tailwind
+  mappings required by the untouched primitives. Restoring only the prescribed sheet loses those
+  mappings; retaining generated CSS violates the exact sheet and semantic-colour contract.
+- Generated `web/src/lib/utils.ts` re-exports `cn`, rather than implementing the Files table's
+  helper over `clsx` + `tailwind-merge`; primitives also import `cn` directly.
+
+The task and doc 09 §1 need an authorized initialization recipe and stylesheet/utility integration
+contract, including permitted generated dependencies and transformations. Pinning the CLI does not
+freeze its registry output. Do not choose another preset, add a palette, or rewrite copy-ins silently.
+Stopped before implementation; no merge. Earlier resolved blockers below remain resolved.
+
 ### Resolved TypeScript alias scope blocker
 
 The Files table now includes `web/tsconfig.json`; step 2 applies the
