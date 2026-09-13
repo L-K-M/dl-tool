@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T040 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T009, T013, T014, T039 |
 | **Blocks** | T042, T043, T072, T103 |
 | **Parallel-safe** | no — it also edits the shared files `web/src/locales/en/common.json`, `web/src/main.tsx` |
@@ -117,12 +117,12 @@ Providers, outermost first: `QueryClientProvider` (`@tanstack/react-query`) → 
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestBootRoutesToSetupWizard`, `TestBootRoutesToLogin` and `TestBootRendersLayout` pass.
-- [ ] `TestLoginStoresCsrfToken` passes and no test finds the token in `localStorage`.
-- [ ] `TestSafeNextRejectsAbsoluteAndProtocolRelative` passes for `//evil.example`, `https://x` and `\\x`.
-- [ ] Every route in doc 09 §2.1 resolves; an unknown path inside the base renders the layout, not a blank.
-- [ ] `BrowserRouter` receives `basename={basePath()}`, so the SPA works under `DLTOOL_BASE_PATH`.
-- [ ] `web/src/main.test.ts` verifies the real app mount with mocked boot requests and no network access.
+- [x] `TestBootRoutesToSetupWizard`, `TestBootRoutesToLogin` and `TestBootRendersLayout` pass.
+- [x] `TestLoginStoresCsrfToken` passes and no test finds the token in `localStorage`.
+- [x] `TestSafeNextRejectsAbsoluteAndProtocolRelative` passes for `//evil.example`, `https://x` and `\\x`.
+- [x] Every route in doc 09 §2.1 resolves; an unknown path inside the base renders the layout, not a blank.
+- [x] `BrowserRouter` receives `basename={basePath()}`, so the SPA works under `DLTOOL_BASE_PATH`.
+- [x] `web/src/main.test.ts` verifies the real app mount with mocked boot requests and no network access.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -306,5 +306,252 @@ resuming; validate navigation against [doc 09 §2.1](../09-web-ui-spec.md#21-rou
 `basename={basePath()}`. The repair does not claim these implementation failures are fixed.
 Run all task verification, record fresh Evidence and complete review before marking T040 done.
 
+### Completed implementation
+
+Installed with `npm ci --prefix web`; pins unchanged. The initial focused test run failed
+because `App.tsx` did not exist. The implemented tree passes the redirect regressions.
+
+Acceptance mapping:
+- Boot destinations and one request in StrictMode: `TestBootRoutesToSetupWizard`,
+  `TestBootRoutesToLogin`, `TestBootRendersLayout`.
+- Memory-only CSRF from all three endpoints: `TestBootRendersLayout`,
+  `TestLoginStoresCsrfToken`, `TestSetupValidationAndCsrf`.
+- Unsafe redirects and preserved next query/hash: `TestSafeNextRejectsAbsoluteAndProtocolRelative`,
+  `TestSafeNextPreservesLocalRoute`, `TestLoginRedirectUnderBase`.
+- All protected routes, unknown paths and empty sized landmarks:
+  `TestAuthenticatedRouteUnderBase`, `TestBootRendersLayout`.
+- Public route gates: `TestAuthenticatedPublicRoute`, `TestSetupUnavailableAfterConfiguration`.
+- Actual entrypoint and API request under the injected base: `renders the application root`
+  in `web/src/main.test.ts`; MSW rejects unhandled requests and the real root is unmounted.
+- Password length/confirmation, setup conflict toast, verbatim login errors and throttling:
+  `TestSetupValidationAndCsrf`, `TestSetupAlreadyCompleteRedirectsWithToast`, `TestLoginError`.
+- Boot server errors remain distinct from unauthenticated: `TestBootFailureOffersRetryWithoutGuessingAuth`.
+
+Task verification exited 0:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t040-1-1789337309/web
+
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/setup 409 (Conflict)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
+GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
+
+ Test Files  4 passed (4)
+      Tests  71 passed (71)
+   Start at  22:19:56
+   Duration  2.26s (transform 501ms, setup 0ms, import 1.89s, tests 2.47s, environment 956ms)
+
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t040-1-1789337309/web
+
+ ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > apiUrl('/tasks') resolves under base  6ms
+ ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > apiUrl('/tasks') resolves under base /dl-tool 1ms
+ ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > eventsUrl() resolves under base  1ms
+ ✓ src/api/client.test.ts > TestApiUrlUsesInjectedBase > eventsUrl() resolves under base /dl-tool 1ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > GET carries X-DLTOOL-CSRF: false 3ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > POST carries X-DLTOOL-CSRF: true 1ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > PATCH carries X-DLTOOL-CSRF: true 1ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > DELETE carries X-DLTOOL-CSRF: true 0ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > a POST with no stored token sends no header 1ms
+ ✓ src/api/client.test.ts > TestCsrfHeaderOnMutationsOnly > an empty token is treated as absent 1ms
+ ✓ src/api/client.test.ts > TestApiClientResolvesUnderInjectedBase 2ms
+ ✓ src/api/client.test.ts > TestCredentialsSameOrigin 1ms
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+ ✓ src/App.test.tsx > TestBootRoutesToSetupWizard 138ms
+ ✓ src/App.test.tsx > TestBootRoutesToLogin 28ms
+ ✓ src/App.test.tsx > TestBootRendersLayout 21ms
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+ ✓ src/main.test.ts > renders the application root 484ms
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+ ✓ src/lib/theme.test.ts > TestResolveThemeFollowsSystem 3ms
+ ✓ src/lib/theme.test.ts > TestApplyThemeTogglesClass 1ms
+ ✓ src/lib/theme.test.ts > TestReadStoredThemeFallsBackToSystem 1ms
+ ✓ src/lib/theme.test.ts > TestStoreThemePreservesPreferences 1ms
+ ✓ src/App.test.tsx > TestLoginStoresCsrfToken 56ms
+ ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative //evil.example 0ms
+ ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative https://x 0ms
+ ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative \\x 0ms
+ ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative /\evil.example 0ms
+ ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative /search
+ 1ms
+ ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative  0ms
+ ✓ src/App.test.tsx > TestSafeNextRejectsAbsoluteAndProtocolRelative null 0ms
+ ✓ src/App.test.tsx > TestLoginRedirectUnderBase /search?query=linux#results 36ms
+ ✓ src/App.test.tsx > TestLoginRedirectUnderBase //evil.example 36ms
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+ ✓ src/App.test.tsx > TestLoginRedirectUnderBase https://x 30ms
+ ✓ src/App.test.tsx > TestLoginRedirectUnderBase /\\evil.example 32ms
+ ✓ src/App.test.tsx > TestSafeNextPreservesLocalRoute 1ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase / 20ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/all 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/downloading 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/completed 17ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/active 14ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/inactive 15ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/stopped 14ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/error 17ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/category/Linux 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /tasks/tag/archive 19ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /search 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /rss/feeds 13ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /rss/rules 20ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/general 15ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/connection 10ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/bandwidth 17ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/bittorrent 17ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/downloads 20ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/rss 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/indexers 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/users 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/notifications 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /settings/advanced 16ms
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /logs 16ms
+ ✓ src/App.test.tsx > TestAuthenticatedRouteUnderBase /unknown 15ms
+ ✓ src/App.test.tsx > TestAuthenticatedPublicRoute /login 18ms
+ ✓ src/App.test.tsx > TestAuthenticatedPublicRoute /setup 15ms
+ ✓ src/App.test.tsx > TestSetupUnavailableAfterConfiguration 12ms
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/setup 409 (Conflict)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 401 (Unauthorized)
+ ✓ src/App.test.tsx > TestSetupValidationAndCsrf 54ms
+ ✓ src/App.test.tsx > TestSetupAlreadyCompleteRedirectsWithToast 74ms
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
+GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
+ ✓ src/App.test.tsx > TestLoginError 401 58ms
+ ✓ src/App.test.tsx > TestLoginError 429 37ms
+ ✓ src/App.test.tsx > TestBootFailureOffersRetryWithoutGuessingAuth 36ms
+stdout | src/lib/theme.test.ts > TestShadcnIntegrationContract
+APPLICATION_BUILD_EXCLUDES_TOOL_JAVASCRIPT
+RUNTIME_ZOD_IMPORT_REJECTED
+CSS_URL_SCAN_REGRESSIONS_AND_LICENSE_AUDIT_OK
+BUILT_CSS_TOKEN_BRIDGE_AND_STATE_UTILITIES_OK
+
+ ✓ src/lib/theme.test.ts > TestThemeAppliedBeforeRootCreation 147ms
+ ✓ src/lib/theme.test.ts > TestSonnerForwardsThemeChoice 17ms
+ ✓ src/lib/theme.test.ts > TestSonnerPreservesIcons 3ms
+ ✓ src/lib/theme.test.ts > TestBundledI18nAndClassMerging 15ms
+ ✓ src/lib/theme.test.ts > TestShadcnIntegrationContract 1032ms
+
+ Test Files  4 passed (4)
+      Tests  71 passed (71)
+   Start at  22:19:59
+   Duration  2.50s (transform 537ms, setup 0ms, import 2.03s, tests 2.83s, environment 1.11s)
+
+AUTH_UI_OK
+```
+
+Scope command, before committing the implementation:
+
+```text
+web/src/App.test.tsx
+web/src/App.tsx
+web/src/components/Auth/LoginScreen.tsx
+web/src/components/Auth/SetupScreen.tsx
+web/src/locales/en/common.json
+web/src/main.test.ts
+web/src/main.tsx
+```
+
+`PATH=/tmp/t039-tools:$PATH make ci` exited 0. The PATH supplies the existing Docker CLI;
+no repository tool version changed. Output:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./...
+?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/api	94.758s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.266s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.613s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.239s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.959s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.034s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.881s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.190s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.246s
+ok  	github.com/L-K-M/dl-tool/internal/store	74.496s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.390s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.080s
+?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t040-1-1789337309/web
+
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/setup 409 (Conflict)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
+GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
+
+ Test Files  4 passed (4)
+      Tests  71 passed (71)
+   Start at  22:21:52
+   Duration  2.27s (transform 695ms, setup 0ms, import 1.96s, tests 2.48s, environment 967ms)
+
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2422 Total (in 207ms) 🔗 572 Unique ✅ 2396 OK 🚫 0 Errors 👻 26 Excluded
+
+```
+
+No backend or generated contract changed. Browser E2E remains T043; this task uses MSW.
+
 ## Blocked
-None. This plan-only repair resolves the scope and count blockers; T040 remains unimplemented.
+None.
