@@ -73,6 +73,11 @@ dark-mode provider (a `class="dark"` toggle on `<html>` persisted in `localStora
 `<svg><polyline>`; `zod` → types generated from `api/openapi.json`. `cmdk` and `vaul` are out of v1 scope;
 mobile sheets use shadcn/ui's Radix Dialog-based `sheet`, not its Vaul-based `drawer`.
 
+**Import aliases:** before shadcn initialization, configure both resolvers for its default `@/` imports:
+Vite's `resolve.alias` maps `@` to the absolute path of `web/src`; `web/tsconfig.json` sets
+`compilerOptions.paths: {"@/*": ["./src/*"]}`. The TypeScript mapping is relative to that config file;
+Vite aliases alone do not configure the CLI preflight or TypeScript. Preserve all other compiler options.
+
 **Sonner theme adapter:** the CLI's `sonner` registry item imports forbidden `next-themes`.
 Copy its source with only this integration change: remove that import and `useTheme` call; accept a
 required `theme` prop typed as the application's `ThemeChoice` and pass it to Sonner. Preserve the
