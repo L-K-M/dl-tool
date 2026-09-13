@@ -259,6 +259,109 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Required support-dependency preflight
+
+Stopped before implementation. No source, dependency or pin changed; acceptance boxes remain unchecked
+and both index rows remain `todo`. The unresolved contradictions are under `Blocked` below.
+
+After `npm ci --prefix web`, copied only `web/package.json` and `web/package-lock.json` into a temporary
+directory outside the worktree, then ran:
+
+```bash
+npm install --prefix "$scratch" --save-dev --save-exact shadcn@4.19.1
+```
+
+Exit 0. Parsed the resulting manifest and lockfile, asserted the required pin and the presence of a
+`node_modules/zod` entry, and printed:
+
+```text
+Required shadcn pin: 4.19.1
+shadcn requires zod: ^3.24.1
+node_modules/zod: 3.25.76
+REQUIRED_SUPPORT_INSTALL_ADDS_FORBIDDEN_ZOD
+```
+
+Enumerated `web/src/**/*.test.{ts,tsx}` and asserted the existing filenames before counting their union
+with step 9's required new file:
+
+```text
+Existing test files: web/src/api/client.test.ts, web/src/main.test.ts
+Required new test file: web/src/lib/theme.test.ts
+Minimum preserved test-file count: 3
+Task Verification expects: 2
+```
+
+Ran the first Verification block verbatim on the unchanged scaffold. Exit 0; full output:
+
+```text
+added 188 packages, and audited 189 packages in 2s
+
+54 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+
+> build
+> tsc --noEmit -p tsconfig.json && vite build
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 14 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                  0.31 kB │ gzip:  0.22 kB
+dist/assets/index-Vp0XYip_.js  190.42 kB │ gzip: 59.95 kB
+
+✓ built in 165ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t039-1-1789320458/web
+
+
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+   Start at  17:29:32
+   Duration  561ms (transform 84ms, setup 0ms, import 265ms, tests 26ms, environment 427ms)
+
+UI_STACK_OK
+```
+
+These are scaffold checks, not T039 acceptance evidence. The unchanged asset has the earlier resource
+audit below; no new resource-loading audit or theme test is claimed. No advisory repair was attempted.
+`make ci` passed lint, vet, typecheck, Go tests and the 13 existing web tests, then exited 2:
+
+```text
+docker compose -f compose.yaml config -q
+/bin/bash: line 1: docker: command not found
+make: *** [Makefile:60: compose-check] Error 127
+```
+
+`git diff --check` passed; the non-doc scope command printed no paths. Documentation check:
+
+```text
+./scripts/doclint.sh
+🔍 2414 Total (in 218ms) 🔗 572 Unique ✅ 2388 OK 🚫 0 Errors 👻 26 Excluded
+```
+
 ### Initialization contract plan repair
 
 Plan only. The canonical initialization boundary and token bridge resolve the preflight below.
@@ -873,6 +976,26 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
+### Required support package violates the lockfile ban
+
+Step 5 and [doc 09 §1](../09-web-ui-spec.md#1-frontend-stack) require installing `shadcn@4.19.1`
+for its CSS variants. Step 9 requires proving forbidden dependencies absent from the lockfile, and
+`Out of scope` forbids `zod`. The isolated install above proves this required package directly depends
+on `zod` and adds it to the lockfile. The plan does not authorize a transitive/build-tool exception.
+
+The owner must clarify the dependency-ban boundary or supply a compatible support-package recipe.
+Do not omit the required support package, alter its dependencies or silently narrow the regression.
+
+### Verification count conflicts with preserved tests
+
+Step 9 adds `web/src/lib/theme.test.ts`. The repository already has two passing test files, both
+included by `web/vite.config.ts`. Preserving them yields at least three, but Verification requires
+`Test Files  2 passed (2)` including the new file. Neither existing test file is in this task's Files
+table, and deleting or excluding tests is forbidden. The expected count needs a plan correction.
+
+Implementation remains stopped; no acceptance box or status changed. `make ci` also cannot complete
+on this host because Docker is absent, as recorded above. Do not merge this blocked attempt.
+
 ### Resolved default initialization contradictions
 
 The preflight above records the font, token and utility conflicts. The
