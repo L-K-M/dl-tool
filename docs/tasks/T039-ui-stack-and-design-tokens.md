@@ -119,8 +119,8 @@ export function initI18n(): typeof i18next;
 5. In that temporary scaffold, run `npx --yes shadcn@4.19.1 add button checkbox dialog sheet input label
    select popover context-menu tabs tooltip --yes` once. For the twelfth primitive, run
    `npx --yes shadcn@4.19.1 view sonner`, parse its JSON array, and copy the first item's
-   `files[0].content` string as `src/components/ui/sonner.tsx`. Apply the import normalization and
-   [Sonner theme adapter](../09-web-ui-spec.md#1-frontend-stack) from doc 09 §1, then copy back only the
+   `files[0].content` string as `src/components/ui/sonner.tsx`. Apply the import normalization,
+   [Sonner icon normalization and theme adapter](../09-web-ui-spec.md#1-frontend-stack), then copy back only the
    authorized files. Install the support dependencies defined there and run
    `npm install --save-exact sonner` from `web/`; retain all existing pins and exclude `next-themes`.
    Keep CLI output and every normalization diff in Evidence. Do not mount the toaster or add a provider;
@@ -135,7 +135,11 @@ export function initI18n(): typeof i18next;
    `applyTheme('dark')` adds the class and `applyTheme('light')` removes it; a corrupt stored value yields
    `'system'`. In the same test file, mock the `sonner` module and render the adapter with
    `React.createElement` to prove it forwards `light`, `dark` and `system`, including a prop change
-   after mounting (`TestSonnerForwardsThemeChoice`). Add `TestShadcnIntegrationContract` in the same
+   after mounting (`TestSonnerForwardsThemeChoice`). Add `TestSonnerPreservesIcons` in the same file,
+   under that same mocked `sonner`: assert each forwarded icon element's component identity and
+   `className` per [doc 09 §1's icon normalization contract](../09-web-ui-spec.md#1-frontend-stack),
+   including the spinner's animation class, plus unchanged toast options/styles.
+   Add `TestShadcnIntegrationContract` in the same
    file: check all thirteen token values in both themes, the canonical alias/mapping declarations,
    required CSS imports, and absence of font imports, package `cn` and forbidden dependencies in
    source/manifest/lockfile, enforcing every condition of [doc 09 §1's build-tool exception](../09-web-ui-spec.md#1-frontend-stack).
@@ -162,7 +166,7 @@ export function initI18n(): typeof i18next;
   resource-loading audit confirms NFR-022, including every allowlisted occurrence.
 - [ ] `web/src/components/ui/` holds exactly the twelve primitives from step 5, with only
   [doc 09 §1's bounded integration changes](../09-web-ui-spec.md#1-frontend-stack);
-  `TestSonnerForwardsThemeChoice` passes.
+  `TestSonnerForwardsThemeChoice` and `TestSonnerPreservesIcons` pass.
   Neither the manifest, lockfile nor source imports contain `next-themes`.
 
 ## Verification
@@ -270,6 +274,247 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Implementation stopped: unresolved Sonner icon template
+
+Partial implementation only. Added the prescribed dependencies and both resolver settings; existing
+pins are unchanged. No primitives, stylesheet, theme or i18n implementation was copied into the worktree.
+Acceptance boxes remained unchecked; both index rows remained `todo`. This partial draft was blocked;
+the plan-only recovery above reverts its implementation before merge.
+
+New unprescribed versions resolved to `@dnd-kit/core` 6.3.1, `@dnd-kit/sortable` 10.0.0,
+`react-resizable-panels` 4.12.4, `radix-ui` 1.6.7, `tw-animate-css` 1.4.0 and `sonner` 2.0.8.
+
+After installing dependencies, copied the scaffold outside the worktree and supplied the task's token
+sheet. Ran the prescribed acquisition commands there:
+
+```bash
+npx --yes shadcn@4.19.1 init --template vite --base radix --preset nova --yes --no-monorepo
+npx --yes shadcn@4.19.1 add button checkbox dialog sheet input label select popover context-menu tabs tooltip --yes
+npx --yes shadcn@4.19.1 view sonner
+```
+
+All exited 0. Initialization output:
+
+```text
+- Preflight checks.
+✔ Preflight checks.
+- Verifying framework.
+✔ Verifying framework. Found Vite.
+- Validating Tailwind CSS. Found v4.
+✔ Validating Tailwind CSS. Found v4.
+- Validating import alias.
+✔ Validating import alias.
+- Writing components.json.
+✔ Writing components.json.
+- Checking registry.
+✔ Checking registry.
+- Installing dependencies.
+- Installing dependencies.
+✔ Installing dependencies.
+- Updating files.
+✔ Created 2 files:
+  - src/components/ui/button.tsx
+  - src/lib/utils.ts
+- Updating src/index.css
+✔ Updating src/index.css
+
+Project initialization completed.
+You may now add components.
+```
+
+Component acquisition output:
+
+```text
+- Checking registry.
+✔ Checking registry.
+- Updating files.
+✔ Created 10 files:
+  - src/components/ui/checkbox.tsx
+  - src/components/ui/input.tsx
+  - src/components/ui/label.tsx
+  - src/components/ui/select.tsx
+  - src/components/ui/popover.tsx
+  - src/components/ui/context-menu.tsx
+  - src/components/ui/tabs.tsx
+  - src/components/ui/tooltip.tsx
+  - src/components/ui/dialog.tsx
+  - src/components/ui/sheet.tsx
+ℹ Skipped 1 file: (files might be identical, use --overwrite to overwrite)
+  - src/components/ui/button.tsx
+The `tooltip` component has been added. Remember to wrap your app with the `TooltipProvider` component.
+```
+
+The CLI also printed this example; it was not copied:
+
+```tsx
+import { TooltipProvider } from "@/components/ui/tooltip"
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <TooltipProvider>{children}</TooltipProvider>
+      </body>
+    </html>
+  )
+}
+```
+
+Parsed the first Sonner JSON item's `files[0].content`, as step 5 requires. It imports
+`IconPlaceholder` from the registry application's private tree and contains five uses, with Lucide
+names `CircleCheckIcon`, `InfoIcon`, `TriangleAlertIcon`, `OctagonXIcon` and `Loader2Icon`.
+For example, the raw source contains:
+
+```tsx
+import { IconPlaceholder } from "@/app/(create)/components/icon-placeholder"
+```
+
+```tsx
+          <IconPlaceholder
+            lucide="CircleCheckIcon"
+            tabler="IconCircleCheck"
+            hugeicons="CheckmarkCircle02Icon"
+            phosphor="CheckCircleIcon"
+            remixicon="RiCheckboxCircleLine"
+            className="size-4"
+          />
+```
+
+To reproduce independently of `next-themes`, applied only the authorized theme adapter in the scratch
+copy and supplied a temporary `ThemeChoice` type. Complete normalization diff:
+
+```diff
+-import { useTheme } from "next-themes"
++import type { ThemeChoice } from "@/lib/theme"
+ import { Toaster as Sonner, type ToasterProps } from "sonner"
+
+ import { IconPlaceholder } from "@/app/(create)/components/icon-placeholder"
+
+-const Toaster = ({ ...props }: ToasterProps) => {
+-  const { theme = "system" } = useTheme()
++const Toaster = ({ theme, ...props }: Omit<ToasterProps, "theme"> & { theme: ThemeChoice }) => {
+
+   return (
+     <Sonner
+-      theme={theme as ToasterProps["theme"]}
++      theme={theme}
+```
+
+The scratch compiler (`./node_modules/.bin/tsc --noEmit -p tsconfig.json`) exited 2:
+
+```text
+Raw Sonner import: import { IconPlaceholder } from "@/app/(create)/components/icon-placeholder"
+Raw IconPlaceholder elements: 5
+Scratch typecheck exit: 2
+src/components/ui/sonner.tsx(6,33): error TS2307: Cannot find module '@/app/(create)/components/icon-placeholder' or its corresponding type declarations.
+```
+
+### Recovery preflight: icon normalization compiles at the pinned versions
+
+Recovery verified the bounded transformation in a fresh scratch outside the worktree (no repository
+change beyond this plan repair). Installed exactly the T039 contract pins: `lucide-react` 1.38.0,
+`sonner` 2.0.8, `react`/`react-dom` 19.2.8, `@types/react` 19.2.18, `typescript` 5.9.3; the scratch
+tsconfig reuses the web compiler options (ES2022, ESNext, bundler, react-jsx, strict, noEmit).
+
+Negative control, the preserved raw registry `files[0].content` unmodified:
+
+```text
+src/raw.tsx(3,26): error TS2307: Cannot find module 'next-themes' or its corresponding type declarations.
+src/raw.tsx(6,33): error TS2307: Cannot find module '@/app/(create)/components/icon-placeholder' or its corresponding type declarations.
+```
+
+The icon-normalized plus theme-adapter fixture — the five named imports the doc 09 §1 table selects,
+keeping each `className` — typechecks cleanly:
+
+```text
+$ ./node_modules/.bin/tsc --noEmit -p tsconfig.json
+$ echo $?
+0
+```
+
+`lucide-react` 1.38.0 exports all five names (`CircleCheckIcon`, `InfoIcon`, `TriangleAlertIcon`,
+`OctagonXIcon`, `Loader2Icon`) as JSX-usable components accepting `className`; the `Omit<ToasterProps,
+"theme">` adapter signature is accepted by `sonner` 2.0.8 under TypeScript 5.9.3. The raw fixture's
+five `lucide` attributes match the doc 09 §1 table slot for slot, including `size-4` and the
+`animate-spin` loading class.
+
+Ran the first Verification block verbatim on the partial repository tree:
+
+```text
+added 637 packages, and audited 638 packages in 5s
+
+181 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+
+> build
+> tsc --noEmit -p tsconfig.json && vite build
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 14 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                  0.31 kB │ gzip:  0.22 kB
+dist/assets/index-Vp0XYip_.js  190.42 kB │ gzip: 59.95 kB
+
+✓ built in 166ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t039-1-1789324325/web
+
+
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+   Start at  18:35:49
+   Duration  592ms (transform 72ms, setup 0ms, import 277ms, tests 34ms, environment 463ms)
+
+UI_STACK_OK
+```
+
+This is not acceptance: the required third test file and implementation are absent. The emitted
+scaffold asset is unchanged from the earlier audit below; no new resource-loading or CSS audit is
+claimed. No advisory repair was attempted; the two high-severity advisories affect only the reverted
+dependency step's install output and must be re-audited if that step is reinstated.
+`make ci` passed lint, vet, typecheck, Go tests and the
+13 scaffold web tests, then exited 2:
+
+```text
+docker compose -f compose.yaml config -q
+/bin/bash: line 1: docker: command not found
+make: *** [Makefile:60: compose-check] Error 127
+```
+
+The dependency/resolver step was committed and pushed before the blocker was discovered; the recovery
+reverted it, so the merged diff of this PR is docs-only (`docs/09-web-ui-spec.md` and this task
+file). The remaining Files-table entries have not been implemented.
+`git diff --check` passed. Documentation check:
+
+```text
+./scripts/doclint.sh
+🔍 2417 Total (in 152ms) 🔗 572 Unique ✅ 2391 OK 🚫 0 Errors 👻 26 Excluded
+```
+
 ### Review follow-up: automate the bundle boundary
 
 Made the module-graph audit an explicit per-run contract-test requirement, including the actual
@@ -1167,6 +1412,20 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
+### Resolved: Sonner acquisition returns an unprocessed icon template
+
+Step 5's required `view sonner` output is not a ready-to-copy primitive. Its source imports
+`@/app/(create)/components/icon-placeholder`, which does not exist in dl-tool. The scratch typecheck
+failure is recorded above. Adding that file violates this task's Files table. Replacing its five JSX
+placeholders with Lucide components exceeds the only authorized Sonner behavioral edit, the theme
+adapter, and changes markup that doc 09 §1 explicitly says to preserve.
+
+[Doc 09 §1's Sonner icon normalization](../09-web-ui-spec.md#1-frontend-stack) now authorizes the
+bounded template expansion, with regression coverage in step 9. The isolated preflight above proves
+it compiles with the existing Lucide pin. Partial implementation is reverted in this PR; T039 and
+both index rows remain `todo`. No accepted ADR or dependency pin changes. Local Docker remains
+unavailable; hosted CI must cover Compose and integration before merge.
+
 ### Resolved support-dependency and test-count contradictions
 
 The preflight above records the original failures. [Doc 09 §1's build-tool exception](../09-web-ui-spec.md#1-frontend-stack)
