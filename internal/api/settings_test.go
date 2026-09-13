@@ -24,11 +24,18 @@ import (
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
+type conformProbeMode int
+
+const (
+	conformProbeOK conformProbeMode = iota
+	conformProbeFailure
+)
+
 // conformAPI exercises the real adapter through NewServer, not a registered stand-in.
-func conformAPI(t *testing.T, dirSuffix string) (*settingsTestEnv, *conformRPC) {
+func conformAPI(t *testing.T, dirSuffix string, mode conformProbeMode) (*settingsTestEnv, *conformRPC) {
 	t.Helper()
 	root := t.TempDir()
-	rpc := &conformRPC{dir: root + dirSuffix, concurrency: "2"}
+	rpc := &conformRPC{dir: root + dirSuffix, concurrency: "2", fail: mode == conformProbeFailure}
 	daemon := httptest.NewServer(rpc)
 	t.Cleanup(daemon.Close)
 	db, err := store.Open(t.Context(), filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
@@ -91,7 +98,7 @@ func (f *conformRPC) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func TestConformConfiguredRoots(t *testing.T) {
 	for _, suffix := range []string{"", "-sibling"} {
 		t.Run(suffix, func(t *testing.T) {
-			env, rpc := conformAPI(t, suffix)
+			env, rpc := conformAPI(t, suffix, conformProbeOK)
 			row := engineByID(decodeEngines(t, env.listEngines(t)), store.EngineIDAria2)
 			require.NotNil(t, row)
 			require.NotNil(t, row.LastError, "boot correction must remain visible")
@@ -113,8 +120,18 @@ func TestConformConfiguredRoots(t *testing.T) {
 	}
 }
 
+func TestConformNeverFailsBoot(t *testing.T) {
+	env, _ := conformAPI(t, "", conformProbeFailure)
+	row := engineByID(decodeEngines(t, env.listEngines(t)), store.EngineIDAria2)
+	require.NotNil(t, row)
+	require.True(t, row.Connected)
+	require.NotNil(t, row.LastError)
+	require.Contains(t, *row.LastError, "max-concurrent-downloads")
+	require.Contains(t, *row.LastError, "warn")
+}
+
 func TestConformTestEndpoint(t *testing.T) {
-	env, rpc := conformAPI(t, "")
+	env, rpc := conformAPI(t, "", conformProbeOK)
 	_, err := env.db.ExecContext(t.Context(), "UPDATE settings SET value_json = ? WHERE key = ?", "8", settingMaxActiveTotal)
 	require.NoError(t, err)
 	response := env.testEngine(t, store.EngineIDAria2)
