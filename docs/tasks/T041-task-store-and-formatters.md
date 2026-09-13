@@ -141,7 +141,7 @@ Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && make typecheck && make test-web && echo STORE_OK
 ```
-Expected: Vitest reports `Test Files  5 passed (5)` including `src/store/useTasks.test.ts` and
+Expected: Vitest reports `Test Files  6 passed (6)` including `src/store/useTasks.test.ts` and
 `src/lib/format.test.ts`, every test named above appears as passing, and the final line of stdout is
 exactly `STORE_OK`.
 
@@ -166,22 +166,54 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Plan repair only, not T041 implementation evidence. After `npm ci --prefix web`,
+comparing the existing suites plus the Files table against Verification reproduced:
+
+```text
+existing=4, required=2, total=6, documented=5
+AssertionError: T041 verification count contradicts existing + required suites
+```
+
+The same check after the count correction passed:
+
+```text
+existing=4, required=2, total=6, documented=6
+```
+
+`make ci` exited 0 with `/tmp/t039-tools` on `PATH` for the existing Docker CLI.
+The first run without it stopped at `compose-check` (`docker: command not found`).
+Successful rerun excerpts:
+
+```text
+0 issues.
+All matched files use Prettier code style!
+ Test Files  4 passed (4)
+      Tests  71 passed (71)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2422 Total (in 216ms) 🔗 572 Unique ✅ 2396 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+Task Verification remains pending until implementation adds the required suites.
 
 ## Blocked
-Blocked on origin/main `6a08ec9`: Verification requires exactly five passing test files,
-but the baseline already has four:
+Resolved by this plan repair: Verification now includes all four existing suites and both
+required suites. T041 remains unimplemented and `todo`.
+
+Original blocker on origin/main `6a08ec9`: Verification required five passing test files,
+but the baseline already had four:
 
 - `web/src/main.test.ts`
 - `web/src/api/client.test.ts`
 - `web/src/lib/theme.test.ts`
 - `web/src/App.test.tsx`
 
-Adding both required suites makes six. Meeting the stated count would require deleting,
-skipping or excluding an existing suite, which is forbidden. The owner must correct
-this task's Verification expectation before implementation can proceed.
+Adding both required suites makes six. The correction changes only the stale count;
+no suite is deleted, skipped or excluded.
 
-After `npm ci --prefix web`, `make test-web` exited 0. Output excerpt:
+Original worker baseline: after `npm ci --prefix web`, `make test-web` exited 0.
+Output excerpt:
 
 ```text
  Test Files  4 passed (4)
@@ -191,4 +223,4 @@ After `npm ci --prefix web`, `make test-web` exited 0. Output excerpt:
 ```
 
 No implementation changes. Acceptance and both index rows remain unchanged.
-The task Verification block and `make ci` were not run; this is baseline evidence only.
+The original worker did not run task Verification or `make ci`; this is baseline evidence only.
