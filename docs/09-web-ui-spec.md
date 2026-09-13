@@ -78,12 +78,40 @@ Vite's `resolve.alias` maps `@` to the absolute path of `web/src`; `web/tsconfig
 `compilerOptions.paths: {"@/*": ["./src/*"]}`. The TypeScript mapping is relative to that config file;
 Vite aliases alone do not configure the CLI preflight or TypeScript. Preserve all other compiler options.
 
+**shadcn initialization boundary:** the pinned CLI reads a mutable registry; its defaults are not the
+application contract. Run initialization and component acquisition in a temporary copy of `web/`,
+with both aliases and Tailwind configured. Use
+`npx --yes shadcn@4.19.1 init --template vite --base radix --preset nova --yes --no-monorepo`, then
+acquire the task's primitives there. Preserve the raw output and normalization diff in task Evidence.
+Copy back only `components.json` and the requested primitives, not the generated manifest, lockfile,
+stylesheet or utility. Keep `radix-nova`, the generated aliases and CSS path in `components.json`.
+
+Normalize the integration as follows; do not change component behavior or markup:
+
+- Implement `cn(...inputs: ClassValue[])` in `src/lib/utils.ts` as `twMerge(clsx(inputs))`, using the
+  pinned `clsx` and `tailwind-merge`. Replace only primitive import sources `"cn"` with
+  `"@/lib/utils"`. Do not install package `cn`.
+- Do not copy font imports, font dependencies or generated font-family declarations. Use Tailwind's
+  system sans stack for `--font-sans`, and alias `--font-heading` to it. No web font is added.
+- Build the stylesheet from the task's token sheet plus the token bridge in §10.1. Retain the generated
+  radius definitions and base rules, and import `tw-animate-css` and `shadcn/tailwind.css` after
+  `tailwindcss`. Discard the generated colour palette, chart/sidebar tokens and their mappings.
+  Keep the task's focus and reduced-motion rules after the integration rules.
+- Install only the support packages required by these copy-ins: `radix-ui` and `tw-animate-css`,
+  recording their resolved exact versions, plus `shadcn` at the CLI pin above for its CSS variants.
+  Sonner is handled below. Preserve every existing pin; never copy the scratch manifest's ranges or
+  upgraded versions. New registry requirements outside this list are a blocker, not permission to
+  add dependencies.
+- Repository formatting is allowed after these bounded transformations. No other primitive edits
+  are authorized except the Sonner adapter below.
+
 **Sonner theme adapter:** the CLI's `sonner` registry item imports forbidden `next-themes`.
 Copy its source with only this integration change: remove that import and `useTheme` call; accept a
 required `theme` prop typed as the application's `ThemeChoice` and pass it to Sonner. Preserve the
 remaining generated markup, icons and styling. The mounting application supplies its current choice
 and updates the prop when that choice changes; Sonner handles OS changes for `system`. No second theme
-provider or stored preference is needed. This is the sole hand-edit exception for the T039 primitives.
+provider or stored preference is needed. This is the only behavioral hand-edit exception for the T039
+primitives; the initialization boundary above also permits import normalization and formatting.
 Install the registry's `sonner` dependency directly, recording the resolved exact version; do not run
 an unfiltered `shadcn add sonner` or install `next-themes`. No existing pin changes.
 
@@ -784,6 +812,28 @@ query.
 }
 .dark { /* the same names, dark values */ }
 ```
+
+**shadcn token bridge:** preserve the task's thirteen token values in both themes. Additional shadcn
+colour variables are aliases, not a second palette. Declare the aliases below in a shared
+`:root, .dark` rule so each theme resolves against its own tokens. For every alias, define
+`--color-<alias-name>` in `@theme inline` as `var(--<alias-name>)`; also expose `--color-border` and
+`--color-accent` from their existing tokens. Never overwrite `--border` or `--accent` with registry values.
+
+| shadcn variable(s) | Application value |
+|---|---|
+| `--background` | `var(--bg)` |
+| `--foreground`, `--card-foreground`, `--popover-foreground`, `--secondary-foreground` | `var(--fg)` |
+| `--card`, `--popover`, `--secondary`, `--muted` | `var(--bg-elevated)` |
+| `--primary` | `var(--accent)` |
+| `--primary-foreground`, `--accent-foreground` | `var(--accent-fg)` |
+| `--muted-foreground` | `var(--fg-muted)` |
+| `--destructive` | `var(--error)` |
+| `--input` | `var(--border)` |
+| `--ring` | `var(--focus-ring)` |
+
+Keep these raw aliases as well as the Tailwind mappings: primitives and Sonner also use `var(...)`
+directly. The generated overlay utilities and opacity modifiers remain unchanged; no new palette is
+introduced by this bridge.
 
 Rules: status colours keep at least 3:1 contrast against their background in both themes; every status is
 also carried by an icon or a shape; spacing follows an 8 px scale; icons come from `lucide-react` only.

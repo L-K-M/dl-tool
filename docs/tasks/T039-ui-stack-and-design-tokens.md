@@ -10,7 +10,7 @@
 | **Parallel-safe** | no — it also edits the shared files `web/package.json`, `web/src/main.tsx`, `web/vite.config.ts` |
 | **Implements** | [NFR-022](../02-requirements.md#nfr-022-load-no-third-party-runtime-assets) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
-| **Est. size** | 13 rows, 4 of them `npx shadcn` copy-ins, ~260 LOC. Larger than the usual cap on purpose: `make typecheck` and `make lint` stay red until Tailwind, the copy-in primitives and the token sheet all exist, so this cannot be split. |
+| **Est. size** | 13 rows, including CLI copy-ins and their bounded integration, ~260 LOC. Larger than the usual cap on purpose: `make typecheck` and `make lint` stay red until Tailwind, the copy-in primitives and the token sheet all exist, so this cannot be split. |
 
 ## Goal
 `npm run build` produces a bundle that loads Tailwind 4, the shadcn/ui primitives M3 needs, and one token
@@ -36,14 +36,14 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/vite.config.ts` | edit | Add the `@tailwindcss/vite` plugin and doc 09 §1's Vite alias. |
 | `web/tsconfig.json` | edit | Add doc 09 §1's TypeScript alias mapping; preserve other compiler options. |
 | `web/src/main.tsx` | edit | Import `index.css` and call `applyTheme(readStoredTheme())` before render. |
-| `web/src/index.css` | create | `@import "tailwindcss"`, the dark variant, and every token in both themes. |
+| `web/src/index.css` | create | Token sheet plus doc 09 §10.1's shadcn token bridge and §1's CSS integration. |
 | `web/src/lib/theme.ts` | create | Read, store, resolve and apply the theme choice. |
-| `web/src/lib/theme.test.ts` | create | Theme resolution, class toggling and Sonner theme-prop forwarding. |
+| `web/src/lib/theme.test.ts` | create | Theme resolution, class toggling, Sonner forwarding and initialization-contract regression checks. |
 | `web/src/i18n.ts` | create | i18next initialisation, `en` only, namespace registry. |
 | `web/src/locales/en/common.json` | create | Shell, theme and empty-state strings. |
-| `web/components.json` | create (`npx shadcn init`) | shadcn/ui CLI configuration. |
-| `web/src/lib/utils.ts` | create (`npx shadcn init`) | The `cn` helper over `clsx` + `tailwind-merge`. |
-| `web/src/components/ui/*.tsx` | create (pinned CLI copy-ins) | Exactly the list in step 5, with doc 09 §1's Sonner theme adapter. |
+| `web/components.json` | create (scratch CLI copy-in) | shadcn/ui CLI configuration. |
+| `web/src/lib/utils.ts` | create | The `cn` helper over `clsx` + `tailwind-merge`, per doc 09 §1. |
+| `web/src/components/ui/*.tsx` | create (pinned CLI copy-ins) | Exactly the list in step 5, with doc 09 §1's bounded integration changes. |
 
 No other file may be modified.
 
@@ -61,7 +61,8 @@ Added to `web/package.json` `dependencies`, at these exact versions (doc 09 §1)
 `@dnd-kit/core`, `@dnd-kit/sortable` and `react-resizable-panels` carry the version `npm install` resolves.
 <!-- pin at implementation time: @dnd-kit/core, @dnd-kit/sortable, react-resizable-panels -->
 
-`web/src/index.css`:
+`web/src/index.css` token values and accessibility rules (extend only with the
+[canonical CSS integration and token bridge](../09-web-ui-spec.md#101-theme-and-tokens)):
 
 ```css
 @import "tailwindcss";
@@ -110,16 +111,19 @@ export function initI18n(): typeof i18next;
 2. Edit `web/vite.config.ts`: import `@tailwindcss/vite` and add `tailwindcss()` to `plugins`.
    Configure its alias and `web/tsconfig.json` as specified in [doc 09 §1](../09-web-ui-spec.md#1-frontend-stack)
    before initializing shadcn. Leave `base: './'` exactly as T003 set it.
-3. Create `web/src/index.css` exactly as above. Every colour is defined once on `:root` and overridden by
-   name under `.dark`; never define a colour only inside a media query.
-4. Run `npx shadcn@4.19.1 init` and accept the Vite + Tailwind defaults, producing `web/components.json`
-   and `web/src/lib/utils.ts`.
-5. Run `npx shadcn@4.19.1 add button checkbox dialog sheet input label select popover context-menu tabs
-   tooltip` once. For the twelfth primitive, run `npx shadcn@4.19.1 view sonner`, parse its JSON array,
-   and write the first item's `files[0].content` string to `web/src/components/ui/sonner.tsx`. Apply only the
-   [Sonner theme adapter](../09-web-ui-spec.md#1-frontend-stack) specified in doc 09 §1.
-   From `web/`, run `npm install --save-exact sonner`; retain all existing pins and exclude `next-themes`.
-   Keep the CLI output and the adapter diff in Evidence. Do not mount the toaster or add a provider;
+3. Create `web/src/index.css` with the token values and accessibility rules above. Add only
+   [doc 09 §10.1's token bridge](../09-web-ui-spec.md#101-theme-and-tokens) and §1's CSS integration.
+   Every colour is defined on `:root` and overridden by name under `.dark`, not only in a media query.
+4. Follow the **shadcn initialization boundary** in [doc 09 §1](../09-web-ui-spec.md#1-frontend-stack):
+   initialize a temporary scaffold, not the worktree. Create the local utility per that contract.
+5. In that temporary scaffold, run `npx --yes shadcn@4.19.1 add button checkbox dialog sheet input label
+   select popover context-menu tabs tooltip --yes` once. For the twelfth primitive, run
+   `npx --yes shadcn@4.19.1 view sonner`, parse its JSON array, and copy the first item's
+   `files[0].content` string as `src/components/ui/sonner.tsx`. Apply the import normalization and
+   [Sonner theme adapter](../09-web-ui-spec.md#1-frontend-stack) from doc 09 §1, then copy back only the
+   authorized files. Install the support dependencies defined there and run
+   `npm install --save-exact sonner` from `web/`; retain all existing pins and exclude `next-themes`.
+   Keep CLI output and every normalization diff in Evidence. Do not mount the toaster or add a provider;
    application composition remains T040's work.
 6. Create `web/src/lib/theme.ts` exactly as above. `readStoredTheme` parses `localStorage['dl.ui.prefs.v1']`
    inside a `try`/`catch` and returns `'system'` on any failure.
@@ -131,17 +135,24 @@ export function initI18n(): typeof i18next;
    `applyTheme('dark')` adds the class and `applyTheme('light')` removes it; a corrupt stored value yields
    `'system'`. In the same test file, mock the `sonner` module and render the adapter with
    `React.createElement` to prove it forwards `light`, `dark` and `system`, including a prop change
-   after mounting (`TestSonnerForwardsThemeChoice`).
+   after mounting (`TestSonnerForwardsThemeChoice`). Add `TestShadcnIntegrationContract` in the same
+   file: check all thirteen token values in both themes, the canonical alias/mapping declarations,
+   required CSS imports, and absence of font imports, package `cn` and forbidden dependencies in
+   source/manifest/lockfile. Exercise the local `cn` with conditional classes and conflicting utilities.
+   Inspect the built CSS to confirm primary, accent, foreground, border, ring and open/closed-state
+   utilities resolve through the bridge in both themes; record that audit alongside the copy-in diff.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `web/package.json` carries every version string from doc 09 §1 unchanged and no forbidden package.
-- [ ] `web/src/index.css` defines all thirteen token names in `:root` and redefines all thirteen in `.dark`.
+- [ ] `web/src/index.css` preserves all thirteen token values in both themes; the canonical token bridge
+  and CSS integration are present. `TestShadcnIntegrationContract` passes and the built-CSS audit is recorded.
 - [ ] `TestApplyThemeTogglesClass` and `TestReadStoredThemeFallsBackToSystem` pass in `theme.test.ts`.
 - [ ] `npm run build` emits an `index.html` and bundles passing the NFR-022 URL scan below; the
   resource-loading audit confirms NFR-022, including every allowlisted occurrence.
-- [ ] `web/src/components/ui/` holds exactly the twelve primitives from step 5, with no hand edits except
-  the [Sonner theme adapter](../09-web-ui-spec.md#1-frontend-stack); `TestSonnerForwardsThemeChoice` passes.
+- [ ] `web/src/components/ui/` holds exactly the twelve primitives from step 5, with only
+  [doc 09 §1's bounded integration changes](../09-web-ui-spec.md#1-frontend-stack);
+  `TestSonnerForwardsThemeChoice` passes.
   Neither the manifest, lockfile nor source imports contain `next-themes`.
 
 ## Verification
@@ -248,6 +259,76 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Initialization contract plan repair
+
+Plan only. The canonical initialization boundary and token bridge resolve the preflight below.
+No implementation, dependency, pin, accepted ADR or status changes. Both index rows remain `todo`.
+
+A temporary plan regression checks the scratch boundary, import normalization, both-theme aliases,
+linked task steps and regression requirements, unchecked acceptance boxes and `todo` status.
+Before the repair:
+
+```text
+AssertionError [ERR_ASSERTION]: canonical plan lacks a bounded initialization recipe
+```
+
+After the repair:
+
+```text
+INITIALIZATION_PLAN_REGRESSIONS_OK
+```
+
+Copied the preserved raw CLI fixture from the preflight below to a new temporary directory and ran
+`npm ci`. Assertions reproduced its font import, overwritten border and package `cn` re-export.
+Applied the documented normalization only in that fixture: generated aliases from the canonical
+bridge table, retained radius/base rules, normalized the eleven primitive imports, rebuilt the local
+utility and restored existing pins. Support versions resolved there were `radix-ui` 1.6.7 and
+`tw-animate-css` 1.4.0; `shadcn` used the existing CLI pin. No fixture files were copied into the repo.
+The fixture's TypeScript/build check and CSS/dependency assertions printed:
+
+```text
+DEFAULT_INIT_CONTRADICTIONS_REPRODUCED
+✓ built in 228ms
+NORMALIZED_COPY_INS_BUILD_OK
+TOKEN_BRIDGE_AND_STATE_UTILITIES_OK
+LOCAL_CN_AND_NO_FONT_DEPENDENCY_OK
+```
+
+The probe checked primary/accent/foreground/border/ring variable references and Radix open/closed
+selectors in emitted CSS, no font assets or `cn` package in the lockfile, and conditional/conflicting
+class merging. It is an integration preflight, not a rendered-theme or complete T039 acceptance test.
+
+Ran the first Verification block verbatim on the unchanged repository scaffold after `npm ci`:
+
+```text
+✓ built in 153ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+0 issues.
+All matched files use Prettier code style!
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+UI_STACK_OK
+```
+
+The scaffold asset is still `index-Vp0XYip_.js`, covered by the earlier resource audit below.
+These are scaffold tests, not the future theme/integration tests. `npm ci` still reports the existing
+two high-severity advisories; no pins changed. `make ci` passed lint, vet, typecheck and tests, then stopped:
+
+```text
+docker compose -f compose.yaml config -q
+/bin/bash: line 1: docker: command not found
+make: *** [Makefile:60: compose-check] Error 127
+```
+
+Hosted CI must cover Compose and integration on the final PR head. `git diff --check` passed;
+non-doc scope output was empty. Documentation check:
+
+```text
+./scripts/doclint.sh
+🔍 2413 Total (in 216ms) 🔗 572 Unique ✅ 2387 OK 🚫 0 Errors 👻 26 Excluded
+```
+
 ### Default initialization preflight
 
 No implementation changes. `npm ci --prefix web` succeeded:
@@ -792,21 +873,14 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
-### Default initialization contradicts the stylesheet and utility contracts
+### Resolved default initialization contradictions
 
-The preflight above reproduces three conflicts in the pinned CLI's current registry output:
-
-- Step 4's defaults add a web font, forbidden under this task's Out of scope section.
-- Initialization replaces step 3's exact token values and adds a separate palette and Tailwind
-  mappings required by the untouched primitives. Restoring only the prescribed sheet loses those
-  mappings; retaining generated CSS violates the exact sheet and semantic-colour contract.
-- Generated `web/src/lib/utils.ts` re-exports `cn`, rather than implementing the Files table's
-  helper over `clsx` + `tailwind-merge`; primitives also import `cn` directly.
-
-The task and doc 09 §1 need an authorized initialization recipe and stylesheet/utility integration
-contract, including permitted generated dependencies and transformations. Pinning the CLI does not
-freeze its registry output. Do not choose another preset, add a palette, or rewrite copy-ins silently.
-Stopped before implementation; no merge. Earlier resolved blockers below remain resolved.
+The preflight above records the font, token and utility conflicts. The
+[canonical initialization boundary](../09-web-ui-spec.md#1-frontend-stack) now isolates CLI side effects
+and defines the permitted dependencies and normalization. The
+[token bridge](../09-web-ui-spec.md#101-theme-and-tokens) preserves the prescribed palette while serving
+both Tailwind classes and direct CSS-variable consumers. No accepted ADR or existing pin changes.
+This is plan repair only: T039 remains unimplemented, with both index rows `todo`.
 
 ### Resolved TypeScript alias scope blocker
 
