@@ -107,7 +107,7 @@ export function initI18n(): typeof i18next;
 
 ## Steps
 1. Edit `web/package.json` with the dependency block above, then run `npm install` to update
-   `web/package-lock.json`. Add no package doc 09 §1 lists as deliberately absent.
+   `web/package-lock.json`. Apply doc 09 §1's dependency bans and bounded build-tool exception.
 2. Edit `web/vite.config.ts`: import `@tailwindcss/vite` and add `tailwindcss()` to `plugins`.
    Configure its alias and `web/tsconfig.json` as specified in [doc 09 §1](../09-web-ui-spec.md#1-frontend-stack)
    before initializing shadcn. Leave `base: './'` exactly as T003 set it.
@@ -138,13 +138,17 @@ export function initI18n(): typeof i18next;
    after mounting (`TestSonnerForwardsThemeChoice`). Add `TestShadcnIntegrationContract` in the same
    file: check all thirteen token values in both themes, the canonical alias/mapping declarations,
    required CSS imports, and absence of font imports, package `cn` and forbidden dependencies in
-   source/manifest/lockfile. Exercise the local `cn` with conditional classes and conflicting utilities.
+   source/manifest/lockfile, enforcing every condition of [doc 09 §1's build-tool exception](../09-web-ui-spec.md#1-frontend-stack).
+   Record its build module-graph audit alongside the CSS audit below. Exercise the local `cn` with
+   conditional classes and conflicting utilities.
    Inspect the built CSS to confirm primary, accent, foreground, border, ring and open/closed-state
    utilities resolve through the bridge in both themes; record that audit alongside the copy-in diff.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `web/package.json` carries every version string from doc 09 §1 unchanged and no forbidden package.
+- [ ] `web/package.json` carries every version string from doc 09 §1 unchanged and no forbidden direct
+  dependency. Its build-tool exception is enforced by `TestShadcnIntegrationContract` and the recorded
+  build module-graph audit.
 - [ ] `web/src/index.css` preserves all thirteen token values in both themes; the canonical token bridge
   and CSS integration are present. `TestShadcnIntegrationContract` passes and the built-CSS audit is recorded.
 - [ ] `TestApplyThemeTogglesClass` and `TestReadStoredThemeFallsBackToSystem` pass in `theme.test.ts`.
@@ -235,8 +239,8 @@ Do not exclude entire hosts, files or lines, or expand the allowlist to accommod
 
 Expected: the build prints `built in`, the scanner prints `URL_SCAN_REGRESSIONS_OK` and
 `RUNTIME_ASSET_URL_SCAN_OK`, Vitest reports
-`Test Files  2 passed (2)` including `src/lib/theme.test.ts`, and the final line of stdout is exactly
-`UI_STACK_OK`.
+`Test Files  3 passed (3)`: preserved `src/api/client.test.ts`, `src/main.test.ts` and new
+`src/lib/theme.test.ts`, with no skipped tests. The final line of stdout is exactly `UI_STACK_OK`.
 
 Also confirm scope:
 ```bash
@@ -248,7 +252,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Out of scope — do NOT
 - Do NOT create `web/src/App.tsx`, a router, a provider tree or any screen; T040 owns them.
 - Do NOT add `next-themes`, `react-dropzone`, `react-hotkeys-hook`, `parse-torrent`, `zod`, `cmdk` or
-  `vaul`; doc 09 §1 names the replacement for each.
+  `vaul` as direct dependencies or application imports; enforce [doc 09 §1's lockfile bans and
+  build-tool exception](../09-web-ui-spec.md#1-frontend-stack). That section names each replacement.
 - Do NOT add a web font, an icon CDN or any other external asset; NFR-022 forbids it.
 - Do NOT write the theme toggle control; T045 puts it in the toolbar and T053 in Settings → General.
 - Do NOT add locale files other than `en`; doc 09 §10.2 ships `en` only.
@@ -259,10 +264,127 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Support-dependency contract repair
+
+Plan only. The canonical build-tool exception resolves the required package conflict; Verification
+now counts the preserved tests plus the required new file. No source, pin, accepted ADR, Files-table
+entry or status changed. Both index rows remain `todo`; acceptance boxes remain unchecked.
+
+Repeated the isolated `shadcn` install from the preflight below, without changing the repository:
+
+```text
+shadcn requires zod: ^3.24.1
+node_modules/zod: 3.25.76, dev=true
+Required theme test plus preserved tests: 3
+```
+
+A temporary Node plan regression checks the canonical exception, linked task enforcement, corrected
+count, preserved test names, unchecked acceptance boxes and both `todo` rows. Before repair:
+
+```text
+not ok 1 - canonical contract bounds the existing build-tool dependency
+not ok 2 - verification preserves existing tests and requires the new test
+ok 3 - repair leaves task unimplemented
+# pass 1
+# fail 2
+```
+
+After repair:
+
+```text
+ok 1 - canonical contract bounds the existing build-tool dependency
+ok 2 - verification preserves existing tests and requires the new test
+ok 3 - repair leaves task unimplemented
+# pass 3
+# fail 0
+```
+
+In the isolated install, added the pinned Tailwind packages and built a minimal CSS-import fixture
+with Vite's programmatic API (`write: false`). Audited every emitted chunk's `modules` keys and
+required a CSS asset. The CSS-only fixture passed; adding a used `zod` import failed the same audit:
+
+```text
+CSS_ONLY_BUILD_EXCLUDES_TOOL_JAVASCRIPT
+RUNTIME_ZOD_IMPORT_REJECTED
+```
+
+This proves the boundary is executable, not T039 acceptance. Ran the first Verification block
+verbatim after `npm ci --prefix web` on the unchanged scaffold; full output:
+
+```text
+added 188 packages, and audited 189 packages in 3s
+
+54 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+
+> build
+> tsc --noEmit -p tsconfig.json && vite build
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 14 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                  0.31 kB │ gzip:  0.22 kB
+dist/assets/index-Vp0XYip_.js  190.42 kB │ gzip: 59.95 kB
+
+✓ built in 141ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/recovery-dltool-158-1789320845/web
+
+
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+   Start at  17:37:40
+   Duration  543ms (transform 66ms, setup 0ms, import 236ms, tests 32ms, environment 427ms)
+
+UI_STACK_OK
+```
+
+These are the two scaffold test files, not the three files required after T039 implementation.
+The unchanged scaffold asset is covered by the earlier resource audit below. `make ci` passed lint,
+vet, typecheck and tests, then exited 2 because Docker is unavailable locally:
+
+```text
+docker compose -f compose.yaml config -q
+/bin/bash: line 1: docker: command not found
+make: *** [Makefile:60: compose-check] Error 127
+```
+
+Hosted CI must cover Compose and integration on the final PR head. No dependency advisory was repaired.
+`git diff --check` passed; non-doc scope output was empty. Documentation check:
+
+```text
+./scripts/doclint.sh
+🔍 2416 Total (in 220ms) 🔗 572 Unique ✅ 2390 OK 🚫 0 Errors 👻 26 Excluded
+```
+
 ### Required support-dependency preflight
 
 Stopped before implementation. No source, dependency or pin changed; acceptance boxes remain unchecked
-and both index rows remain `todo`. The unresolved contradictions are under `Blocked` below.
+and both index rows remain `todo`. These original contradictions are now resolved under `Blocked` below.
 
 After `npm ci --prefix web`, copied only `web/package.json` and `web/package-lock.json` into a temporary
 directory outside the worktree, then ran:
@@ -976,25 +1098,14 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
-### Required support package violates the lockfile ban
+### Resolved support-dependency and test-count contradictions
 
-Step 5 and [doc 09 §1](../09-web-ui-spec.md#1-frontend-stack) require installing `shadcn@4.19.1`
-for its CSS variants. Step 9 requires proving forbidden dependencies absent from the lockfile, and
-`Out of scope` forbids `zod`. The isolated install above proves this required package directly depends
-on `zod` and adds it to the lockfile. The plan does not authorize a transitive/build-tool exception.
-
-The owner must clarify the dependency-ban boundary or supply a compatible support-package recipe.
-Do not omit the required support package, alter its dependencies or silently narrow the regression.
-
-### Verification count conflicts with preserved tests
-
-Step 9 adds `web/src/lib/theme.test.ts`. The repository already has two passing test files, both
-included by `web/vite.config.ts`. Preserving them yields at least three, but Verification requires
-`Test Files  2 passed (2)` including the new file. Neither existing test file is in this task's Files
-table, and deleting or excluding tests is forbidden. The expected count needs a plan correction.
-
-Implementation remains stopped; no acceptance box or status changed. `make ci` also cannot complete
-on this host because Docker is absent, as recorded above. Do not merge this blocked attempt.
+The preflight above records the original failures. [Doc 09 §1's build-tool exception](../09-web-ui-spec.md#1-frontend-stack)
+now bounds the required tool's transitive dependency without adding an application validator.
+Step 9 enforces that boundary; Verification preserves both existing test files alongside the new one.
+No accepted ADR, pin or implementation changed. T039 and both index rows remain `todo`.
+Docker remains unavailable locally; hosted CI must cover Compose and integration before this plan
+repair merges.
 
 ### Resolved default initialization contradictions
 

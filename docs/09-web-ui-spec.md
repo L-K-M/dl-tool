@@ -73,6 +73,15 @@ dark-mode provider (a `class="dark"` toggle on `<html>` persisted in `localStora
 `<svg><polyline>`; `zod` → types generated from `api/openapi.json`. `cmdk` and `vaul` are out of v1 scope;
 mobile sheets use shadcn/ui's Radix Dialog-based `sheet`, not its Vaul-based `drawer`.
 
+**Build-tool exception:** install the already-required `shadcn` in `devDependencies` at its CLI pin.
+Its transitive `zod` is permitted only in the build-tool dependency graph, not as an application
+validator. Keep `zod` absent from every direct manifest dependency section and application imports;
+every lockfile `zod` entry must have `dev: true` and be reachable from the pinned `shadcn` dependency
+through npm's resolved dependency graph. Other forbidden packages remain absent from the lockfile.
+Application code may import only `shadcn/tailwind.css`, never the tool's JavaScript. Audit the build
+module graph: neither `zod` nor `shadcn` JavaScript may enter any emitted browser chunk. Generated
+OpenAPI types remain the application's contract; this exception adds no runtime validation library.
+
 **Import aliases:** before shadcn initialization, configure both resolvers for its default `@/` imports:
 Vite's `resolve.alias` maps `@` to the absolute path of `web/src`; `web/tsconfig.json` sets
 `compilerOptions.paths: {"@/*": ["./src/*"]}`. The TypeScript mapping is relative to that config file;
