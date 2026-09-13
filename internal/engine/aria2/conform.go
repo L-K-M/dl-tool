@@ -29,7 +29,11 @@ func (c *Client) Conform(ctx context.Context, maxActiveTotal int) ([]engine.Conf
 	}
 	raw, err := c.call(ctx, methodGetGlobalOption)
 	if errors.Is(err, engine.ErrUnavailable) {
-		return nil, err
+		for i := range checks {
+			checks[i].Got = "unavailable"
+			warnConformance(&checks[i])
+		}
+		return checks, err
 	}
 	var options map[string]string
 	if err == nil {

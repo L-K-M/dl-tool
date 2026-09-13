@@ -1424,6 +1424,7 @@ func TestConformBootCorrection(t *testing.T) {
 	torrent := buildFixtureTorrent(t, fetchFixtureBody(t, mustFixtureURL(t), mustFixtureSHA(t)), "conformance-foreign.bin", mustFixtureURL(t))
 	hash, err := client.Add(t.Context(), engine.AddRequest{Blob: torrent.blob, BlobKind: "torrent", StartPaused: true})
 	require.NoError(t, err)
+	hash = strings.TrimPrefix(hash, engine.NameQBittorrent+":")
 	before := session.visibleTorrentHashes(hash)
 	enableATM := func() {
 		status, body := session.do(http.MethodPost, "app/setPreferences", url.Values{"json": {`{"auto_tmm_enabled":true}`}})

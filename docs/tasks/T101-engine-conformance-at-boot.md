@@ -203,6 +203,21 @@ omits untracked files.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Live queueing observation before writes
+
+[Task verification run 34721872048](https://github.com/L-K-M/dl-tool/actions/runs/34721872048),
+checked-out SHA `2805b58f2e9396fd2df50531bbb573fc8d0c9c1d`, observed the pinned live daemon:
+
+```text
+--- FAIL: TestConformBootCorrection (18.85s)
+    contract_test.go:1420: GET app/preferences queueing excerpt: {"add_to_top_of_queue":false,"disk_queue_size":1048576,"max_active_checking_torrents":1,"max_active_downloads":3,"max_active_torrents":5,"max_active_uploads":3,"queueing_enabled":true,"request_queue_size":500}
+    contract_test.go:1427: the seeded torrent never became visible
+```
+
+The new fixture compared an adapter-qualified ID with native hashes. Strip the engine prefix before
+waiting; retain the foreign-torrent assertion. No conformance writes existed at observation time.
+The boot assertion still needs a red/green live run. Repository CI was not reached in this run.
+
 ### Resumed implementation
 
 PR #129 remains draft. The scoped workflow and live boot/correction regression are committed;

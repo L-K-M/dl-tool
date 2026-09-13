@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -25,6 +27,9 @@ const (
 
 	unknownEngineDetail = "the addressed engine does not exist"
 	unregisteredEngine  = "the %s engine is not registered in this process"
+
+	// A conformance summary is distinct from a health failure in last_error.
+	conformancePrefix = "conformance: "
 )
 
 // EngineDTO is one entry of GET /engines (docs/05-api-contract.md section
@@ -71,8 +76,9 @@ type TestEngineOutput struct {
 // 11: the engines list and probe here; GET/PATCH /settings arrive with
 // T092 on this same struct.
 type SettingsHandlers struct {
-	settings *store.SettingsStore
-	engines  *engine.Registry
+	settings   *store.SettingsStore
+	engines    *engine.Registry
+	loadPolicy func(context.Context) (engine.Policy, error)
 }
 
 // NewSettingsHandlers builds the settings handlers. db is the store the
@@ -80,7 +86,7 @@ type SettingsHandlers struct {
 // resolves each row's engine through — the same instance NewServer hands
 // the task handlers, so a test registering a stand-in reaches both.
 func NewSettingsHandlers(db *sqlx.DB, engines *engine.Registry) *SettingsHandlers {
-	return &SettingsHandlers{settings: store.NewSettingsStore(db), engines: engines}
+	return &SettingsHandlers{settings: store.NewSettingsStore(db), engines: engines, loadPolicy: admissionPolicyLoader(db, nil)}
 }
 
 // registerOperations mounts list-engines and test-engine on the Huma API;
@@ -109,8 +115,8 @@ func (h *SettingsHandlers) registerOperations(hapi huma.API) {
 
 // ListEngines serves GET /engines: one entry per engines row, with the
 // capabilities of the row's registered adapter. Connected comes from the
-// stored probe history — last_seen_at set and last_error cleared by a
-// success — plus the engine being registered in this process, so a row
+// stored probe history, distinguishing conformance warnings from failed
+// health probes, plus the engine being registered in this process, so a row
 // left behind by a disabled lane never renders as reachable.
 func (h *SettingsHandlers) ListEngines(ctx context.Context, _ *struct{}) (*ListEnginesOutput, error) {
 	rows, err := h.settings.ListEngines(ctx)
@@ -151,9 +157,8 @@ func (h *SettingsHandlers) renderEngine(row store.Engine) EngineDTO {
 			capabilities = append(capabilities, string(capability))
 		}
 		dto.Capabilities = capabilities
-		// A cleared last_error with a stamped last_seen_at is a recorded
-		// success (TouchEngine writes them as one).
-		dto.Connected = row.LastSeenAt != nil && row.LastError == nil
+		// A successful health probe may still report competing automation.
+		dto.Connected = row.LastSeenAt != nil && (row.LastError == nil || strings.HasPrefix(*row.LastError, conformancePrefix))
 	}
 	if dto.Capabilities == nil {
 		dto.Capabilities = []string{}
@@ -179,38 +184,91 @@ func (h *SettingsHandlers) TestEngine(ctx context.Context, in *TestEngineInput) 
 	output := &TestEngineOutput{}
 	started := time.Now()
 
+	var outcome engineProbeOutcome
 	e, registered := h.engines.Get(row.Kind)
 	if !registered {
-		detail := fmt.Sprintf(unregisteredEngine, row.Kind)
-		output.Body.Error = &detail
+		outcome.healthErr = fmt.Errorf(unregisteredEngine, row.Kind)
 	} else {
 		probeCtx, cancel := context.WithTimeout(ctx, engineProbeDeadline)
-		version, healthErr := e.Health(probeCtx)
+		outcome = probeEngineConformance(probeCtx, e, h.loadPolicy, logFromContext(ctx))
 		cancel()
-
-		if healthErr != nil {
-			detail := healthErr.Error()
-			output.Body.Error = &detail
-		} else {
-			output.Body.Ok = true
-			output.Body.Version = &version
-		}
+	}
+	if outcome.healthErr != nil {
+		detail := outcome.healthErr.Error()
+		output.Body.Error = &detail
+	} else {
+		output.Body.Ok = true
+		output.Body.Version = &outcome.version
 	}
 	output.Body.ElapsedMS = elapsedMillis(time.Since(started))
 
-	// Record the outcome whatever it was, so last_seen_at, version and
-	// last_error stay current for the list endpoint.
-	var versionArg, lastErrArg *string
-	if output.Body.Ok {
-		versionArg = output.Body.Version
-	} else {
-		lastErrArg = output.Body.Error
-	}
-	if err := h.settings.TouchEngine(ctx, row.ID, versionArg, lastErrArg, time.Now().UnixMilli()); err != nil {
+	if err := recordEngineProbe(ctx, h.settings, row.ID, outcome); err != nil {
 		return nil, internalFailure(ctx, "record probe", err)
 	}
 
 	return output, nil
+}
+
+type engineProbeOutcome struct {
+	version   string
+	healthErr error
+	summary   *string
+}
+
+// probeEngineConformance shares the boot and correction sequence under the caller's deadline.
+func probeEngineConformance(ctx context.Context, e engine.Engine, load func(context.Context) (engine.Policy, error), log *slog.Logger) engineProbeOutcome {
+	version, err := e.Health(ctx)
+	outcome := engineProbeOutcome{version: version, healthErr: err}
+	if err != nil {
+		return outcome
+	}
+	conformer, ok := e.(interface {
+		Conform(context.Context, int) ([]engine.ConformanceCheck, error)
+	})
+	if !ok {
+		return outcome
+	}
+
+	policy, err := load(ctx)
+	var checks []engine.ConformanceCheck
+	if err != nil {
+		checks = []engine.ConformanceCheck{{Key: settingMaxActiveTotal, Want: "non-negative integer", Got: "unreadable", Warn: true, Severity: "warn"}}
+	} else {
+		checks, err = conformer.Conform(ctx, policy.Limits.MaxActiveTotal)
+		if err != nil && len(checks) == 0 {
+			checks = []engine.ConformanceCheck{{Key: "probe", Want: "reachable", Got: "unavailable", Warn: true, Severity: "warn"}}
+		}
+	}
+	var summary []string
+	for _, check := range checks {
+		if check.Severity == "ok" {
+			continue
+		}
+		// Quote values so paths or daemon responses cannot inject log/summary lines.
+		summary = append(summary, fmt.Sprintf("%s want=%q got=%q (%s)", check.Key, check.Want, check.Got, check.Severity))
+		log.Warn("engine conformance", slog.String("engine", e.Name()), slog.String("key", check.Key), slog.String("want", check.Want), slog.String("got", check.Got))
+	}
+	if len(summary) > 0 {
+		message := conformancePrefix + strings.Join(summary, "; ")
+		outcome.summary = &message
+	}
+	return outcome
+}
+
+// TouchEngine separates health and warning writes. Write the warning last so it survives success.
+func recordEngineProbe(ctx context.Context, settings *store.SettingsStore, id string, outcome engineProbeOutcome) error {
+	at := time.Now().UnixMilli()
+	if outcome.healthErr != nil {
+		message := outcome.healthErr.Error()
+		return settings.TouchEngine(ctx, id, nil, &message, at)
+	}
+	if err := settings.TouchEngine(ctx, id, &outcome.version, nil, at); err != nil {
+		return err
+	}
+	if outcome.summary != nil {
+		return settings.TouchEngine(ctx, id, nil, outcome.summary, at)
+	}
+	return nil
 }
 
 // elapsedMillis reports a probe duration in whole milliseconds, rounded up

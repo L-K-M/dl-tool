@@ -9,11 +9,13 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/jmoiron/sqlx"
+	"github.com/stretchr/testify/require"
 
 	"github.com/L-K-M/dl-tool/internal/config"
 	"github.com/L-K-M/dl-tool/internal/engine"
@@ -21,6 +23,124 @@ import (
 	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
+
+// conformAPI exercises the real adapter through NewServer, not a registered stand-in.
+func conformAPI(t *testing.T, dirSuffix string) (*settingsTestEnv, *conformRPC) {
+	t.Helper()
+	root := t.TempDir()
+	rpc := &conformRPC{dir: root + dirSuffix, concurrency: "2"}
+	daemon := httptest.NewServer(rpc)
+	t.Cleanup(daemon.Close)
+	db, err := store.Open(t.Context(), filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	server, err := NewServer(&config.Config{ConfigDir: root, SessionTTL: time.Hour, DataRoots: []string{root}, Aria2URL: daemon.URL}, db, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	adapter, ok := server.Engines.Get(engine.NameAria2)
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, adapter.Close()) })
+	user := seedUser(t, db)
+	return &settingsTestEnv{api: humatest.Wrap(t, server.API), db: db, server: server, bearer: seedLiveAPIToken(t, db, user.ID)}, rpc
+}
+
+type conformRPC struct {
+	mu               sync.Mutex
+	dir, concurrency string
+	reads            int
+	fail             bool
+}
+
+func (f *conformRPC) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var request struct {
+		ID     any               `json:"id"`
+		Method string            `json:"method"`
+		Params []json.RawMessage `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "bad RPC", http.StatusBadRequest)
+		return
+	}
+	var result any = []any{}
+	switch request.Method {
+	case "aria2.getVersion":
+		result = map[string]string{"version": aria2Version}
+	case "aria2.getGlobalOption":
+		f.reads++
+		if f.fail {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		result = map[string]string{"max-concurrent-downloads": f.concurrency, "dir": f.dir, "save-session": "session"}
+	case "aria2.changeGlobalOption":
+		var options map[string]string
+		if len(request.Params) != 2 || string(request.Params[0]) != `"token:"` || json.Unmarshal(request.Params[1], &options) != nil {
+			http.Error(w, "bad options", http.StatusBadRequest)
+			return
+		}
+		f.concurrency = options["max-concurrent-downloads"]
+		result = "OK"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result}); err != nil {
+		http.Error(w, "encode RPC", http.StatusInternalServerError)
+	}
+}
+
+func TestConformConfiguredRoots(t *testing.T) {
+	for _, suffix := range []string{"", "-sibling"} {
+		t.Run(suffix, func(t *testing.T) {
+			env, rpc := conformAPI(t, suffix)
+			row := engineByID(decodeEngines(t, env.listEngines(t)), store.EngineIDAria2)
+			require.NotNil(t, row)
+			require.NotNil(t, row.LastError, "boot correction must remain visible")
+			require.Contains(t, *row.LastError, "max-concurrent-downloads")
+			if suffix != "" {
+				require.Contains(t, *row.LastError, "dir")
+			} else {
+				require.NotContains(t, *row.LastError, "dir")
+			}
+			require.True(t, row.Connected, "conformance warnings must preserve health")
+			require.NotNil(t, row.Version)
+			require.Equal(t, aria2Version, *row.Version)
+			require.NotNil(t, row.LastSeenAt)
+			rpc.mu.Lock()
+			defer rpc.mu.Unlock()
+			require.Equal(t, 1, rpc.reads, "listing must not probe")
+			require.Equal(t, "5", rpc.concurrency)
+		})
+	}
+}
+
+func TestConformTestEndpoint(t *testing.T) {
+	env, rpc := conformAPI(t, "")
+	_, err := env.db.ExecContext(t.Context(), "UPDATE settings SET value_json = ? WHERE key = ?", "8", settingMaxActiveTotal)
+	require.NoError(t, err)
+	response := env.testEngine(t, store.EngineIDAria2)
+	require.Equal(t, http.StatusOK, response.Code)
+	require.True(t, decodeTestEngine(t, response).Body.Ok)
+	rpc.mu.Lock()
+	require.Equal(t, "8", rpc.concurrency)
+	require.Equal(t, 2, rpc.reads)
+	rpc.mu.Unlock()
+	row := engineByID(decodeEngines(t, env.listEngines(t)), store.EngineIDAria2)
+	require.NotNil(t, row.LastError)
+	require.Contains(t, *row.LastError, "max-concurrent-downloads")
+
+	// A clean correction clears the previous warning; failed conformance retains health.
+	require.True(t, decodeTestEngine(t, env.testEngine(t, store.EngineIDAria2)).Body.Ok)
+	row = engineByID(decodeEngines(t, env.listEngines(t)), store.EngineIDAria2)
+	require.Nil(t, row.LastError)
+	rpc.mu.Lock()
+	rpc.fail = true
+	rpc.mu.Unlock()
+	require.True(t, decodeTestEngine(t, env.testEngine(t, store.EngineIDAria2)).Body.Ok)
+	row = engineByID(decodeEngines(t, env.listEngines(t)), store.EngineIDAria2)
+	require.True(t, row.Connected)
+	require.NotNil(t, row.LastError)
+	require.Contains(t, *row.LastError, "max-concurrent-downloads")
+}
 
 // Secret sentinels seeded into secret_enc. GET /engines must never carry
 // them: the store query never selects the column, and the test proves the
