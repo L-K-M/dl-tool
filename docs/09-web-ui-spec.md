@@ -73,6 +73,15 @@ dark-mode provider (a `class="dark"` toggle on `<html>` persisted in `localStora
 `<svg><polyline>`; `zod` → types generated from `api/openapi.json`. `cmdk` and `vaul` are out of v1 scope;
 mobile sheets use shadcn/ui's Radix Dialog-based `sheet`, not its Vaul-based `drawer`.
 
+**Sonner theme adapter:** the CLI's `sonner` registry item imports forbidden `next-themes`.
+Copy its source with only this integration change: remove that import and `useTheme` call; accept a
+required `theme` prop typed as the application's `ThemeChoice` and pass it to Sonner. Preserve the
+remaining generated markup, icons and styling. The mounting application supplies its current choice
+and updates the prop when that choice changes; Sonner handles OS changes for `system`. No second theme
+provider or stored preference is needed. This is the sole hand-edit exception for the T039 primitives.
+Install the registry's `sonner` dependency directly, recording the resolved exact version; do not run
+an unfiltered `shadcn add sonner` or install `next-themes`. No existing pin changes.
+
 ---
 
 ## 2. Application shell
