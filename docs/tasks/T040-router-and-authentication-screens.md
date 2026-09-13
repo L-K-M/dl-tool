@@ -35,6 +35,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/Auth/SetupScreen.tsx` | create | The `/setup` first-run wizard. |
 | `web/src/App.test.tsx` | create | Boot routing, CSRF capture and redirect validation. |
 | `web/src/main.tsx` | edit | Render `<App />` instead of T003's placeholder. |
+| `web/src/main.test.ts` | edit | Mock boot requests with MSW and assert the mounted app without network access. |
 | `web/src/locales/en/common.json` | edit | Auth strings. |
 
 No other file may be modified.
@@ -105,7 +106,10 @@ Providers, outermost first: `QueryClientProvider` (`@tanstack/react-query`) → 
    is identical for a wrong password and an unknown user. On `429` show the `Retry-After` seconds.
 5. After login navigate to `safeNext(searchParams.get('next'))`, defaulting to `/`.
 6. Edit `web/src/locales/en/common.json` with the auth strings; every visible string goes through `t()`.
-7. Edit `web/src/main.tsx` to render `<App />`.
+7. Edit `web/src/main.tsx` to render `<App />`. Update `web/src/main.test.ts` to mount the real app
+   with MSW (`GET /auth/me` → `200`), reject unhandled requests, await the authenticated layout and
+   clean up handlers and mounts.
+   Preserve its root-rendering coverage; follow [doc 13 §1](../13-testing-and-verification.md#1-test-pyramid).
 8. Create `web/src/App.test.tsx` with `msw` handlers: `/auth/me` → `401 /problems/setup-required` renders
    the wizard; `401 /problems/unauthenticated` renders the login form; `200` renders the layout;
    a successful login calls `setCsrfToken`; `safeNext('//evil.example')` and `safeNext('https://x')` both
@@ -118,14 +122,16 @@ Providers, outermost first: `QueryClientProvider` (`@tanstack/react-query`) → 
 - [ ] `TestSafeNextRejectsAbsoluteAndProtocolRelative` passes for `//evil.example`, `https://x` and `\\x`.
 - [ ] Every route in doc 09 §2.1 resolves; an unknown path inside the base renders the layout, not a blank.
 - [ ] `BrowserRouter` receives `basename={basePath()}`, so the SPA works under `DLTOOL_BASE_PATH`.
+- [ ] `web/src/main.test.ts` verifies the real app mount with mocked boot requests and no network access.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-make lint && make typecheck && make test-web && echo AUTH_UI_OK
+make lint && make typecheck && make test-web &&
+  (cd web && npx vitest run --reporter=verbose) && echo AUTH_UI_OK
 ```
-Expected: Vitest reports `Test Files  3 passed (3)` including `src/App.test.tsx`, every test named above
-appears as passing, and the final line of stdout is exactly `AUTH_UI_OK`.
+Expected: both Vitest runs report `Test Files  4 passed (4)` including `src/App.test.tsx`, the verbose
+run shows every test named above passing, and the final line of stdout is exactly `AUTH_UI_OK`.
 
 Also confirm scope:
 ```bash
@@ -148,7 +154,157 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+### Withdrawn implementation
+
+The following output records the partial attempt at `06b29e58a11dc8a2c78bf828841c4709eb325b14`,
+not task completion. PR #143 withdraws that implementation in an appended commit for a plan-only
+repair; its code and failing tests remain in PR history. Both index rows remain `todo`.
+
+Installed dependencies with
+`npm ci --prefix web` without changing pins. The task verification command exited 2:
+
+```text
+$ make lint && make typecheck && make test-web && echo AUTH_UI_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+```
+
+Failure excerpts from that run:
+
+```text
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+```
+
+```text
+ FAIL  src/App.test.tsx > TestLoginStoresCsrfToken
+TestingLibraryElementError: Unable to find role="heading" and name "Search"
+```
+
+```text
+Expected: "/dl-tool/"
+Received: "/dl-tool"
+```
+
+```text
+ Test Files  1 failed | 3 passed (4)
+      Tests  7 failed | 63 passed (70)
+   Start at  21:28:13
+   Duration  3.01s (transform 762ms, setup 0ms, import 2.34s, tests 3.10s, environment 977ms)
+
+make: *** [Makefile:44: test-web] Error 1
+```
+
+The verbose diagnostic run identified all four test files:
+`src/main.test.ts`, `src/api/client.test.ts`, `src/lib/theme.test.ts`,
+`src/App.test.tsx`. No tests were removed or skipped.
+
+`AUTH_UI_OK` was not printed. `make ci` was not run; no merge requested.
+
+### Plan repair verification
+
+Reproduced the withdrawn head after `npm ci --prefix web`: `make test-web` exited 2 with
+`7 failed | 63 passed (70)` across four files and the same connection refusal.
+This repair restores all frontend files to the main baseline, including its existing tests;
+it does not pass T040 by removing coverage. The partial code and tests remain at the SHA above.
+
+The first repair `make ci` run reached compose-check but failed because `docker` was absent from
+`PATH`. Reused the existing Docker CLI (`28.3.3`) and Compose plugin (`v5.5.1`); no repository
+pin changed. The complete rerun exited 0:
+
+```text
+$ PATH=/tmp/t039-tools:$PATH make ci
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./...
+?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/api	91.614s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.119s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.423s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.194s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.943s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.020s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.557s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.177s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.216s
+ok  	github.com/L-K-M/dl-tool/internal/store	71.645s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.399s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.064s
+?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/recovery-dltool-165-1789335048/web
+
+
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+   Start at  21:37:38
+   Duration  2.00s (transform 377ms, setup 0ms, import 1.35s, tests 797ms, environment 764ms)
+
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2422 Total (in 241ms) 🔗 572 Unique ✅ 2396 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+The verbose command above also exited 0 on the baseline: three files, 22 tests. Four files are
+expected only when T040 is implemented. A plan check confirmed the authorized entrypoint-test path,
+the expected count (three existing files plus `App.test.tsx`), both `todo` rows, and a docs-only diff:
+
+```text
+T040_PLAN_REPAIR_OK: entrypoint scope, four-file expectation, both todo rows, docs-only diff
+```
+
+The review fix puts verbose output inside the same command chain, before the success sentinel.
+Executed that exact chain on the unchanged baseline; exit 0, final stdout excerpt:
+
+```text
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+   Start at  21:48:15
+   Duration  2.05s (transform 423ms, setup 0ms, import 1.44s, tests 868ms, environment 686ms)
+
+AUTH_UI_OK
+```
+
+This validates command ordering, not T040 acceptance or its future four-file suite.
+
+### Retry notes
+
+The withdrawn attempt's `TestLoginStoresCsrfToken` exposed a login redirect race:
+the session update let the authenticated login gate override `next` with `/`. Six further failures
+asserted `/dl-tool/`, while router navigation produced `/dl-tool`. Preserve regression coverage when
+resuming; validate navigation against [doc 09 §2.1](../09-web-ui-spec.md#21-routes) and the required
+`basename={basePath()}`. The repair does not claim these implementation failures are fixed.
+Run all task verification, record fresh Evidence and complete review before marking T040 done.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+None. This plan-only repair resolves the scope and count blockers; T040 remains unimplemented.
