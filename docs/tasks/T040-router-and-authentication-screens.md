@@ -148,7 +148,85 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Partial implementation; acceptance remains unchecked. Installed dependencies with
+`npm ci --prefix web` without changing pins. The task verification command exited 2:
+
+```text
+$ make lint && make typecheck && make test-web && echo AUTH_UI_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+```
+
+Failure excerpts from that run:
+
+```text
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+```
+
+```text
+ FAIL  src/App.test.tsx > TestLoginStoresCsrfToken
+TestingLibraryElementError: Unable to find role="heading" and name "Search"
+```
+
+```text
+Expected: "/dl-tool/"
+Received: "/dl-tool"
+```
+
+```text
+ Test Files  1 failed | 3 passed (4)
+      Tests  7 failed | 63 passed (70)
+   Start at  21:28:13
+   Duration  3.01s (transform 762ms, setup 0ms, import 2.34s, tests 3.10s, environment 977ms)
+
+make: *** [Makefile:44: test-web] Error 1
+```
+
+The verbose diagnostic run identified all four test files:
+`src/main.test.ts`, `src/api/client.test.ts`, `src/lib/theme.test.ts`,
+`src/App.test.tsx`. No tests were removed or skipped.
+
+`AUTH_UI_OK` was not printed. `make ci` was not run; no merge requested.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Stopped on two planning errors:
+
+1. This task's Verification block requires `Test Files  3 passed (3)`.
+   T039 already added `web/src/lib/theme.test.ts`; adding the required
+   `web/src/App.test.tsx` makes four files. Correct this task's expected count.
+   Reaching three would require deleting, skipping, or excluding an existing test.
+2. `web/src/main.test.ts` mounts the exported `App` without a network mock.
+   Replacing the placeholder with the required app starts `/auth/me`, producing
+   the connection refusal above. Doc 13 §1 requires network-free unit tests.
+   Authorize `web/src/main.test.ts` in this task's Files table so its mount can
+   use MSW and assert the real app without making a network request. Do not retain
+   a test-only placeholder or suppress production requests to preserve this test.
+
+Partial code and regression tests are pushed on draft PR #143. Both index rows
+remain `todo`. No out-of-scope file was changed.
+
+Resume notes: `TestLoginStoresCsrfToken` exposes a login redirect race: the
+session update renders the authenticated login gate, which overrides `next`
+with `/`. Six further failures assert `/dl-tool/`, while router navigation
+produces `/dl-tool`; confirm the canonical base-root contract before resolving
+those assertions. Preserve these failing tests while repairing the plan, then
+finish implementation, rerun verification and `make ci`, record full final
+Evidence, update both index rows, and review the final head before merging.
