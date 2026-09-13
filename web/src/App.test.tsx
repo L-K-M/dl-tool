@@ -131,6 +131,12 @@ test("TestBootRendersLayout", async () => {
   expect(screen.getByRole("banner").textContent).toBe("");
   expect(screen.getByRole("complementary").textContent).toBe("");
   expect(screen.getByRole("contentinfo").textContent).toBe("");
+  expect(screen.getByTestId("app-root").className).toContain(
+    "grid-cols-[220px_minmax(0,1fr)]",
+  );
+  expect(screen.getByTestId("app-root").className).toContain(
+    "grid-rows-[48px_minmax(0,1fr)_28px]",
+  );
   expect(bootCalls).toBe(1);
   noPersistedToken();
 });
@@ -168,6 +174,26 @@ test.each([
 ])("TestSafeNextRejectsAbsoluteAndProtocolRelative %s", (raw) => {
   expect(safeNext(raw)).toBe("/");
 });
+test.each([
+  "/search?query=linux#results",
+  "//evil.example",
+  "https://x",
+  "/\\\\evil.example",
+])("TestLoginRedirectUnderBase %s", async (next) => {
+  boot("unauthenticated");
+  server.use(
+    http.post("*/api/v1/auth/login", () => HttpResponse.json(session)),
+  );
+  mount(`/dl-tool/login?${new URLSearchParams({ next })}`, "/dl-tool/");
+  await screen.findByRole("heading", { name: "Sign in" });
+  login();
+  await screen.findByRole("main");
+  expect(
+    window.location.pathname + window.location.search + window.location.hash,
+  ).toBe(next.startsWith("/search") ? `/dl-tool${next}` : "/dl-tool");
+  noPersistedToken();
+});
+
 test("TestSafeNextPreservesLocalRoute", () => {
   expect(safeNext("/search?q=linux#results")).toBe("/search?q=linux#results");
 });
