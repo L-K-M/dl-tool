@@ -37,12 +37,12 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/main.tsx` | edit | Import `index.css` and call `applyTheme(readStoredTheme())` before render. |
 | `web/src/index.css` | create | `@import "tailwindcss"`, the dark variant, and every token in both themes. |
 | `web/src/lib/theme.ts` | create | Read, store, resolve and apply the theme choice. |
-| `web/src/lib/theme.test.ts` | create | Theme resolution and class toggling. |
+| `web/src/lib/theme.test.ts` | create | Theme resolution, class toggling and Sonner theme-prop forwarding. |
 | `web/src/i18n.ts` | create | i18next initialisation, `en` only, namespace registry. |
 | `web/src/locales/en/common.json` | create | Shell, theme and empty-state strings. |
 | `web/components.json` | create (`npx shadcn init`) | shadcn/ui CLI configuration. |
 | `web/src/lib/utils.ts` | create (`npx shadcn init`) | The `cn` helper over `clsx` + `tailwind-merge`. |
-| `web/src/components/ui/*.tsx` | create (`npx shadcn add`) | Copy-in primitives, exactly the list in step 5. |
+| `web/src/components/ui/*.tsx` | create (pinned CLI copy-ins) | Exactly the list in step 5, with doc 09 §1's Sonner theme adapter. |
 
 No other file may be modified.
 
@@ -113,7 +113,12 @@ export function initI18n(): typeof i18next;
 4. Run `npx shadcn@4.19.1 init` and accept the Vite + Tailwind defaults, producing `web/components.json`
    and `web/src/lib/utils.ts`.
 5. Run `npx shadcn@4.19.1 add button checkbox dialog sheet input label select popover context-menu tabs
-   tooltip sonner` once, so every M3 dialog has its primitive already copied in.
+   tooltip` once. For the twelfth primitive, run `npx shadcn@4.19.1 view sonner`, parse its JSON array,
+   and write the first item's `files[0].content` string to `web/src/components/ui/sonner.tsx`. Apply only the
+   [Sonner theme adapter](../09-web-ui-spec.md#1-frontend-stack) specified in doc 09 §1.
+   From `web/`, run `npm install --save-exact sonner`; retain all existing pins and exclude `next-themes`.
+   Keep the CLI output and the adapter diff in Evidence. Do not mount the toaster or add a provider;
+   application composition remains T040's work.
 6. Create `web/src/lib/theme.ts` exactly as above. `readStoredTheme` parses `localStorage['dl.ui.prefs.v1']`
    inside a `try`/`catch` and returns `'system'` on any failure.
 7. Create `web/src/i18n.ts` and `web/src/locales/en/common.json` holding the app title, the theme labels
@@ -122,7 +127,9 @@ export function initI18n(): typeof i18next;
    `createRoot`, so the first paint is already in the right theme.
 9. Create `web/src/lib/theme.test.ts`: `resolveTheme('system')` follows a stubbed `matchMedia`;
    `applyTheme('dark')` adds the class and `applyTheme('light')` removes it; a corrupt stored value yields
-   `'system'`.
+   `'system'`. In the same test file, mock the `sonner` module and render the adapter with
+   `React.createElement` to prove it forwards `light`, `dark` and `system`, including a prop change
+   after mounting (`TestSonnerForwardsThemeChoice`).
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -131,7 +138,9 @@ export function initI18n(): typeof i18next;
 - [ ] `TestApplyThemeTogglesClass` and `TestReadStoredThemeFallsBackToSystem` pass in `theme.test.ts`.
 - [ ] `npm run build` emits an `index.html` and bundles passing the NFR-022 URL scan below; the
   resource-loading audit confirms NFR-022, including every allowlisted occurrence.
-- [ ] `web/src/components/ui/` holds exactly the twelve primitives from step 5 and nothing hand-written.
+- [ ] `web/src/components/ui/` holds exactly the twelve primitives from step 5, with no hand edits except
+  the [Sonner theme adapter](../09-web-ui-spec.md#1-frontend-stack); `TestSonnerForwardsThemeChoice` passes.
+  Neither the manifest, lockfile nor source imports contain `next-themes`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -237,6 +246,111 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Sonner plan repair
+
+Plan only; no source, dependency, pin or status changes. Re-ran `npm ci --prefix web` and
+`npx --yes shadcn@4.19.1 view sonner`; the registry still declares `sonner` and `next-themes`
+and imports/calls `useTheme`. The original preflight below records the command and source.
+
+A temporary plan regression check asserted a canonical adapter exception, a required theme prop,
+separate `view sonner` acquisition instead of unfiltered `add`, corresponding acceptance coverage,
+and unchanged `todo` status/unchecked boxes. Before the repair:
+
+```text
+AssertionError: canonical plan lacks a Sonner copy-in exception
+```
+
+After the repair, plan checks pass; the unchanged upstream copy-in still reproduces the original import:
+
+```text
+SONNER_PLAN_REGRESSIONS_OK
+PINNED_SONNER_CONTRADICTION_REPRODUCED
+```
+
+Inspected the resolved Sonner tarball outside the worktree: its theme effect updates explicit choices
+and listens to `matchMedia` changes for `system`. No package was added to this repository.
+
+Ran the first Verification bash block verbatim on the unchanged scaffold. Selected output:
+
+```text
+✓ built in 169ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+0 issues.
+All matched files use Prettier code style!
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+UI_STACK_OK
+```
+
+These are existing scaffold tests, not T039's future theme/adapter tests. The scaffold bundle is
+unchanged from the resource audit below. `make ci` passed lint, vet, typecheck and tests, then stopped:
+
+```text
+docker compose -f compose.yaml config -q
+/bin/bash: line 1: docker: command not found
+make: *** [Makefile:60: compose-check] Error 127
+```
+
+Hosted CI must cover Compose and integration on the final PR head. `npm ci` reports the existing two
+high-severity advisories; no pins changed. `git diff --check` passed. Documentation check:
+
+```text
+./scripts/doclint.sh
+🔍 2406 Total (in 207ms) 🔗 572 Unique ✅ 2380 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+### Required Sonner copy-in preflight
+
+Implementation stopped before source changes. `npm ci --prefix web` succeeded:
+
+```text
+added 188 packages, and audited 189 packages in 2s
+
+54 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+```
+
+Inspected the required primitive with the pinned CLI:
+
+```bash
+cd web
+npx --yes shadcn@4.19.1 view sonner > /tmp/dl-tool-t039-sonner.json
+node --input-type=module <<'JS'
+import { readFileSync } from 'node:fs';
+const [item] = JSON.parse(readFileSync('/tmp/dl-tool-t039-sonner.json', 'utf8'));
+console.log(JSON.stringify({ name: item.name, dependencies: item.dependencies }, null, 2));
+for (const file of item.files) {
+  console.log(file.content.split('\n').filter(line => /next-themes|useTheme\(\)/.test(line)).join('\n'));
+}
+JS
+```
+
+Observed dependency metadata and source:
+
+```text
+{
+  "name": "sonner",
+  "dependencies": [
+    "sonner",
+    "next-themes"
+  ]
+}
+import { useTheme } from "next-themes"
+  const { theme = "system" } = useTheme()
+```
+
+No dependency or pin changed. Task Verification and `make ci` were not run: the required copy-in
+contradicts the dependency ban. Acceptance boxes and both index rows remain unchanged.
+`make doclint` and `git diff --check` passed; doclint output:
+
+```text
+./scripts/doclint.sh
+🔍 2404 Total (in 185ms) 🔗 572 Unique ✅ 2378 OK 🚫 0 Errors 👻 26 Excluded
+```
+
 ### Generated-output lint repair
 
 Focused tooling repair, not T039 implementation. T039 and both index rows remain `todo`.
@@ -478,6 +592,15 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
+### Resolved Sonner copy-in contradiction
+
+The preflight above reproduced the forbidden `next-themes` import. The
+[canonical Sonner theme adapter](../09-web-ui-spec.md#1-frontend-stack) now defines the bounded copy-in
+exception; step 5 avoids installing the forbidden dependency. No accepted ADR or existing pin changes.
+This resolves the plan contradiction only. T039 is unimplemented and both index rows remain `todo`.
+
+### Resolved earlier blockers
+
 The URL-check contradiction and generated-output lint blocker are resolved. The tooling repair
 above fixes the existing formatter boundary without widening T039's Files table. The Verification
 command now reaches `UI_STACK_OK` on the scaffold; T039 remains unimplemented and `todo`.
