@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T039 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T003 |
 | **Blocks** | T040, T041, T052, T103 |
 | **Parallel-safe** | no — it also edits the shared files `web/package.json`, `web/src/main.tsx`, `web/vite.config.ts` |
@@ -160,15 +160,15 @@ export function initI18n(): typeof i18next;
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `web/package.json` carries every version string from doc 09 §1 unchanged and no forbidden direct
+- [x] `web/package.json` carries every version string from doc 09 §1 unchanged and no forbidden direct
   dependency. `TestShadcnIntegrationContract` enforces its build-tool exception, including the
   automated build module-graph audit and negative fixture; record the output.
-- [ ] `web/src/index.css` preserves all thirteen token values in both themes; the canonical token bridge
+- [x] `web/src/index.css` preserves all thirteen token values in both themes; the canonical token bridge
   and CSS integration are present. `TestShadcnIntegrationContract` passes and the built-CSS audit is recorded.
-- [ ] `TestApplyThemeTogglesClass` and `TestReadStoredThemeFallsBackToSystem` pass in `theme.test.ts`.
-- [ ] `npm run build` emits an `index.html` and bundles passing the NFR-022 URL scan below; the
+- [x] `TestApplyThemeTogglesClass` and `TestReadStoredThemeFallsBackToSystem` pass in `theme.test.ts`.
+- [x] `npm run build` emits an `index.html` and bundles passing the NFR-022 URL scan below; the
   resource-loading audit confirms NFR-022, including every allowlisted occurrence.
-- [ ] `web/src/components/ui/` holds exactly the twelve primitives from step 5, with only
+- [x] `web/src/components/ui/` holds exactly the twelve primitives from step 5, with only
   [doc 09 §1's bounded integration changes](../09-web-ui-spec.md#1-frontend-stack);
   `TestSonnerForwardsThemeChoice` and `TestSonnerPreservesIcons` pass.
   Neither the manifest, lockfile nor source imports contain `next-themes`.
@@ -301,6 +301,295 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Completed implementation, PR #142
+
+This entry supersedes the historical partial implementations and resolved blockers below.
+Code is committed in `7aae5e9` and `077c73a`; subsequent Evidence/index edits do not change that code.
+The PR will squash code, Evidence, task status and both index rows into one task commit.
+No router, provider, screen or toaster mount was added.
+
+Acceptance mapping, all executed:
+
+| Criterion | Proof |
+|---|---|
+| Pins, dependency bans, build-tool boundary | `TestShadcnIntegrationContract`: manifest, resolved lock graph, source imports, offline actual-entry build, every emitted chunk, used-zod negative fixture |
+| Both palettes, bridge, CSS integration | Same test: 26 source and emitted token values, shared aliases, mappings, emitted primary/accent/foreground/border/ring and open/closed utilities, exact CSS scanner fixtures |
+| Theme behavior | `TestResolveThemeFollowsSystem`, `TestApplyThemeTogglesClass`, `TestReadStoredThemeFallsBackToSystem`, `TestStoreThemePreservesPreferences`, `TestThemeAppliedBeforeRootCreation` |
+| No external runtime assets | Exact Verification scanner plus source/resource audit below |
+| Twelve bounded copy-ins | `TestShadcnIntegrationContract`, `TestSonnerForwardsThemeChoice`, `TestSonnerPreservesIcons`; acquisition comparison below |
+| Bundled English and local class merging | `TestBundledI18nAndClassMerging` |
+
+The restored historical test's blanket HTTP(S) assertion first failed on the license comment.
+Replaced it with the current Verification scanner's exact normalization and rejection fixtures.
+No emitted CSS, identifier allowlist or dependency pin was changed.
+
+Fresh acquisition ran outside the worktree in `/tmp/dltool-T039-final-l0K2v0`:
+
+```bash
+npx --yes shadcn@4.19.1 init --template vite --base radix --preset nova --yes --no-monorepo
+npx --yes shadcn@4.19.1 add button checkbox dialog sheet input label select popover context-menu tabs tooltip --yes
+npx --yes shadcn@4.19.1 view sonner
+```
+
+CLI output, after the scratch dependency install:
+
+```text
+- Preflight checks.
+✔ Preflight checks.
+- Verifying framework.
+✔ Verifying framework. Found Vite.
+- Validating Tailwind CSS. Found v4.
+✔ Validating Tailwind CSS. Found v4.
+- Validating import alias.
+✔ Validating import alias.
+- Writing components.json.
+✔ Writing components.json.
+- Checking registry.
+✔ Checking registry.
+- Installing dependencies.
+- Installing dependencies.
+✔ Installing dependencies.
+- Updating files.
+✔ Created 2 files:
+  - src/components/ui/button.tsx
+  - src/lib/utils.ts
+- Updating src/index.css
+✔ Updating src/index.css
+
+Project initialization completed.
+You may now add components.
+
+- Checking registry.
+✔ Checking registry.
+- Updating files.
+✔ Created 10 files:
+  - src/components/ui/checkbox.tsx
+  - src/components/ui/input.tsx
+  - src/components/ui/label.tsx
+  - src/components/ui/select.tsx
+  - src/components/ui/popover.tsx
+  - src/components/ui/context-menu.tsx
+  - src/components/ui/tabs.tsx
+  - src/components/ui/tooltip.tsx
+  - src/components/ui/dialog.tsx
+  - src/components/ui/sheet.tsx
+ℹ Skipped 1 file: (files might be identical, use --overwrite to overwrite)
+  - src/components/ui/button.tsx
+The `tooltip` component has been added. Remember to wrap your app with the `TooltipProvider` component.
+```
+
+The CLI also printed the same TooltipProvider example preserved below; it was not copied.
+The raw Sonner JSON, every primitive normalization diff, and scratch CSS/utility integration diff
+are unchanged from the full records under **Current implementation: blocked on Tailwind license URL**
+below. Those acquisition records are reused, not their obsolete verification claims. Compared the
+fresh raw Sonner JSON with that record and all twelve formatted primitives, `components.json`, CSS
+and utility with the previously recorded normalized files, byte for byte:
+
+```text
+RAW_SONNER_AND_ALL_NORMALIZED_COPY_INS_MATCH_RECORDED_EVIDENCE
+```
+
+Only authorized copy-ins were copied back. Support versions remain `radix-ui` 1.6.7,
+`tw-animate-css` 1.4.0, `sonner` 2.0.8; unprescribed stack versions are `@dnd-kit/core` 6.3.1,
+`@dnd-kit/sortable` 10.0.0 and `react-resizable-panels` 4.12.4. Existing pins are unchanged.
+
+#### Current resource-loading audit
+
+Built HTML loads only `./assets/index-DtoeS2ZM.js` and `./assets/index-B4tCSVnN.css`.
+The actual-entry module graph contains React, React DOM, scheduler, their JSX/CommonJS wrappers,
+Vite's module-preload polyfill, Rolldown runtime, `main.tsx`, `theme.ts`, CSS and HTML.
+No tool JavaScript, API client, application networking, font or remote icon is bundled.
+Primitives and i18n are deliberately not mounted until T040.
+
+Audited all 20 JavaScript identifiers against installed `react-dom/cjs` production source.
+Locations are `line:column` in `index-DtoeS2ZM.js`; source line numbers below refer to
+`react-dom-client.production.js` unless otherwise stated:
+
+| Identifier | Every built location | Source/use |
+|---|---|---|
+| React diagnostic prefix | 1:11817, 1:15307 | `react-dom.production.js:14`, client:19; `formatProdErrorMessage` returns text, including concatenated codes/arguments, without fetching |
+| SVG | 8:85679, 8:85838, 8:100429, 9:11436, 9:23449 | 8070, 8084: `createElementNS`; 9485, 13975, 14894: namespace comparisons |
+| MathML | 8:85744, 8:85907, 9:11478 | 8076, 8090: `createElementNS`; 13977: namespace comparison |
+| XLink | 9:2264, 9:3581, 9:3661, 9:3738, 9:3812, 9:3887, 9:3962 | 13107, 13191–13231: namespace argument to `setAttributeNS`, directly or through `setValueForNamespacedAttribute` (984–995), never its value |
+| XML | 9:4034, 9:4112, 9:4191 | 13239–13255: the same namespace helper |
+
+Parsed JavaScript string/template literals with TypeScript to inspect decoded escapes: only these
+same 20 identifiers occur. Inspected resource sinks and their inputs: the sole `fetch` is Vite's
+module-preload fallback, using local link URLs; React's script/style/preload/attribute machinery takes
+application props, while this entry renders only static text. `theme.ts` uses localStorage,
+matchMedia and classList. No dynamic URL construction reaches an external resource sink.
+
+CSS has no `@font-face`, remote import or resource URL. Its sole HTTP(S) occurrence is line 1,
+column 40 in the exact leading license comment. Installed `tailwindcss/dist/lib.mjs:38`, function
+`Ea`, prepends `gt` with the versioned license string; `gt` at line 5 returns `kind:"comment"`.
+The comment is metadata, not a resource reference. The contract test checks its installed source,
+exact emitted prefix and every prescribed rejection fixture; emitted bytes remain untouched.
+
+`npm audit --omit=dev --json` reports zero vulnerabilities. Full audit still reports the two existing
+development advisories through `js-yaml` and `@redocly/openapi-core` (GHSA-2883-xcg3-v3hh).
+Dependency repair is outside this task; no pin changed.
+
+#### Verification output
+
+Ran the first Verification block verbatim, exit 0:
+
+```text
+added 637 packages, and audited 638 packages in 5s
+
+181 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+
+> build
+> tsc --noEmit -p tsconfig.json && vite build
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 16 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.39 kB │ gzip:  0.26 kB
+dist/assets/index-B4tCSVnN.css   52.05 kB │ gzip:  8.93 kB
+dist/assets/index-DtoeS2ZM.js   190.85 kB │ gzip: 60.16 kB
+
+✓ built in 197ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t039-1-1789332191/web
+
+
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+   Start at  20:56:01
+   Duration  1.95s (transform 417ms, setup 0ms, import 1.26s, tests 856ms, environment 695ms)
+
+UI_STACK_OK
+```
+
+Ran `PATH="/tmp/t039-tools:$PATH" make ci`, exit 0. PATH supplies the previously provisioned
+Docker CLI and Compose plugin; no local daemon or engine integration is claimed.
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./...
+?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/api	94.607s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.535s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.891s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.257s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.028s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.045s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.437s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.209s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.096s
+ok  	github.com/L-K-M/dl-tool/internal/store	75.206s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.379s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.082s
+?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t039-1-1789332191/web
+
+
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+   Start at  20:57:50
+   Duration  1.95s (transform 405ms, setup 0ms, import 1.26s, tests 806ms, environment 688ms)
+
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2420 Total (in 222ms) 🔗 572 Unique ✅ 2394 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+Verbose Vitest also printed these passing assertions and audits:
+
+```text
+stdout | src/lib/theme.test.ts > TestShadcnIntegrationContract
+APPLICATION_BUILD_EXCLUDES_TOOL_JAVASCRIPT
+RUNTIME_ZOD_IMPORT_REJECTED
+CSS_URL_SCAN_REGRESSIONS_AND_LICENSE_AUDIT_OK
+BUILT_CSS_TOKEN_BRIDGE_AND_STATE_UTILITIES_OK
+
+ ✓ src/lib/theme.test.ts > TestResolveThemeFollowsSystem 4ms
+ ✓ src/lib/theme.test.ts > TestApplyThemeTogglesClass 1ms
+ ✓ src/lib/theme.test.ts > TestReadStoredThemeFallsBackToSystem 1ms
+ ✓ src/lib/theme.test.ts > TestStoreThemePreservesPreferences 1ms
+ ✓ src/lib/theme.test.ts > TestThemeAppliedBeforeRootCreation 6ms
+ ✓ src/lib/theme.test.ts > TestSonnerForwardsThemeChoice 10ms
+ ✓ src/lib/theme.test.ts > TestSonnerPreservesIcons 1ms
+ ✓ src/lib/theme.test.ts > TestBundledI18nAndClassMerging 8ms
+ ✓ src/lib/theme.test.ts > TestShadcnIntegrationContract 721ms
+
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+```
+
+The exact status-based scope command printed nothing after the incremental code commits.
+Repeated it with a temporary `GIT_INDEX_FILE` seeded by `git read-tree origin/main` to include
+committed progress without altering the real index. It lists all 24 authorized concrete paths:
+
+```text
+web/components.json
+web/package-lock.json
+web/package.json
+web/src/components/ui/button.tsx
+web/src/components/ui/checkbox.tsx
+web/src/components/ui/context-menu.tsx
+web/src/components/ui/dialog.tsx
+web/src/components/ui/input.tsx
+web/src/components/ui/label.tsx
+web/src/components/ui/popover.tsx
+web/src/components/ui/select.tsx
+web/src/components/ui/sheet.tsx
+web/src/components/ui/sonner.tsx
+web/src/components/ui/tabs.tsx
+web/src/components/ui/tooltip.tsx
+web/src/i18n.ts
+web/src/index.css
+web/src/lib/theme.test.ts
+web/src/lib/theme.ts
+web/src/lib/utils.ts
+web/src/locales/en/common.json
+web/src/main.tsx
+web/tsconfig.json
+web/vite.config.ts
+```
+
+`git diff --check` passed. Hosted checks and current-head review remain merge gates.
+
 ### Recovery: bound the license-comment scan exception
 
 Plan-only recovery of PR #141. The loop stopped after two workers encountered the same scanner

@@ -121,7 +121,7 @@ The application shell, the virtualised grid, the add dialog, the folder browser,
 
 | Task | Title | Depends on | Status |
 |---|---|---|---|
-| [T039](T039-ui-stack-and-design-tokens.md) | Install the UI stack and define the design tokens | T003 | todo |
+| [T039](T039-ui-stack-and-design-tokens.md) | Install the UI stack and define the design tokens | T003 | done |
 | [T040](T040-router-and-authentication-screens.md) | Mount the router, the providers and the authentication screens | T009, T013, T014, T039 | todo |
 | [T041](T041-task-store-and-formatters.md) | Build the live task store and the locale-aware formatters | T014, T025, T039 | todo |
 | [T042](T042-virtualised-task-grid.md) | Render the virtualised task grid and the mobile card list | T021, T040, T041 | todo |
@@ -328,7 +328,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
-| T039 | Install the UI stack and define the design tokens | T003 | yes | todo | [T039](T039-ui-stack-and-design-tokens.md) |
+| T039 | Install the UI stack and define the design tokens | T003 | yes | done | [T039](T039-ui-stack-and-design-tokens.md) |
 | T040 | Mount the router, the providers and the authentication screens | T009, T013, T014, T039 | yes | todo | [T040](T040-router-and-authentication-screens.md) |
 | T041 | Build the live task store and the locale-aware formatters | T014, T025, T039 | yes | todo | [T041](T041-task-store-and-formatters.md) |
 | T042 | Render the virtualised task grid and the mobile card list | T021, T040, T041 | yes | todo | [T042](T042-virtualised-task-grid.md) |
