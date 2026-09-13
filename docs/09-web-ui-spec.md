@@ -71,7 +71,7 @@ dark-mode provider (a `class="dark"` toggle on `<html>` persisted in `localStora
 `<input type="file" multiple>`; `react-hotkeys-hook` → one `keydown` listener with the guard in §3.6;
 `parse-torrent` → `POST /api/v1/tasks/inspect` parses server-side; `d3-shape` → an inline
 `<svg><polyline>`; `zod` → types generated from `api/openapi.json`. `cmdk` and `vaul` are out of v1 scope;
-mobile sheets use shadcn/ui's `drawer`.
+mobile sheets use shadcn/ui's Radix Dialog-based `sheet`, not its Vaul-based `drawer`.
 
 ---
 

@@ -111,7 +111,7 @@ export function initI18n(): typeof i18next;
    name under `.dark`; never define a colour only inside a media query.
 4. Run `npx shadcn@4.19.1 init` and accept the Vite + Tailwind defaults, producing `web/components.json`
    and `web/src/lib/utils.ts`.
-5. Run `npx shadcn@4.19.1 add button checkbox dialog drawer input label select popover context-menu tabs
+5. Run `npx shadcn@4.19.1 add button checkbox dialog sheet input label select popover context-menu tabs
    tooltip sonner` once, so every M3 dialog has its primitive already copied in.
 6. Create `web/src/lib/theme.ts` exactly as above. `readStoredTheme` parses `localStorage['dl.ui.prefs.v1']`
    inside a `try`/`catch` and returns `'system'` on any failure.
@@ -161,7 +161,59 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Plan repair only; this is not T039 implementation evidence.
+
+`npm ci --prefix web` succeeded. `git diff --check` passed. Documentation check:
+
+```text
+$ make doclint
+./scripts/doclint.sh
+🔍 2400 Total (in 210ms) 🔗 572 Unique ✅ 2374 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+`make ci` passed lint, vet, typecheck and tests (13 web tests), then stopped at
+Compose because this worktree's host has no Docker. Final output:
+
+```text
+docker compose -f compose.yaml config -q
+/bin/bash: line 1: docker: command not found
+make: *** [Makefile:60: compose-check] Error 127
+```
+
+Hosted CI must verify Compose before merge.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Resolved by using the mobile-sheet primitive specified in
+[doc 09 §1](../09-web-ui-spec.md#1-frontend-stack). Step 5 previously required
+`drawer`, whose `vaul` import contradicted the dependency ban.
+
+Original reproduction with the pinned CLI:
+
+```text
+$ cd web && npx --yes shadcn@4.19.1 view drawer | node --input-type=module -e 'let input = ""; for await (const chunk of process.stdin) input += chunk; const [item] = JSON.parse(input); console.log(JSON.stringify({ name: item.name, dependencies: item.dependencies }, null, 2)); console.log(item.files[0].content.split("\n").find(line => line.includes("from \"vaul\"")));'
+{
+  "name": "drawer",
+  "dependencies": [
+    "cn",
+    "vaul"
+  ]
+}
+import { Drawer as DrawerPrimitive } from "vaul"
+```
+
+Replacement verified with the same CLI:
+
+```text
+$ cd web && npx --yes shadcn@4.19.1 view sheet | node --input-type=module -e 'let input = ""; for await (const chunk of process.stdin) input += chunk; const [item] = JSON.parse(input); console.log(JSON.stringify({ name: item.name, dependencies: item.dependencies }, null, 2)); console.log(item.files[0].content.split("\n").find(line => line.includes("Dialog as SheetPrimitive")));'
+{
+  "name": "sheet",
+  "dependencies": [
+    "cn",
+    "radix-ui"
+  ]
+}
+import { Dialog as SheetPrimitive } from "radix-ui"
+```
+
+This is a plan-only repair. No dependency was added or pin changed. T039 remains
+unimplemented; both index rows remain `todo`. Task Verification was not run.
