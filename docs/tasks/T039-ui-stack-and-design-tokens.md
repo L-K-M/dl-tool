@@ -237,6 +237,57 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Required Sonner copy-in preflight
+
+Implementation stopped before source changes. `npm ci --prefix web` succeeded:
+
+```text
+added 188 packages, and audited 189 packages in 2s
+
+54 packages are looking for funding
+  run `npm fund` for details
+
+2 high severity vulnerabilities
+```
+
+Inspected the required primitive with the pinned CLI:
+
+```bash
+cd web
+npx --yes shadcn@4.19.1 view sonner > /tmp/dl-tool-t039-sonner.json
+node --input-type=module <<'JS'
+import { readFileSync } from 'node:fs';
+const [item] = JSON.parse(readFileSync('/tmp/dl-tool-t039-sonner.json', 'utf8'));
+console.log(JSON.stringify({ name: item.name, dependencies: item.dependencies }, null, 2));
+for (const file of item.files) {
+  console.log(file.content.split('\n').filter(line => /next-themes|useTheme\(\)/.test(line)).join('\n'));
+}
+JS
+```
+
+Observed dependency metadata and source:
+
+```text
+{
+  "name": "sonner",
+  "dependencies": [
+    "sonner",
+    "next-themes"
+  ]
+}
+import { useTheme } from "next-themes"
+  const { theme = "system" } = useTheme()
+```
+
+No dependency or pin changed. Task Verification and `make ci` were not run: the required copy-in
+contradicts the dependency ban. Acceptance boxes and both index rows remain unchanged.
+`make doclint` and `git diff --check` passed; doclint output:
+
+```text
+./scripts/doclint.sh
+🔍 2404 Total (in 185ms) 🔗 572 Unique ✅ 2378 OK 🚫 0 Errors 👻 26 Excluded
+```
+
 ### Generated-output lint repair
 
 Focused tooling repair, not T039 implementation. T039 and both index rows remain `todo`.
@@ -478,6 +529,19 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
+### Required Sonner copy-in imports a forbidden dependency
+
+Step 5 requires the pinned CLI's `sonner` copy-in; its registry metadata installs `next-themes`, and its
+source imports and calls `useTheme` from that package (see the preflight Evidence above).
+[Doc 09 §1](../09-web-ui-spec.md#1-frontend-stack) and this task's Out of scope section forbid
+`next-themes`. Acceptance also requires exactly the generated primitives, with nothing hand-written.
+
+The owner must reconcile these requirements, for example by explicitly permitting a Sonner adapter to
+this task's theme API. Installing the forbidden dependency, silently rewriting the copy-in, or omitting
+Sonner would override the plan. Implementation stopped; do not merge this task as done.
+
+### Resolved earlier blockers
+
 The URL-check contradiction and generated-output lint blocker are resolved. The tooling repair
 above fixes the existing formatter boundary without widening T039's Files table. The Verification
 command now reaches `UI_STACK_OK` on the scaffold; T039 remains unimplemented and `todo`.
