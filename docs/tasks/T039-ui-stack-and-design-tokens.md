@@ -164,4 +164,25 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Step 5 requires the unmodified shadcn drawer, but this task and
+[doc 09 §1](../09-web-ui-spec.md#1-frontend-stack) forbid `vaul`, which that drawer
+imports. Acceptance criteria 1 and 5 cannot both pass.
+
+Confirmed with the pinned CLI:
+
+```text
+$ cd web && npx --yes shadcn@4.19.1 view drawer | node --input-type=module -e 'let input = ""; for await (const chunk of process.stdin) input += chunk; const [item] = JSON.parse(input); console.log(JSON.stringify({ name: item.name, dependencies: item.dependencies }, null, 2)); console.log(item.files[0].content.split("\n").find(line => line.includes("from \"vaul\"")));'
+{
+  "name": "drawer",
+  "dependencies": [
+    "cn",
+    "vaul"
+  ]
+}
+import { Drawer as DrawerPrimitive } from "vaul"
+```
+
+The owner must reconcile doc 09 §1 and this task: authorize the drawer's dependency
+or specify a permitted replacement and revise the copy-in requirement. No
+implementation files changed. Both index rows remain `todo`. Verification and
+`make ci` were not run; implementation stopped at the contradiction.
