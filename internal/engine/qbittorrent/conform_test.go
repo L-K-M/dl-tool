@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,19 +36,23 @@ func conformClient(t *testing.T, fixture *conformanceFixture) (*Client, *httptes
 		fixture.paths = append(fixture.paths, r.URL.Path)
 		switch r.URL.Path {
 		case "/api/v2/app/preferences":
-			require.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, http.MethodGet, r.Method)
 			if fixture.readStatus != 0 {
 				w.WriteHeader(fixture.readStatus)
 				return
 			}
-			require.NoError(t, json.NewEncoder(w).Encode(fixture.prefs))
+			assert.NoError(t, json.NewEncoder(w).Encode(fixture.prefs))
 		case "/api/v2/app/setPreferences":
-			require.Equal(t, http.MethodPost, r.Method)
-			require.NoError(t, r.ParseForm())
-			require.Len(t, r.PostForm, 1)
-			require.Len(t, r.PostForm["json"], 1)
+			assert.Equal(t, http.MethodPost, r.Method)
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+			assert.Len(t, r.PostForm, 1)
+			assert.Len(t, r.PostForm["json"], 1)
 			var changed map[string]any
-			require.NoError(t, json.Unmarshal([]byte(r.PostForm.Get("json")), &changed))
+			if !assert.NoError(t, json.Unmarshal([]byte(r.PostForm.Get("json")), &changed)) {
+				return
+			}
 			fixture.writes = append(fixture.writes, changed)
 			if fixture.writeStatus != 0 {
 				w.WriteHeader(fixture.writeStatus)
@@ -57,8 +62,8 @@ func conformClient(t *testing.T, fixture *conformanceFixture) (*Client, *httptes
 				fixture.prefs[key] = value
 			}
 		case "/api/v2/search/plugins":
-			require.Equal(t, http.MethodGet, r.Method)
-			require.NoError(t, json.NewEncoder(w).Encode(fixture.plugins))
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.NoError(t, json.NewEncoder(w).Encode(fixture.plugins))
 		default:
 			t.Errorf("unexpected endpoint %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -208,6 +213,23 @@ func TestConformNeverFailsBoot(t *testing.T) {
 				require.Empty(t, fixture.writes)
 			}
 		})
+	}
+}
+
+func TestConformPreservesNativeUnlimited(t *testing.T) {
+	const nativeUnlimited = -1
+
+	fixture := &conformanceFixture{prefs: cleanPreferences(), plugins: []any{}}
+	for _, key := range []string{"max_active_downloads", "max_active_uploads", "max_active_torrents", "max_active_checking_torrents"} {
+		fixture.prefs[key] = nativeUnlimited
+	}
+	client, _ := conformClient(t, fixture)
+	checks, err := conform(t, client, 5)
+	require.NoError(t, err)
+	require.Empty(t, fixture.writes, "unlimited native ceilings must not become finite")
+	for _, check := range checks {
+		require.Equal(t, "ok", check.Severity, check.Key)
+		require.False(t, check.Forced, check.Key)
 	}
 }
 

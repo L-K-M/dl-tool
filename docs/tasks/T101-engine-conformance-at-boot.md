@@ -203,6 +203,40 @@ omits untracked files.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Review regression: preserve native unlimited limits
+
+Round 1 found that native `-1` ceilings were lowered to finite values. Confirmed against
+qBittorrent `release-5.2.3` `sessionimpl.cpp`: its queueing configuration passes these values to
+libtorrent and uses `-1` when queueing is disabled. Added the preservation test before the fix:
+
+```text
+=== RUN   TestConformPreservesNativeUnlimited
+         Error:       Should be empty, but was [map[max_active_checking_torrents:5 max_active_downloads:5 max_active_torrents:5 max_active_uploads:5]]
+         Messages:    unlimited native ceilings must not become finite
+--- FAIL: TestConformPreservesNativeUnlimited (0.01s)
+```
+
+After excluding the native sentinel from finite raises:
+
+```text
+=== RUN   TestConformPreservesNativeUnlimited
+--- PASS: TestConformPreservesNativeUnlimited (0.00s)
+=== RUN   TestConformUnlimitedDisablesQueueing
+--- PASS: TestConformUnlimitedDisablesQueueing (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.107s
+```
+
+`make lint` exited 0. Integration compilation passed:
+
+```text
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.036s [no tests to run]
+```
+
+Extended the live correction scenario to read back all four native unlimited ceilings. Handler
+assertions now fail nonfatally on their goroutine; baseline polling runs on the test goroutine.
+Final-tree CI evidence for this review fix is pending; the completed runs below precede it.
+
 ### Completed implementation verification
 
 [Run 34750142163](https://github.com/L-K-M/dl-tool/actions/runs/34750142163) executed the exact

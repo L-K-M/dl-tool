@@ -1426,16 +1426,25 @@ func TestConformBootCorrection(t *testing.T) {
 	hash = strings.TrimPrefix(hash, engine.NameQBittorrent+":")
 	before := session.visibleTorrentHashes(hash)
 
-	// Visibility precedes resume-data checking; establish the stopped baseline before boot.
-	require.Eventually(t, func() bool {
+	// Poll on the test goroutine: daemonSession assertions may call FailNow.
+	baselineState := ""
+	deadline := time.Now().Add(addVisibilityTimeout)
+	for time.Now().Before(deadline) {
 		status, body := session.do(http.MethodGet, "torrents/info", url.Values{"hashes": {hash}})
 		require.Equal(t, http.StatusOK, status)
 		var transfers []struct {
 			State string `json:"state"`
 		}
 		require.NoError(t, json.Unmarshal(body, &transfers))
-		return len(transfers) == 1 && transfers[0].State == stoppedState
-	}, addVisibilityTimeout, inspectionVisibilityPoll, "foreign torrent must stop before boot")
+		if len(transfers) == 1 {
+			baselineState = transfers[0].State
+		}
+		if baselineState == stoppedState {
+			break
+		}
+		time.Sleep(inspectionVisibilityPoll)
+	}
+	require.Equal(t, stoppedState, baselineState, "foreign torrent must stop before boot")
 
 	automationKeys := []string{"rss_processing_enabled", "scheduler_enabled", "auto_tmm_enabled"}
 	enableAutomation := func() {
@@ -1502,8 +1511,29 @@ func TestConformBootCorrection(t *testing.T) {
 	require.Contains(t, corrected.Body.String(), `"ok":true`)
 	require.Equal(t, false, preferences()["auto_tmm_enabled"])
 	assertAutomationOff()
+
+	// A correction must preserve the daemon's native unlimited ceilings.
+	const nativeUnlimited = -1
+	unlimited := map[string]int{}
+	for _, key := range []string{"max_active_downloads", "max_active_uploads", "max_active_torrents", "max_active_checking_torrents"} {
+		unlimited[key] = nativeUnlimited
+	}
+	encoded, err := json.Marshal(unlimited)
+	require.NoError(t, err)
+	status, body := session.do(http.MethodPost, "app/setPreferences", url.Values{"json": {string(encoded)}})
+	require.Equal(t, http.StatusOK, status, "%s", body)
+	nativePrefs := preferences()
+	require.Equal(t, true, nativePrefs["queueing_enabled"])
+	for key := range unlimited {
+		require.Equal(t, float64(nativeUnlimited), nativePrefs[key], key)
+	}
+	require.Contains(t, call(http.MethodPost, "/engines/eng_qbittorrent/test").Body.String(), `"ok":true`)
+	nativePrefs = preferences()
+	for key := range unlimited {
+		require.Equal(t, float64(nativeUnlimited), nativePrefs[key], key)
+	}
 	require.Equal(t, before, session.torrentHashes())
-	status, body := session.do(http.MethodGet, "torrents/info", url.Values{"hashes": {hash}})
+	status, body = session.do(http.MethodGet, "torrents/info", url.Values{"hashes": {hash}})
 	require.Equal(t, http.StatusOK, status)
 	var transfers []struct {
 		State   string `json:"state"`

@@ -17,6 +17,7 @@ const (
 	pathSetPreferences = "app/setPreferences"
 	pathSearchPlugins  = "search/plugins"
 	prefQueueing       = "queueing_enabled"
+	nativeUnlimited    = -1 // qBittorrent passes this sentinel to libtorrent.
 	conformanceOK      = "ok"
 	conformanceForced  = "forced"
 	conformanceWarn    = "warn"
@@ -63,7 +64,7 @@ func (c *Client) Conform(ctx context.Context, maxActiveTotal int) ([]engine.Conf
 			value, ok := prefs[key].(float64)
 			if !ok || math.Trunc(value) != value {
 				warnConformance(&check)
-			} else if value < float64(maxActiveTotal) {
+			} else if value != nativeUnlimited && value < float64(maxActiveTotal) {
 				changed[key] = maxActiveTotal
 			}
 			checks = append(checks, check)
