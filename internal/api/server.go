@@ -189,7 +189,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	engines := engine.NewRegistry()
 	if cfg.Aria2URL != "" {
 		aria2Engine, err := aria2.New(
-			aria2.Config{URL: cfg.Aria2URL, Secret: cfg.Aria2Secret.Reveal(), Timeout: aria2CallTimeout},
+			aria2.Config{URL: cfg.Aria2URL, Secret: cfg.Aria2Secret.Reveal(), Timeout: aria2CallTimeout, DataRoots: cfg.DataRoots},
 			nil,
 		)
 		if err != nil {
@@ -206,7 +206,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		// never a construction error — a boot must not be locked out of its
 		// UI by an engine that is down.
 		if db != nil {
-			connectEngine(store.NewSettingsStore(db), aria2Engine, engine.NameAria2, cfg.Aria2URL, log)
+			connectEngine(store.NewSettingsStore(db), aria2Engine, engine.NameAria2, cfg.Aria2URL, admissionPolicyLoader(db, cfg.DataRoots), log)
 		}
 	}
 
@@ -243,7 +243,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		// same nil-db guard: the openapi subcommand's stdout stays a pure
 		// document, and a down daemon is a warn, never a boot failure.
 		if db != nil {
-			connectEngine(store.NewSettingsStore(db), qbittorrentEngine, engine.NameQBittorrent, cfg.QBittorrentURL, log)
+			connectEngine(store.NewSettingsStore(db), qbittorrentEngine, engine.NameQBittorrent, cfg.QBittorrentURL, admissionPolicyLoader(db, cfg.DataRoots), log)
 		}
 	}
 
@@ -688,6 +688,7 @@ func connectEngine(
 	settings *store.SettingsStore,
 	e engine.Engine,
 	kind, url string,
+	load func(context.Context) (engine.Policy, error),
 	log *slog.Logger,
 ) {
 	ctx := context.Background()
@@ -712,15 +713,14 @@ func connectEngine(
 			slog.String("engine", kind),
 			slog.String("err", err.Error()),
 		)
-		touchEngineOutcome(ctx, settings, store.EngineIDPrefix+kind, "", err, log)
+		touchEngineOutcome(ctx, settings, store.EngineIDPrefix+kind, engineProbeOutcome{healthErr: err}, log)
 
 		return
 	}
 
-	// Connect discarded the version; one more Health call resolves it for
-	// engines.version (docs/17-operations-and-runbook.md section 1).
-	version, healthErr := e.Health(probeCtx)
-	touchEngineOutcome(ctx, settings, store.EngineIDPrefix+kind, version, healthErr, log)
+	// Health and conformance share the remaining boot budget and one recorded outcome.
+	outcome := probeEngineConformance(probeCtx, e, load, log)
+	touchEngineOutcome(ctx, settings, store.EngineIDPrefix+kind, outcome, log)
 }
 
 // touchEngineOutcome records one probe outcome in the engine's row: a nil
@@ -732,19 +732,10 @@ func touchEngineOutcome(
 	ctx context.Context,
 	settings *store.SettingsStore,
 	engineID string,
-	version string,
-	healthErr error,
+	outcome engineProbeOutcome,
 	log *slog.Logger,
 ) {
-	var versionArg, lastErr *string
-	if healthErr != nil {
-		message := healthErr.Error()
-		lastErr = &message
-	} else if version != "" {
-		versionArg = &version
-	}
-
-	if err := settings.TouchEngine(ctx, engineID, versionArg, lastErr, time.Now().UnixMilli()); err != nil {
+	if err := recordEngineProbe(ctx, settings, engineID, outcome); err != nil {
 		log.Warn("engine probe outcome not recorded",
 			slog.String("engine", engineID),
 			slog.String("err", err.Error()),

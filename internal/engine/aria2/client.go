@@ -30,9 +30,10 @@ import (
 // Config is the adapter's construction input. URL is DLTOOL_ARIA2_URL and
 // Secret is DLTOOL_ARIA2_SECRET (docs/11-config-reference.md §2).
 type Config struct {
-	URL     string        // e.g. http://aria2:6800/jsonrpc
-	Secret  string        // sent as the first positional parameter, "token:" + Secret
-	Timeout time.Duration // per-call deadline; 0 means defaultCallTimeout
+	URL       string        // e.g. http://aria2:6800/jsonrpc
+	Secret    string        // sent as the first positional parameter, "token:" + Secret
+	Timeout   time.Duration // per-call deadline; 0 means defaultCallTimeout
+	DataRoots []string      // configured download roots, copied by New
 }
 
 const (
@@ -163,10 +164,11 @@ var statusKeys = []string{
 // Client implements engine.Engine over aria2's JSON-RPC 2.0 endpoint for HTTP,
 // FTP, SFTP and Metalink transfers.
 type Client struct {
-	url     string
-	secret  string
-	timeout time.Duration
-	hc      *http.Client
+	dataRoots []string
+	url       string
+	secret    string
+	timeout   time.Duration
+	hc        *http.Client
 
 	// readIdle is the notification connection's read-idle window, snapshotted
 	// per connection from wsReadIdle; the reconnect test shortens it on the
@@ -219,12 +221,13 @@ func New(cfg Config, hc *http.Client) (*Client, error) {
 	}
 
 	return &Client{
-		url:      cfg.URL,
-		secret:   cfg.Secret,
-		timeout:  timeout,
-		hc:       hc,
-		readIdle: wsReadIdle,
-		done:     make(chan struct{}),
+		dataRoots: slices.Clone(cfg.DataRoots),
+		url:       cfg.URL,
+		secret:    cfg.Secret,
+		timeout:   timeout,
+		hc:        hc,
+		readIdle:  wsReadIdle,
+		done:      make(chan struct{}),
 	}, nil
 }
 

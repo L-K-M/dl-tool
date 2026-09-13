@@ -1,0 +1,111 @@
+name: Task verification
+
+on:
+  push:
+    branches: ['task/**']
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Task ID (T followed by three digits)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Extract task verification
+        env:
+          REQUESTED_TASK: ${{ inputs.task }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import subprocess
+
+          def extract(text):
+              lines = text.splitlines()
+              headings = [i for i, line in enumerate(lines) if line == '## Verification']
+              if len(headings) != 1:
+                  raise ValueError('expected exactly one Verification heading')
+              section = []
+              for line in lines[headings[0] + 1:]:
+                  if line.startswith('## '):
+                      break
+                  section.append(line)
+              blocks = []
+              fence = None
+              body = []
+              for line in section:
+                  if line.startswith(('```', '~~~')):
+                      if fence is None:
+                          match = re.fullmatch(r'(`{3,}|~{3,})([^`~]*)', line)
+                          if not match:
+                              raise ValueError('malformed opening fence')
+                          fence, language = match.groups()
+                          body = []
+                      else:
+                          if line != fence:
+                              raise ValueError('malformed closing fence')
+                          if language == 'bash':
+                              blocks.append('\n'.join(body))
+                          fence = None
+                      continue
+                  if fence is not None:
+                      body.append(line)
+              if fence is not None or not blocks or not blocks[0].strip():
+                  raise ValueError('missing, empty or unclosed bash fence')
+              return blocks[0] + '\n'
+
+          # Fail-closed parser regressions live beside the workflow they protect.
+          valid = '## Verification\n```bash\nprintf ok\n```\n## Evidence\n'
+          assert extract(valid) == 'printf ok\n'
+          assert extract(valid.replace('## Evidence', '```bash\nsecond\n```\n## Evidence')) == 'printf ok\n'
+          for invalid in ('', valid + valid, valid.replace('printf ok', ''),
+                          valid.replace('```bash', '```sh'), valid.replace('\n```\n', '\n'),
+                          valid.replace('\n```\n', '\n~~~\n')):
+              try:
+                  extract(invalid)
+              except ValueError:
+                  continue
+              raise AssertionError('accepted malformed verification')
+
+          task = os.environ['REQUESTED_TASK']
+          if not task:
+              match = re.fullmatch(r'task/(T[0-9]{3})-[A-Za-z0-9-]+', os.environ['BRANCH'])
+              if not match:
+                  raise ValueError('invalid task branch')
+              task = match.group(1)
+          if not re.fullmatch(r'T[0-9]{3}', task):
+              raise ValueError('invalid task ID')
+          files = list(pathlib.Path('docs/tasks').glob(task + '-*.md'))
+          if len(files) != 1:
+              raise ValueError('missing or ambiguous task file')
+          script = extract(files[0].read_text())
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'task-verification.sh').write_text(script)
+          sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          identity = f'Task: {task}\nChecked-out SHA: {sha}\n'
+          print(identity + script)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(identity)
+          PY
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: make setup
+      - name: Run task Verification
+        run: bash -euo pipefail "$RUNNER_TEMP/task-verification.sh"
+      - name: Run repository CI
+        run: make ci

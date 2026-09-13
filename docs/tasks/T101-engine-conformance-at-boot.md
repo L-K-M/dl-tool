@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T101 |
 | **Milestone** | M2 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T019, T027, T028, T029 |
 | **Blocks** | — |
 | **Parallel-safe** | no — extends `internal/engine/engine.go` and `internal/api/settings.go` |
@@ -152,17 +152,17 @@ aria2 checks, exactly these:
     `make ci`. Record the actual checked-out commit SHA and task ID in the run log and summary.
 
 ## Acceptance criteria
-- [ ] `rss_processing_enabled`, `scheduler_enabled` and `auto_tmm_enabled` are all false after `Conform`
+- [x] `rss_processing_enabled`, `scheduler_enabled` and `auto_tmm_enabled` are all false after `Conform`
       against a daemon that had them true.
-- [ ] `setPreferences` carries only the changed keys, and is not called at all when nothing changed.
-- [ ] An installed search plugin produces one `warn` row and no uninstall attempt.
-- [ ] The queueing keys written are the ones observed in `app/preferences`, recorded under Evidence.
-- [ ] A conformance failure never exits the process and never fails `NewServer`.
-- [ ] `GET /engines` shows the failure summary in `last_error` for the affected engine.
-- [ ] aria2 uses the configured data roots through `NewServer`; a prefix-sharing sibling warns.
-- [ ] aria2 raises concurrency only when needed and warns on missing session persistence or RPC failure.
-- [ ] `POST /engines/{id}/test` reruns conformance using the current stored `max_active_total`.
-- [ ] The real qBittorrent boot/correction scenario in Step 12 passes without changing foreign transfers.
+- [x] `setPreferences` carries only the changed keys, and is not called at all when nothing changed.
+- [x] An installed search plugin produces one `warn` row and no uninstall attempt.
+- [x] The queueing keys written are the ones observed in `app/preferences`, recorded under Evidence.
+- [x] A conformance failure never exits the process and never fails `NewServer`.
+- [x] `GET /engines` shows the failure summary in `last_error` for the affected engine.
+- [x] aria2 uses the configured data roots through `NewServer`; a prefix-sharing sibling warns.
+- [x] aria2 raises concurrency only when needed and warns on missing session persistence or RPC failure.
+- [x] `POST /engines/{id}/test` reruns conformance using the current stored `max_active_total`.
+- [x] The real qBittorrent boot/correction scenario in Step 12 passes without changing foreign transfers.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -203,8 +203,454 @@ omits untracked files.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-No implementation evidence yet. This PR repairs the plan only; T101 and both index rows remain `todo`.
-Task Verification and `make ci` were not run locally for this documentation repair.
+### Review regression: preserve native unlimited limits
+
+Round 1 found that native `-1` ceilings were lowered to finite values. Confirmed against
+qBittorrent `release-5.2.3` `sessionimpl.cpp`: its queueing configuration passes these values to
+libtorrent and uses `-1` when queueing is disabled. Added the preservation test before the fix:
+
+```text
+=== RUN   TestConformPreservesNativeUnlimited
+         Error:       Should be empty, but was [map[max_active_checking_torrents:5 max_active_downloads:5 max_active_torrents:5 max_active_uploads:5]]
+         Messages:    unlimited native ceilings must not become finite
+--- FAIL: TestConformPreservesNativeUnlimited (0.01s)
+```
+
+After excluding the native sentinel from finite raises:
+
+```text
+=== RUN   TestConformPreservesNativeUnlimited
+--- PASS: TestConformPreservesNativeUnlimited (0.00s)
+=== RUN   TestConformUnlimitedDisablesQueueing
+--- PASS: TestConformUnlimitedDisablesQueueing (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.107s
+```
+
+`make lint` exited 0. Integration compilation passed:
+
+```text
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	0.036s [no tests to run]
+```
+
+Extended the live correction scenario to read back all four native unlimited ceilings. Handler
+assertions now fail nonfatally on their goroutine; baseline polling runs on the test goroutine.
+[Run 34751574390](https://github.com/L-K-M/dl-tool/actions/runs/34751574390) passed exact Verification
+and `make ci` on the review-fix implementation. This evidence update changes documentation only;
+its head must also pass checks and receive completed review before merge. Verbatim output excerpts:
+
+```text
+Task: T101
+Checked-out SHA: e457187a7d217aba845fdbf59273a2768c371d52
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	90.367s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.093s
+ok  	github.com/L-K-M/dl-tool/internal/engine	26.159s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.158s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.765s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.010s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.925s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.150s
+ok  	github.com/L-K-M/dl-tool/internal/secure	6.069s
+ok  	github.com/L-K-M/dl-tool/internal/store	83.854s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.360s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.084s
+--- PASS: TestConformNoWriteWhenClean (0.00s)
+--- PASS: TestConformForcesAutoTMMOff (0.02s)
+--- PASS: TestConformBatchesChanges (0.00s)
+--- PASS: TestConformWarnsOnSearchPlugin (0.00s)
+--- PASS: TestConformNeverFailsBoot (0.01s)
+--- PASS: TestConformPreservesNativeUnlimited (0.00s)
+--- PASS: TestConformUnlimitedDisablesQueueing (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.057s
+--- PASS: TestConformRaisesAria2Concurrency (0.01s)
+--- PASS: TestConformConfiguredRoots (0.01s)
+--- PASS: TestConformAria2Warnings (0.01s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	1.045s
+--- PASS: TestConformConfiguredRoots (0.58s)
+--- PASS: TestConformNeverFailsBoot (0.29s)
+--- PASS: TestConformTestEndpoint (0.31s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	2.199s
+go test -tags=integration -count=1 -timeout=20m ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	2.496s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	70.978s
+ok  	github.com/L-K-M/dl-tool/internal/engine/enginetest	16.141s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	134.168s
+    contract_test.go:1419: GET app/preferences queueing excerpt: {"add_to_top_of_queue":false,"disk_queue_size":1048576,"max_active_checking_torrents":1,"max_active_downloads":3,"max_active_torrents":5,"max_active_uploads":3,"queueing_enabled":true,"request_queue_size":500}
+--- PASS: TestConformBootCorrection (6.05s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	6.070s
+```
+
+Repository CI also passed lint, vet, typecheck, all Go/Vitest tests, Compose and doclint:
+
+```text
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./...
+ok  	github.com/L-K-M/dl-tool/internal/api	89.270s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.084s
+ok  	github.com/L-K-M/dl-tool/internal/engine	25.352s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.185s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.785s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.016s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.014s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.166s
+ok  	github.com/L-K-M/dl-tool/internal/secure	6.014s
+ok  	github.com/L-K-M/dl-tool/internal/store	83.323s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.383s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.070s
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2398 Total (in 57ms) 🔗 571 Unique ✅ 2373 OK 🚫 0 Errors 👻 25 Excluded
+```
+
+### Completed implementation verification
+
+[Run 34750142163](https://github.com/L-K-M/dl-tool/actions/runs/34750142163) executed the exact
+Verification fence, then `make ci`, on implementation SHA
+`c1ec86fedca042fed9241d235c46934f7ac3c3a1`. Both steps exited 0. Output excerpts below are verbatim,
+without GitHub's timestamp prefixes or terminal colors. Earlier attempts below are historical.
+
+```text
+Task: T101
+Checked-out SHA: c1ec86fedca042fed9241d235c46934f7ac3c3a1
+```
+
+Verification output:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	87.900s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.060s
+ok  	github.com/L-K-M/dl-tool/internal/engine	24.660s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.142s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.747s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.009s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.823s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.152s
+ok  	github.com/L-K-M/dl-tool/internal/secure	6.210s
+ok  	github.com/L-K-M/dl-tool/internal/store	79.720s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.336s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.072s
+```
+
+The verbose race run printed:
+
+```text
+--- PASS: TestConformNoWriteWhenClean (0.01s)
+--- PASS: TestConformForcesAutoTMMOff (0.02s)
+--- PASS: TestConformBatchesChanges (0.00s)
+--- PASS: TestConformWarnsOnSearchPlugin (0.00s)
+--- PASS: TestConformNeverFailsBoot (0.01s)
+--- PASS: TestConformUnlimitedDisablesQueueing (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	1.084s
+--- PASS: TestConformRaisesAria2Concurrency (0.02s)
+--- PASS: TestConformConfiguredRoots (0.01s)
+--- PASS: TestConformAria2Warnings (0.01s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	1.061s
+--- PASS: TestConformConfiguredRoots (0.60s)
+--- PASS: TestConformNeverFailsBoot (0.30s)
+--- PASS: TestConformTestEndpoint (0.30s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	2.220s
+```
+
+Integration output and the separate verbose boot/correction run:
+
+```text
+go test -tags=integration -count=1 -timeout=20m ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.743s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	77.755s
+ok  	github.com/L-K-M/dl-tool/internal/engine/enginetest	16.103s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	139.559s
+=== RUN   TestConformBootCorrection
+    contract_test.go:1419: GET app/preferences queueing excerpt: {"add_to_top_of_queue":false,"disk_queue_size":1048576,"max_active_checking_torrents":1,"max_active_downloads":3,"max_active_torrents":5,"max_active_uploads":3,"queueing_enabled":true,"request_queue_size":500}
+--- PASS: TestConformBootCorrection (6.16s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	6.177s
+```
+
+`make ci` also ran lint, vet, typecheck, Go/Vitest tests, Compose validation and doclint:
+
+```text
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./...
+?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/api	86.527s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.077s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.830s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.117s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.725s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.013s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.094s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.151s
+ok  	github.com/L-K-M/dl-tool/internal/secure	5.683s
+ok  	github.com/L-K-M/dl-tool/internal/store	78.619s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.354s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.078s
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2398 Total (in 48ms) 🔗 570 Unique ✅ 2374 OK 🚫 0 Errors 👻 24 Excluded
+```
+
+Acceptance coverage:
+
+- `TestConformBootCorrection`: all three automation settings forced off at boot and correction;
+  named warning visible; foreign hashes, stopped state and ATM flag unchanged.
+- `TestConformNoWriteWhenClean`, `TestConformForcesAutoTMMOff`, `TestConformBatchesChanges`:
+  one sparse form, each observed queue ceiling and clean no-write behavior.
+- `TestConformWarnsOnSearchPlugin`: exactly one warning and no other search endpoint.
+- Adapter and API `TestConformNeverFailsBoot`: read/write failures and unavailable daemons warn;
+  `NewServer` still serves the list with health preserved.
+- `TestConformConfiguredRoots`, `TestConformAria2Warnings`, `TestConformRaisesAria2Concurrency`:
+  copied roots through `NewServer`, sibling rejection, session/RPC warnings and sparse raises.
+- `TestConformTestEndpoint`: current stored ceiling, retained warnings and clean correction.
+
+The scope command was run against a temporary main worktree with this PR's files copied in,
+including new files, before the evidence commit. This reconstructs cumulative scope without
+rewriting the incremental commits:
+
+```text
+.github/workflows/task-verification.yml
+internal/api/server.go
+internal/api/settings.go
+internal/api/settings_test.go
+internal/engine/aria2/client.go
+internal/engine/aria2/conform.go
+internal/engine/aria2/conform_test.go
+internal/engine/engine.go
+internal/engine/qbittorrent/conform.go
+internal/engine/qbittorrent/conform_test.go
+internal/engine/qbittorrent/contract_test.go
+```
+
+### Live queueing observation before writes
+
+[Task verification run 34721872048](https://github.com/L-K-M/dl-tool/actions/runs/34721872048),
+checked-out SHA `2805b58f2e9396fd2df50531bbb573fc8d0c9c1d`, observed the pinned live daemon:
+
+```text
+--- FAIL: TestConformBootCorrection (18.85s)
+    contract_test.go:1420: GET app/preferences queueing excerpt: {"add_to_top_of_queue":false,"disk_queue_size":1048576,"max_active_checking_torrents":1,"max_active_downloads":3,"max_active_torrents":5,"max_active_uploads":3,"queueing_enabled":true,"request_queue_size":500}
+    contract_test.go:1427: the seeded torrent never became visible
+```
+
+The new fixture compared an adapter-qualified ID with native hashes. Strip the engine prefix before
+waiting; retain the foreign-torrent assertion. No conformance writes existed at observation time.
+The boot assertion still needs a red/green live run. Repository CI was not reached in this run.
+
+### Recovery regression, 2026-09-13
+
+[Task verification run 34748360754](https://github.com/L-K-M/dl-tool/actions/runs/34748360754),
+checked-out SHA `74e1a937125d813feb004dc7bbd144edfeb5f3eb`, reached the live boot assertion:
+
+```text
+--- FAIL: TestConformBootCorrection (4.74s)
+Error: Not equal: expected: bool(false), actual: bool(true)
+Messages: boot must force ATM off
+```
+
+Recovered the preserved qBittorrent tests before copying its implementation. Local regression output:
+
+```text
+$ go test -race -count=1 ./internal/engine/qbittorrent -run '^TestConform'
+--- FAIL: TestConformNoWriteWhenClean (0.00s)
+Messages: adapter must implement Conform
+FAIL
+$ go test -tags=integration ./internal/engine/aria2 -run '^$'
+internal/engine/aria2/contract_test.go:46:2: methodGetGlobalOption redeclared in this block
+internal/engine/aria2/conform.go:15:2: other declaration of methodGetGlobalOption
+FAIL
+```
+
+After restoring qBittorrent conformance and renaming the colliding production constant:
+
+```text
+$ go test -tags=integration ./internal/engine/... -run '^$'
+ok github.com/L-K-M/dl-tool/internal/engine 0.006s [no tests to run]
+ok github.com/L-K-M/dl-tool/internal/engine/aria2 0.026s [no tests to run]
+ok github.com/L-K-M/dl-tool/internal/engine/enginetest 0.027s [no tests to run]
+ok github.com/L-K-M/dl-tool/internal/engine/qbittorrent 0.027s [no tests to run]
+```
+
+Compilation only, not live integration acceptance. The race-enabled conformance unit run and
+`make lint` exited 0. Final Verification remains pending.
+
+The first live green attempt reached the foreign-state assertion but exposed asynchronous fixture
+initialization. [CI run 34749800489](https://github.com/L-K-M/dl-tool/actions/runs/34749800489)
+at `9b6fd6e` printed:
+
+```text
+--- FAIL: TestConformBootCorrection (4.79s)
+    contract_test.go:1500:
+        Error: Not equal:
+            expected: "stoppedDL"
+            actual  : "checkingResumeData"
+```
+
+Wait for the stopped baseline before boot. The immediate post-correction state assertion remains.
+
+### Resumed implementation
+
+PR #129 remains draft. The scoped workflow and live boot/correction regression are committed;
+local integration compilation passed. The first CI run will supply the live preference observation.
+
+Aria2 test-first check:
+
+```text
+$ go test -race -count=1 -v ./internal/engine/aria2 -run '^TestConform'
+Messages: adapter must implement Conform
+FAIL
+```
+
+After implementing the probe, the same command passed:
+
+```text
+--- PASS: TestConformRaisesAria2Concurrency (0.01s)
+```
+
+The complete local output is pending replacement with final-tree Verification evidence.
+`make lint` exited 0. No task completion is claimed.
+
+### Implementation attempt on a62659bc897ee0d934f616645cfa1e28fc755f70
+
+Stopped before implementation: no Docker executable, Docker socket or `qbittorrent-nox` was found.
+No live queueing preferences were observed. T101 and both index rows remain `todo`; all acceptance
+boxes remain unchecked.
+
+Observed output:
+
+```text
+$ docker version --format '{{.Server.Version}}'
+/bin/bash: line 1: docker: command not found
+$ test -S /var/run/docker.sock; printf 'Docker socket check exit: %s\n' "$?"
+Docker socket check exit: 1
+```
+
+`make test-integration` exited 2. Failure excerpts:
+
+```text
+go test -tags=integration -count=1 -timeout=20m ./internal/engine/...
+--- FAIL: TestAria2Contract (0.05s)
+```
+
+```text
+get provider: rootless Docker not found, failed to create Docker provider
+```
+
+```text
+--- FAIL: TestQBittorrentContract (0.00s)
+```
+
+```text
+rootless Docker not found, failed to create Docker provider
+```
+
+`make ci` exited 2:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+sh: 1: eslint: not found
+make: *** [Makefile:25: lint] Error 127
+```
+
+The remaining Verification commands were not run. These are baseline failures, not implementation
+verification. Resume with Docker access and installed development dependencies.
+
+### Prerequisite investigation, 2026-09-12
+
+In the source checkout, `(cd web && npm ci && npm run lint)` exited 0.
+The earlier missing `eslint` was an uninstalled worktree dependency, not a code defect.
+Each fresh worktree still needs its dependencies installed.
+
+The container has no Docker executable/socket, no configured Docker environment keys and no sudo.
+A rootless namespace probe failed:
+
+```text
+$ unshare -Ur true
+unshare: unshare failed: Operation not permitted
+```
+
+PR #129 CI run [34688548897](https://github.com/L-K-M/dl-tool/actions/runs/34688548897) also exposed
+failures independent of this documentation-only change:
+
+```text
+--- FAIL: TestOwnershipResetRejectsStaleResponse/wire (2.01s)
+    sync_test.go:1507: Condition never satisfied
+    the forced full resync never ran
+--- FAIL: TestInspectMagnetLeavesNoHandle/daemon_primary_path (5.35s)
+    contract_test.go:878: expected: 0, actual: 1
+    InspectMagnet must leave torrents/info exactly as it found it
+```
+
+A focused local reproduction attempt did not fail:
+
+```text
+$ go test -race -count=100 ./internal/engine/qbittorrent -run '^TestOwnershipResetRejectsStaleResponse/wire$'
+ok  github.com/L-K-M/dl-tool/internal/engine/qbittorrent 23.637s
+```
+
+This does not invalidate the CI failure or establish a fix. The live-daemon failure cannot be
+reproduced here without Docker. Neither failure has been repaired; no assertion was weakened.
+
+### Prerequisite repairs, 2026-09-12
+
+The earlier failures above are superseded by merged repairs:
+
+- [PR #130](https://github.com/L-K-M/dl-tool/pull/130) waits for torrent visibility before inspection
+  baselines and fixture configuration. Immediate count/hash and completion assertions remain.
+  [CI at c2dc3d7](https://github.com/L-K-M/dl-tool/actions/runs/34718709266) passed, including real
+  container integration. Local regressions failed before the repair, then passed.
+- [PR #131](https://github.com/L-K-M/dl-tool/pull/131) asserts the exact forced-resync request after
+  a deliberately delayed observation. The old assertion failed under that delay; 100 race-enabled
+  repetitions passed after repair. [CI at 2c9e3dd](https://github.com/L-K-M/dl-tool/actions/runs/34719396365)
+  passed, including real container integration.
+- [PR #132](https://github.com/L-K-M/dl-tool/pull/132) authorizes the CI execution route in Step 13.
+  It neither implements the workflow nor completes T101.
+
+No production adapter repair was needed. No live queueing excerpt has been observed for T101 yet.
+Task Verification and acceptance criteria remain pending; use the scoped CI route, not Docker
+provisioning on this host.
+
+### Prior plan-repair validation
+
+No implementation evidence was recorded by the plan-repair PR. Task Verification and `make ci` were
+not run locally for that repair.
 
 Recovery validation:
 
@@ -229,12 +675,5 @@ run. With the development tools on `PATH`, `make doclint` exited 0:
 `git diff --check` exited 0. Only this task file changed; both index rows remain `todo`.
 
 ## Blocked
-The scope blockers recorded in PR #128 are resolved by the Files table and
-[Engines §9](../06-download-engines.md#9-engine-conformance-at-boot): configured-root wiring, boot/test
-orchestration, colocated unit/API tests and the ADR-required real-daemon test are now in scope.
-Implementation must still observe the queueing keys as directed above.
-
-The owner declined local or remote Docker provisioning. Existing CI runs the integration suite but
-not this task's separate verbose boot/correction command. The Files table now authorizes a CI workflow
-defined in Step 13. Required observations, assertions and completion criteria are unchanged. The
-workflow remains to be built.
+None. Scope and Docker-execution prerequisites are resolved; the scoped GitHub workflow passed
+exact Verification and `make ci`. Earlier failed attempts remain above for provenance.
