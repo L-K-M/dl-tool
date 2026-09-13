@@ -104,7 +104,7 @@ export function formatRatio(ratio: number, locale?: string): string;
 export function formatPercent(progress: number, locale?: string): string;
 /** Intl.RelativeTimeFormat under 7 days, Intl.DateTimeFormat after. */
 export function formatWhen(rfc3339: string, now?: Date, locale?: string): string;
-/** The absolute RFC 3339 rendering used in every tooltip. */
+/** Localized absolute timestamp tooltip per doc 09 §10.2. */
 export function formatAbsolute(rfc3339: string, locale?: string): string;
 ```
 
@@ -114,7 +114,9 @@ export function formatAbsolute(rfc3339: string, locale?: string): string;
    which `Intl` unit name applies at each magnitude.
 2. Create `web/src/lib/format.test.ts` asserting: `formatBytes(442381537280)` is `412 GB`;
    `formatBytes(null)` and `formatBytes(0)` are `—`; `formatRate(0)` is `—`; `formatEta(null)` is `∞`;
-   `formatRatio(10000)` is `∞`; and every assertion passes with the locale forced to `en`.
+   `formatRatio(10000)` is `∞`; and these assertions pass with the locale forced to `en`.
+   Add `TestFormatAbsoluteUsesLocale`: for the same RFC 3339 input, compare `formatAbsolute` in `en`
+   and `de` against `Intl.DateTimeFormat` using the options in doc 09 §10.2. Assert the outputs differ.
 3. Create `web/src/store/useTasks.ts` with the state, the reducer and the selectors above, using
    `zustand`'s `create` with no middleware.
 4. Implement `applySync` exactly as the merge table specifies, and keep it pure — no fetch, no timer.
@@ -130,7 +132,8 @@ export function formatAbsolute(rfc3339: string, locale?: string): string;
 - [ ] `TestApplySyncFullUpdateReplacesMap`, `TestApplySyncDeltaMergesFields`,
       `TestApplySyncRemovesTasksAndSelection`, `TestSeqGapReplacesMap` and
       `TestUnchangedTaskKeepsIdentity` all pass.
-- [ ] `TestFormatBytesMatchesSpecExamples` and `TestNullAndZeroRenderings` pass.
+- [ ] `TestFormatBytesMatchesSpecExamples`, `TestNullAndZeroRenderings` and
+      `TestFormatAbsoluteUsesLocale` pass.
 - [ ] No file in this task imports `EventSource`, `fetch` or the `api` client.
 - [ ] `selectFilterCounts` returns all seven keys, including zero counts.
 - [ ] `connection` starts at `'connecting'` and is changed only through `setConnection`.
@@ -166,12 +169,50 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-Current blocker documentation only. `make doclint` exited 0:
+Absolute-date plan repair only, not implementation evidence. This contract check failed before
+repair with `AssertionError: Added tooltip contradicts Intl-only date requirement` and passed after:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+
+ui = Path('docs/09-web-ui-spec.md').read_text()
+task = Path('docs/tasks/T041-task-store-and-formatters.md').read_text()
+contract = task.split('## Evidence')[0]
+added = next(line for line in ui.splitlines() if '| `addedOn` |' in line)
+assert 'tooltip is the RFC 3339 string' not in added, 'Added tooltip contradicts Intl-only date requirement'
+assert 'localized absolute' in added
+assert "dateStyle: 'full', timeStyle: 'long'" in ui
+assert 'absolute RFC 3339 rendering' not in contract
+assert 'TestFormatAbsoluteUsesLocale' in contract
+index = Path('docs/tasks/00-task-index.md').read_text()
+rows = [line for line in index.splitlines() if line.startswith(('| [T041]', '| T041 |'))]
+assert len(rows) == 2 and all('| todo |' in line for line in rows)
+assert '| **Status** | todo |' in task
+print('DATE_CONTRACT_OK; T041 remains todo in task and both index rows')
+PY
+```
 
 ```text
-./scripts/doclint.sh
-🔍 2422 Total (in 222ms) 🔗 572 Unique ✅ 2396 OK 🚫 0 Errors 👻 26 Excluded
+DATE_CONTRACT_OK; T041 remains todo in task and both index rows
 ```
+
+After `npm ci --prefix web`, `PATH=/tmp/t039-tools:$PATH make ci` exited 0
+using the existing Docker CLI. An initial 120-second tool timeout interrupted Go tests;
+the complete rerun passed. Excerpts:
+
+```text
+0 issues.
+All matched files use Prettier code style!
+ Test Files  4 passed (4)
+      Tests  71 passed (71)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2425 Total (in 221ms) 🔗 572 Unique ✅ 2399 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+Task Verification remains pending: the two T041 suites do not exist yet.
 
 Previous plan repair only, not T041 implementation evidence. After `npm ci --prefix web`,
 comparing the existing suites plus the Files table against Verification reproduced:
@@ -205,19 +246,14 @@ docker compose -f compose.yaml -f compose.dev.yaml config -q
 Task Verification remains pending until implementation adds the required suites.
 
 ## Blocked
-### Current: absolute-date contract
+### Absolute-date contract (resolved)
 
-On origin/main `e4a0cb8`, `formatAbsolute` must produce RFC 3339 for tooltips,
-but Step 1 permits only `Intl.NumberFormat`, `Intl.DateTimeFormat` and
-`Intl.RelativeTimeFormat`; UI spec §10.2 also requires every displayed date to
-pass through Intl and forbids hand-rolled formatters. Intl has no RFC 3339
-output mode. Returning the input preserves RFC 3339 but bypasses Intl;
-assembling `formatToParts()` output would hand-roll the date format.
-
-Owner clarification required: allow RFC 3339 passthrough for `formatAbsolute`,
-or change the tooltip contract to localized absolute dates. No implementation
-or acceptance changes; task Verification and `make ci` were not run. Both
-index rows remain `todo`. Frontend dependencies installed with `npm ci --prefix web`.
+On origin/main `e4a0cb8`, the RFC 3339 tooltip contract contradicted the Intl-only
+requirement. This plan repair makes the tooltip follow
+[UI §10.2](../09-web-ui-spec.md#102-i18n), preserving
+[NFR-008](../02-requirements.md#nfr-008-ship-translation-plumbing-with-english-only)
+without a passthrough exception or a hand-rolled formatter. The task contract and
+required locale test now match. No implementation; T041 remains `todo`.
 
 ### Previous: suite count (resolved)
 

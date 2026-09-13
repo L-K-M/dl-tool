@@ -295,7 +295,7 @@ Segments, left to right:
 | 11 | `ratio` | Ratio | 70 | right | ✅ | numeric | 2 decimal places, `∞` above 9999 | `ratio` |
 | 12 | `uploaded` | Uploaded | 90 | right | ✅ | numeric | bytes | `uploaded_bytes` |
 | 13 | `destination` | Destination | 200 | left | ✅ | string | middle-ellipsis path + tooltip | `destination` |
-| 14 | `addedOn` | Added | 140 | left | ✅ | numeric timestamp | relative under 7 days, absolute after; tooltip is the RFC 3339 string | `added_at` |
+| 14 | `addedOn` | Added | 140 | left | ✅ | numeric timestamp | relative under 7 days, absolute after; localized absolute tooltip per [§10.2](#102-i18n) | `added_at` |
 | 15 | `completedOn` | Completed | 140 | left | ✅ | numeric timestamp | as `addedOn`, `—` when null | `completed_at` |
 
 Hidden by default, available from `Columns ▾`, each backed by an existing Task field (id → source):
@@ -879,6 +879,9 @@ also carried by an icon or a shape; spacing follows an 8 px scale; icons come fr
 - Plurals use i18next suffix keys (`key_one` / `key_other`), never inline ICU.
 - Every byte count, rate, duration and date goes through `Intl.NumberFormat`,
   `Intl.DateTimeFormat` or `Intl.RelativeTimeFormat` with the active locale. No hand-rolled formatters.
+- Absolute timestamp tooltips use `Intl.DateTimeFormat` with
+  `{ dateStyle: 'full', timeStyle: 'long' }`, the active locale and the browser's time zone.
+  RFC 3339 is the API input format, not the tooltip output format.
 - No string concatenation in code; every user-visible string passes through `t()`. This is enforced by an
   ESLint rule.
 - Use logical CSS properties (`margin-inline-start`, `inset-inline-end`) throughout so a future `dir="rtl"`
