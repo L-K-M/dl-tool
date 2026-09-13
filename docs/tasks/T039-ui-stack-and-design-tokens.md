@@ -237,7 +237,108 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-### URL-check plan repair
+### Generated-output lint repair
+
+Focused tooling repair, not T039 implementation. T039 and both index rows remain `todo`.
+Formatter scope is defined in [doc 13 §2](../13-testing-and-verification.md#2-makefile).
+No dependency, pin, task Files table or acceptance criterion changed.
+
+Before the repair, `npm ci --prefix web && npm run build --prefix web && make lint`
+built the scaffold, then failed:
+
+```text
+✓ built in 166ms
+```
+
+```text
+[warn] dist/assets/index-Vp0XYip_.js
+[warn] Code style issues found in the above file. Run Prettier with --write to fix.
+make: *** [Makefile:26: lint] Error 1
+```
+
+An isolated regression fixture used the installed Prettier CLI and a copy of
+`web/.prettierignore` (empty before the repair). It placed `export const value=1`
+in `dist/assets/app.js` and formatted `export const value = 1;` in `src/app.ts`,
+`src/api/schema.d.ts` and `src/dist/source.ts`. It asserted `prettier --check .`
+exited 0, then made each source file unformatted in turn and asserted exit 1
+naming that file, restoring it between checks. The temporary fixture was removed afterward.
+Before the fix, its first assertion failed:
+
+```text
+AssertionError [ERR_ASSERTION]: build output must not fail formatting:
+Checking formatting...
+[warn] dist/assets/app.js
+[warn] Code style issues found in the above file. Run Prettier with --write to fix.
+
+
+1 !== 0
+```
+
+After the fix:
+
+```text
+generated dist ignored: PASS
+src/app.ts formatting enforced: PASS
+src/api/schema.d.ts formatting enforced: PASS
+src/dist/source.ts formatting enforced: PASS
+```
+
+Ran the first bash block under Verification verbatim, with `web/dist` retained.
+Selected output:
+
+```text
+✓ built in 154ms
+URL_SCAN_REGRESSIONS_OK
+RUNTIME_ASSET_URL_SCAN_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+```
+
+```text
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
+```
+
+```text
+UI_STACK_OK
+```
+
+This proves the scaffold's build-to-lint sequence is runnable, not that T039 is implemented.
+The existing tests are not the future theme tests; acceptance boxes remain unchecked.
+The unchanged scaffold bundle's resource audit is recorded below and must be repeated for T039.
+`npm ci` still reports two high-severity advisories; no pins changed.
+
+`make vet`, `make test` (all Go packages and 13 web tests) and `git diff --check` passed.
+Documentation check:
+
+```text
+$ make doclint
+./scripts/doclint.sh
+🔍 2403 Total (in 165ms) 🔗 572 Unique ✅ 2377 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+`make ci` passed lint, vet, typecheck and tests, then stopped because Docker is unavailable locally:
+
+```text
+docker compose -f compose.yaml config -q
+/bin/bash: line 1: docker: command not found
+make: *** [Makefile:60: compose-check] Error 127
+```
+
+Hosted CI must verify Compose and integration before merge.
+
+### Earlier URL-check plan repair
 
 Plan repair only. T039 and both index rows remain `todo`; no implementation or pins changed.
 The former grep rejected a non-fetching `createElementNS` fixture before this repair:
@@ -377,10 +478,9 @@ make: *** [Makefile:60: compose-check] Error 127
 Hosted CI must verify Compose before merge.
 
 ## Blocked
-The URL-check contradiction is resolved by the scan and audit above. The same build now exposes
-an independent blocker: `make lint` runs Prettier over generated `web/dist/assets/*.js` and fails.
-The Files table does not authorize a formatter-ignore file or Makefile changes. This repair does
-not change that scope or fix that separate concern. T039 is not ready for full Verification yet.
+The URL-check contradiction and generated-output lint blocker are resolved. The tooling repair
+above fixes the existing formatter boundary without widening T039's Files table. The Verification
+command now reaches `UI_STACK_OK` on the scaffold; T039 remains unimplemented and `todo`.
 
 Earlier blocker resolved by using the mobile-sheet primitive specified in
 [doc 09 §1](../09-web-ui-spec.md#1-frontend-stack). Step 5 previously required
