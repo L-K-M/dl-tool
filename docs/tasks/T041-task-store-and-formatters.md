@@ -166,7 +166,14 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-Plan repair only, not T041 implementation evidence. After `npm ci --prefix web`,
+Current blocker documentation only. `make doclint` exited 0:
+
+```text
+./scripts/doclint.sh
+🔍 2422 Total (in 222ms) 🔗 572 Unique ✅ 2396 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+Previous plan repair only, not T041 implementation evidence. After `npm ci --prefix web`,
 comparing the existing suites plus the Files table against Verification reproduced:
 
 ```text
@@ -198,6 +205,22 @@ docker compose -f compose.yaml -f compose.dev.yaml config -q
 Task Verification remains pending until implementation adds the required suites.
 
 ## Blocked
+### Current: absolute-date contract
+
+On origin/main `e4a0cb8`, `formatAbsolute` must produce RFC 3339 for tooltips,
+but Step 1 permits only `Intl.NumberFormat`, `Intl.DateTimeFormat` and
+`Intl.RelativeTimeFormat`; UI spec §10.2 also requires every displayed date to
+pass through Intl and forbids hand-rolled formatters. Intl has no RFC 3339
+output mode. Returning the input preserves RFC 3339 but bypasses Intl;
+assembling `formatToParts()` output would hand-roll the date format.
+
+Owner clarification required: allow RFC 3339 passthrough for `formatAbsolute`,
+or change the tooltip contract to localized absolute dates. No implementation
+or acceptance changes; task Verification and `make ci` were not run. Both
+index rows remain `todo`. Frontend dependencies installed with `npm ci --prefix web`.
+
+### Previous: suite count (resolved)
+
 Resolved by this plan repair: Verification now includes all four existing suites and both
 required suites. T041 remains unimplemented and `todo`.
 
