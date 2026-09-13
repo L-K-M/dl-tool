@@ -112,7 +112,7 @@ ci: lint vet typecheck test compose-check doclint
 |---|---|---|
 | `setup` | Go module download, `golangci-lint` install, `npm ci`, Playwright chromium install, `lychee` install. | 0 once the toolchain is present; non-zero on any download failure. |
 | `gen` | `scripts/gen.sh`: regenerates `api/openapi.json` and `web/src/api/schema.d.ts`. | 0 always if generation succeeds; it does **not** check for drift — CI does (§7). |
-| `lint` | `gofmt -l`, `golangci-lint run`, ESLint, Prettier `--check`. | Non-zero on any unformatted file or any lint finding. |
+| `lint` | `gofmt -l`, `golangci-lint run`, ESLint, Prettier `--check`. | Non-zero on any unformatted checked file or any lint finding. |
 | `vet` | `go vet ./...`. | Non-zero on any vet diagnostic. |
 | `typecheck` | `tsc --noEmit`. | Non-zero on any TypeScript error. |
 | `test` | Go tests with `-race` plus Vitest. With `PKG=` set, Go only. | Non-zero on any failing or panicking test. |
@@ -125,6 +125,10 @@ ci: lint vet typecheck test compose-check doclint
 | `ci` | `lint vet typecheck test compose-check doclint` in that order. | Stops at the first non-zero target. |
 
 `go test -race` needs cgo at test time; only the `build` target sets `CGO_ENABLED=0`.
+
+`web/.prettierignore` excludes only the Vite output directory `/dist/` from formatting checks.
+Build output is minified, not formatter input; `make lint` must also pass after `npm run build`.
+Source files, configuration and the generated `src/api/schema.d.ts` remain checked.
 
 ## 3. Definition of Done
 
