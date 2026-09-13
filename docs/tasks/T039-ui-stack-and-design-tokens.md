@@ -139,16 +139,20 @@ export function initI18n(): typeof i18next;
    file: check all thirteen token values in both themes, the canonical alias/mapping declarations,
    required CSS imports, and absence of font imports, package `cn` and forbidden dependencies in
    source/manifest/lockfile, enforcing every condition of [doc 09 §1's build-tool exception](../09-web-ui-spec.md#1-frontend-stack).
-   Record its build module-graph audit alongside the CSS audit below. Exercise the local `cn` with
-   conditional classes and conflicting utilities.
+   On every test run, execute the build module-graph audit programmatically with the installed Vite
+   (`write: false`), using the actual application entry and build configuration, without network access.
+   Inspect every emitted JavaScript chunk's module IDs; allow the CSS subpath, not tool JavaScript.
+   Include a negative fixture with a used `zod` import and assert the same audit rejects it. Record
+   output alongside the CSS audit below. Exercise the local `cn` with conditional classes and
+   conflicting utilities.
    Inspect the built CSS to confirm primary, accent, foreground, border, ring and open/closed-state
    utilities resolve through the bridge in both themes; record that audit alongside the copy-in diff.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `web/package.json` carries every version string from doc 09 §1 unchanged and no forbidden direct
-  dependency. Its build-tool exception is enforced by `TestShadcnIntegrationContract` and the recorded
-  build module-graph audit.
+  dependency. `TestShadcnIntegrationContract` enforces its build-tool exception, including the
+  automated build module-graph audit and negative fixture; record the output.
 - [ ] `web/src/index.css` preserves all thirteen token values in both themes; the canonical token bridge
   and CSS integration are present. `TestShadcnIntegrationContract` passes and the built-CSS audit is recorded.
 - [ ] `TestApplyThemeTogglesClass` and `TestReadStoredThemeFallsBackToSystem` pass in `theme.test.ts`.
@@ -264,6 +268,56 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+### Review follow-up: automate the bundle boundary
+
+Made the module-graph audit an explicit per-run contract-test requirement, including the actual
+application build and a negative fixture. This closes the manual-evidence ambiguity; implementation
+still belongs to T039. A new temporary plan assertion failed before this clarification:
+
+```text
+not ok 1 - canonical contract bounds the existing build-tool dependency
+ok 2 - verification preserves existing tests and requires the new test
+ok 3 - repair leaves task unimplemented
+# pass 2
+# fail 1
+```
+
+After clarification, all three plan checks passed. Re-ran the isolated executable audit:
+
+```text
+CSS_ONLY_BUILD_EXCLUDES_TOOL_JAVASCRIPT
+RUNTIME_ZOD_IMPORT_REJECTED
+```
+
+Inspected the pinned package to resolve the review's export/token concern:
+
+```text
+shadcn version: 4.19.1
+CSS export: "./dist/tailwind.css"
+NO_CANONICAL_TOKEN_DECLARATIONS
+```
+
+The CSS contains variants, keyframes and utility-specific properties, not declarations of the
+thirteen application tokens. The fixture already proves Vite resolves its export. Doc 09 §1's
+existing Components row supplies the CLI pin; duplicating it is unnecessary.
+
+Advisory triage: `npm audit --json --prefix web` identified `GHSA-2883-xcg3-v3hh` in
+`node_modules/js-yaml`, also affecting `node_modules/@redocly/openapi-core`. Production-only audit:
+
+```text
+{ info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0 }
+```
+
+Dependency repair, an additional ESLint guard and parsing Vitest's summary are deferred outside this
+contract repair. Required test names/count and no-skipping rules remain acceptance gates; passing
+scaffold output is explicitly not task completion. The narrow tool allowlist remains intentional.
+No source, pins or status changed. `git diff --check` passed. Documentation check:
+
+```text
+./scripts/doclint.sh
+🔍 2416 Total (in 226ms) 🔗 572 Unique ✅ 2390 OK 🚫 0 Errors 👻 26 Excluded
+```
+
 ### Support-dependency contract repair
 
 Plan only. The canonical build-tool exception resolves the required package conflict; Verification

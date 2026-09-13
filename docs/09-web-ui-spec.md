@@ -78,9 +78,10 @@ Its transitive `zod` is permitted only in the build-tool dependency graph, not a
 validator. Keep `zod` absent from every direct manifest dependency section and application imports;
 every lockfile `zod` entry must have `dev: true` and be reachable from the pinned `shadcn` dependency
 through npm's resolved dependency graph. Other forbidden packages remain absent from the lockfile.
-Application code may import only `shadcn/tailwind.css`, never the tool's JavaScript. Audit the build
-module graph: neither `zod` nor `shadcn` JavaScript may enter any emitted browser chunk. Generated
-OpenAPI types remain the application's contract; this exception adds no runtime validation library.
+Application code may import only `shadcn/tailwind.css`, never the tool's JavaScript. The automated
+contract test audits the build module graph: neither `zod` nor `shadcn` JavaScript may enter any
+emitted browser chunk. Generated OpenAPI types remain the application's contract; this exception
+adds no runtime validation library.
 
 **Import aliases:** before shadcn initialization, configure both resolvers for its default `@/` imports:
 Vite's `resolve.alias` maps `@` to the absolute path of `web/src`; `web/tsconfig.json` sets
