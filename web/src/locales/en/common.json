@@ -1,5 +1,35 @@
 {
   "appTitle": "dl-tool",
+  "auth": {
+    "login": "Sign in",
+    "setup": "Set up dl-tool",
+    "setupToken": "Setup token",
+    "username": "Username",
+    "password": "Password",
+    "confirmPassword": "Confirm password",
+    "passwordRequirement": "Use at least {{count}} characters.",
+    "passwordMismatch": "Passwords must match.",
+    "locale": "Language",
+    "english": "English",
+    "createAccount": "Create account",
+    "setupComplete": "Setup is already complete. Sign in to continue.",
+    "unavailable": "Cannot reach the server. Try again.",
+    "rateLimited": "Too many attempts. Retry after {{seconds}} seconds.",
+    "unknownWait": "an unknown number of",
+    "serverDetail": "{{detail}}",
+    "header": "Toolbar",
+    "sidebar": "Navigation",
+    "statusBar": "Status bar",
+    "screens": {
+      "tasks": "Downloads",
+      "search": "Search",
+      "rss-feeds": "RSS feeds",
+      "rss-rules": "RSS rules",
+      "settings": "Settings",
+      "logs": "Logs",
+      "notFound": "Page not found"
+    }
+  },
   "theme": { "system": "System", "light": "Light", "dark": "Dark" },
   "empty": {
     "tasks": "No downloads yet — paste a link or drop a .torrent file to start.",
