@@ -113,8 +113,8 @@ export function initI18n(): typeof i18next;
 4. Run `npx shadcn@4.19.1 init` and accept the Vite + Tailwind defaults, producing `web/components.json`
    and `web/src/lib/utils.ts`.
 5. Run `npx shadcn@4.19.1 add button checkbox dialog sheet input label select popover context-menu tabs
-   tooltip` once. For the twelfth primitive, run `npx shadcn@4.19.1 view sonner`, copy its file content to
-   `web/src/components/ui/sonner.tsx`, and apply only the
+   tooltip` once. For the twelfth primitive, run `npx shadcn@4.19.1 view sonner`, parse its JSON array,
+   and write the first item's `files[0].content` string to `web/src/components/ui/sonner.tsx`. Apply only the
    [Sonner theme adapter](../09-web-ui-spec.md#1-frontend-stack) specified in doc 09 §1.
    From `web/`, run `npm install --save-exact sonner`; retain all existing pins and exclude `next-themes`.
    Keep the CLI output and the adapter diff in Evidence. Do not mount the toaster or add a provider;
@@ -260,7 +260,7 @@ and unchanged `todo` status/unchecked boxes. Before the repair:
 AssertionError: canonical plan lacks a Sonner copy-in exception
 ```
 
-After the repair:
+After the repair, plan checks pass; the unchanged upstream copy-in still reproduces the original import:
 
 ```text
 SONNER_PLAN_REGRESSIONS_OK
