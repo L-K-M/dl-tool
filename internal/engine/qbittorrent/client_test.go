@@ -278,12 +278,21 @@ func (f *fakeServer) loginCount() int {
 	return f.logins
 }
 
-// newClient returns a connected-or-connectable client for one fake.
+// newClient returns a connected-or-connectable client for one fake. The
+// client closes with the test: Connect's sync/maindata poll must not
+// outlive it and hit a port a later test's fake reuses.
 func newClient(t *testing.T, f *fakeServer) *Client {
 	t.Helper()
 
 	c, err := New(Config{BaseURL: f.srv.URL, Username: testUsername, Password: testPassword}, nil)
 	require.NoError(t, err)
+	// Report rather than require: FailNow's Goexit inside a cleanup would
+	// abandon the rest of the cleanup queue, including the fake's Close.
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("closing client: %v", err)
+		}
+	})
 	return c
 }
 
