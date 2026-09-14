@@ -167,4 +167,23 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+This task cannot pass `make test-web` without editing `web/src/App.test.tsx`, which is not in the
+`## Files` table ("No other file may be modified").
+
+- `TestBootRendersLayout` asserts `screen.getByRole("banner").textContent === ""`,
+  `getByRole("complementary").textContent === ""` and `getByRole("contentinfo").textContent === ""`
+  (`web/src/App.test.tsx`, T040 commit `6a08ec9`). T040's own task file says the regions stay "empty
+  landmark[s] until T042 and T044 fill them", so the assertions were written as placeholders.
+- Step 8 of this task requires mounting `Toolbar`, `Sidebar` and `StatusBar` in exactly those three
+  regions. Any spec-conforming content (sidebar labels and counts, toolbar buttons, status-bar
+  segments) makes all three `textContent`s non-empty, so the test fails. There is no compliant
+  rendering that satisfies both.
+
+Two fixes are needed in this task file before it can run:
+
+1. Add `web/src/App.test.tsx` to the `## Files` table so the landmark assertions can be updated
+   (e.g. assert the mounted regions instead of empty `textContent`).
+2. Correct the `## Verification` expected count: `web/src` already contains 7 test files
+   (`App.test.tsx`, `api/client.test.ts`, `components/TaskGrid/TaskGrid.test.tsx`,
+   `lib/format.test.ts`, `lib/theme.test.ts`, `main.test.ts`, `store/useTasks.test.ts`), so adding
+   `src/components/Shell/Shell.test.tsx` makes Vitest report `Test Files  8 passed (8)`, not 7.
