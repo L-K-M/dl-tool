@@ -193,6 +193,11 @@ on Reset; `loadInitial` validates the scalar members; `patch` clones its input a
 `version`; `DEFAULT_COLUMN_ORDER` moved to `ColumnsMenu.tsx` so the store test does not import the
 component graph; and the dead `KeyboardSensor` was removed — header keyboard-drag would conflict with
 click-to-sort on the same keys, and the spec's keyboard reorder path is the popover's Move buttons.
+The separator clamp uses `columnDef` bounds, carries `aria-valuemin`/`max`/`now`, and takes its header
+label from the `grid` namespace hook; `TestFilterDisablesMovesAndResetClearsFilter` covers the two new
+popover behaviours. `TestShrinkingPageKeepsVirtualIndicesInBounds`'s first `aria-rowcount` assertion
+now waits like the second one already did — a racy synchronous read that flaked in the slower
+task-verification runner; the assertion itself is unchanged.
 
 ### Acceptance proof
 
@@ -242,7 +247,7 @@ cd web && npx vitest run
  ✓ src/App.test.tsx (55 tests)
  ✓ src/main.test.ts (1 test)
  ✓ src/lib/theme.test.ts (9 tests)
- ✓ src/components/TaskGrid/TaskGrid.test.tsx (31 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (32 tests)
    ✓ TestRendersDefaultColumns
    ✓ TestStatusSortsByOrdinal
    ✓ TestShiftClickSelectsRange
@@ -257,9 +262,10 @@ cd web && npx vitest run
    ✓ TestPinnedColumnsStayFixed
    ✓ TestUnmountMidResizeStillPersists
    ✓ TestResetRestoresLiveGrid
+   ✓ TestFilterDisablesMovesAndResetClearsFilter
 
  Test Files  9 passed (9)
-      Tests  145 passed (145)
+      Tests  146 passed (146)
 
 PREFS_OK
 ```

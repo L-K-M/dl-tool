@@ -321,7 +321,9 @@ test("TestShrinkingPageKeepsVirtualIndicesInBounds", async () => {
   tasks = [task("replacement")];
   reportedTotal = 1;
   await act(() => invalidateTaskList(qc));
-  expect(screen.getByRole("grid").getAttribute("aria-rowcount")).toBe("1");
+  await waitFor(() =>
+    expect(screen.getByRole("grid").getAttribute("aria-rowcount")).toBe("1"),
+  );
   fireEvent.scroll(screen.getByRole("grid"), { target: { scrollTop: 0 } });
   await screen.findByText("replacement");
   expect(order()).toEqual(["replacement"]);
@@ -926,4 +928,27 @@ test("TestResetRestoresLiveGrid", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
   expect(columnIds()).toEqual([...DEFAULT_COLUMN_ORDER]);
   expect(within(row("one")).getAllByRole("gridcell")).toHaveLength(15);
+});
+
+test("TestFilterDisablesMovesAndResetClearsFilter", async () => {
+  await mount();
+  await openColumnsMenu();
+  const filter = screen.getByRole("textbox", {
+    name: "Filter columns",
+  }) as HTMLInputElement;
+  fireEvent.change(filter, { target: { value: "size" } });
+  const up = () =>
+    screen.getByRole("button", {
+      name: "Move Size up",
+    }) as HTMLButtonElement;
+  const down = () =>
+    screen.getByRole("button", {
+      name: "Move Size down",
+    }) as HTMLButtonElement;
+  // A filtered list hides the neighbour a move would swap with.
+  expect(up().disabled).toBe(true);
+  expect(down().disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
+  expect(filter.value).toBe("");
+  expect(up().disabled).toBe(false);
 });

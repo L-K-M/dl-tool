@@ -589,6 +589,7 @@ function GridHeader({
   const id = header.column.id as ColumnId;
   const pinned = PINNED_GRID_COLUMNS.has(id);
   const { t: tc } = useTranslation();
+  const { t: gt } = useTranslation("grid");
   const { setNodeRef, listeners, transform, transition, isDragging } =
     useSortable({ id: header.id, disabled: pinned });
   const sorted = header.column.getIsSorted();
@@ -672,11 +673,14 @@ function GridHeader({
         <span
           role="separator"
           aria-orientation="vertical"
+          aria-valuemin={header.column.columnDef.minSize ?? 20}
+          aria-valuemax={
+            header.column.columnDef.maxSize ?? Number.MAX_SAFE_INTEGER
+          }
+          aria-valuenow={Math.round(header.column.getSize())}
           // title, not aria-label: a descendant's label leaks into the
           // columnheader's name-from-content; title is not consulted there.
-          title={tc("shell.resizeColumn", {
-            name: initI18n().t(`headers.${id}`, { ns: "grid" }),
-          })}
+          title={tc("shell.resizeColumn", { name: gt(`headers.${id}`) })}
           tabIndex={0}
           data-resize-handle={id}
           onPointerDown={(event) => event.stopPropagation()}
@@ -690,9 +694,13 @@ function GridHeader({
             const delta = event.key === "ArrowLeft" ? -16 : 16;
             header.getContext().table.setColumnSizing((old) => ({
               ...old,
+              // Same bounds the pointer path enforces via columnDef.
               [id]: Math.min(
-                Math.max(header.column.getSize() + delta, 40),
-                1200,
+                Math.max(
+                  header.column.getSize() + delta,
+                  header.column.columnDef.minSize ?? 20,
+                ),
+                header.column.columnDef.maxSize ?? Number.MAX_SAFE_INTEGER,
               ),
             }));
           }}
@@ -885,8 +893,11 @@ export function TaskGrid(props: TaskGridProps) {
     }
     table.setColumnSizing({
       ...table.getState().columnSizing,
-      // 8 px of cell padding on each side of the content measurement.
-      [columnId]: Math.min(Math.max(width + 8, 40), 1200),
+      // Content measurement plus cell padding, clamped to the column bounds.
+      [columnId]: Math.min(
+        Math.max(width + 8, column.columnDef.minSize ?? 20),
+        column.columnDef.maxSize ?? Number.MAX_SAFE_INTEGER,
+      ),
     });
   };
   const rows = table.getRowModel().rows;
