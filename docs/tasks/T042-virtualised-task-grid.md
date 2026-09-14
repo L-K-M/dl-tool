@@ -345,6 +345,32 @@ Only this task document changed. The task and both index rows remain `todo`.
 
 ## Blocked
 
+### Unresolved: keyboard actions require forbidden components
+
+Step 6 requires the keyboard model in [doc 09 §3.6](../09-web-ui-spec.md#36-keyboard):
+`Enter`/`F2` opens the focused task's detail pane; `Ctrl/Cmd+F` focuses the toolbar filter.
+This task's Out of scope section forbids building the detail pane and toolbar, assigning them to
+T048 and T044. Both depend on T042 in the current index. Neither component nor an action interface
+exists in the current implementation: `web/src/App.tsx` renders an empty header and task placeholder.
+
+Checked on the current main baseline with:
+
+```bash
+rg --files web/src/components
+rg -n 'onKeyDown|keydown|detail|filter box|cheat|shortcut|remove' web/src/App.tsx web/src/components
+```
+
+The file list contains only `Auth/` and `ui/` components. The search finds authentication error-detail
+strings and the generic context-menu shortcut primitive, not task keyboard actions or their targets.
+
+Implementing those targets here violates scope; inert callbacks or unconsumed events would not satisfy
+the required actions. Owner clarification is needed: explicitly defer cross-component keyboard actions
+to their owning tasks, or revise the scope and dependency plan. No implementation was added. The task
+and both index rows remain `todo`; acceptance boxes remain unchecked. Implementation Verification and
+`make ci` were not run because work stopped at this contradiction. `npm ci --prefix web` succeeded with
+two high-severity audit findings; no pins changed. `git diff --check` and `make doclint` passed (0 errors).
+Do not merge this as completed T042 work.
+
 Resolved: the Verification suite count now includes the required new `TaskGrid.test.tsx`
 without removing or excluding existing suites. No code was added; the task and both index rows
 remain `todo`. Grid implementation and acceptance verification remain pending.
