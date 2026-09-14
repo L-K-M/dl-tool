@@ -33,7 +33,7 @@ func TestSanitiseSegmentTable(t *testing.T) {
 		{4, "...", "_"},
 		{5, "/etc/passwd", "_etc_passwd"},
 		{7, `C:\Windows\system32.exe`, "C__Windows_system32.exe"},
-		{8, `\\?\C:\x`, "____C_x"},
+		{8, `\\?\C:\x`, "____C__x"},
 		{9, "CON", "_CON"},
 		{10, "nul.txt", "_nul.txt"},
 		{11, "com9.tar.gz", "_com9.tar.gz"},
