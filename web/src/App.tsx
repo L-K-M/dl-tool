@@ -23,6 +23,8 @@ import { SetupScreen } from "./components/Auth/SetupScreen";
 import { Toaster } from "./components/ui/sonner";
 import { initI18n } from "./i18n";
 import { readStoredTheme } from "./lib/theme";
+import { TaskGrid } from "./components/TaskGrid/TaskGrid";
+import type { SidebarFilter } from "./store/useTasks";
 
 type AuthEnvelope = components["schemas"]["AuthEnvelope"];
 export type SessionState =
@@ -166,7 +168,7 @@ function AppLayout() {
     >
       <header aria-label={t("regions.header")} className="col-span-2" />
       <aside aria-label={t("regions.sidebar")} />
-      <main className="min-w-0 overflow-auto">
+      <main className="min-w-0 overflow-hidden">
         <Outlet />
       </main>
       <footer aria-label={t("regions.statusBar")} className="col-span-2" />
@@ -179,12 +181,32 @@ function Placeholder({ screen }: { screen: string }) {
   return <h1>{t(`screens.${screen}`)}</h1>;
 }
 
-function TasksRoute({ filter }: { filter?: string }) {
+function TasksRoute({
+  filter,
+  group,
+}: {
+  filter?: SidebarFilter;
+  group?: "category" | "tag";
+}) {
   const params = useParams();
+  const state = filter ?? params.filter ?? "all";
+  const filters: SidebarFilter[] = [
+    "all",
+    "downloading",
+    "completed",
+    "active",
+    "inactive",
+    "stopped",
+    "error",
+  ];
+  if (!filters.includes(state as SidebarFilter))
+    return <Navigate to="/tasks/all" replace />;
   return (
-    <div data-filter={filter ?? params.filter} data-name={params.name}>
-      <Placeholder screen="tasks" />
-    </div>
+    <TaskGrid
+      filter={state as SidebarFilter}
+      category={group === "category" ? params.name : undefined}
+      tag={group === "tag" ? params.name : undefined}
+    />
   );
 }
 
@@ -207,8 +229,14 @@ export default function App() {
               >
                 <Route path="/" element={<TasksRoute filter="all" />} />
                 <Route path="/tasks/:filter" element={<TasksRoute />} />
-                <Route path="/tasks/category/:name" element={<TasksRoute />} />
-                <Route path="/tasks/tag/:name" element={<TasksRoute />} />
+                <Route
+                  path="/tasks/category/:name"
+                  element={<TasksRoute group="category" />}
+                />
+                <Route
+                  path="/tasks/tag/:name"
+                  element={<TasksRoute group="tag" />}
+                />
                 <Route
                   path="/search"
                   element={<Placeholder screen="search" />}
