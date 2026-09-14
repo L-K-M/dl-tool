@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T022, T023, T041, T042 |
 | **Blocks** | T045, T049, T051, T052, T063, T072, T104 |
-| **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/locales/en/common.json` |
+| **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/App.test.tsx` and `web/src/locales/en/common.json` |
 | **Implements** | — (renders [FR-013](../02-requirements.md#fr-013-resolve-the-sidebar-filter-sets), [FR-014](../02-requirements.md#fr-014-apply-lifecycle-and-queue-actions-to-a-selection) and [FR-015](../02-requirements.md#fr-015-remove-a-task-with-or-without-its-data), covered by T021, T022 and T023) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 4 new files, ~400 LOC. The three chrome regions share one layout and one test file. |
@@ -41,6 +41,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/TaskGrid/TaskGrid.tsx` | edit | Extend the existing listener with this task's action callbacks. |
 | `web/src/components/TaskGrid/TaskGrid.test.tsx` | edit | Guard, dispatch-once and dialog-isolation regressions. |
 | `web/src/App.tsx` | edit | Mount the three regions inside `AppLayout` and wire grid action callbacks. |
+| `web/src/App.test.tsx` | edit | Assert the mounted chrome in `TestBootRendersLayout` instead of empty landmarks. |
 | `web/src/locales/en/common.json` | edit | Sidebar, toolbar and status-bar strings. |
 
 No other file may be modified.
@@ -116,6 +117,9 @@ Sidebar markup, per group:
 6. Add the theme toggle button calling `applyTheme` and `storeTheme` from T039.
 7. Create `StatusBar.tsx` with the six segments in order, every number through the T041 formatters.
 8. Edit `web/src/App.tsx` to render `Toolbar`, `Sidebar` and `StatusBar` in the three region slots.
+   Replace `TestBootRendersLayout`'s empty-landmark assertions in `web/src/App.test.tsx` with
+   assertions that each region renders its mounted chrome: the toolbar in `banner`, the navigation
+   tree in `complementary` and the status segments in `contentinfo`.
 9. Create `Shell.test.tsx`: counts render from a seeded store; a zero-count node is present and dimmed;
    toolbar buttons are disabled with an empty selection; `Pause` posts
    `{"ids":["tsk_…"],"action":"pause"}`; the remove dialog's delete-files box starts unticked; the status
@@ -140,14 +144,14 @@ Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && make typecheck && make test-web && echo SHELL_OK
 ```
-Expected: Vitest reports `Test Files  7 passed (7)` including `src/components/Shell/Shell.test.tsx`, every
+Expected: Vitest reports `Test Files  8 passed (8)` including `src/components/Shell/Shell.test.tsx`, every
 test named above appears as passing, and the final line of stdout is exactly `SHELL_OK`.
 
 Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the paths in the Files table and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -167,23 +171,20 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-This task cannot pass `make test-web` without editing `web/src/App.test.tsx`, which is not in the
-`## Files` table ("No other file may be modified").
+Resolved by the plan repair: `web/src/App.test.tsx` is now in the `## Files` table with the
+`TestBootRendersLayout` rewrite assigned to step 8, and the `## Verification` expectation reads
+`Test Files  8 passed (8)`. T044 remains unimplemented and `todo`.
 
-- `TestBootRendersLayout` asserts `screen.getByRole("banner").textContent === ""`,
-  `getByRole("complementary").textContent === ""` and `getByRole("contentinfo").textContent === ""`
-  (`web/src/App.test.tsx`, T040 commit `6a08ec9`). T040's own task file says the regions stay "empty
-  landmark[s] until T042 and T044 fill them", so the assertions were written as placeholders.
-- Step 8 of this task requires mounting `Toolbar`, `Sidebar` and `StatusBar` in exactly those three
-  regions. Any spec-conforming content (sidebar labels and counts, toolbar buttons, status-bar
-  segments) makes all three `textContent`s non-empty, so the test fails. There is no compliant
-  rendering that satisfies both.
+Original blocker: `TestBootRendersLayout` asserts `screen.getByRole("banner").textContent === ""`,
+`getByRole("complementary").textContent === ""` and `getByRole("contentinfo").textContent === ""`
+(`web/src/App.test.tsx`, T040 commit `6a08ec9`). T040's own task file says the regions stay "empty
+landmark[s] until T042 and T044 fill them", so the assertions were written as placeholders. Step 8
+mounts `Toolbar`, `Sidebar` and `StatusBar` in exactly those three regions; any spec-conforming
+content makes all three `textContent`s non-empty, so the test fails and the file was outside the
+`## Files` table.
 
-Two fixes are needed in this task file before it can run:
-
-1. Add `web/src/App.test.tsx` to the `## Files` table so the landmark assertions can be updated
-   (e.g. assert the mounted regions instead of empty `textContent`).
-2. Correct the `## Verification` expected count: `web/src` already contains 7 test files
-   (`App.test.tsx`, `api/client.test.ts`, `components/TaskGrid/TaskGrid.test.tsx`,
-   `lib/format.test.ts`, `lib/theme.test.ts`, `main.test.ts`, `store/useTasks.test.ts`), so adding
-   `src/components/Shell/Shell.test.tsx` makes Vitest report `Test Files  8 passed (8)`, not 7.
+The original `## Verification` block also expected `Test Files  7 passed (7)`, but `web/src` already
+contained 7 test files before `Shell.test.tsx` (`App.test.tsx`, `api/client.test.ts`,
+`components/TaskGrid/TaskGrid.test.tsx`, `lib/format.test.ts`, `lib/theme.test.ts`, `main.test.ts`,
+`store/useTasks.test.ts`), so the correct expectation is 8. The scope check's "in that order" phrase
+was dropped because `git status --porcelain` sorts paths and the `## Files` table does not.
