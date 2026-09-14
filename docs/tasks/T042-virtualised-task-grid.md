@@ -146,7 +146,7 @@ Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && make typecheck && make test-web && echo GRID_OK
 ```
-Expected: Vitest reports `Test Files  6 passed (6)` including
+Expected: Vitest reports `Test Files  7 passed (7)` including
 `src/components/TaskGrid/TaskGrid.test.tsx`, every test named above appears as passing, and the final line
 of stdout is exactly `GRID_OK`.
 
@@ -232,8 +232,124 @@ This proves the specified budget is feasible, not that the unimplemented TaskGri
 ([GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh)). Dependency remediation is
 outside this plan repair; no pins changed.
 
+### Current baseline verification
+
+On `49fb1fa`, before adding grid code, ran:
+
+```bash
+make lint && make typecheck && make test-web && echo GRID_OK
+```
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t042-1-1789351229/web
+
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/setup 409 (Conflict)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
+GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
+
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+   Start at  02:01:45
+   Duration  2.34s (transform 961ms, setup 0ms, import 2.81s, tests 2.56s, environment 1.72s)
+
+GRID_OK
+```
+
+This is baseline evidence only. No grid acceptance test exists yet. `npm ci --prefix web`
+installed the pinned dependencies and reported two high-severity audit findings; no pins changed.
+
+### Suite-count repair verification
+
+The following contract check failed before the repair and passed afterward:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import re
+p = Path('docs/tasks/T042-virtualised-task-grid.md').read_text()
+verification = p.split('## Verification\n', 1)[1].split('## Out of scope', 1)[0]
+existing = list(Path('web/src').rglob('*.test.ts')) + list(Path('web/src').rglob('*.test.tsx'))
+required = re.findall(r'\| `(web/[^`]+\.test\.tsx?)` \| create \|', p)
+expected = len(set(map(str, existing)) | set(required))
+actual = int(re.search(r'Test Files  (\d+) passed', verification)[1])
+print(f'existing={len(existing)}, required new={len(required)}, expected={expected}, documented={actual}', flush=True)
+assert actual == expected, 'T042 suite count excludes its required new test file'
+PY
+```
+
+```text
+existing=6, required new=1, expected=7, documented=6
+AssertionError: T042 suite count excludes its required new test file
+```
+
+```text
+existing=6, required new=1, expected=7, documented=7
+```
+
+Fresh `npm ci --prefix web` installed the pinned dependencies and again reported two high-severity
+findings; no pins changed. The Verification command exited 0 on the unchanged implementation:
+
+```text
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+   Start at  02:05:41
+   Duration  2.34s (transform 862ms, setup 0ms, import 3.02s, tests 2.58s, environment 1.62s)
+
+GRID_OK
+```
+
+This is baseline proof, not grid acceptance. `make ci` initially failed because it ran alongside the
+Verification command and golangci-lint rejected concurrent execution. Rerunning sequentially with
+`PATH="/tmp/t039-tools:$PATH" make ci` reused the existing Docker CLI and exited 0. Output excerpts:
+
+```text
+0 issues.
+All matched files use Prettier code style!
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2431 Total (in 223ms) 🔗 573 Unique ✅ 2404 OK 🚫 0 Errors 👻 27 Excluded
+```
+
+Only this task document changed. The task and both index rows remain `todo`.
+
 ## Blocked
-Resolved by the plan repair: [doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation) now separates table
+
+Resolved: the Verification suite count now includes the required new `TaskGrid.test.tsx`
+without removing or excluding existing suites. No code was added; the task and both index rows
+remain `todo`. Grid implementation and acceptance verification remain pending.
+
+Previous blocker, resolved by the plan repair: [doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation) now separates table
 row density from fixed mobile card height while preserving no auto-measurement and the existing mobile
 content and tap-target requirements. This repairs the missing exception, not the implementation.
 T042 and both index rows remain `todo`; implementation Verification is still pending.
