@@ -137,7 +137,8 @@ directory → `404 /problems/not-found`; a missing `path` → `422 /problems/val
    `registerOperations`.
 8. Run `make gen` to regenerate `api/openapi.json` and `web/src/api/schema.d.ts` (docs/13 §7.1).
    Run the verification command, paste its output under `## Evidence`, and confirm scope with the
-   command below. Only then commit everything, including the two regenerated files.
+   `git status` command under `## Verification`. Only then commit everything, including the two
+   regenerated files.
 
 ## Acceptance criteria
 - [ ] `TestSanitiseSegmentTable` runs all thirty rows of doc 12 §3.4 and every one passes.
