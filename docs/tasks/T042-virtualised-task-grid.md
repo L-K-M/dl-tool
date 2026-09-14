@@ -228,8 +228,15 @@ print('ENTRYPOINT_SCOPE_OK: both tests authorized, integration acceptance requir
 PY
 ```
 
+Before repair (exit 1, excerpt):
+
 ```text
 AssertionError: T042 omits required integration test: web/src/main.test.ts
+```
+
+After repair (exit 0):
+
+```text
 ENTRYPOINT_SCOPE_OK: both tests authorized, integration acceptance required, T042 todo
 ```
 
@@ -346,8 +353,9 @@ web/src/locales/en/grid.json
 
 ### Historical plan-repair evidence
 
-Implementation Verification pending. Replace this section with fresh Verification and `make ci` output
-when implementing the grid. The following is plan-repair evidence only, not proof of grid rendering.
+Implementation Verification pending. When implementing the grid, replace the entire `## Evidence`
+section, including all repair and superseded-attempt subsections, with fresh Verification and `make ci`
+output. The following is plan-repair evidence only, not proof of grid rendering.
 
 Before repair, this contract check failed; after repair, the same check passed:
 
