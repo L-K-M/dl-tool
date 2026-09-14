@@ -442,10 +442,12 @@ aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
 
 - `@tanstack/react-virtual`'s `useVirtualizer({ count, getScrollElement, estimateSize: () => rowHeight, overscan: 10 })`.
 - Rows are **fixed height**, with no auto-measurement. At tablet and desktop breakpoints, `rowHeight`
-  is 32 px comfortable or 26 px compact. Mobile cards use 160 px in either density, leaving room for
-  the multiline content and touch controls in [§10.3](#103-responsive-and-mobile).
+  is 32 px comfortable or 26 px compact. Mobile cards use 160 px in either density, with the content
+  budget in [§10.3](#103-responsive-and-mobile).
   Use the active height for both the rendered row and the virtualiser estimate; update both when the
-  breakpoint or density changes, without changing row order or selection.
+  breakpoint or density changes, without changing row order or selection. Call `virtualizer.measure()`
+  after changing the height to invalidate cached offsets. This resets the estimate cache; it does not
+  enable DOM row measurement. Do not attach `measureElement` to rows.
 - Column virtualisation is not used; at ≤ 40 columns it adds bugs and buys nothing.
 - Exactly one element has `overflow: auto`. The header is a separate sticky row translated in sync with
   `transform: translateX(-scrollLeft)`.
@@ -904,10 +906,15 @@ Breakpoints: `< 640 px` mobile · `640–1023 px` tablet · `≥ 1024 px` deskto
 
 Mobile card: line 1 the name clamped to two lines, line 2 the progress bar, line 3
 `Status · Size · ↓rate · ↑rate · ETA`, and a `⋮` button opening a bottom sheet carrying the §3.7 context
-menu. Card height follows [§3.9](#39-virtualisation), not table density. The metadata may wrap but must
-not be truncated or overlap adjacent cards. Long-press enters selection mode with a top action bar.
-Tap targets are at least 44 × 44 px. No action is hover-only; every hover affordance also exists in the
-`⋮` menu.
+menu. Card height follows [§3.9](#39-virtualisation), not table density. Its vertical budget is 16 px
+block padding (8 per edge), 32 px for the two-line name, 16 px for the progress bar, 80 px for metadata
+lines, and 16 px for the two gaps (8 each). Name and metadata use 14 px text with 16 px line height.
+Treat each of the five metadata values as a non-wrapping item; wrap only between items, using at most
+five lines. Reserve a separate inline control rail so touch controls do not consume the text budget.
+If a metadata item cannot fit the available width, widen the card content and use the grid's existing
+horizontal scroll container, never truncate the value or add a nested scroll container.
+Long-press enters selection mode with a top action bar. Tap targets are at least 44 × 44 px.
+No action is hover-only; every hover affordance also exists in the `⋮` menu.
 
 A web app manifest, maskable icons, `display: standalone` and a `theme-color` matching the dark background
 ship in v1. The service worker's only jobs are meeting the install criterion and caching static assets.

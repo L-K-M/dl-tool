@@ -98,7 +98,8 @@ useVirtualizer({ count: rows.length, getScrollElement, estimateSize: () => rowHe
 
 Row heights follow [doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation): table density applies only
 at tablet/desktop breakpoints; mobile cards use their own fixed height in either density. Never measure
-rows. Keep the rendered height and virtualiser estimate equal when the breakpoint or density changes.
+rows. Keep the rendered height and virtualiser estimate equal when the breakpoint or density changes,
+including the cache reset required by doc 09 §3.9.
 Progress bar attributes: `role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}
 aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
 
@@ -119,14 +120,16 @@ aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
    `isContentEditable`. Exactly one row carries `tabIndex={0}`.
 7. Create `TaskCardList.tsx`: name clamped to two lines, the progress bar, then
    `Status · Size · ↓rate · ↑rate · ETA`, tap targets at least 44 px, rendered below 640 px.
-   Use the fixed mobile height from doc 09 §3.9, allowing metadata to wrap without truncation or overlap.
+   Use the fixed mobile height from doc 09 §3.9 and the content budget and overflow rules in §10.3.
 8. Edit `web/src/App.tsx` so `TasksRoute` reads `:filter`, `:name` and renders `TaskGrid`.
 9. Create `TaskGrid.test.tsx` with `msw` serving a `GET /tasks` page and the store seeded through
    `hydrate`: assert the fifteen headers, a formatted size cell, status sorting by `STATUS_ORDINAL`,
    `Shift+click` range selection, and `aria-rowcount` equal to the reported `total` while a 10 000-row
    store renders far fewer `role="row"` elements. Add `TestRowHeightTracksLayoutAndDensity` to check both
    densities on each side of the mobile breakpoint: rendered heights and virtualiser estimates follow
-   doc 09 §3.9, including after a breakpoint change, with row order and selection preserved.
+   doc 09 §3.9, including cached offsets and total virtual height after a breakpoint change, with row
+   order and selection preserved. Cover all five metadata items at narrow mobile widths and assert the
+   §10.3 budget, non-wrapping items, and touch-target styles.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -167,8 +170,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-Implementation Verification pending. The following is plan-repair evidence only, not proof of grid
-rendering or mobile geometry.
+Implementation Verification pending. Replace this section with fresh Verification and `make ci` output
+when implementing the grid. The following is plan-repair evidence only, not proof of grid rendering.
 
 Before repair, this contract check failed; after repair, the same check passed:
 
@@ -202,6 +205,32 @@ docker compose -f compose.yaml -f compose.dev.yaml config -q
 
 `git diff --check` exited 0. Task status and both T042 index rows were checked and remain `todo`.
 No grid code was added; the new acceptance test remains implementation work.
+
+Review reproduced stale offsets in the installed `@tanstack/virtual-core`: create three estimated rows,
+read `getTotalSize()`, change `estimateSize` through `setOptions`, then call `measure()`. Output:
+
+```text
+initial total: 96
+changed estimate, stale total: 96
+cache reset total: 480
+```
+
+The canonical contract now requires that cache reset and defines the mobile content budget.
+An isolated Chromium layout fixture exercised that budget with five metadata lines, adjacent cards,
+and an oversized non-wrapping value using only the grid's horizontal scroller. Browser startup first
+failed on missing shared libraries; using the existing browser library bundle resolved it. Output:
+
+```text
+MOBILE_BUDGET_OK width=320: five metadata lines, 44px target, long-value grid scroll
+MOBILE_BUDGET_OK width=375: five metadata lines, 44px target, long-value grid scroll
+MOBILE_BUDGET_OK width=639: five metadata lines, 44px target, long-value grid scroll
+```
+
+This proves the specified budget is feasible, not that the unimplemented TaskGrid uses it.
+`npm audit --prefix web --omit=dev --json` reported zero vulnerabilities. The full audit identified
+`js-yaml` and its dependent `@redocly/openapi-core` under development dependencies
+([GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh)). Dependency remediation is
+outside this plan repair; no pins changed.
 
 ## Blocked
 Resolved by the plan repair: [doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation) now separates table
