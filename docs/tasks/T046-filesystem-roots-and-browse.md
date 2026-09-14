@@ -136,8 +136,8 @@ directory → `404 /problems/not-found`; a missing `path` → `422 /problems/val
    `Server`, `NewFSHandlers(cfg.DataRoots)` in `NewServer`, `s.fs.Register(s.API)` in
    `registerOperations`.
 8. Run `make gen` to regenerate `api/openapi.json` and `web/src/api/schema.d.ts` (docs/13 §7.1).
-   Run the verification command and paste its output under `## Evidence`, then commit everything,
-   including the two regenerated files.
+   Run the verification command, paste its output under `## Evidence`, and confirm scope with the
+   command below. Only then commit everything, including the two regenerated files.
 
 ## Acceptance criteria
 - [ ] `TestSanitiseSegmentTable` runs all thirty rows of doc 12 §3.4 and every one passes.
