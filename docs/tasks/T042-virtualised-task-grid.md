@@ -115,9 +115,11 @@ aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
 5. Wire `@tanstack/react-table` with `getCoreRowModel` and `getSortedRowModel`, `columnResizeMode:
    'onChange'`, and one `@tanstack/react-virtual` virtualiser over the sorted rows. Exactly one element has
    `overflow: auto`; the header row is sticky and translated by `-scrollLeft`.
-6. Implement selection and the keyboard model of doc 09 §3.5 and §3.6, writing the selection into the T041
-   store. One `keydown` listener, which returns immediately when the event target is `INPUT`, `TEXTAREA` or
-   `isContentEditable`. Exactly one row carries `tabIndex={0}`.
+6. Implement selection from doc 09 §3.5 and this task's keyboard subset under
+   [doc 09 §3.6 Implementation ownership](../09-web-ui-spec.md#36-keyboard), writing selection into the
+   T041 store. One `keydown` listener returns immediately when the event target is `INPUT`, `TEXTAREA`
+   or `isContentEditable`. Exactly one row carries `tabIndex={0}`. Leave cross-component shortcuts to
+   their named owners; do not install dead handlers or suppress keys for unavailable targets.
 7. Create `TaskCardList.tsx`: name clamped to two lines, the progress bar, then
    `Status · Size · ↓rate · ↑rate · ETA`, tap targets at least 44 px, rendered below 640 px.
    Use the fixed mobile height from doc 09 §3.9 and the content budget and overflow rules in §10.3.
@@ -129,12 +131,17 @@ aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
    densities on each side of the mobile breakpoint: rendered heights and virtualiser estimates follow
    doc 09 §3.9, including cached offsets and total virtual height after a breakpoint change, with row
    order and selection preserved. Cover all five metadata items at narrow mobile widths and assert the
-   §10.3 budget, non-wrapping items, and touch-target styles.
+   §10.3 budget, non-wrapping items, and touch-target styles. Add
+   `TestGridKeyboardNavigationAndSelection` covering this task's entire §3.6 subset, roving focus across
+   virtualised rows, the editable-target guard and no interception of later-owned shortcuts.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestRendersDefaultColumns`, `TestStatusSortsByOrdinal`, `TestShiftClickSelectsRange` pass.
 - [ ] `TestAriaRowcountIsTotalNotDomRows` passes with 10 000 tasks in the store.
+- [ ] `TestGridKeyboardNavigationAndSelection` proves this task's
+  [keyboard subset](../09-web-ui-spec.md#36-keyboard), including the editable-target guard and leaving
+  later-owned shortcuts unintercepted.
 - [ ] `TestRowHeightTracksLayoutAndDensity` passes; mobile cards retain the required content and tap
   targets without overlapping adjacent cards.
 - [ ] Every cell whose source is null or zero renders `—`, and `eta_seconds: null` renders `∞`.
@@ -343,7 +350,86 @@ docker compose -f compose.yaml -f compose.dev.yaml config -q
 
 Only this task document changed. The task and both index rows remain `todo`.
 
+### Keyboard ownership repair verification
+
+The original worker stopped because §3.6 required unbuilt targets forbidden by T042's scope.
+The following plan-contract check failed before the repair and passed afterward:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+
+spec = Path('docs/09-web-ui-spec.md').read_text()
+keyboard = spec.split('### 3.6 Keyboard\n', 1)[1].split('### 3.7', 1)[0]
+assert 'Implementation ownership' in keyboard, 'Keyboard contract has no staged implementation ownership'
+for task, test in [('T042', 'TestGridKeyboardNavigationAndSelection'),
+                   ('T044', 'TestShellKeyboardActions'),
+                   ('T048', 'TestKeyboardOpensFocusedTask')]:
+    text = next(Path('docs/tasks').glob(task + '-*.md')).read_text()
+    assert '| **Status** | todo |' in text
+    assert test in text.split('## Acceptance criteria\n', 1)[1].split('## Verification', 1)[0], task
+    assert '#36-keyboard' in text
+    if task != 'T042':
+        files = text.split('## Files\n', 1)[1].split('No other file', 1)[0]
+        assert '`web/src/components/TaskGrid/TaskGrid.tsx` | edit |' in files, task
+        assert '`web/src/components/TaskGrid/TaskGrid.test.tsx` | edit |' in files, task
+index = Path('docs/tasks/00-task-index.md').read_text()
+rows = [line for line in index.splitlines() if line.startswith(('| [T042]', '| T042 |'))]
+assert len(rows) == 2 and all('| todo |' in line for line in rows)
+print('KEYBOARD_PLAN_OK: ownership, integration scope, acceptance tests, T042 todo')
+PY
+```
+
+```text
+AssertionError: Keyboard contract has no staged implementation ownership
+KEYBOARD_PLAN_OK: ownership, integration scope, acceptance tests, T042 todo
+```
+
+`npm ci --prefix web` succeeded with the unchanged pins and two high-severity audit findings.
+The first CI invocation was interrupted by the command harness's 120-second timeout during Go tests.
+Rerunning `PATH="/tmp/t039-tools:$PATH" make ci` with a longer timeout exited 0, reusing the existing
+Docker CLI for compose validation. Output excerpts:
+
+```text
+0 issues.
+All matched files use Prettier code style!
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2445 Total (in 224ms) 🔗 573 Unique ✅ 2418 OK 🚫 0 Errors 👻 27 Excluded
+```
+
+`git diff --check` passed. Only doc 09 and the T042, T044 and T048 task documents changed.
+No implementation or acceptance completion is claimed; all three tasks remain `todo`.
+
 ## Blocked
+
+### Resolved: keyboard actions require forbidden components
+
+Step 6 requires the keyboard model in [doc 09 §3.6](../09-web-ui-spec.md#36-keyboard):
+`Enter`/`F2` opens the focused task's detail pane; `Ctrl/Cmd+F` focuses the toolbar filter.
+This task's Out of scope section forbids building the detail pane and toolbar, assigning them to
+T048 and T044. Both depend on T042 in the current index. Neither component nor an action interface
+exists in the current implementation: `web/src/App.tsx` renders an empty header and task placeholder.
+
+Checked on the current main baseline with:
+
+```bash
+rg --files web/src/components
+rg -n 'onKeyDown|keydown|detail|filter box|cheat|shortcut|remove' web/src/App.tsx web/src/components
+```
+
+The file list contains only `Auth/` and `ui/` components. The search finds authentication error-detail
+strings and the generic context-menu shortcut primitive, not task keyboard actions or their targets.
+
+The recovery-authorized plan repair assigns staged ownership in
+[doc 09 §3.6](../09-web-ui-spec.md#36-keyboard). T044 and T048 now include grid integration scope and
+acceptance tests; T104 retains the complete keyboard gate. This changes delivery order, not the final
+keyboard requirement. No implementation was added. The task and both index rows remain `todo`;
+acceptance boxes remain unchecked. The original worker ran only dependency installation, diff checks
+and doclint before stopping. Fresh repair verification is recorded in Evidence; it is not T042 completion.
 
 Resolved: the Verification suite count now includes the required new `TaskGrid.test.tsx`
 without removing or excluding existing suites. No code was added; the task and both index rows

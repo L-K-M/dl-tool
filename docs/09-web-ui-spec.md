@@ -418,6 +418,26 @@ Server-side persistence uses `GET /api/v1/prefs` and `PUT /api/v1/prefs` →
 Every handler must bail out when the event target is `INPUT`, `TEXTAREA` or `isContentEditable` — this is
 qBittorrent's own guard, and its absence is why its `Escape` handling misfires inside text fields.
 
+**Implementation ownership:** the table is the completed M3 contract, not a requirement to build
+later components in T042.
+
+- [T042](tasks/T042-virtualised-task-grid.md) implements grid navigation, cell endpoints, selection
+  shortcuts and clearing selection with `Esc`.
+- [T044](tasks/T044-sidebar-toolbar-and-status-bar.md) adds both remove shortcuts, toolbar-filter focus
+  and the shortcut cheat-sheet overlay in the shell. Remove shortcuts share the toolbar's confirmation
+  flow; cancellation sends no deletion request.
+- [T048](tasks/T048-detail-pane-and-file-tree.md) adds opening detail for the focused task, which need
+  not be selected. Dialog-owning tasks handle closing their focused dialog with `Esc`; grid selection
+  must not clear behind an open dialog.
+- [T104](tasks/T104-accessibility-harness.md) verifies the complete table without pointer input.
+
+Keep one grid `keydown` listener. T044 and T048 extend it with typed action callbacks wired through
+`App.tsx` to their mounted owners, including the focused task ID for detail. They own the corresponding
+TaskGrid edits and integration tests. No raw DOM queries or unconsumed events bridge components.
+T042 adds no inert callbacks or handlers for unavailable targets and does not suppress their default
+key behavior. Once integrated, each key triggers its action once; dialog events do not reach grid
+shortcuts. The editable-target guard applies throughout.
+
 ### 3.7 Context menu
 
 Built from shadcn/ui's `context-menu` (Radix) so it is keyboard- and touch-reachable. Order, with `—`
