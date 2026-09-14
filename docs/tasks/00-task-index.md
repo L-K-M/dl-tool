@@ -124,7 +124,7 @@ The application shell, the virtualised grid, the add dialog, the folder browser,
 | [T039](T039-ui-stack-and-design-tokens.md) | Install the UI stack and define the design tokens | T003 | done |
 | [T040](T040-router-and-authentication-screens.md) | Mount the router, the providers and the authentication screens | T009, T013, T014, T039 | done |
 | [T041](T041-task-store-and-formatters.md) | Build the live task store and the locale-aware formatters | T014, T025, T039 | done |
-| [T042](T042-virtualised-task-grid.md) | Render the virtualised task grid and the mobile card list | T021, T040, T041 | todo |
+| [T042](T042-virtualised-task-grid.md) | Render the virtualised task grid and the mobile card list | T021, T040, T041 | done |
 | [T043](T043-playwright-harness-and-grid-performance.md) | Stand up the Playwright harness with the setup and grid-performance specs | T040, T042 | todo |
 | [T044](T044-sidebar-toolbar-and-status-bar.md) | Build the sidebar tree, the toolbar and the status bar | T022, T023, T041, T042 | todo |
 | [T045](T045-column-management-and-ui-prefs.md) | Add column management and the UI preference document | T042, T044 | todo |
@@ -331,7 +331,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T039 | Install the UI stack and define the design tokens | T003 | yes | done | [T039](T039-ui-stack-and-design-tokens.md) |
 | T040 | Mount the router, the providers and the authentication screens | T009, T013, T014, T039 | yes | done | [T040](T040-router-and-authentication-screens.md) |
 | T041 | Build the live task store and the locale-aware formatters | T014, T025, T039 | yes | done | [T041](T041-task-store-and-formatters.md) |
-| T042 | Render the virtualised task grid and the mobile card list | T021, T040, T041 | yes | todo | [T042](T042-virtualised-task-grid.md) |
+| T042 | Render the virtualised task grid and the mobile card list | T021, T040, T041 | yes | done | [T042](T042-virtualised-task-grid.md) |
 | T043 | Stand up the Playwright harness with the setup and grid-performance specs | T040, T042 | yes | todo | [T043](T043-playwright-harness-and-grid-performance.md) |
 | T044 | Build the sidebar tree, the toolbar and the status bar | T022, T023, T041, T042 | yes | todo | [T044](T044-sidebar-toolbar-and-status-bar.md) |
 | T045 | Add column management and the UI preference document | T042, T044 | no | todo | [T045](T045-column-management-and-ui-prefs.md) |
