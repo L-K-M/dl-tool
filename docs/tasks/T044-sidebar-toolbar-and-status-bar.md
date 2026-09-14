@@ -362,3 +362,12 @@ contained 7 test files before `Shell.test.tsx` (`App.test.tsx`, `api/client.test
 `components/TaskGrid/TaskGrid.test.tsx`, `lib/format.test.ts`, `lib/theme.test.ts`, `main.test.ts`,
 `store/useTasks.test.ts`), so the correct expectation is 8. The scope check's "in that order" phrase
 was dropped because `git status --porcelain` sorts paths and the `## Files` table does not.
+
+Separate unresolved prerequisite (outside this task's Files table): the push-triggered integration
+run `34837489148`, job `103954541708`, failed `TestInspectionBaselineWaitsForSeed/unrelated_torrent`
+with `contract_test.go:940: unexpected request: GET /api/v2/sync/maindata`. Review traced the likely
+cause to leaked qBittorrent pollers: `internal/engine/qbittorrent/client_test.go` `newClient` creates
+connected clients without registering `client.Close`, so `Connect`'s background pollers outlive their
+tests and hit a reused port. That file is not in this task's Files table and was deliberately not
+edited in this PR. The duplicate pull_request run passed and a rerun of the failed job passed, but
+the leak remains a real defect on `main` that needs a separate focused repair before this PR merges.
