@@ -41,6 +41,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/TaskGrid/TaskGrid.tsx` | edit | Extend the existing listener with this task's action callbacks. |
 | `web/src/components/TaskGrid/TaskGrid.test.tsx` | edit | Guard, dispatch-once and dialog-isolation regressions. |
 | `web/src/App.tsx` | edit | Mount the three regions inside `AppLayout` and wire grid action callbacks. |
+| `web/src/App.test.tsx` | edit | Update `TestBootRendersLayout`'s three empty-region assertions for the mounted shell (added by amendment; see Blocked). |
 | `web/src/locales/en/common.json` | edit | Sidebar, toolbar and status-bar strings. |
 
 No other file may be modified.
@@ -168,11 +169,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Blocked
 
-The task's Step 8 mounts Toolbar, Sidebar and StatusBar in AppLayout's three region
-slots, but `web/src/App.test.tsx` — which the Files table does not list — asserts those
-regions are empty. `TestBootRendersLayout` requires `getByRole("banner").textContent`
-to be `""`, and likewise for `complementary` and `contentinfo`; any mounted shell fails
-it, so the Verification block (`make test-web`, "Test Files 7 passed (7)") cannot pass
-without editing that file. The Files table needs a `web/src/App.test.tsx` row licensing
-only the update of those three assertions; this task file owns the answer. Same class as
-T009's missing `internal/api/server.go` row.
+None. An earlier session stopped here because `web/src/App.test.tsx` — the owner of
+`TestBootRendersLayout`'s empty-region assertions — was missing from the Files table.
+The amendment it proposed is the `web/src/App.test.tsx` row above; the task then
+proceeded with no other scope change.
