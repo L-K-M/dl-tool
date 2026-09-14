@@ -232,8 +232,70 @@ This proves the specified budget is feasible, not that the unimplemented TaskGri
 ([GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh)). Dependency remediation is
 outside this plan repair; no pins changed.
 
+### Current baseline verification
+
+On `49fb1fa`, before adding grid code, ran:
+
+```bash
+make lint && make typecheck && make test-web && echo GRID_OK
+```
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t042-1-1789351229/web
+
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/setup 409 (Conflict)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
+GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
+
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+   Start at  02:01:45
+   Duration  2.34s (transform 961ms, setup 0ms, import 2.81s, tests 2.56s, environment 1.72s)
+
+GRID_OK
+```
+
+This is baseline evidence only. No grid acceptance test exists yet. `npm ci --prefix web`
+installed the pinned dependencies and reported two high-severity audit findings; no pins changed.
+
 ## Blocked
-Resolved by the plan repair: [doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation) now separates table
+
+Current blocker: Verification requires `Test Files  6 passed (6)` **including** the new
+`TaskGrid.test.tsx`, but the unchanged baseline already runs six test files (output above).
+Step 9 and the Files table require a seventh file. Meeting the stated count would require
+removing or excluding an existing suite, which the forbidden shortcuts prohibit.
+The owner must correct the expected count before implementation resumes. No code was added;
+the task and both index rows remain `todo`. Stopped under IMPLEMENTING.md's plan-error rule.
+
+Previous blocker, resolved by the plan repair: [doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation) now separates table
 row density from fixed mobile card height while preserving no auto-measurement and the existing mobile
 content and tap-target requirements. This repairs the missing exception, not the implementation.
 T042 and both index rows remain `todo`; implementation Verification is still pending.
