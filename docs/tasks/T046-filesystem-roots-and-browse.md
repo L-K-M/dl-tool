@@ -178,40 +178,70 @@ prints, and nothing else. Use `git status`, not
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-Not run — the task stopped before implementation (see ## Blocked), so there is no
-verification output to paste. The wiring claims below were checked against the tree:
+Verification ran on this branch; it stops one row short of `FS_BROWSE_OK` because of the
+doc 12 §3.4 row-8 contradiction recorded under `## Blocked`.
 
 ```text
-$ git rev-parse --short HEAD
-b0524cb
-$ grep -rln 'huma.Register' internal/api --include='*.go' | grep -v _test.go | sort
-internal/api/auth.go
-internal/api/server.go
-internal/api/settings.go
-internal/api/sse.go
-internal/api/tasks.go
-$ grep -n 'registerOperations\|RegisterOperations' internal/api/server.go
-299:	server.registerOperations()
-390:// registerOperations mounts the placeholder operation that keeps the document
-392:func (s *Server) registerOperations() {
-393:	s.auth.registerOperations(s.API)
-394:	s.tasks.registerOperations(s.API)
-395:	s.settings.registerOperations(s.API)
-396:	s.SSE.RegisterOperations(s.API)
-$ grep -rn 'server\.registerOperations\|\.registerOperations()' . --include='*.go' \
-    | grep -v _test.go
-./internal/api/server.go:299:	server.registerOperations()
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG="./internal/fsx/... ./internal/api/..."
+go test -race -count=1 ./internal/fsx/... ./internal/api/...
+--- FAIL: TestSanitiseSegmentTable (0.00s)
+    --- FAIL: TestSanitiseSegmentTable/row_08 (0.00s)
+        safepath_test.go:62: SanitiseSegment("\\\\?\\C:\\x") = "____C__x", want "____C_x"
+FAIL	github.com/L-K-M/dl-tool/internal/fsx	0.030s
+ok  	github.com/L-K-M/dl-tool/internal/api	97.052s
+FAIL
 ```
 
-Every production `huma.Register` call lives in a file reached only through
-`Server.registerOperations`, and `NewServer` is that method's only caller — server.go:299 is
-the sole invocation of `registerOperations` on the `Server` anywhere outside tests. No file
-in the Files table can install a registration for `/fs/roots` or `/fs/browse`.
+Twenty-nine of the thirty §3.4 rows pass — every row except 8 — as do all `internal/api`
+tests, including the fs endpoint tests and `TestOpenAPIMatchesCommittedDocument` against
+the regenerated `api/openapi.json` and `web/src/api/schema.d.ts`. `FS_BROWSE_OK` cannot
+print until row 8 is resolved in the plan.
 
 ## Blocked
 
-None. An earlier session stopped here because `internal/api/server.go` — the registration
-call site of the two `/fs` Huma operations — was missing from the Files table while the
-note below it forbade editing that file. The amendment it proposed is the
-`internal/api/server.go` row above (recorded in pull request #160); the task proceeds with
-no other scope change.
+Doc 12 §3.4 row 8 cannot be implemented verbatim: its expected output contradicts §3.2
+step 6 and row 7 of the same table.
+
+- §3.2 step 6 replaces *each* of `/ \ : * ? " < > |` with `_`. Applied to row 8's input
+  `\\?\C:\x` that yields `____C__x`; the table expects `____C_x`, collapsing the `:\`
+  pair to one underscore.
+- Row 7's `C:\Windows\system32.exe` → `C__Windows_system32.exe` maps the identical `C:\`
+  substring to `C__`, i.e. per character. Rows 7 and 8 cannot both be produced by any
+  rule consistent with step 6's "each", because the `C:\` substring is identical in
+  both inputs.
+
+Row 19 needed no plan fix. Its input is written `\|` only because a bare pipe inside a
+table cell's code span is escaped in GitHub-flavoured markdown; the segment under test is
+`"a<b>c|d?e*f:g"`, which step 6 maps exactly to the tabulated `_a_b_c_d_e_f_g_`. The test
+carries that input with a comment.
+
+The only rules satisfying all thirty rows — absorbing the colon of a leading `\\?\X:`
+device prefix, or replacing the first illegal run per character while collapsing later
+runs — appear nowhere in §3.2 and disagree with each other on inputs outside the table
+(for example `z\\?\C:\x`), so picking one would fabricate undocumented behaviour on the
+path-safety boundary. Either plan amendment unblocks the task:
+
+1. Correct row 8's expected output to `____C__x`, matching step 6 and every other row; or
+2. If `\\?\X:` device-prefix handling is intended (the row is labelled "Windows device
+   path"), add it to §3.2 as an explicit step so the algorithm and the table agree.
+
+The implementation is otherwise complete on this branch: `SanitiseSegment`, `SafeJoin`
+with `openat2` plus the `ENOSYS` fallback, `Browse`/`Roots`, the two `/fs` operations,
+`server.go` wiring, regenerated `api/openapi.json` and `web/src/api/schema.d.ts`, and the
+full thirty-row §3.4 test table. Once the row is resolved, updating the expected value in
+`internal/fsx/safepath_test.go` finishes the task. An earlier session's blocked record —
+the missing `server.go` wiring scope — was resolved by pull request #160 and the plan
+amendment on top of it.
