@@ -175,17 +175,22 @@ no dependency or generated-file changes.
 
 Acceptance coverage:
 - Reducer transitions and identity: the five named tests plus `TestReconnectFullUpdateReplacesMap`.
+- Snapshot selection cleanup: `TestSnapshotPrunesMissingSelection` covers both replacement flags.
 - Formatters: the three named tests plus magnitude, duration and relative-date boundary tests.
 - Import boundary and sole task writer: `TestStoreHasNoTransportImportsOrExtraTaskWriters`.
 - All filter keys and memberships: `TestSidebarCountsCoverEveryFilterAndState`.
 - Connection ownership: `TestConnectionChangesOnlyThroughSetter`.
 - Hydration/reset delegation: `TestHydrateAndResetDelegateTaskWritesToApplySync`.
 
-Final tree, including the review fix for CWD-independent test paths, passed the exact Verification
-command (exit 0). Before the fix, the store suite launched from the repository root failed with
-`ENOENT: no such file or directory, open 'src/store/useTasks.ts'`. Afterward, all 11 store tests
-passed from both the repository root (`vitest --root web`) and `web/`.
-No production behavior changed during review; deferred suggestions are recorded in PR #147.
+Final tree, including both review fixes, passed the exact Verification command (exit 0).
+Before the source-path fix, the store suite launched from the repository root failed with
+`ENOENT: no such file or directory, open 'src/store/useTasks.ts'`. All 12 store tests now pass
+from both the repository root (`vitest --root web`) and `web/`.
+
+Before snapshot selection cleanup, `TestSnapshotPrunesMissingSelection` failed with
+`expected Set{ 'gone', 'kept' } to deeply equal Set{ 'kept' }`.
+The fix prunes absent selections only on authoritative replacement; delta removal behavior remains
+covered. Deferred presentation/identity suggestions and rejected findings are recorded in PR #147.
 
 Verification output:
 
@@ -224,9 +229,9 @@ POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
 GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
 
  Test Files  6 passed (6)
-      Tests  88 passed (88)
-   Start at  00:36:56
-   Duration  2.26s (transform 708ms, setup 0ms, import 2.58s, tests 2.56s, environment 1.67s)
+      Tests  89 passed (89)
+   Start at  00:45:52
+   Duration  2.31s (transform 781ms, setup 0ms, import 2.71s, tests 2.58s, environment 1.69s)
 
 STORE_OK
 ```
@@ -237,28 +242,29 @@ Named assertions, `cd web && npx vitest run src/store/useTasks.test.ts src/lib/f
 ```text
  RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t041-1-1789344293/web
 
- ✓ src/lib/format.test.ts > TestFormatBytesMatchesSpecExamples 26ms
+ ✓ src/lib/format.test.ts > TestFormatBytesMatchesSpecExamples 31ms
  ✓ src/lib/format.test.ts > TestNullAndZeroRenderings 1ms
- ✓ src/lib/format.test.ts > TestFormatAbsoluteUsesLocale 5ms
- ✓ src/lib/format.test.ts > TestMagnitudeBoundariesAndLocales 4ms
+ ✓ src/lib/format.test.ts > TestFormatAbsoluteUsesLocale 8ms
+ ✓ src/lib/format.test.ts > TestMagnitudeBoundariesAndLocales 6ms
  ✓ src/lib/format.test.ts > TestDurationRatioAndPercentUseIntl 2ms
- ✓ src/lib/format.test.ts > TestRelativeDateUnitsAndSevenDayBoundary 5ms
+ ✓ src/lib/format.test.ts > TestRelativeDateUnitsAndSevenDayBoundary 7ms
  ✓ src/store/useTasks.test.ts > TestApplySyncFullUpdateReplacesMap 3ms
  ✓ src/store/useTasks.test.ts > TestApplySyncDeltaMergesFields 1ms
  ✓ src/store/useTasks.test.ts > TestApplySyncRemovesTasksAndSelection 1ms
  ✓ src/store/useTasks.test.ts > TestSeqGapReplacesMap 0ms
  ✓ src/store/useTasks.test.ts > TestUnchangedTaskKeepsIdentity 1ms
  ✓ src/store/useTasks.test.ts > TestReconnectFullUpdateReplacesMap 0ms
+ ✓ src/store/useTasks.test.ts > TestSnapshotPrunesMissingSelection 0ms
  ✓ src/store/useTasks.test.ts > TestSidebarCountsCoverEveryFilterAndState 1ms
- ✓ src/store/useTasks.test.ts > TestCategoryAndTagCounts 0ms
+ ✓ src/store/useTasks.test.ts > TestCategoryAndTagCounts 1ms
  ✓ src/store/useTasks.test.ts > TestConnectionChangesOnlyThroughSetter 2ms
  ✓ src/store/useTasks.test.ts > TestHydrateAndResetDelegateTaskWritesToApplySync 1ms
  ✓ src/store/useTasks.test.ts > TestStoreHasNoTransportImportsOrExtraTaskWriters 35ms
 
  Test Files  2 passed (2)
-      Tests  17 passed (17)
-   Start at  00:36:59
-   Duration  919ms (transform 226ms, setup 0ms, import 658ms, tests 92ms, environment 446ms)
+      Tests  18 passed (18)
+   Start at  00:45:55
+   Duration  973ms (transform 187ms, setup 0ms, import 619ms, tests 105ms, environment 429ms)
 ```
 
 Scope: incremental commits leave the working tree clean. Copied the four committed implementation
@@ -290,18 +296,18 @@ go vet ./...
 cd web && npx tsc --noEmit -p tsconfig.json
 go test -race -count=1 ./...
 ?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/api	92.882s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.284s
-ok  	github.com/L-K-M/dl-tool/internal/engine	23.017s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.240s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.916s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.022s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.859s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.204s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.302s
-ok  	github.com/L-K-M/dl-tool/internal/store	73.719s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.377s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.074s
+ok  	github.com/L-K-M/dl-tool/internal/api	87.782s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.125s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.412s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.211s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.946s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.019s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.479s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.189s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.073s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.927s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.396s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.083s
 ?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
 cd web && npx vitest run
 
@@ -325,14 +331,14 @@ POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
 GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
 
  Test Files  6 passed (6)
-      Tests  88 passed (88)
-   Start at  00:38:49
-   Duration  2.39s (transform 762ms, setup 0ms, import 2.83s, tests 2.56s, environment 1.72s)
+      Tests  89 passed (89)
+   Start at  00:47:40
+   Duration  2.24s (transform 549ms, setup 0ms, import 2.49s, tests 2.54s, environment 1.63s)
 
 docker compose -f compose.yaml config -q
 docker compose -f compose.yaml -f compose.dev.yaml config -q
 ./scripts/doclint.sh
-🔍 2425 Total (in 232ms) 🔗 572 Unique ✅ 2399 OK 🚫 0 Errors 👻 26 Excluded
+🔍 2425 Total (in 222ms) 🔗 572 Unique ✅ 2399 OK 🚫 0 Errors 👻 26 Excluded
 ```
 
 <details>

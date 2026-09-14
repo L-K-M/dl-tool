@@ -178,6 +178,19 @@ test("TestReconnectFullUpdateReplacesMap", () => {
   expect(state().connection).toBe("connecting");
 });
 
+test("TestSnapshotPrunesMissingSelection", () => {
+  for (const flags of [{ full_update: true }, { seq_gap: true }]) {
+    state().reset();
+    state().hydrate([task("gone"), task("kept")]);
+    state().setSelection(["gone", "kept"]);
+    const before = state();
+    state().applySync(message({ ...flags, tasks: { kept: task("kept") } }));
+    expect([...state().tasks.keys()]).toEqual(["kept"]);
+    expect(state().selection).toEqual(new Set(["kept"]));
+    expect(before.selection).toEqual(new Set(["gone", "kept"]));
+  }
+});
+
 test("TestSidebarCountsCoverEveryFilterAndState", () => {
   const empty = {
     all: 0,

@@ -59,6 +59,12 @@ export const useTasks = create<TasksState>((set, get) => ({
         tasks.delete(id);
         selection.delete(id);
       }
+      // Snapshots express missed removals by absence, not tasks_removed.
+      if (replace) {
+        for (const id of selection) {
+          if (!tasks.has(id)) selection.delete(id);
+        }
+      }
       return { tasks, selection, stats: msg.stats, rid: msg.rid };
     }),
   hydrate: (tasks) => {
