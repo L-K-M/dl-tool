@@ -177,6 +177,84 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+
+### Current implementation attempt: blocked
+
+Draft [PR #151](https://github.com/L-K-M/dl-tool/pull/151), implementation commit `7458842`.
+The scaffold is incomplete. No acceptance box is checked; `TaskGrid.test.tsx` does not exist yet.
+Task status and both index rows remain `todo`. `npm ci --prefix web` succeeded with unchanged pins
+and two high-severity audit findings.
+
+Ran the exact Verification command on this implementation tree:
+
+```bash
+make lint && make typecheck && make test-web && echo GRID_OK
+```
+
+Output excerpts (exit 2; repeated MSW stack traces omitted):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+InternalError: [MSW] Cannot bypass a request when using the "error" strategy for the "onUnhandledRequest" option.
+
+ FAIL  src/main.test.ts > renders the application root
+AssertionError: expected 'Loading tasks…' to be 'Downloads' // Object.is equality
+
+Expected: "Downloads"
+Received: "Loading tasks…"
+
+ ❯ src/main.test.ts:60:54
+     58|   await screen.findByRole("main");
+     59|   expect(mount).toHaveBeenCalledWith(host);
+     60|   expect(screen.getByTestId("app-root").textContent).toBe("Downloads");
+       |                                                      ^
+     61|   expect(host.contains(screen.getByTestId("app-root"))).toBe(true);
+     62|   expect(bootRequests).toBe(1);
+
+ Test Files  1 failed | 5 passed (6)
+      Tests  1 failed | 88 passed (89)
+   Start at  03:14:54
+   Duration  2.44s (transform 773ms, setup 0ms, import 2.64s, tests 2.86s, environment 1.68s)
+
+make: *** [Makefile:44: test-web] Error 1
+```
+
+`GRID_OK` was not printed. `make ci` was not run locally: execution stopped at the scope blocker below.
+No grid acceptance or browser verification is claimed. Review and merge remain pending.
+
+The prescribed `git status` scope command printed nothing because incremental progress was already
+committed. `git diff --name-only origin/main...HEAD -- . ':(exclude)docs'` confirmed the actual code scope:
+
+```text
+web/src/App.tsx
+web/src/components/TaskGrid/TaskCardList.tsx
+web/src/components/TaskGrid/TaskGrid.tsx
+web/src/locales/en/grid.json
+```
+
+`git diff --check` passed. Only the task document changed after this Verification run.
+`make doclint` then exited 0:
+
+```text
+./scripts/doclint.sh
+🔍 2446 Total (in 228ms) 🔗 574 Unique ✅ 2418 OK 🚫 0 Errors 👻 28 Excluded
+```
+
+### Historical plan-repair evidence
+
 Implementation Verification pending. Replace this section with fresh Verification and `make ci` output
 when implementing the grid. The following is plan-repair evidence only, not proof of grid rendering.
 
@@ -405,6 +483,24 @@ docker compose -f compose.yaml -f compose.dev.yaml config -q
 No implementation or acceptance completion is claimed; all three tasks remain `todo`.
 
 ## Blocked
+
+### Open: entrypoint test requires the replaced placeholder
+
+`web/src/main.test.ts:60` asserts that the entire authenticated app text equals `Downloads`.
+It mocks only `/auth/me`, not the task list. T042 replaces that placeholder with an API-backed grid;
+the unchanged test now fails with `Loading tasks…`. Both this suite and `web/src/App.test.tsx` also
+reject the newly required `/tasks` requests through MSW's strict unhandled-request policy.
+
+Neither test file is in this task's Files table. Repair requires authorizing those files, adding task
+page handlers and replacing the obsolete placeholder assertion with entrypoint-to-grid proof while
+preserving the existing root, authentication, base-path and route assertions. Changing production
+loading copy or suppressing the task request merely to retain the old assertion would hide the stale
+test instead of verifying the new route.
+
+Stopped without changing either test, weakening assertions, marking completion or requesting review.
+The four-file scaffold is pushed to draft PR #151 for resumption, not ready to merge. Grid acceptance
+coverage and implementation corrections remain unfinished, including header/grid ownership, roving
+focus and row-update isolation. Resolve scope before continuing.
 
 ### Resolved: keyboard actions require forbidden components
 
