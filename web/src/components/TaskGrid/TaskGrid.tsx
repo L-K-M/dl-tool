@@ -552,16 +552,14 @@ export function TaskGrid(props: TaskGridProps) {
   useEffect(
     () =>
       useTasks.subscribe((next, previous) => {
-        const key = sorting[0]?.id as Exclude<ColumnId, "select"> | undefined;
-        if (
-          key &&
-          ids.some(
+        const changed = sorting.some(({ id: columnId }) => {
+          const field = sourceFields[columnId as Exclude<ColumnId, "select">];
+          return ids.some(
             (id) =>
-              next.tasks.get(id)?.[sourceFields[key]] !==
-              previous.tasks.get(id)?.[sourceFields[key]],
-          )
-        )
-          setSortRevision((revision) => revision + 1);
+              next.tasks.get(id)?.[field] !== previous.tasks.get(id)?.[field],
+          );
+        });
+        if (changed) setSortRevision((revision) => revision + 1);
       }),
     [ids, sorting],
   );
@@ -577,7 +575,11 @@ export function TaskGrid(props: TaskGridProps) {
     columns,
     getRowId: (task) => task.id,
     state: { sorting },
-    onSortingChange: setSorting,
+    onSortingChange: (update) => {
+      setSorting(update);
+      // Unsorted ticks update cells, not table snapshots; refresh before sorting.
+      setSortRevision((revision) => revision + 1);
+    },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     columnResizeMode: "onChange",

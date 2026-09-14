@@ -204,27 +204,29 @@ The existing App assertions retain authentication, CSRF, layout and routing cove
 Supplemental command: `cd web && npx vitest run --reporter=verbose` (exit 0), excerpts:
 
 ```text
- ✓ src/main.test.ts > TestEntrypointRendersTaskGridUnderBase 606ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRendersDefaultColumns 225ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestStatusSortsByOrdinal 305ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestShiftClickSelectsRange 142ms
- ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters / 91ms
- ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/downloading 54ms
- ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/category/Linux 58ms
- ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/tag/archive 58ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestAriaRowcountIsTotalNotDomRows 666ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestGridKeyboardNavigationAndSelection 1624ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestDensityIsControlledNotCached 53ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRowHeightTracksLayoutAndDensity 858ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 320 21ms
+✓ src/main.test.ts > TestEntrypointRendersTaskGridUnderBase 636ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRendersDefaultColumns 237ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestStatusSortsByOrdinal 339ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestShiftClickSelectsRange 124ms
+ ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters / 81ms
+ ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/downloading 61ms
+ ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/category/Linux 66ms
+ ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/tag/archive 59ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestAriaRowcountIsTotalNotDomRows 644ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestGridKeyboardNavigationAndSelection 1601ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestDensityIsControlledNotCached 50ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRowHeightTracksLayoutAndDensity 875ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 320 17ms
  ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 375 17ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 639 27ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMissingCellsAndErrorDetails 49ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestLiveCellsAndSortInvalidation 126ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestTimestampSortUsesInstants 50ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestGridOwnsHeaderAndRows 56ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 639 21ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMissingCellsAndErrorDetails 35ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestLiveCellsAndSortInvalidation 111ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestSecondarySortTracksLiveChanges 68ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestSortReadsUnsortedLiveChanges 60ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestTimestampSortUsesInstants 45ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestGridOwnsHeaderAndRows 58ms
  ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestPageFailureKeepsGridAndRetries 63ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestOnlyGridScrollsHorizontally 67ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestOnlyGridScrollsHorizontally 61ms
 ```
 
 ### Verification
@@ -246,10 +248,11 @@ All matched files use Prettier code style!
 cd web && npx tsc --noEmit -p tsconfig.json
 cd web && npx vitest run
 
+
  Test Files  7 passed (7)
-      Tests  109 passed (109)
-   Start at  04:19:21
-   Duration  5.28s (transform 933ms, setup 0ms, import 3.45s, tests 7.73s, environment 2.08s)
+      Tests  111 passed (111)
+   Start at  04:24:30
+   Duration  5.33s (transform 915ms, setup 0ms, import 3.21s, tests 7.64s, environment 2.12s)
 
 GRID_OK
 ```
@@ -258,6 +261,8 @@ Expected auth-error responses and the deliberately failed task-page network requ
 The retry regression first failed with an unhandled query error, then passed with a retained grid and
 working Retry button. Timestamp sorting, header ownership, density ownership and mobile line-height
 regressions also failed before their fixes and passed afterward.
+`TestSortReadsUnsortedLiveChanges` and `TestSecondarySortTracksLiveChanges` then reproduced stale
+sort snapshots; refreshing on sort changes and watching every active key fixed both.
 
 ### Full gate
 
@@ -270,25 +275,25 @@ All matched files use Prettier code style!
 go vet ./...
 go test -race -count=1 ./...
 ?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/api	88.094s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.119s
-ok  	github.com/L-K-M/dl-tool/internal/engine	21.131s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.259s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.921s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.031s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.546s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.185s
-ok  	github.com/L-K-M/dl-tool/internal/secure	3.998s
-ok  	github.com/L-K-M/dl-tool/internal/store	71.943s
+ok  	github.com/L-K-M/dl-tool/internal/api	87.500s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.108s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.543s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.210s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.911s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.033s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.670s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.196s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.223s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.684s
 ok  	github.com/L-K-M/dl-tool/internal/sync	4.386s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.077s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.075s
 ?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
  Test Files  7 passed (7)
-      Tests  109 passed (109)
+      Tests  111 passed (111)
 docker compose -f compose.yaml config -q
 docker compose -f compose.yaml -f compose.dev.yaml config -q
 ./scripts/doclint.sh
-🔍 2441 Total (in 244ms) 🔗 572 Unique ✅ 2415 OK 🚫 0 Errors 👻 26 Excluded
+🔍 2441 Total (in 219ms) 🔗 572 Unique ✅ 2415 OK 🚫 0 Errors 👻 26 Excluded
 ```
 
 ### Browser layout

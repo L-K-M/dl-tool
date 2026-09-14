@@ -511,6 +511,23 @@ test("TestLiveCellsAndSortInvalidation", async () => {
   expect(screen.getByText("four")).toBeTruthy();
 });
 
+test("TestSecondarySortTracksLiveChanges", async () => {
+  await mount();
+  fireEvent.click(screen.getByRole("columnheader", { name: "Status" }));
+  fireEvent.click(screen.getByRole("columnheader", { name: "Name" }), {
+    shiftKey: true,
+  });
+  act(() => useTasks.getState().hydrate([task("one", { name: "zzz" })]));
+  expect(order()).toEqual(["three", "two", "one"]);
+});
+
+test("TestSortReadsUnsortedLiveChanges", async () => {
+  await mount();
+  act(() => useTasks.getState().hydrate([task("one", { name: "zzz" })]));
+  fireEvent.click(screen.getByRole("columnheader", { name: "Name" }));
+  expect(order()).toEqual(["three", "two", "one"]);
+});
+
 test("TestTimestampSortUsesInstants", async () => {
   tasks = [
     task("later", { added_at: "2026-09-01T01:00:00Z" }),
