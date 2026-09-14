@@ -234,14 +234,12 @@ func verifyBeneath(root string, parts []string) (err error) {
 		return nil
 	case errors.Is(oerr, unix.ENOENT):
 		// Rule 5 has the writer create the final component after the join
-		// is accepted, so a missing tail is expected: a nonexistent
-		// component implies nothing below it exists, so verifying the
-		// longest existing prefix is the whole check.
-		if len(parts) == 0 {
-			return fmt.Errorf("fsx: openat2 beneath %s: %w", root, oerr)
-		}
-
-		return verifyBeneath(root, parts[:len(parts)-1])
+		// is accepted, so a missing tail is expected — but ENOENT cannot
+		// be told apart from a dangling symlink at this layer, and the two
+		// must not disagree with the ENOSYS path. The lstat walk
+		// distinguishes them: it returns nil at the first genuinely
+		// missing component and rejects a symlink wherever it sits.
+		return verifyBeneathWalk(rootFD, parts)
 	case errors.Is(oerr, unix.ENOSYS) || errors.Is(oerr, unix.EINVAL):
 		return verifyBeneathWalk(rootFD, parts)
 	case errors.Is(oerr, unix.ELOOP) || errors.Is(oerr, unix.EXDEV):
