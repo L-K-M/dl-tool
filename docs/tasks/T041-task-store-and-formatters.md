@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T041 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T014, T025, T039 |
 | **Blocks** | T042, T044, T051, T063 |
 | **Parallel-safe** | yes — touches only `web/src/store/` and `web/src/lib/` |
@@ -130,15 +130,15 @@ export function formatAbsolute(rfc3339: string, locale?: string): string;
 7. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestApplySyncFullUpdateReplacesMap`, `TestApplySyncDeltaMergesFields`,
+- [x] `TestApplySyncFullUpdateReplacesMap`, `TestApplySyncDeltaMergesFields`,
       `TestApplySyncRemovesTasksAndSelection`, `TestSeqGapReplacesMap` and
       `TestUnchangedTaskKeepsIdentity` all pass.
-- [ ] `TestFormatBytesMatchesSpecExamples`, `TestNullAndZeroRenderings` and
+- [x] `TestFormatBytesMatchesSpecExamples`, `TestNullAndZeroRenderings` and
       `TestFormatAbsoluteUsesLocale` pass.
-- [ ] No file in this task imports `EventSource`, `fetch` or the `api` client.
-- [ ] `selectFilterCounts` returns all seven keys, including zero counts.
-- [ ] `connection` starts at `'connecting'` and is changed only through `setConnection`.
-- [ ] `applySync` is the only exported function that writes `tasks`.
+- [x] No file in this task imports `EventSource`, `fetch` or the `api` client.
+- [x] `selectFilterCounts` returns all seven keys, including zero counts.
+- [x] `connection` starts at `'connecting'` and is changed only through `setConnection`.
+- [x] `applySync` is the only exported function that writes `tasks`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -170,6 +170,180 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
+Installed dependencies with `npm ci --prefix web`. Code is limited to the four Files paths;
+no dependency or generated-file changes.
+
+Acceptance coverage:
+- Reducer transitions and identity: the five named tests plus `TestReconnectFullUpdateReplacesMap`.
+- Snapshot selection cleanup: `TestSnapshotPrunesMissingSelection` covers both replacement flags.
+- Formatters: the three named tests plus magnitude, duration and relative-date boundary tests.
+- Import boundary and sole task writer: `TestStoreHasNoTransportImportsOrExtraTaskWriters`.
+- All filter keys and memberships: `TestSidebarCountsCoverEveryFilterAndState`.
+- Connection ownership: `TestConnectionChangesOnlyThroughSetter`.
+- Hydration/reset delegation: `TestHydrateAndResetDelegateTaskWritesToApplySync`.
+
+Final tree, including both review fixes, passed the exact Verification command (exit 0).
+Before the source-path fix, the store suite launched from the repository root failed with
+`ENOENT: no such file or directory, open 'src/store/useTasks.ts'`. All 12 store tests now pass
+from both the repository root (`vitest --root web`) and `web/`.
+
+Before snapshot selection cleanup, `TestSnapshotPrunesMissingSelection` failed with
+`expected Set{ 'gone', 'kept' } to deeply equal Set{ 'kept' }`.
+The fix prunes absent selections only on authoritative replacement; delta removal behavior remains
+covered. Deferred presentation/identity suggestions and rejected findings are recorded in PR #147.
+
+Verification output:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t041-1-1789344293/web
+
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/setup 409 (Conflict)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
+GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
+
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+   Start at  00:45:52
+   Duration  2.31s (transform 781ms, setup 0ms, import 2.71s, tests 2.58s, environment 1.69s)
+
+STORE_OK
+```
+
+Named assertions, `cd web && npx vitest run src/store/useTasks.test.ts src/lib/format.test.ts --reporter=verbose`
+(exit 0):
+
+```text
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t041-1-1789344293/web
+
+ ✓ src/lib/format.test.ts > TestFormatBytesMatchesSpecExamples 31ms
+ ✓ src/lib/format.test.ts > TestNullAndZeroRenderings 1ms
+ ✓ src/lib/format.test.ts > TestFormatAbsoluteUsesLocale 8ms
+ ✓ src/lib/format.test.ts > TestMagnitudeBoundariesAndLocales 6ms
+ ✓ src/lib/format.test.ts > TestDurationRatioAndPercentUseIntl 2ms
+ ✓ src/lib/format.test.ts > TestRelativeDateUnitsAndSevenDayBoundary 7ms
+ ✓ src/store/useTasks.test.ts > TestApplySyncFullUpdateReplacesMap 3ms
+ ✓ src/store/useTasks.test.ts > TestApplySyncDeltaMergesFields 1ms
+ ✓ src/store/useTasks.test.ts > TestApplySyncRemovesTasksAndSelection 1ms
+ ✓ src/store/useTasks.test.ts > TestSeqGapReplacesMap 0ms
+ ✓ src/store/useTasks.test.ts > TestUnchangedTaskKeepsIdentity 1ms
+ ✓ src/store/useTasks.test.ts > TestReconnectFullUpdateReplacesMap 0ms
+ ✓ src/store/useTasks.test.ts > TestSnapshotPrunesMissingSelection 0ms
+ ✓ src/store/useTasks.test.ts > TestSidebarCountsCoverEveryFilterAndState 1ms
+ ✓ src/store/useTasks.test.ts > TestCategoryAndTagCounts 1ms
+ ✓ src/store/useTasks.test.ts > TestConnectionChangesOnlyThroughSetter 2ms
+ ✓ src/store/useTasks.test.ts > TestHydrateAndResetDelegateTaskWritesToApplySync 1ms
+ ✓ src/store/useTasks.test.ts > TestStoreHasNoTransportImportsOrExtraTaskWriters 35ms
+
+ Test Files  2 passed (2)
+      Tests  18 passed (18)
+   Start at  00:45:55
+   Duration  973ms (transform 187ms, setup 0ms, import 619ms, tests 105ms, environment 429ms)
+```
+
+Scope: incremental commits leave the working tree clean. Copied the four committed implementation
+files into a disposable worktree at baseline `e455ee2` and ran the exact `git status` scope command
+there, preserving the task branch and its reviewed ancestry:
+
+```text
+web/src/lib/format.test.ts
+web/src/lib/format.ts
+web/src/store/useTasks.test.ts
+web/src/store/useTasks.ts
+```
+
+`PATH=/tmp/t039-tools:$PATH make ci` exited 0 using the existing Docker CLI. Output:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./...
+?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/api	87.782s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.125s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.412s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.211s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.946s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.019s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.479s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.189s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.073s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.927s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.396s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.083s
+?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t041-1-1789344293/web
+
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/setup 409 (Conflict)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 401 (Unauthorized)
+GET http://localhost:3000/api/v1/auth/me 401 (Unauthorized)
+POST http://localhost:3000/api/v1/auth/login 429 (Too Many Requests)
+GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
+
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+   Start at  00:47:40
+   Duration  2.24s (transform 549ms, setup 0ms, import 2.49s, tests 2.54s, environment 1.63s)
+
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2425 Total (in 222ms) 🔗 572 Unique ✅ 2399 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+<details>
+<summary>Historical plan-repair evidence, before implementation</summary>
+
 Absolute-date plan repair only, not implementation evidence. This contract check failed before
 repair with `AssertionError: Added tooltip contradicts Intl-only date requirement` and passed after:
 
@@ -247,7 +421,11 @@ docker compose -f compose.yaml -f compose.dev.yaml config -q
 
 Task Verification remains pending until implementation adds the required suites.
 
+</details>
+
 ## Blocked
+No current blockers. Resolved planning history follows.
+
 ### Absolute-date contract (resolved)
 
 On origin/main `e4a0cb8`, the RFC 3339 tooltip contract contradicted the Intl-only
