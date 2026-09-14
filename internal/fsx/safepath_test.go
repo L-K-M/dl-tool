@@ -49,9 +49,9 @@ func TestSanitiseSegmentTable(t *testing.T) {
 		{19, `"a<b>c|d?e*f:g"`, "_a_b_c_d_e_f_g_"},
 		{22, "", "_"},
 		// NFD: e followed by U+0301 combining acute must compose to U+00E9.
-		{23, "re\u0301sume\u0301.txt", "résumé.txt"},
+		{23, "re\u0301sume\u0301.txt", "r\u00e9sum\u00e9.txt"},
 		// Cyrillic а (U+0430) is a homoglyph, not a hazard: kept verbatim.
-		{24, "аdmin.txt", "аdmin.txt"},
+		{24, "\u0430dmin.txt", "\u0430dmin.txt"},
 		{25, ".hidden", ".hidden"},
 		{26, "-rf", "-rf"},
 		{28, "/", "_"},
@@ -77,8 +77,9 @@ func TestSanitiseSegmentTable(t *testing.T) {
 	t.Run("row 06 filename-star double decode rejected", func(t *testing.T) {
 		// The filename* value is percent-decoded exactly once; what decodes
 		// to a traversal is rejected wholesale, never sanitised into a
-		// plausible name.
-		decoded, err := url.QueryUnescape("..%2F..%2Fetc%2Fshadow")
+		// plausible name. PathUnescape, not QueryUnescape: RFC 5987 has no
+		// '+'-to-space rule.
+		decoded, err := url.PathUnescape("..%2F..%2Fetc%2Fshadow")
 		if err != nil {
 			t.Fatalf("decode: %v", err)
 		}
@@ -87,6 +88,15 @@ func TestSanitiseSegmentTable(t *testing.T) {
 		}
 		if _, err := SafeJoin(root, strings.Split(decoded, "/")); !errors.Is(err, ErrPathRejected) {
 			t.Errorf("SafeJoin traversal = %v, want ErrPathRejected", err)
+		}
+		// The doubly-encoded form keeps its literal %2F after the single
+		// decode — only a second pass would manufacture the traversal.
+		once, err := url.PathUnescape("..%252F..%252Fetc%252Fshadow")
+		if err != nil {
+			t.Fatalf("decode double-encoded: %v", err)
+		}
+		if want := "..%2F..%2Fetc%2Fshadow"; once != want {
+			t.Fatalf("one decode of double-encoded payload = %q, want %q", once, want)
 		}
 	})
 
@@ -103,7 +113,7 @@ func TestSanitiseSegmentTable(t *testing.T) {
 		got := SanitiseSegment(strings.Repeat("A", 300) + ".mkv")
 		want := strings.Repeat("A", maxSegmentBytes) + ".mkv"
 		if got != want {
-			t.Errorf("SanitiseSegment long name = %d bytes, want 240 of A + .mkv", len(got))
+			t.Errorf("SanitiseSegment long name = %q, want %d bytes of A + .mkv", got, maxSegmentBytes)
 		}
 	})
 
@@ -144,5 +154,99 @@ func TestSanitiseSegmentTable(t *testing.T) {
 		if got := dedupeName("movie.mkv", taken); got != "movie (2).mkv" {
 			t.Errorf("folded repeat = %q, want %q", got, "movie (2).mkv")
 		}
+		if got := dedupeName("MOVIE.MKV", taken); got != "MOVIE (3).MKV" {
+			t.Errorf("third folded repeat = %q, want %q", got, "MOVIE (3).MKV")
+		}
 	})
+
+	t.Run("generated candidate cannot collide with a later genuine name", func(t *testing.T) {
+		taken := map[string]int{}
+		got := []string{
+			dedupeName("Movie.mkv", taken),
+			dedupeName("movie.mkv", taken),
+			dedupeName("movie (2).mkv", taken),
+		}
+		seen := map[string]bool{}
+		for _, name := range got {
+			folded := strings.ToLower(name)
+			if seen[folded] {
+				t.Fatalf("dedupeName produced a folded collision in %v", got)
+			}
+			seen[folded] = true
+		}
+	})
+}
+
+// TestSafeJoinAllowsUnbuiltTail pins the download-writer contract: SafeJoin
+// runs before rule 5 creates the final component, so a missing tail is not
+// an error — only the existing prefix is verified.
+func TestSafeJoinAllowsUnbuiltTail(t *testing.T) {
+	root := t.TempDir()
+
+	got, err := SafeJoin(root, []string{"newdir", "newfile.mkv"})
+	if err != nil {
+		t.Fatalf("SafeJoin unbuilt tail = error %v, want the joined path", err)
+	}
+	if want := filepath.Join(root, "newdir", "newfile.mkv"); got != want {
+		t.Errorf("SafeJoin unbuilt tail = %q, want %q", got, want)
+	}
+
+	if err := os.Mkdir(filepath.Join(root, "existing"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink("/etc", filepath.Join(root, "existing", "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if _, err := SafeJoin(root, []string{"existing", "link", "new"}); !errors.Is(err, ErrPathRejected) {
+		t.Errorf("SafeJoin through a prefix symlink = %v, want ErrPathRejected", err)
+	}
+}
+
+// TestBrowseFollowsInRootSymlink proves an absolute symlink whose target
+// stays inside the same root is browsed at its resolved location, not
+// refused or reinterpreted by the anchored open.
+func TestBrowseFollowsInRootSymlink(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(real, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink(real, filepath.Join(root, "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	listing, err := Browse([]string{root}, filepath.Join(root, "link"), false)
+	if err != nil {
+		t.Fatalf("Browse through in-root symlink = error %v", err)
+	}
+	if listing.Path != real {
+		t.Errorf("listing path = %q, want resolved %q", listing.Path, real)
+	}
+	if len(listing.Directories) != 1 || listing.Directories[0].Name != "sub" {
+		t.Errorf("directories = %+v, want the real directory's sub", listing.Directories)
+	}
+}
+
+// TestBrowseHidesCrossRootSymlink pins listing to what browsing can reach:
+// a symlink in one root whose target lives in another root is not listed,
+// because browsing it resolves outside the root the path lexically sits in.
+func TestBrowseHidesCrossRootSymlink(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rootB, "b-dir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(rootB, "b-dir"), filepath.Join(rootA, "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	listing, err := Browse([]string{rootA, rootB}, rootA, false)
+	if err != nil {
+		t.Fatalf("Browse root A = error %v", err)
+	}
+	for _, dir := range listing.Directories {
+		if dir.Name == "link" {
+			t.Error("cross-root symlink listed although browsing it is rejected")
+		}
+	}
 }

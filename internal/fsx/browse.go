@@ -61,7 +61,7 @@ func Browse(roots []string, path string, showHidden bool) (Listing, error) {
 			continue
 		}
 
-		return browseRoot(roots, resolvedRoot, cleaned, showHidden)
+		return browseRoot(resolvedRoot, cleaned, showHidden)
 	}
 
 	return Listing{}, ErrPathRejected
@@ -73,7 +73,7 @@ func Browse(roots []string, path string, showHidden bool) (Listing, error) {
 // ".." path — and the directory is then opened through a descriptor
 // anchored at the root, which refuses any escape a swap could smuggle in
 // after the check.
-func browseRoot(roots []string, resolvedRoot, cleaned string, showHidden bool) (listing Listing, err error) {
+func browseRoot(resolvedRoot, cleaned string, showHidden bool) (listing Listing, err error) {
 	resolved, err := resolveExisting(cleaned)
 	if err != nil {
 		return Listing{}, fmt.Errorf("fsx: resolve %s: %w", cleaned, err)
@@ -82,7 +82,11 @@ func browseRoot(roots []string, resolvedRoot, cleaned string, showHidden bool) (
 		return Listing{}, ErrPathRejected
 	}
 
-	rel, err := filepath.Rel(resolvedRoot, cleaned)
+	// The anchored open walks the resolved path: deriving rel from the
+	// lexical path would either refuse an in-root absolute symlink or let
+	// RESOLVE_IN_ROOT reinterpret its target root-relative — opening the
+	// wrong directory. resolved is already proven beneath resolvedRoot.
+	rel, err := filepath.Rel(resolvedRoot, resolved)
 	if err != nil {
 		return Listing{}, ErrPathRejected
 	}
@@ -141,7 +145,6 @@ func browseRoot(roots []string, resolvedRoot, cleaned string, showHidden bool) (
 	listing.FreeBytes = space.FreeBytes
 	listing.TotalBytes = space.TotalBytes
 
-	resolvedRoots := resolveRoots(roots)
 	for _, dirent := range dirents {
 		name := dirent.Name()
 		if !showHidden && strings.HasPrefix(name, ".") {
@@ -149,7 +152,18 @@ func browseRoot(roots []string, resolvedRoot, cleaned string, showHidden bool) (
 		}
 
 		entryPath := filepath.Join(resolved, name)
-		if dirent.IsDir() {
+		typ := dirent.Type()
+		if typ == ^fs.FileMode(0) {
+			// The filesystem reported DT_UNKNOWN (some CIFS/SMB mounts,
+			// older XFS); Go surfaces that as every type bit set, so
+			// IsDir would be true even for files. lstat for the real type.
+			finfo, ferr := dirent.Info()
+			if ferr != nil {
+				continue
+			}
+			typ = finfo.Mode().Type()
+		}
+		if typ.IsDir() {
 			listing.Directories = append(listing.Directories, Entry{
 				Name:     name,
 				Path:     entryPath,
@@ -157,15 +171,17 @@ func browseRoot(roots []string, resolvedRoot, cleaned string, showHidden bool) (
 			})
 			continue
 		}
-		if dirent.Type()&os.ModeSymlink == 0 {
+		if typ&os.ModeSymlink == 0 {
 			continue // files and special entries are never listed
 		}
 
 		// A symlinked entry lists only when its resolved target is a
-		// directory that stays inside the configured roots — never follow
-		// a symlink out of a root.
+		// directory inside this same root — the root the browse of the
+		// entry's path will be jailed to. A target in a different
+		// configured root still resolves outside it, so listing it would
+		// advertise an entry browse then rejects.
 		target, err := resolveExisting(entryPath)
-		if err != nil || !withinAny(target, resolvedRoots) {
+		if err != nil || !within(target, resolvedRoot) {
 			continue
 		}
 		tinfo, err := os.Stat(entryPath)
@@ -234,33 +250,6 @@ func mapBrowseOpenError(resolvedRoot, cleaned string, err error) error {
 	}
 
 	return ErrPathRejected
-}
-
-// resolveRoots resolves every configured root once; roots that do not
-// resolve are dropped from the containment set rather than failing the
-// listing.
-func resolveRoots(roots []string) []string {
-	resolved := make([]string, 0, len(roots))
-	for _, configured := range roots {
-		r, err := resolveExisting(filepath.Clean(configured))
-		if err != nil {
-			continue
-		}
-		resolved = append(resolved, r)
-	}
-
-	return resolved
-}
-
-// withinAny reports whether path lies inside any resolved root.
-func withinAny(path string, resolvedRoots []string) bool {
-	for _, root := range resolvedRoots {
-		if within(path, root) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // writable reports whether the process may write to path.

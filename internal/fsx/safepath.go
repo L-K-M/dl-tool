@@ -232,6 +232,16 @@ func verifyBeneath(root string, parts []string) (err error) {
 		}
 
 		return nil
+	case errors.Is(oerr, unix.ENOENT):
+		// Rule 5 has the writer create the final component after the join
+		// is accepted, so a missing tail is expected: a nonexistent
+		// component implies nothing below it exists, so verifying the
+		// longest existing prefix is the whole check.
+		if len(parts) == 0 {
+			return fmt.Errorf("fsx: openat2 beneath %s: %w", root, oerr)
+		}
+
+		return verifyBeneath(root, parts[:len(parts)-1])
 	case errors.Is(oerr, unix.ENOSYS) || errors.Is(oerr, unix.EINVAL):
 		return verifyBeneathWalk(rootFD, parts)
 	case errors.Is(oerr, unix.ELOOP) || errors.Is(oerr, unix.EXDEV):
@@ -260,6 +270,12 @@ func verifyBeneathWalk(rootFD int, parts []string) (err error) {
 	for i, part := range parts {
 		var st unix.Stat_t
 		if err := unix.Fstatat(dirfd, part, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				// The tail is not built yet — rule 5 creates it after the
+				// join is accepted; the prefix up to dirfd is verified.
+				return nil
+			}
+
 			return fmt.Errorf("fsx: lstat component %s: %w", part, err)
 		}
 		switch st.Mode & unix.S_IFMT {
@@ -279,17 +295,16 @@ func verifyBeneathWalk(rootFD int, parts []string) (err error) {
 
 				return fmt.Errorf("fsx: openat component %s: %w", part, oerr)
 			}
-			if dirfd != rootFD {
-				if cerr := unix.Close(dirfd); cerr != nil {
-					err = errors.Join(
-						fmt.Errorf("fsx: close walked descriptor: %w", cerr),
-						unix.Close(next),
-					)
-
-					return err
+			// dirfd moves to next before prev is closed: on a close error
+			// the deferred cleanup still owns next, and prev — already
+			// released by the failed close — is never closed twice.
+			prev := dirfd
+			dirfd = next
+			if prev != rootFD {
+				if cerr := unix.Close(prev); cerr != nil {
+					return fmt.Errorf("fsx: close walked descriptor: %w", cerr)
 				}
 			}
-			dirfd = next
 		default:
 			// The last component may name a file; an intermediate one may not.
 			if i < len(parts)-1 {
@@ -307,7 +322,12 @@ func verifyBeneathWalk(rootFD int, parts []string) (err error) {
 // both Movie.mkv and movie.mkv cannot use the second name as an overwrite
 // primitive on a case-insensitive export.
 func dedupeName(name string, taken map[string]int) string {
-	key := nameFolder.String(name)
+	// A fresh caser per call: x/text documents a Caser as not safe to
+	// share between goroutines, and the download writer dedupes files
+	// concurrently.
+	fold := cases.Fold()
+
+	key := fold.String(name)
 	n := taken[key]
 	taken[key] = n + 1
 	if n == 0 {
@@ -319,13 +339,18 @@ func dedupeName(name string, taken map[string]int) string {
 		stem, ext = name[:idx], name[idx:]
 	}
 
-	return stem + " (" + strconv.Itoa(n+1) + ")" + ext
-}
+	// Every generated name is registered too: a torrent carrying a literal
+	// "movie (2).mkv" after "movie.mkv" deduped onto it would otherwise
+	// recreate the collision this rule exists to prevent.
+	for i := n + 1; ; i++ {
+		candidate := stem + " (" + strconv.Itoa(i) + ")" + ext
+		if ckey := fold.String(candidate); taken[ckey] == 0 {
+			taken[ckey] = 1
 
-// nameFolder produces the case-folded key the collision map is indexed by
-// — full Unicode case folding, so NFKC-distinct accents still collide only
-// when a case-insensitive filesystem would fold them together.
-var nameFolder = cases.Fold()
+			return candidate
+		}
+	}
+}
 
 // ResolveDestination resolves requested against the configured roots,
 // following symlinks, and returns the cleaned absolute path. roots is

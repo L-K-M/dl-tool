@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// browseIssue calls GET /fs/browse with the test bearer credential.
+// browse calls GET /fs/browse with the test bearer credential.
 func (e *tasksTestEnv) browse(t *testing.T, query string) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -235,7 +235,11 @@ func TestBrowseNotFound(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	for _, path := range []string{filepath.Join(env.dataRoot, "missing"), file} {
+	for _, path := range []string{
+		filepath.Join(env.dataRoot, "missing"),
+		file,
+		filepath.Join(file, "child"),
+	} {
 		response := env.browse(t, browseQuery(path, false))
 		assertProblem(t, response, http.StatusNotFound, SlugNotFound)
 	}
@@ -290,5 +294,17 @@ func TestBrowseMissingPath(t *testing.T) {
 	env := newTasksTestEnv(t)
 
 	response := env.api.Get("/fs/browse", "Authorization: Bearer "+env.bearer)
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+}
+
+// TestFSRejectUnknownQuery pins RejectUnknownQueryParameters on both /fs
+// operations: a mistyped query key is 422, never silently ignored.
+func TestFSRejectUnknownQuery(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.browse(t, browseQuery(env.dataRoot, false)+"&wat=1")
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	response = env.api.Get("/fs/roots?wat=1", "Authorization: Bearer "+env.bearer)
 	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 }

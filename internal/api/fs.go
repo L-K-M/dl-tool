@@ -41,6 +41,8 @@ func (h *FSHandlers) Register(hapi huma.API) {
 		Description: "Every DLTOOL_DATA_ROOTS entry with its writability and free space; the folder browser opens at these. The list never probes past statfs — a missing root cannot slow the page down.",
 		Tags:        []string{"filesystem"},
 		Security:    credentialRequired,
+		// Same strictness as browse: a mistyped query key is 422.
+		RejectUnknownQueryParameters: true,
 	}, h.ListRoots)
 
 	huma.Register(hapi, huma.Operation{
