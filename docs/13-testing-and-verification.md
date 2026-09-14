@@ -277,6 +277,38 @@ See [`10-deployment-and-compose.md`](10-deployment-and-compose.md).
   and a registered service worker. Nothing works offline; the check asserts installability only.
 - Byte, rate and duration strings are asserted through `Intl`, so a locale change cannot silently break them.
 
+### 6.3 Grid update performance
+
+T043 depends on T051: measure the shipped event transport, reducer and grid, not an idle page or a
+separate test store. This engine-free scenario runs against the embedded SPA with synthetic task data;
+§6.1's real-engine stack remains required for transfer scenarios.
+
+- Seed the task-list response and initial sync snapshot with the same 10 000 tasks. Intercept the
+  EventSource boundary in the browser fixture before navigation. The test double supplies `open`,
+  `readyState`, listener registration and `close` semantics, then delivers named `sync` MessageEvents
+  with JSON payloads and increasing `lastEventId`/`rid`. Leave T051's transport, `applySync`, subscriptions
+  and rendering unchanged. Stub `/sync` with the current snapshot so recovery cannot erase the seed.
+- After list hydration and the initial snapshot render, fix the changed-ID set to all mounted data rows
+  plus the final offscreen task. Each tick changes their `progress` and `download_rate`, without changing
+  IDs, state or ordering. Generate payloads before measurement; report the changed-row count.
+- Deliver ten incremental updates at one-second intervals. Assert a new visible progress value after
+  each delivery, before the next tick. Missing, coalesced or late renders fail; idle samples do not count.
+  After measurement, scroll to the offscreen task and assert its final value too.
+- Enable CDP performance metrics and tracing after warm-up. Record a `ScriptDuration` baseline before
+  the first tick and sample at each one-second boundary after that tick's render. Convert deltas from
+  seconds to milliseconds; each interval must contain exactly one verified update. Retain the CDP trace
+  under the throwaway state directory and print all ten deltas plus the nearest-rank p95
+  (`sorted[ceil(0.95 * count) - 1]`). Assert p95 is under 8 ms, as required by
+  [NFR-001](02-requirements.md#nfr-001-render-a-10-000-row-grid-smoothly).
+- Assert `aria-rowcount` is 10 000 and fewer than 200 rows are mounted throughout the measured run.
+  As a one-off negative control, suppress fixture sync delivery and record the visible-update assertion
+  failure in Evidence; a low idle `ScriptDuration` must never pass. Restore delivery before committing
+  and rerun the normal scenario. Do not commit a permanently failing or skipped test.
+
+This is a browser rendering benchmark, not proof of native SSE networking. T051's transport tests and
+§6.1's real-stack progress scenario cover those boundaries. No production test hooks or direct store
+writes are permitted.
+
 ## 7. CI
 
 | Workflow | Job | Runs | Blocking |
