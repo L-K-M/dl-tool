@@ -671,8 +671,14 @@ export function TaskGrid(props: TaskGridProps) {
     switch (event.key) {
       case "Delete": {
         // Empty-selection removal is a no-op; it neither dispatches nor
-        // suppresses the key.
-        if (!props.actions?.requestRemove || state.selection.size === 0) return;
+        // suppresses the key. Held-key auto-repeat must not re-open the
+        // confirmation flow either.
+        if (
+          event.repeat ||
+          !props.actions?.requestRemove ||
+          state.selection.size === 0
+        )
+          return;
         props.actions.requestRemove([...state.selection], event.shiftKey);
         event.preventDefault();
         return;
@@ -689,6 +695,9 @@ export function TaskGrid(props: TaskGridProps) {
         event.preventDefault();
         return;
       case "Escape":
+        // Same no-op rule as Delete: with nothing selected the grid must not
+        // swallow a key that a focused dialog may still own.
+        if (state.selection.size === 0) return;
         state.clearSelection();
         event.preventDefault();
         return;
@@ -775,7 +784,7 @@ export function TaskGrid(props: TaskGridProps) {
         overflow: "hidden",
       }}
     >
-      <style>{`.grid-stripes { background-image: repeating-linear-gradient(135deg, transparent 0 6px, #ffffff44 6px 12px); } .grid-indeterminate { animation: grid-stripes 1s linear infinite; } @keyframes grid-stripes { to { background-position: 17px 0; } } @media (prefers-reduced-motion: reduce) { .grid-indeterminate { animation: none; } } .task-pending::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--accent); animation: task-shimmer 1s ease-in-out infinite; pointer-events: none; } @keyframes task-shimmer { 50% { opacity: 0.25; } } [data-task-id]:focus-visible, [role=gridcell]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }`}</style>
+      <style>{`.grid-stripes { background-image: repeating-linear-gradient(135deg, transparent 0 6px, #ffffff44 6px 12px); } .grid-indeterminate { animation: grid-stripes 1s linear infinite; } @keyframes grid-stripes { to { background-position: 17px 0; } } @media (prefers-reduced-motion: reduce) { .grid-indeterminate { animation: none; } } .task-pending::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--accent); animation: task-shimmer 1s ease-in-out infinite; pointer-events: none; } @keyframes task-shimmer { 50% { opacity: 0.25; } } @media (prefers-reduced-motion: reduce) { .task-pending::after { animation: none; } } [data-task-id]:focus-visible, [role=gridcell]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }`}</style>
       {!mobile && (
         <div
           style={{

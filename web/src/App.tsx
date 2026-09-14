@@ -122,6 +122,13 @@ export function useAuthActions() {
     },
     signOut: () => {
       setCsrfToken(null);
+      // Drop every cached query except the session itself (removing an
+      // observed query makes it refetch, which would re-authenticate), so a
+      // later sign-in as a different user never renders the previous user's
+      // rows from cache.
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] !== sessionKey[0],
+      });
       queryClient.setQueryData<SessionState>(sessionKey, {
         status: "anonymous",
       });

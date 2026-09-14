@@ -238,7 +238,10 @@ export function useBulkAction(): (
     },
     onSuccess: (results) => {
       for (const result of results ?? [])
-        if (!result.ok) toast.error(result.detail ?? result.type ?? "");
+        if (!result.ok)
+          toast.error(
+            result.detail ?? result.type ?? t("shell.actionFailedGeneric"),
+          );
     },
     onError: (error, _variables, context) => {
       if (context?.previous) {
@@ -317,26 +320,34 @@ export function RemoveTasksDialog({
   useEffect(() => {
     if (request) setDeleteFiles(request.deleteFiles);
   }, [request]);
-  const names = (request?.ids ?? []).map(
-    (id) => useTasks.getState().tasks.get(id)?.name ?? id,
-  );
+  const tasks = useTasks((state) => state.tasks);
+  const names = (request?.ids ?? []).map((id) => tasks.get(id)?.name ?? id);
   const confirm = async () => {
     if (!request || busy) return;
     setBusy(true);
     const removed: string[] = [];
     const failures: string[] = [];
     try {
-      for (const id of request.ids) {
-        const { error } = await api.DELETE("/tasks/{id}", {
-          params: { path: { id }, query: { delete_data: deleteFiles } },
-        });
-        if (error) failures.push(error.detail ?? error.title ?? id);
-        else removed.push(id);
+      // Every id gets its own DELETE: a transport failure on one must not
+      // skip the rest, and each failure reports its own detail.
+      const settled = await Promise.allSettled(
+        request.ids.map(async (id) => {
+          const { error } = await api.DELETE("/tasks/{id}", {
+            params: { path: { id }, query: { delete_data: deleteFiles } },
+          });
+          if (error) throw new Error(String(error.detail ?? error.title ?? id));
+          return id;
+        }),
+      );
+      for (const result of settled) {
+        if (result.status === "fulfilled") removed.push(result.value);
+        else
+          failures.push(
+            result.reason instanceof Error
+              ? result.reason.message
+              : t("shell.networkError"),
+          );
       }
-    } catch {
-      // A transport failure aborts the remaining deletions; the confirmed
-      // removals are still reconciled below.
-      failures.push(t("shell.networkError"));
     } finally {
       setBusy(false);
     }
@@ -361,7 +372,9 @@ export function RemoveTasksDialog({
     <Dialog
       open={request !== null}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        // Escape and outside clicks are ignored mid-flight: the buttons are
+        // disabled, so the dialog must not pretend to be idle either.
+        if (!open && !busy) onClose();
       }}
     >
       <DialogContent onCloseAutoFocus={onCloseAutoFocus}>

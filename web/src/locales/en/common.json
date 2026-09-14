@@ -78,6 +78,7 @@
     "needsSelection": "Select at least one task",
     "reconnecting": "Reconnecting…",
     "actionFailed": "Action failed: {{detail}}",
+    "actionFailedGeneric": "Action failed",
     "networkError": "Network error",
     "signOutFailed": "Sign out failed: {{detail}}",
     "sidebar": {

@@ -159,6 +159,10 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  // TestShellKeyboardActions injects <base> and rewrites history; a failure
+  // before its own cleanup must not leak either into later tests.
+  document.querySelector("base")?.remove();
+  window.history.replaceState(null, "", "/");
   qc.clear();
   server.resetHandlers();
   vi.restoreAllMocks();
@@ -334,7 +338,7 @@ test("TestStatusBarSegments", () => {
   expect(segments[0].getAttribute("aria-live")).toBe("polite");
   expect(segments[0].textContent).toBe("● Connected");
   expect(segments[1].textContent).toBe("↓ 12.9 MB/s ↑ 1.5 MB/s");
-  expect((segments[1] as HTMLElement).style.fontVariantNumeric).toBe(
+  expect(screen.getByRole("status").parentElement!.className).toContain(
     "tabular-nums",
   );
   expect(segments[2].textContent).toBe("8 active / 2 total");
@@ -506,7 +510,7 @@ test("TestRemoveDialogRecoversFromTransportFailure", async () => {
   // The confirmed removal reconciles even though the next DELETE rejected.
   expect(useTasks.getState().tasks.has("one")).toBe(false);
   expect(useTasks.getState().tasks.has("two")).toBe(true);
-  await screen.findByText("Removal failed: Network error");
+  await screen.findByText(/Removal failed:/);
 
   // The wedged busy flag was the bug: a reopened dialog must confirm again.
   view.rerender(tree({ ids: ["two"], deleteFiles: false }));

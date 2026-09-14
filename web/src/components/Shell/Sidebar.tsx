@@ -1,4 +1,4 @@
-import { useState, type JSX, type ReactNode } from "react";
+import { useMemo, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router-dom";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -19,6 +19,18 @@ export const DOWNLOAD_NODES = [
   { filter: "stopped", to: "/tasks/stopped" },
   { filter: "error", to: "/tasks/error" },
 ] as const;
+
+// Explicit keys keep i18n extraction static; a template key would be
+// invisible to static catalog tools.
+const FILTER_LABEL_KEYS = {
+  all: "shell.sidebar.all",
+  downloading: "shell.sidebar.downloading",
+  completed: "shell.sidebar.completed",
+  active: "shell.sidebar.active",
+  inactive: "shell.sidebar.inactive",
+  stopped: "shell.sidebar.stopped",
+  error: "shell.sidebar.error",
+} as const;
 
 // Doc 09 section 2.4: a zero-count DOWNLOAD node dims, it never hides.
 const zeroCountOpacity = 0.45;
@@ -50,7 +62,7 @@ function Node({
     <NavLink
       to={to}
       end={end}
-      className="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted"
+      className="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted aria-[current=page]:bg-accent aria-[current=page]:font-medium aria-[current=page]:text-accent-foreground"
       style={{ opacity: dimmed ? zeroCountOpacity : undefined }}
     >
       <span className="truncate">{label}</span>
@@ -124,12 +136,14 @@ export function Sidebar(): JSX.Element {
       ),
     ),
   );
-  const uncategorised = [...tasks.values()].filter(
-    (task) => !task.category,
-  ).length;
-  const untagged = [...tasks.values()].filter(
-    (task) => !task.tags?.length,
-  ).length;
+  const uncategorised = useMemo(
+    () => [...tasks.values()].filter((task) => !task.category).length,
+    [tasks],
+  );
+  const untagged = useMemo(
+    () => [...tasks.values()].filter((task) => !task.tags?.length).length,
+    [tasks],
+  );
   return (
     <div className="flex h-full flex-col gap-1 overflow-y-auto border-r border-border py-2">
       <Group id="nav-download" label={t("shell.sidebar.download")}>
@@ -137,7 +151,7 @@ export function Sidebar(): JSX.Element {
           <Node
             key={filter}
             to={to}
-            label={t(`shell.sidebar.${filter}`)}
+            label={t(FILTER_LABEL_KEYS[filter])}
             count={filters[filter]}
             dimmed={filters[filter] === 0}
           />

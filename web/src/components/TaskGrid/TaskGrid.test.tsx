@@ -459,9 +459,45 @@ test("TestShellActionCallbacksDispatchOnce", async () => {
   fireEvent.keyDown(grid, { key: "Delete" });
   expect(actions.requestRemove).toHaveBeenCalledTimes(1);
   expect(actions.requestRemove).toHaveBeenLastCalledWith(["one", "two"], false);
+  // Held-key auto-repeat must not re-dispatch the removal flow.
+  fireEvent.keyDown(grid, { key: "Delete", repeat: true });
+  expect(actions.requestRemove).toHaveBeenCalledTimes(1);
   fireEvent.keyDown(grid, { key: "Delete", shiftKey: true });
   expect(actions.requestRemove).toHaveBeenCalledTimes(2);
   expect(actions.requestRemove).toHaveBeenLastCalledWith(["one", "two"], true);
+  // Escape clears a live selection; with nothing selected it is a no-op and
+  // leaves the key unsuppressed for any focused dialog.
+  const cleared = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => {
+    grid.dispatchEvent(cleared);
+  });
+  expect(cleared.defaultPrevented).toBe(true);
+  expect(useTasks.getState().selection.size).toBe(0);
+  const unselected = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => {
+    grid.dispatchEvent(unselected);
+  });
+  expect(unselected.defaultPrevented).toBe(false);
+  act(() => useTasks.getState().setSelection(["one", "two"]));
+  // Pending rows announce and style the in-flight mutation.
+  act(() => useShellUi.setState({ pending: new Set(["one"]) }));
+  await waitFor(() =>
+    expect(
+      document.querySelector('[data-task-id="one"]')?.getAttribute("aria-busy"),
+    ).toBe("true"),
+  );
+  expect(document.querySelector('[data-task-id="one"]')?.className).toContain(
+    "task-pending",
+  );
+  act(() => useShellUi.setState({ pending: new Set() }));
   fireEvent.keyDown(grid, { key: "f", ctrlKey: true });
   fireEvent.keyDown(grid, { key: "f", metaKey: true });
   fireEvent.keyDown(grid, { key: "f" });

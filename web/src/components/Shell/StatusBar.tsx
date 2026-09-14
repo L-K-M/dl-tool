@@ -12,18 +12,21 @@ export function StatusBar(): JSX.Element {
   const stats = useTasks((state) => state.stats);
   const total = useTasks((state) => state.tasks.size);
   const locale = i18n.language;
-  const connectionLabel =
+  const connectionText =
     connection === "live"
-      ? `● ${t("shell.status.connected")}`
+      ? t("shell.status.connected")
       : connection === "offline"
-        ? `○ ${t("shell.status.offline")}`
-        : `◐ ${t("shell.status.reconnecting")}`;
+        ? t("shell.status.offline")
+        : t("shell.status.reconnecting");
+  const connectionGlyph =
+    connection === "live" ? "●" : connection === "offline" ? "○" : "◐";
   return (
-    <div className="flex h-full items-center gap-4 border-t border-border px-3 text-xs">
+    <div className="flex h-full items-center gap-4 border-t border-border px-3 text-xs tabular-nums">
       <span role="status" aria-live="polite">
-        {connectionLabel}
+        {/* The shape is decorative; the translated text announces state. */}
+        <span aria-hidden="true">{connectionGlyph}</span> {connectionText}
       </span>
-      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+      <span>
         ↓ {formatRate(stats.speed_down, locale)} ↑{" "}
         {formatRate(stats.speed_up, locale)}
       </span>

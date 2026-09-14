@@ -224,8 +224,8 @@ cd web && npx vitest run
 
  Test Files  8 passed (8)
       Tests  128 passed (128)
-   Start at  11:42:35
-   Duration  6.88s (transform 1.34s, setup 0ms, import 4.81s, tests 12.46s, environment 2.50s)
+   Start at  12:20:50
+   Duration  7.06s (transform 1.19s, setup 0ms, import 5.03s, tests 12.88s, environment 2.64s)
 
 SHELL_OK
 ```
@@ -316,6 +316,32 @@ background pollers outlive their tests. It surfaced once as push-run 34837489148
 `unexpected request: GET /api/v2/sync/maindata` at `contract_test.go:940` — a leaked poller hitting
 a reused port. The rerun and the pull_request run both passed; the leak itself needs a separate
 prerequisite repair.
+
+A third automated round on `04bca58` produced one rejected blocker and twelve applied fixes:
+
+- Rejected (spec evidence): pre-ticking the delete-files box for the "Remove task and files" menu
+  item. Doc 09 section 10.6 says the checkbox is *never* pre-checked except after `Shift+Delete`;
+  both menu items therefore open the same unticked confirmation.
+- Applied: `signOut` now clears the shared query cache too, excluding the session key so its active
+  observer cannot refetch and re-authenticate.
+- Applied: sidebar active nodes get `aria-[current=page]` styling; grid `Escape` with an empty
+  selection is a no-op like `Delete`; the remove dialog ignores Escape/outside dismissal while
+  deletions are in flight; removals run via `Promise.allSettled` so every id is attempted and each
+  failure reports its own detail; dialog task names subscribe to the store; failed bulk results
+  never toast an empty string; held-key Delete auto-repeat cannot re-dispatch; the task-pending
+  shimmer respects `prefers-reduced-motion`; sidebar download labels use static i18n keys;
+  uncategorised/untagged counts are memoized; the status bar hides its decorative glyphs from
+  assistive tech and uses tabular numerals throughout; the Shell suite's `afterEach` clears the
+  injected `<base>` and history.
+- Rejected (server contract): the `/tasks/category` and `/tasks/tag` fallback routes pass `""`, and
+  the API deliberately reads `?category=`/`?tag=` as the uncategorised/untagged filter
+  (`internal/api/tasks.go` lines 119-123, 258, 1042-1047).
+- Rejected (spec taxonomy): the Saved Searches node targets `/search` because doc 09's route table
+  defines no distinct saved-searches route; M4 owns that screen.
+- Rejected (spec'd structure): the empty sixth status-bar span reserves the alt-speed segment of
+  doc 09 section 2.6, whose data source does not exist yet.
+- Rejected (spec'd keys): doc 09 section 3.6 lists `Delete` only; `Backspace` is not a removal key.
+- Deferred: aggregating per-task bulk-action failures into one toast.
 
 ## Blocked
 Resolved by the plan repair: `web/src/App.test.tsx` is now in the `## Files` table with the
