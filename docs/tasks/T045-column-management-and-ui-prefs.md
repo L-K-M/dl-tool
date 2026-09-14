@@ -167,7 +167,7 @@ Expected: exactly the paths in the Files table and nothing else. Use `git status
 
 ## Evidence
 
-<Agent pastes command output here before marking done.>
+`<Agent pastes command output here before marking done.>`
 
 <details>
 <summary>Historical plan-repair evidence, before implementation</summary>
