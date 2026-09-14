@@ -168,7 +168,29 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Not run — the task stopped before implementation (see ## Blocked), so there is no
+verification output to paste. The wiring claims below were checked against the tree:
+
+```text
+$ grep -rln 'huma.Register' internal/api --include='*.go' | grep -v _test.go | sort
+internal/api/auth.go
+internal/api/server.go
+internal/api/settings.go
+internal/api/sse.go
+internal/api/tasks.go
+$ grep -n 'registerOperations\|RegisterOperations' internal/api/server.go
+299:	server.registerOperations()
+390:// registerOperations mounts the placeholder operation that keeps the document
+392:func (s *Server) registerOperations() {
+393:	s.auth.registerOperations(s.API)
+394:	s.tasks.registerOperations(s.API)
+395:	s.settings.registerOperations(s.API)
+396:	s.SSE.RegisterOperations(s.API)
+```
+
+Every production `huma.Register` call lives in a file reached only through
+`Server.registerOperations`, and `NewServer` (server.go:299) is its only caller — no file in
+the Files table can install a registration for `/fs/roots` or `/fs/browse`.
 
 ## Blocked
 
@@ -200,4 +222,8 @@ both plan-level:
 2. Or assign the wiring to a named task. T047 already extends `internal/api/fs.go`, but its
    Files table does not list `server.go` either, so the gap recurs there unless amended.
 
-The task cannot proceed until the table is amended or the note's premise is corrected.
+Option 1 is the only fix that unblocks this task's own acceptance tests: under option 2 the
+routes stay unregistered while T046 runs, so the humatest suites built through `NewServer`
+still cannot reach them. Option 2 only closes the gap for T047, and would additionally
+require deferring or reworking T046's acceptance tests. The task cannot proceed until the
+Files table is amended or the note's premise is corrected.
