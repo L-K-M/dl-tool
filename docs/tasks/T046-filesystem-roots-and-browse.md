@@ -172,6 +172,8 @@ Not run — the task stopped before implementation (see ## Blocked), so there is
 verification output to paste. The wiring claims below were checked against the tree:
 
 ```text
+$ git rev-parse --short HEAD
+b0524cb
 $ grep -rln 'huma.Register' internal/api --include='*.go' | grep -v _test.go | sort
 internal/api/auth.go
 internal/api/server.go
@@ -186,11 +188,15 @@ $ grep -n 'registerOperations\|RegisterOperations' internal/api/server.go
 394:	s.tasks.registerOperations(s.API)
 395:	s.settings.registerOperations(s.API)
 396:	s.SSE.RegisterOperations(s.API)
+$ grep -rn 'server\.registerOperations\|\.registerOperations()' internal cmd --include='*.go' \
+    | grep -v _test.go
+internal/api/server.go:299:	server.registerOperations()
 ```
 
 Every production `huma.Register` call lives in a file reached only through
-`Server.registerOperations`, and `NewServer` (server.go:299) is its only caller — no file in
-the Files table can install a registration for `/fs/roots` or `/fs/browse`.
+`Server.registerOperations`, and `NewServer` is that method's only caller — server.go:299 is
+the sole invocation of `registerOperations` on the `Server` anywhere outside tests. No file
+in the Files table can install a registration for `/fs/roots` or `/fs/browse`.
 
 ## Blocked
 
@@ -222,8 +228,9 @@ both plan-level:
 2. Or assign the wiring to a named task. T047 already extends `internal/api/fs.go`, but its
    Files table does not list `server.go` either, so the gap recurs there unless amended.
 
-Option 1 is the only fix that unblocks this task's own acceptance tests: under option 2 the
-routes stay unregistered while T046 runs, so the humatest suites built through `NewServer`
-still cannot reach them. Option 2 only closes the gap for T047, and would additionally
+Option 1 is the only fix that unblocks this task's own acceptance tests without reordering
+work: under option 2 as scoped to T047 (or any task sequenced after T046), the routes stay
+unregistered while T046 runs, so the humatest suites built through `NewServer` still cannot
+reach them. Option 2 only closes the gap for T047, and would additionally
 require deferring or reworking T046's acceptance tests. The task cannot proceed until the
 Files table is amended or the note's premise is corrected.
