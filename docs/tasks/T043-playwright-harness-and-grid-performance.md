@@ -123,7 +123,7 @@ Version: `@playwright/test@1.62.1` (doc 09 §1).
       `the grid stays inside the scripting budget` all pass in Chromium.
 - [ ] The run leaves nothing inside the repository: the state directory is under the OS temp directory.
 - [ ] The performance test satisfies [doc 13 §6.3](../13-testing-and-verification.md#63-grid-update-performance),
-      including rendered-update assertions, trace, printed samples/p95 and a failing negative control.
+      including rendered-update assertions, trace, printed samples/p95 and the one-off negative-control evidence.
 - [ ] Re-running `make e2e` twice in a row passes both times.
 
 ## Verification

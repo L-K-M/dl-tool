@@ -301,8 +301,9 @@ separate test store. This engine-free scenario runs against the embedded SPA wit
   (`sorted[ceil(0.95 * count) - 1]`). Assert p95 is under 8 ms, as required by
   [NFR-001](02-requirements.md#nfr-001-render-a-10-000-row-grid-smoothly).
 - Assert `aria-rowcount` is 10 000 and fewer than 200 rows are mounted throughout the measured run.
-  A negative control that suppresses fixture sync delivery must fail the visible-update assertion;
-  a low idle `ScriptDuration` must never pass. Restore delivery and rerun the normal scenario.
+  As a one-off negative control, suppress fixture sync delivery and record the visible-update assertion
+  failure in Evidence; a low idle `ScriptDuration` must never pass. Restore delivery before committing
+  and rerun the normal scenario. Do not commit a permanently failing or skipped test.
 
 This is a browser rendering benchmark, not proof of native SSE networking. T051's transport tests and
 §6.1's real-stack progress scenario cover those boundaries. No production test hooks or direct store
