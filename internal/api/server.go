@@ -111,6 +111,9 @@ type Server struct {
 	// /settings operations T092 adds to the same handlers.
 	settings *SettingsHandlers
 
+	// fs owns the /fs browse operations of doc 05 section 7.
+	fs *FSHandlers
+
 	// SSE owns the live-update endpoints: GET /events and GET /sync, and
 	// the hub they read from. It is exported for the composition root in
 	// cmd/dl-tool, which owns the *obs.Metrics instance whose
@@ -276,6 +279,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		Engines:  engines,
 		tasks:    NewTaskHandlers(db, engines, cfg.DataRoots),
 		settings: NewSettingsHandlers(db, engines),
+		fs:       NewFSHandlers(cfg.DataRoots),
 		SSE:      sseHandlers,
 	}
 	// The two credentials of docs/05-api-contract.md section 1.2, so the
@@ -393,6 +397,7 @@ func (s *Server) registerOperations() {
 	s.auth.registerOperations(s.API)
 	s.tasks.registerOperations(s.API)
 	s.settings.registerOperations(s.API)
+	s.fs.Register(s.API)
 	s.SSE.RegisterOperations(s.API)
 
 	// The bulk-action and patch operations of docs/05-api-contract.md
