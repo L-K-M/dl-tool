@@ -64,6 +64,12 @@ export interface TaskGridProps {
   tag?: string;
   /** Controlled by the preference owner; the grid does not persist it. */
   density?: "comfortable" | "compact";
+  /** Client-side substring on the name column from the toolbar's filter box (§2.5 item 7). */
+  nameQuery?: string;
+  /** Shell keyboard actions (§3.6); a key stays unconsumed until its owner is wired. */
+  onRemoveSelected?: (withData: boolean) => void;
+  onFocusFilter?: () => void;
+  onShowShortcuts?: () => void;
 }
 const listKey = ["tasks"];
 const pageLimit = 500;
@@ -533,6 +539,15 @@ const LiveRow = memo(function LiveRow({
 
 export function TaskGrid(props: TaskGridProps) {
   const { ids, total, isLoading, error } = useTaskIds(props);
+  const nameQuery = props.nameQuery?.trim().toLowerCase() ?? "";
+  // The toolbar filter narrows the loaded rows client-side; it never issues a request.
+  const visibleIds = useMemo(() => {
+    if (!nameQuery) return ids;
+    const tasks = useTasks.getState().tasks;
+    return ids.filter((id) =>
+      tasks.get(id)?.name.toLowerCase().includes(nameQuery),
+    );
+  }, [ids, nameQuery]);
   const queryClient = useQueryClient();
   const headerId = useId();
   const bodyId = useId();
@@ -554,22 +569,22 @@ export function TaskGrid(props: TaskGridProps) {
       useTasks.subscribe((next, previous) => {
         const changed = sorting.some(({ id: columnId }) => {
           const field = sourceFields[columnId as Exclude<ColumnId, "select">];
-          return ids.some(
+          return visibleIds.some(
             (id) =>
               next.tasks.get(id)?.[field] !== previous.tasks.get(id)?.[field],
           );
         });
         if (changed) setSortRevision((revision) => revision + 1);
       }),
-    [ids, sorting],
+    [visibleIds, sorting],
   );
   const data = useMemo(() => {
     void sortRevision;
-    return ids.flatMap((id) => {
+    return visibleIds.flatMap((id) => {
       const task = useTasks.getState().tasks.get(id);
       return task ? [task] : [];
     });
-  }, [ids, sortRevision]);
+  }, [visibleIds, sortRevision]);
   const table = useReactTable({
     data,
     columns,
@@ -647,6 +662,26 @@ export function TaskGrid(props: TaskGridProps) {
       target.isContentEditable
     )
       return;
+    // §3.6 shell actions, wired through App.tsx; absent handlers leave the key inert.
+    if (event.key === "Delete" && props.onRemoveSelected) {
+      event.preventDefault();
+      props.onRemoveSelected(event.shiftKey);
+      return;
+    }
+    if (
+      (event.key === "f" || event.key === "F") &&
+      (event.ctrlKey || event.metaKey) &&
+      props.onFocusFilter
+    ) {
+      event.preventDefault();
+      props.onFocusFilter();
+      return;
+    }
+    if (event.key === "?" && props.onShowShortcuts) {
+      event.preventDefault();
+      props.onShowShortcuts();
+      return;
+    }
     if (!rows.length) return;
     const current = Math.max(0, orderedIds.indexOf(rovingId));
     let next = current;
@@ -821,11 +856,12 @@ export function TaskGrid(props: TaskGridProps) {
         ) : rows.length === 0 ? (
           <p>
             {t(
-              props.filter === "all" &&
-                props.category === undefined &&
-                props.tag === undefined
-                ? "empty"
-                : "filteredEmpty",
+              nameQuery ||
+                props.filter !== "all" ||
+                props.category !== undefined ||
+                props.tag !== undefined
+                ? "filteredEmpty"
+                : "empty",
             )}
           </p>
         ) : null}

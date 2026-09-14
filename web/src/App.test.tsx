@@ -163,9 +163,10 @@ test("TestBootRendersLayout", async () => {
   boot();
   mount();
   await screen.findByRole("main");
-  expect(screen.getByRole("banner").textContent).toBe("");
-  expect(screen.getByRole("complementary").textContent).toBe("");
-  expect(screen.getByRole("contentinfo").textContent).toBe("");
+  // The three region slots host the T044 shell: toolbar, sidebar tree, status bar.
+  expect(screen.getByRole("banner").textContent).toContain("Add");
+  expect(screen.getByRole("navigation", { name: "Download" })).toBeTruthy();
+  expect(screen.getByRole("contentinfo").textContent).toContain("Sched");
   expect(screen.getByTestId("app-root").className).toContain(
     "grid-cols-[220px_minmax(0,1fr)]",
   );
@@ -190,7 +191,8 @@ test("TestLoginStoresCsrfToken", async () => {
   mount("/login?next=%2Fsearch%3Fquery%3Dlinux%23results");
   await screen.findByRole("heading", { name: "Sign in" });
   login();
-  await screen.findByRole("heading", { name: "Search" });
+  // Level 1: the sidebar's sr-only "Search" group heading also matches by name.
+  await screen.findByRole("heading", { name: "Search", level: 1 });
   expect(
     window.location.pathname + window.location.search + window.location.hash,
   ).toBe("/search?query=linux#results");

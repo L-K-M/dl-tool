@@ -41,7 +41,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/TaskGrid/TaskGrid.tsx` | edit | Extend the existing listener with this task's action callbacks. |
 | `web/src/components/TaskGrid/TaskGrid.test.tsx` | edit | Guard, dispatch-once and dialog-isolation regressions. |
 | `web/src/App.tsx` | edit | Mount the three regions inside `AppLayout` and wire grid action callbacks. |
-| `web/src/App.test.tsx` | edit | Update `TestBootRendersLayout`'s three empty-region assertions for the mounted shell (added by amendment; see Blocked). |
+| `web/src/App.test.tsx` | edit | Update `TestBootRendersLayout`'s three empty-region assertions for the mounted shell, and scope `TestLoginStoresCsrfToken`'s `Search`-heading query to level 1 because the sidebar's sr-only Search group heading now also matches (added by amendment; see Blocked). |
 | `web/src/locales/en/common.json` | edit | Sidebar, toolbar and status-bar strings. |
 
 No other file may be modified.
@@ -172,4 +172,5 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 None. An earlier session stopped here because `web/src/App.test.tsx` — the owner of
 `TestBootRendersLayout`'s empty-region assertions — was missing from the Files table.
 The amendment it proposed is the `web/src/App.test.tsx` row above; the task then
-proceeded with no other scope change.
+proceeded with no other scope change beyond that row's two assertion updates
+(empty regions, `Search` heading level).
