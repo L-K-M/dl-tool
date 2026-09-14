@@ -371,3 +371,8 @@ connected clients without registering `client.Close`, so `Connect`'s background 
 tests and hit a reused port. That file is not in this task's Files table and was deliberately not
 edited in this PR. The duplicate pull_request run passed and a rerun of the failed job passed, but
 the leak remains a real defect on `main` that needs a separate focused repair before this PR merges.
+
+Resolved: the repair landed on `main` as `19da8a9` via
+[#156](https://github.com/L-K-M/dl-tool/pull/156) — `newClient` now registers the client's `Close` in
+`t.Cleanup` so `Connect`'s poll dies with the test. Its second review round reported zero actionable
+suggestions and all 14 checks passed on `e4701f0`.
