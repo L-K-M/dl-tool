@@ -274,7 +274,7 @@ Implement verbatim as table-driven tests in `internal/fsx/safepath_test.go` (T04
 | 5 | `/etc/passwd` as a `Content-Disposition` filename | `_etc_passwd` | RFC 6266: strip folder info |
 | 6 | `..%2F..%2Fetc%2Fshadow` from `filename*` | decodes to `../../etc/shadow` → **reject the download** | double-decode trap |
 | 7 | `C:\Windows\system32.exe` | `C__Windows_system32.exe` | drive letter plus backslash |
-| 8 | `\\?\C:\x` | `____C_x` | Windows device path |
+| 8 | `\\?\C:\x` | `____C__x` | Windows device path |
 | 9 | `CON` | `_CON` | reserved name |
 | 10 | `nul.txt` | `_nul.txt` | reserved stem, case-insensitive |
 | 11 | `com9.tar.gz` | `_com9.tar.gz` | reserved name |
@@ -763,3 +763,4 @@ the repository owner decides.
 | 2026-09-02 | Added §7.4: engine credentials are mounted secrets rather than service environment variables, and configuration state is mode-enforced independently of `UMASK`. |
 | 2026-09-02 | Single-account cleanup: dropped the §3.3 `default_destination` subtree jail (containment is the data-root check alone) and restated the §6.8 exemption without roles; §6.4 says operator account rather than admin ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Review pass: the `.dlm` import caps are no longer restated here — §5.3 now points at [`07-search-and-indexers.md`](07-search-and-indexers.md) §4.1, which owned stricter numbers, and keeps only the two rules that are security properties rather than format rules. |
+| 2026-09-14 | Corrected §3.4 row 8's expected output to `____C__x`: §3.2 step 6 replaces each illegal character individually, so `\\?\C:\x` yields two underscores after `C`, exactly as row 7's identical `C:\` substring already shows. |
