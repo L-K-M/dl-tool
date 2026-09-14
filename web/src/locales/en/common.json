@@ -66,6 +66,13 @@
     "clearCompleted": "Clear completed",
     "noCompleted": "No completed tasks",
     "columns": "Columns",
+    "columnsMenu": {
+      "filter": "Filter columns",
+      "moveUp": "Move {{name}} up",
+      "moveDown": "Move {{name}} down",
+      "reset": "Reset to defaults"
+    },
+    "resizeColumn": "Resize {{name}}",
     "settings": "Settings",
     "signOut": "Sign out",
     "filterLabel": "Filter tasks by name",

@@ -38,6 +38,8 @@ import {
   type ThemeChoice,
 } from "../../lib/theme";
 import { selectFilterCounts, useTasks, type Task } from "../../store/useTasks";
+import { useUiPrefs } from "../../store/useUiPrefs";
+import { ColumnsMenu, useGridTable } from "../TaskGrid/ColumnsMenu";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -512,11 +514,14 @@ export function Toolbar(): JSX.Element {
     "aria-disabled": selectionDisabled || undefined,
     title: disabledReason,
   } as const;
+  const gridTable = useGridTable((state) => state.table);
   const toggleTheme = () => {
     const next = resolveTheme(theme) === "dark" ? "light" : "dark";
     storeTheme(next);
     applyTheme(next);
     setTheme(next);
+    // lib/theme owns the class; the prefs document only records the choice.
+    useUiPrefs.getState().patch({ theme: next });
   };
   return (
     <div className="flex h-full min-w-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
@@ -675,18 +680,22 @@ export function Toolbar(): JSX.Element {
         ) : null}
       </span>
       {separator}
-      <Button
-        variant="ghost"
-        size="sm"
-        disabled
-        aria-disabled="true"
-        aria-label={t("shell.columns")}
-        title={t("shell.comingColumns")}
-      >
-        <Columns3 aria-hidden="true" />{" "}
-        <span className={iconLabelClass}>{t("shell.columns")}</span>{" "}
-        <ChevronDown aria-hidden="true" />
-      </Button>
+      {gridTable ? (
+        <ColumnsMenu table={gridTable} />
+      ) : (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled
+          aria-disabled="true"
+          aria-label={t("shell.columns")}
+          title={t("shell.columns")}
+        >
+          <Columns3 aria-hidden="true" />{" "}
+          <span className={iconLabelClass}>{t("shell.columns")}</span>{" "}
+          <ChevronDown aria-hidden="true" />
+        </Button>
+      )}
       <Button
         variant="ghost"
         size="icon-sm"

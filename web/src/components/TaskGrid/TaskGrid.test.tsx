@@ -26,7 +26,9 @@ import {
   invalidateTaskList,
 } from "./TaskGrid";
 import { useTasks, type Task } from "../../store/useTasks";
+import { PREFS_KEY, defaultPrefs, useUiPrefs } from "../../store/useUiPrefs";
 import { useShellUi } from "../Shell/Toolbar";
+import { ColumnsMenu, moveGridColumn, useGridTable } from "./ColumnsMenu";
 import { formatBytes } from "../../lib/format";
 
 const task = (id: string, patch: Partial<Task> = {}): Task => ({
@@ -88,6 +90,8 @@ beforeEach(() => {
     pending: new Set(),
     filterInput: null,
   });
+  useUiPrefs.setState(structuredClone(defaultPrefs));
+  useGridTable.setState({ table: null });
   localStorage.clear();
   tasks = [task("one"), task("two"), task("three")];
   reportedTotal = tasks.length;
@@ -187,6 +191,19 @@ function order() {
   return [...document.querySelectorAll<HTMLElement>("[data-task-id]")].map(
     (node) => node.dataset.taskId,
   );
+}
+function columnIds() {
+  return screen
+    .getAllByRole("columnheader")
+    .map((node) => node.getAttribute("data-column-id"));
+}
+/** Renders the toolbar's popover against the mounted grid's table. */
+async function openColumnsMenu() {
+  const table = useGridTable.getState().table;
+  expect(table).not.toBeNull();
+  render(<ColumnsMenu table={table!} />);
+  fireEvent.click(screen.getByRole("button", { name: "Columns" }));
+  await screen.findByRole("group", { name: "Columns" });
 }
 
 test("TestRendersDefaultColumns", async () => {
@@ -304,7 +321,9 @@ test("TestShrinkingPageKeepsVirtualIndicesInBounds", async () => {
   tasks = [task("replacement")];
   reportedTotal = 1;
   await act(() => invalidateTaskList(qc));
-  expect(screen.getByRole("grid").getAttribute("aria-rowcount")).toBe("1");
+  await waitFor(() =>
+    expect(screen.getByRole("grid").getAttribute("aria-rowcount")).toBe("1"),
+  );
   fireEvent.scroll(screen.getByRole("grid"), { target: { scrollTop: 0 } });
   await screen.findByText("replacement");
   expect(order()).toEqual(["replacement"]);
@@ -680,8 +699,17 @@ test("TestTimestampSortUsesInstants", async () => {
     task("earlier", { added_at: "2026-09-01T02:00:00+02:00" }),
   ];
   await mount();
-  fireEvent.click(screen.getByRole("columnheader", { name: "Added" }));
+  const added = screen.getByRole("columnheader", { name: "Added" });
+  // The persisted default sorts Added descending (doc 09 section 3.3).
+  expect(added.getAttribute("aria-sort")).toBe("descending");
+  expect(order()).toEqual(["later", "earlier"]);
+  fireEvent.click(added);
+  // The asc → desc → default cycle clears the sort back to server order.
+  expect(order()).toEqual(["later", "earlier"]);
+  expect(added.getAttribute("aria-sort")).toBe("none");
+  fireEvent.click(added);
   expect(order()).toEqual(["earlier", "later"]);
+  expect(added.getAttribute("aria-sort")).toBe("ascending");
 });
 
 test("TestGridOwnsHeaderAndRows", async () => {
@@ -733,4 +761,194 @@ test("TestOnlyGridScrollsHorizontally", async () => {
   expect(
     screen.getAllByRole("columnheader")[0].parentElement?.style.transform,
   ).toBe("translateX(-120px)");
+});
+
+test("TestColumnPrefsSurviveRemount", async () => {
+  const first = await mount();
+  await openColumnsMenu();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Destination" }));
+  fireEvent.click(screen.getByRole("button", { name: "Move Size down" }));
+  const handle = document.querySelector('[data-resize-handle="size"]')!;
+  fireEvent.mouseDown(handle, { clientX: 100 });
+  fireEvent.mouseMove(document, { clientX: 150 });
+  fireEvent.mouseUp(document);
+  expect(useUiPrefs.getState().grid.sizing.size).toBe(140);
+  const expected = [
+    "select",
+    "queuePos",
+    "name",
+    "progress",
+    "size",
+    "status",
+    "dlSpeed",
+    "ulSpeed",
+    "eta",
+    "peers",
+    "ratio",
+    "uploaded",
+    "addedOn",
+    "completedOn",
+  ];
+  expect(columnIds()).toEqual(expected);
+  // The debounced write lands the whole document in localStorage.
+  await waitFor(() =>
+    expect(localStorage.getItem(PREFS_KEY)).toContain('"size":140'),
+  );
+  first.unmount();
+  await mount();
+  expect(columnIds()).toEqual(expected);
+  expect(within(row("one")).getAllByRole("gridcell")).toHaveLength(14);
+  expect(
+    document
+      .querySelector("section")!
+      .style.getPropertyValue("--col-size-size"),
+  ).toBe("140");
+});
+
+test("TestAriaSortAndMultiSortBadge", async () => {
+  await mount();
+  const added = screen.getByRole("columnheader", { name: "Added" });
+  const status = screen.getByRole("columnheader", { name: "Status" });
+  const name = screen.getByRole("columnheader", { name: "Name" });
+  expect(added.getAttribute("aria-sort")).toBe("descending");
+  expect(status.getAttribute("aria-sort")).toBe("none");
+  fireEvent.click(status);
+  expect(status.getAttribute("aria-sort")).toBe("ascending");
+  expect(added.getAttribute("aria-sort")).toBe("none");
+  // Single sort: no priority badge.
+  expect(within(status).queryByText("1")).toBeNull();
+  fireEvent.click(name, { shiftKey: true });
+  expect(name.getAttribute("aria-sort")).toBe("ascending");
+  expect(within(status).getByText("1")).toBeTruthy();
+  expect(within(name).getByText("2")).toBeTruthy();
+});
+
+test("TestPinnedColumnsStayFixed", async () => {
+  await mount();
+  await openColumnsMenu();
+  const up = (label: string) =>
+    screen.getByRole("button", {
+      name: `Move ${label} up`,
+    }) as HTMLButtonElement;
+  const down = (label: string) =>
+    screen.getByRole("button", {
+      name: `Move ${label} down`,
+    }) as HTMLButtonElement;
+  for (const label of ["Select tasks", "Name"]) {
+    expect(up(label).disabled).toBe(true);
+    expect(down(label).disabled).toBe(true);
+  }
+  // Pinned columns are never a drag source or a reorder target.
+  const current = [...DEFAULT_COLUMN_ORDER];
+  expect(moveGridColumn(current, "select", "size")).toEqual(current);
+  expect(moveGridColumn(current, "size", "select")).toEqual(current);
+  expect(moveGridColumn(current, "name", "size")).toEqual(current);
+  const nameHeader = document.querySelector('[data-column-id="name"]')!;
+  fireEvent.pointerDown(nameHeader, {
+    pointerId: 1,
+    clientX: 100,
+    clientY: 5,
+  });
+  fireEvent.pointerMove(document, { pointerId: 1, clientX: 300, clientY: 5 });
+  fireEvent.pointerUp(document, { pointerId: 1, clientX: 300, clientY: 5 });
+  expect(columnIds()).toEqual([...DEFAULT_COLUMN_ORDER]);
+  // A movable column swaps within the unpinned slots; the pinned positions stay.
+  fireEvent.click(up("Size"));
+  expect(columnIds().slice(0, 4)).toEqual([
+    "select",
+    "size",
+    "name",
+    "queuePos",
+  ]);
+});
+
+test("TestStoredPrefsCannotHidePinnedColumn", async () => {
+  // A hand-edited document must not hide a pinned column: its popover
+  // checkbox is disabled, so nothing else could bring it back.
+  useUiPrefs.setState((state) => ({
+    grid: { ...state.grid, visibility: { name: false } },
+  }));
+  await mount();
+  expect(screen.getByRole("columnheader", { name: "Name" })).toBeTruthy();
+});
+
+test("TestUnmountMidResizeStillPersists", async () => {
+  const first = await mount();
+  const handle = document.querySelector('[data-resize-handle="size"]')!;
+  fireEvent.mouseDown(handle, { clientX: 100 });
+  fireEvent.mouseMove(document, { clientX: 150 });
+  // Route change before mouseup: the resize gesture never formally ends.
+  first.unmount();
+  useUiPrefs.getState().patch({ lastDestination: "/data/z" });
+  await waitFor(() =>
+    expect(localStorage.getItem(PREFS_KEY)).toContain("/data/z"),
+  );
+});
+
+test("TestResizeHandleDoubleClickAutoFits", async () => {
+  await mount();
+  const handle = document.querySelector('[data-resize-handle="size"]')!;
+  fireEvent.mouseDown(handle, { clientX: 100 });
+  fireEvent.mouseMove(document, { clientX: 150 });
+  fireEvent.mouseUp(document);
+  expect(useUiPrefs.getState().grid.sizing.size).toBe(140);
+  fireEvent.doubleClick(handle);
+  // jsdom reports no layout, so auto-fit finds nothing measurable and
+  // restores the column's default width.
+  expect(
+    document
+      .querySelector("section")!
+      .style.getPropertyValue("--col-size-size"),
+  ).toBe("90");
+});
+
+test("TestResizeHandleArrowKeys", async () => {
+  await mount();
+  const handle = document.querySelector('[data-resize-handle="size"]')!;
+  expect(handle.getAttribute("role")).toBe("separator");
+  fireEvent.keyDown(handle, { key: "ArrowRight" });
+  expect(useUiPrefs.getState().grid.sizing.size).toBe(106);
+  fireEvent.keyDown(handle, { key: "ArrowLeft" });
+  fireEvent.keyDown(handle, { key: "ArrowLeft" });
+  expect(useUiPrefs.getState().grid.sizing.size).toBe(74);
+});
+
+test("TestGridUnmountPublishesNullTable", async () => {
+  const first = await mount();
+  expect(useGridTable.getState().table).not.toBeNull();
+  first.unmount();
+  expect(useGridTable.getState().table).toBeNull();
+});
+
+test("TestResetRestoresLiveGrid", async () => {
+  await mount();
+  await openColumnsMenu();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Destination" }));
+  fireEvent.click(screen.getByRole("button", { name: "Move Size down" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
+  expect(columnIds()).toEqual([...DEFAULT_COLUMN_ORDER]);
+  expect(within(row("one")).getAllByRole("gridcell")).toHaveLength(15);
+});
+
+test("TestFilterDisablesMovesAndResetClearsFilter", async () => {
+  await mount();
+  await openColumnsMenu();
+  const filter = screen.getByRole("textbox", {
+    name: "Filter columns",
+  }) as HTMLInputElement;
+  fireEvent.change(filter, { target: { value: "size" } });
+  const up = () =>
+    screen.getByRole("button", {
+      name: "Move Size up",
+    }) as HTMLButtonElement;
+  const down = () =>
+    screen.getByRole("button", {
+      name: "Move Size down",
+    }) as HTMLButtonElement;
+  // A filtered list hides the neighbour a move would swap with.
+  expect(up().disabled).toBe(true);
+  expect(down().disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
+  expect(filter.value).toBe("");
+  expect(up().disabled).toBe(false);
 });
