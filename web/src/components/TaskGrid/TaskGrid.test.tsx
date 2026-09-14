@@ -271,6 +271,45 @@ test("TestShiftClickSelectsRange", async () => {
   expect(selected()).toEqual(["two"]);
 });
 
+test.each([false, true])(
+  "TestRowCheckboxTogglesWithoutClearingOthers mobile=%s",
+  async (isMobile) => {
+    mobile = isMobile;
+    await mount();
+    const checkbox = (id: string) => within(row(id)).getByRole("checkbox");
+    fireEvent.click(checkbox("one"));
+    fireEvent.click(checkbox("two"));
+    expect(selected()).toEqual(["one", "two"]);
+    fireEvent.click(checkbox("one"));
+    expect(selected()).toEqual(["two"]);
+    fireEvent.click(checkbox("three"), { shiftKey: true });
+    expect(selected()).toEqual(["one", "two", "three"]);
+    expect(row("three").tabIndex).toBe(0);
+  },
+);
+
+test("TestShrinkingPageKeepsVirtualIndicesInBounds", async () => {
+  tasks = Array.from({ length: 100 }, (_, index) => task(`task-${index}`));
+  reportedTotal = tasks.length;
+  await mount();
+  fireEvent.keyDown(screen.getByRole("grid"), { key: "End" });
+  await waitFor(() => expect(row("task-99")).not.toBeNull());
+  tasks = [task("replacement")];
+  reportedTotal = 1;
+  await act(() => invalidateTaskList(qc));
+  expect(screen.getByRole("grid").getAttribute("aria-rowcount")).toBe("1");
+  fireEvent.scroll(screen.getByRole("grid"), { target: { scrollTop: 0 } });
+  await screen.findByText("replacement");
+  expect(order()).toEqual(["replacement"]);
+  tasks = [];
+  reportedTotal = 0;
+  await act(() => invalidateTaskList(qc));
+  await waitFor(() =>
+    expect(screen.getByRole("grid").getAttribute("aria-rowcount")).toBe("0"),
+  );
+  expect(order()).toEqual([]);
+});
+
 test("TestAriaRowcountIsTotalNotDomRows", async () => {
   tasks = Array.from({ length: 10000 }, (_, index) => task(`task-${index}`));
   reportedTotal = 10007;

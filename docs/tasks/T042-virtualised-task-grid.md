@@ -204,29 +204,32 @@ The existing App assertions retain authentication, CSRF, layout and routing cove
 Supplemental command: `cd web && npx vitest run --reporter=verbose` (exit 0), excerpts:
 
 ```text
-✓ src/main.test.ts > TestEntrypointRendersTaskGridUnderBase 636ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRendersDefaultColumns 237ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestStatusSortsByOrdinal 339ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestShiftClickSelectsRange 124ms
- ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters / 81ms
- ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/downloading 61ms
- ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/category/Linux 66ms
- ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/tag/archive 59ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestAriaRowcountIsTotalNotDomRows 644ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestGridKeyboardNavigationAndSelection 1601ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestDensityIsControlledNotCached 50ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRowHeightTracksLayoutAndDensity 875ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 320 17ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 375 17ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 639 21ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMissingCellsAndErrorDetails 35ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestLiveCellsAndSortInvalidation 111ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestSecondarySortTracksLiveChanges 68ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestSortReadsUnsortedLiveChanges 60ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestTimestampSortUsesInstants 45ms
+✓ src/main.test.ts > TestEntrypointRendersTaskGridUnderBase 575ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRendersDefaultColumns 226ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestStatusSortsByOrdinal 326ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestShiftClickSelectsRange 151ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRowCheckboxTogglesWithoutClearingOthers mobile=false 128ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRowCheckboxTogglesWithoutClearingOthers mobile=true 63ms
+ ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters / 82ms
+ ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/downloading 56ms
+ ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/category/Linux 68ms
+ ✓ src/App.test.tsx > TestTaskRoutesRequestServerFilters /tasks/tag/archive 66ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestShrinkingPageKeepsVirtualIndicesInBounds 722ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestAriaRowcountIsTotalNotDomRows 564ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestGridKeyboardNavigationAndSelection 1521ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestDensityIsControlledNotCached 58ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestRowHeightTracksLayoutAndDensity 787ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 320 20ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 375 20ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMobileContentBudgetAndTargets 639 15ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestMissingCellsAndErrorDetails 38ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestLiveCellsAndSortInvalidation 119ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestSecondarySortTracksLiveChanges 81ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestSortReadsUnsortedLiveChanges 71ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestTimestampSortUsesInstants 51ms
  ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestGridOwnsHeaderAndRows 58ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestPageFailureKeepsGridAndRetries 63ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestOnlyGridScrollsHorizontally 61ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestPageFailureKeepsGridAndRetries 62ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestOnlyGridScrollsHorizontally 63ms
 ```
 
 ### Verification
@@ -250,9 +253,9 @@ cd web && npx vitest run
 
 
  Test Files  7 passed (7)
-      Tests  111 passed (111)
-   Start at  04:24:30
-   Duration  5.33s (transform 915ms, setup 0ms, import 3.21s, tests 7.64s, environment 2.12s)
+      Tests  114 passed (114)
+   Start at  05:11:31
+   Duration  6.00s (transform 713ms, setup 0ms, import 3.40s, tests 8.38s, environment 2.05s)
 
 GRID_OK
 ```
@@ -275,25 +278,25 @@ All matched files use Prettier code style!
 go vet ./...
 go test -race -count=1 ./...
 ?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/api	87.500s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.108s
-ok  	github.com/L-K-M/dl-tool/internal/engine	21.543s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.210s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.911s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.033s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.670s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.196s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.223s
-ok  	github.com/L-K-M/dl-tool/internal/store	70.684s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.386s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.075s
+ok  	github.com/L-K-M/dl-tool/internal/api	91.921s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.149s
+ok  	github.com/L-K-M/dl-tool/internal/engine	22.013s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.243s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.915s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.017s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.561s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.182s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.185s
+ok  	github.com/L-K-M/dl-tool/internal/store	72.643s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.382s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.071s
 ?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
  Test Files  7 passed (7)
-      Tests  111 passed (111)
+      Tests  114 passed (114)
 docker compose -f compose.yaml config -q
 docker compose -f compose.yaml -f compose.dev.yaml config -q
 ./scripts/doclint.sh
-🔍 2441 Total (in 219ms) 🔗 572 Unique ✅ 2415 OK 🚫 0 Errors 👻 26 Excluded
+🔍 2441 Total (in 254ms) 🔗 572 Unique ✅ 2415 OK 🚫 0 Errors 👻 26 Excluded
 ```
 
 ### Browser layout
@@ -311,6 +314,8 @@ BROWSER_LAYOUT_OK 375 {"bodyWidth":375,"viewport":375,"rowHeight":160,"nextTop":
 BROWSER_LAYOUT_OK 639 {"bodyWidth":639,"viewport":639,"rowHeight":160,"nextTop":208,"rowBottom":208,"gridWidth":419,"scrollWidth":419,"card":{"bottom":200,"items":[{"height":16,"whiteSpace":"nowrap"},{"height":16,"whiteSpace":"nowrap"},{"height":16,"whiteSpace":"nowrap"},{"height":16,"whiteSpace":"nowrap"},{"height":16,"whiteSpace":"nowrap"}],"input":{"width":44,"height":44}}}
 BROWSER_LAYOUT_OK 640 {"bodyWidth":640,"viewport":640,"rowHeight":32,"nextTop":112,"rowBottom":112,"gridWidth":420,"scrollWidth":1730,"card":null}
 BROWSER_LAYOUT_OK 1024 {"bodyWidth":1024,"viewport":1024,"rowHeight":32,"nextTop":112,"rowBottom":112,"gridWidth":804,"scrollWidth":1730,"card":null}
+BROWSER_CHECKBOX_OK 320
+BROWSER_CHECKBOX_OK 1024
 ```
 
 ### Scope
@@ -340,6 +345,30 @@ web/src/main.test.ts
 `git diff --check` passed. Only the task document and both T042 index rows accompany these code files.
 No generated API or dependency files changed. Squash merge will place code, Evidence and both rows in
 one main commit. Review and remote gates remain required before merge.
+
+### Review round 1
+
+Read the complete GLM summary, inline comments and review for `a58ce7b`.
+`TestRowCheckboxTogglesWithoutClearingOthers` reproduced lost selection on desktop and mobile before
+the fix; both cases now pass, as does the real-browser checkbox probe. Checkbox clicks now toggle
+membership through the existing selection owner without collapsing other rows. Mobile controls no
+longer use a label that could synthesize a second click.
+
+Rejected the reported stale-index crash: the installed virtualizer includes `count` in its measurement
+and index dependencies. `TestShrinkingPageKeepsVirtualIndicesInBounds` passes with its real virtualizer
+from 100 rows at the last row, to one replacement, to zero. No invalid-index behavior was reproduced.
+
+The missing-test, missing-Verification, missing-CI, excerpt, fence and status findings are chunk-boundary
+false positives: this document contains each named passing test, both command outputs, balanced fences,
+and completed status matching both index rows. The module-cycle finding predicts hypothetical future
+edits, not a current failure; the entrypoint, unit suites and browser build execute it successfully.
+Extracting a new primitives file is outside this task's Files table and unnecessary for correctness.
+
+Deferred optional suggestions: handler memoization, grid label, peer pluralization, filter-guard
+consolidation, invalid-filter coverage, test-fixture cleanup and non-task overflow ownership when those
+screens gain content. `total`, row indexing, empty-state copy and resize configuration follow the
+explicit task contract; lateral cell navigation is not in its keyboard subset. No Makefile or store
+changes were made for out-of-scope suggestions. Required review of the updated head remains pending.
 
 ## Blocked
 

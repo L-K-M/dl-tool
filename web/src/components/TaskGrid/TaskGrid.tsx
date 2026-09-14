@@ -620,7 +620,12 @@ export function TaskGrid(props: TaskGridProps) {
         orderedIds.indexOf(id),
       ].sort((a, b) => a - b);
       state.setSelection(orderedIds.slice(ends[0], ends[1] + 1));
-    } else if (event.ctrlKey || event.metaKey) {
+    } else if (
+      event.ctrlKey ||
+      event.metaKey ||
+      (event.target instanceof HTMLInputElement &&
+        event.target.type === "checkbox")
+    ) {
       const next = new Set(state.selection);
       if (next.has(id)) next.delete(id);
       else next.add(id);

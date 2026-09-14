@@ -84,7 +84,7 @@ function Card({ id }: { id: string }) {
           ))}
         </div>
       </div>
-      <label
+      <span
         style={{
           width: 44,
           minWidth: 44,
@@ -101,7 +101,7 @@ function Card({ id }: { id: string }) {
           aria-label={t("selectTask", { name: task.name })}
           style={{ width: 44, height: 44, margin: 0 }}
         />
-      </label>
+      </span>
     </div>
   );
 }
