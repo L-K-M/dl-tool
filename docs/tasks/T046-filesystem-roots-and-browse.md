@@ -188,9 +188,9 @@ $ grep -n 'registerOperations\|RegisterOperations' internal/api/server.go
 394:	s.tasks.registerOperations(s.API)
 395:	s.settings.registerOperations(s.API)
 396:	s.SSE.RegisterOperations(s.API)
-$ grep -rn 'server\.registerOperations\|\.registerOperations()' internal cmd --include='*.go' \
+$ grep -rn 'server\.registerOperations\|\.registerOperations()' . --include='*.go' \
     | grep -v _test.go
-internal/api/server.go:299:	server.registerOperations()
+./internal/api/server.go:299:	server.registerOperations()
 ```
 
 Every production `huma.Register` call lives in a file reached only through
