@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T042, T044 |
 | **Blocks** | T053, T064, T104 |
-| **Parallel-safe** | no — extends T042's `TaskGrid.tsx` and T044's `Toolbar.tsx` |
+| **Parallel-safe** | no — extends T042's `TaskGrid.tsx`/`TaskGrid.test.tsx` and T044's `Toolbar.tsx` |
 | **Implements** | — (client half of [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences), covered by T107) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 3 new files, ~330 LOC |
@@ -34,7 +34,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/store/useUiPrefs.test.ts` | create | Defaults, merge, debounce and corrupt-value handling. |
 | `web/src/components/TaskGrid/ColumnsMenu.tsx` | create | The `Columns ▾` popover with search, checkboxes and move buttons. |
 | `web/src/components/TaskGrid/TaskGrid.tsx` | edit | Drive table state from the prefs store; add resize, reorder and `aria-sort`. |
+| `web/src/components/TaskGrid/TaskGrid.test.tsx` | edit | Align sorting expectations with the persisted default; cover remount persistence, `aria-sort`, the multi-sort badge and pinned columns. |
 | `web/src/components/Shell/Toolbar.tsx` | edit | Replace the disabled `Columns ▾` placeholder with the popover. |
+| `web/src/locales/en/common.json` | edit | `Columns ▾` popover strings (filter, move up/down, reset); doc 09 §10.2 forbids hardcoded text. |
 
 No other file may be modified.
 
@@ -115,7 +117,15 @@ export function ColumnsMenu(props: {
    back without throwing; `patch` deep-merges and leaves unknown members intact; no write is scheduled
    while dragging and exactly one write lands 500 ms after the last change; `resetGrid` restores
    `DEFAULT_COLUMN_ORDER`.
-9. Run the verification command and paste its output under `## Evidence`.
+9. Edit `web/src/components/TaskGrid/TaskGrid.test.tsx`: `TestTimestampSortUsesInstants` now mounts with
+   the persisted default `addedOn` descending — the first click on `Added` clears the sort back to
+   server order (doc 09 §3.4's ascending → descending → default cycle) and the second click ascends, so
+   the instant-based comparator is still proven. Add coverage that hiding, reordering and resizing a
+   column survive a remount of the grid, that header cells expose `aria-sort` with the `1`/`2` badge on
+   multi-sort, and that `select`/`name` cannot leave their pinned positions (no drag, move buttons
+   disabled in the popover).
+10. Add the `Columns ▾` popover strings to `web/src/locales/en/common.json`.
+11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestDefaultsWhenStorageEmpty`, `TestCorruptStorageFallsBack` and `TestPatchPreservesUnknownMembers`
@@ -130,14 +140,15 @@ Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && make typecheck && make test-web && echo PREFS_OK
 ```
-Expected: Vitest reports `Test Files  8 passed (8)` including `src/store/useUiPrefs.test.ts`, every test
+Expected: Vitest reports `Test Files  N passed (N)` where `N` equals the number of pre-existing
+`web/src` test files plus one for `src/store/useUiPrefs.test.ts` (9 at the time of writing); every test
 named above appears as passing, and the final line of stdout is exactly `PREFS_OK`.
 
 Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the paths in the Files table and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -154,7 +165,30 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Plan-repair evidence only, not implementation proof. With the required default sort applied
+(`useState<SortingState>([{ id: "addedOn", desc: true }])` on `d165163`, after `npm ci --prefix web`):
+
+```text
+ FAIL  src/components/TaskGrid/TaskGrid.test.tsx > TestTimestampSortUsesInstants
+- Expected ["earlier","later"]
++ Received ["later","earlier"]
+```
+
+That is the correct behavior under doc 09 §3.4 — one click on a descending column clears the sort —
+so the existing test, not the sort cycle, had to move. The repair adds the test file and the locale
+file to the Files table; both are required by the task's own rules.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+Resolved by the plan repair: `web/src/components/TaskGrid/TaskGrid.test.tsx` and
+`web/src/locales/en/common.json` are now in the Files table, and the Verification suite count tracks
+the pre-existing files instead of a hard-coded number.
+
+Original defect: `defaultPrefs` must match doc 09 §3.3, whose `grid.sorting` is
+`[{"id":"addedOn","desc":true}]`, and Step 3 wires `sorting` straight through to the table state. That
+makes `TestTimestampSortUsesInstants` fail — one click on `Added` clears the descending sort back to
+server order `[later, earlier]`, never the asserted `[earlier, later]` — and three acceptance criteria
+(remount persistence, `aria-sort`/badge, pinned columns) had no test file to live in. The popover
+strings likewise required `common.json`, which doc 09 §10.2's no-hardcoded-strings rule puts outside a
+silent defaultValue workaround.
