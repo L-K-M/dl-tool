@@ -16,13 +16,30 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import {
   flexRender,
   getCoreRowModel,
   getSortedRowModel,
   useReactTable,
   type ColumnDef,
+  type ColumnSizingInfoState,
+  type Header,
   type Row,
-  type SortingState,
+  type Updater,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -53,11 +70,28 @@ import {
   formatWhen,
 } from "../../lib/format";
 import { useTasks, type SidebarFilter, type Task } from "../../store/useTasks";
+import { useUiPrefs, type UiPrefs } from "../../store/useUiPrefs";
 import { useDebouncedNameFilter, useTaskPending } from "../Shell/Toolbar";
 import strings from "../../locales/en/grid.json";
 import { TaskCardList } from "./TaskCardList";
+import {
+  PINNED_GRID_COLUMNS,
+  moveGridColumn,
+  normalizeGridOrder,
+  useGridTable,
+} from "./ColumnsMenu";
 
 initI18n().addResourceBundle("en", "grid", strings);
+
+// @dnd-kit's published declarations still reference the global JSX namespace
+// that React 19's types removed; alias the members they use.
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace JSX {
+    type Element = import("react").JSX.Element;
+    type IntrinsicElements = import("react").JSX.IntrinsicElements;
+  }
+}
 
 /** The shell callbacks this task's doc 09 §3.6 keys dispatch to; wired in App.tsx. */
 export interface TaskGridActions {
@@ -379,6 +413,8 @@ export const columns: ColumnDef<Task>[] = DEFAULT_COLUMN_ORDER.map(
     size: widths[index],
     enableSorting: id !== "select",
     sortDescFirst: false,
+    enableHiding: !PINNED_GRID_COLUMNS.has(id),
+    enableResizing: id !== "select",
     accessorFn: (task) => {
       if (id === "select") return null;
       if (id === "status") return STATUS_ORDINAL[task.state];
@@ -401,6 +437,9 @@ export const columns: ColumnDef<Task>[] = DEFAULT_COLUMN_ORDER.map(
     },
   }),
 );
+
+const resolveUpdater = <T,>(update: Updater<T>, current: T): T =>
+  typeof update === "function" ? (update as (old: T) => T)(current) : update;
 
 function useRowHeight(density: TaskGridProps["density"]) {
   const [mobile, setMobile] = useState(
@@ -458,6 +497,9 @@ const LiveRow = memo(function LiveRow({
   focusCell: number | null;
   onSelect: (id: string, event: MouseEvent) => void;
   register: (id: string, node: HTMLDivElement | null) => void;
+  /** Changes when column order or visibility does; the memo check uses it to
+   *  re-render rows whose cell list changed while their row object stayed. */
+  columnsSignature: string;
 }) {
   const task = useTasks((state) => state.tasks.get(row.id));
   const selected = useTasks((state) => state.selection.has(row.id));
@@ -500,7 +542,7 @@ const LiveRow = memo(function LiveRow({
               key={id}
               tabIndex={focused && focusCell === columnIndex ? 0 : -1}
               style={{
-                flex: `0 0 ${cell.column.getSize()}px`,
+                flex: `0 0 calc(var(--col-${id}-size) * 1px)`,
                 minWidth: 0,
                 padding: "0 4px",
                 boxSizing: "border-box",
@@ -543,15 +585,154 @@ const LiveRow = memo(function LiveRow({
   );
 });
 
+function GridHeader({
+  header,
+  index,
+  ids,
+  middleOffset,
+  sortCount,
+  suppressClick,
+}: {
+  header: Header<Task, unknown>;
+  index: number;
+  ids: string[];
+  /** Width of the visible columns rendered between `select` and `name`. */
+  middleOffset: number;
+  sortCount: number;
+  suppressClick: { current: boolean };
+}) {
+  const id = header.column.id as ColumnId;
+  const pinned = PINNED_GRID_COLUMNS.has(id);
+  const { setNodeRef, listeners, transform, transition, isDragging } =
+    useSortable({ id: header.id, disabled: pinned });
+  const sorted = header.column.getIsSorted();
+  return (
+    <span
+      ref={setNodeRef}
+      {...listeners}
+      role="columnheader"
+      aria-colindex={index + 1}
+      aria-sort={
+        sorted === "asc"
+          ? "ascending"
+          : sorted === "desc"
+            ? "descending"
+            : "none"
+      }
+      data-column-id={id}
+      onClick={(event) => {
+        // The pointer-up that ends a column drag also fires a click; it must
+        // not toggle the sort.
+        if (suppressClick.current) return;
+        header.column.getToggleSortingHandler()?.(event);
+      }}
+      style={{
+        flex: `0 0 calc(var(--col-${id}-size) * 1px)`,
+        position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 2,
+        padding: "0 4px",
+        boxSizing: "border-box",
+        overflow: "hidden",
+        whiteSpace: "nowrap",
+        background: "var(--bg)",
+        zIndex: isDragging ? 3 : pinned ? 1 : undefined,
+        transform: pinned
+          ? id === "select"
+            ? "translateX(var(--grid-scroll-left, 0px))"
+            : `translateX(max(0px, calc(var(--grid-scroll-left, 0px) - ${middleOffset}px)))`
+          : transform
+            ? `translateX(${transform.x}px)`
+            : undefined,
+        transition,
+        textAlign: rightAligned.has(id) ? "right" : "left",
+        cursor: pinned ? undefined : isDragging ? "grabbing" : "grab",
+      }}
+    >
+      {id === "select" ? (
+        <SelectionBox ids={ids} />
+      ) : (
+        <>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+            {flexRender(header.column.columnDef.header, header.getContext())}
+          </span>
+          {sorted === "asc" ? (
+            <ArrowUp aria-hidden="true" size={12} style={{ flexShrink: 0 }} />
+          ) : sorted === "desc" ? (
+            <ArrowDown aria-hidden="true" size={12} style={{ flexShrink: 0 }} />
+          ) : null}
+          {sortCount > 1 && sorted ? (
+            <span
+              aria-hidden="true"
+              style={{
+                flexShrink: 0,
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                fontSize: 10,
+                lineHeight: "14px",
+                textAlign: "center",
+                background: "var(--accent)",
+                color: "var(--accent-fg)",
+              }}
+            >
+              {header.column.getSortIndex() + 1}
+            </span>
+          ) : null}
+        </>
+      )}
+      {header.column.getCanResize() ? (
+        <span
+          aria-hidden="true"
+          data-resize-handle={id}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={header.getResizeHandler()}
+          onTouchStart={header.getResizeHandler()}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            header.column.resetSize();
+          }}
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: 5,
+            cursor: "col-resize",
+            zIndex: 2,
+          }}
+        />
+      ) : null}
+    </span>
+  );
+}
+
 export function TaskGrid(props: TaskGridProps) {
   const { ids, total, isLoading, error } = useTaskIds(props);
   const queryClient = useQueryClient();
   const headerId = useId();
   const bodyId = useId();
   const { t } = useTranslation("grid");
-  const height = useRowHeight(props.density);
+  const gridPrefs = useUiPrefs((state) => state.grid);
+  const setDragging = useUiPrefs((state) => state.setDragging);
+  const height = useRowHeight(props.density ?? gridPrefs.density);
   const mobile = height === mobileHeight;
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const sorting = gridPrefs.sorting;
+  const columnOrder = useMemo(
+    () => normalizeGridOrder(gridPrefs.order, DEFAULT_COLUMN_ORDER),
+    [gridPrefs.order],
+  );
+  const [columnSizingInfo, setColumnSizingInfo] =
+    useState<ColumnSizingInfoState>({
+      columnSizingStart: [],
+      deltaOffset: null,
+      deltaPercentage: null,
+      isResizingColumn: false,
+      startOffset: null,
+      startSize: null,
+    });
   const [sortRevision, setSortRevision] = useState(0);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [focusCell, setFocusCell] = useState<number | null>(null);
@@ -586,20 +767,80 @@ export function TaskGrid(props: TaskGridProps) {
       return [task];
     });
   }, [ids, sortRevision, nameFilter]);
+  const patchGrid = (part: Partial<UiPrefs["grid"]>) =>
+    useUiPrefs
+      .getState()
+      .patch({ grid: { ...useUiPrefs.getState().grid, ...part } });
   const table = useReactTable({
     data,
     columns,
     getRowId: (task) => task.id,
-    state: { sorting },
+    state: {
+      sorting,
+      columnOrder,
+      columnVisibility: gridPrefs.visibility,
+      columnSizing: gridPrefs.sizing,
+      columnSizingInfo,
+    },
     onSortingChange: (update) => {
-      setSorting(update);
+      patchGrid({ sorting: resolveUpdater(update, sorting) });
       // Unsorted ticks update cells, not table snapshots; refresh before sorting.
       setSortRevision((revision) => revision + 1);
     },
+    onColumnOrderChange: (update) =>
+      patchGrid({
+        order: normalizeGridOrder(
+          resolveUpdater(update, columnOrder),
+          DEFAULT_COLUMN_ORDER,
+        ),
+      }),
+    onColumnVisibilityChange: (update) =>
+      patchGrid({ visibility: resolveUpdater(update, gridPrefs.visibility) }),
+    onColumnSizingChange: (update) =>
+      patchGrid({ sizing: resolveUpdater(update, gridPrefs.sizing) }),
+    onColumnSizingInfoChange: setColumnSizingInfo,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    enableColumnResizing: true,
     columnResizeMode: "onChange",
   });
+  // The toolbar's Columns popover reaches the table through this store; the
+  // shell layout gives TaskGrid and Toolbar no common editable parent.
+  useEffect(() => {
+    useGridTable.setState({ table });
+    return () => useGridTable.setState({ table: null });
+  }, [table]);
+  // While a resize gesture is live the prefs store must not schedule a write
+  // (doc 09 section 3.3); gesture end flushes the accumulated state once.
+  useEffect(() => {
+    setDragging(columnSizingInfo.isResizingColumn !== false);
+  }, [columnSizingInfo.isResizingColumn, setDragging]);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+  const suppressHeaderClick = useRef(false);
+  const endColumnDrag = () => {
+    setDragging(false);
+    // The pointer-up that ends a drag also fires a click on a header; keep the
+    // suppression flag up just long enough to swallow exactly that click.
+    setTimeout(() => {
+      suppressHeaderClick.current = false;
+    }, 0);
+  };
+  const onColumnDragEnd = (event: DragEndEvent) => {
+    endColumnDrag();
+    const over = event.over?.id;
+    if (over === undefined || event.active.id === over) return;
+    const next = moveGridColumn(
+      columnOrder,
+      String(event.active.id),
+      String(over),
+    );
+    if (next !== columnOrder) table.setColumnOrder(next);
+  };
   const rows = table.getRowModel().rows;
   const orderedIds = useMemo(() => rows.map((row) => row.id), [rows]);
   const virtualizer = useVirtualizer({
@@ -774,15 +1015,31 @@ export function TaskGrid(props: TaskGridProps) {
     width: table.getTotalSize(),
     height: comfortableHeight,
   };
+  const visibleColumns = table.getVisibleLeafColumns();
+  const nameIndex = visibleColumns.findIndex((c) => c.id === "name");
+  const middleOffset = visibleColumns
+    .slice(1, Math.max(1, nameIndex))
+    .reduce((sum, column) => sum + column.getSize(), 0);
+  const columnsSignature = visibleColumns.map((c) => c.id).join(",");
+  // The performant-resize technique of doc 09 section 3.4: widths live in CSS
+  // variables on the grid root, so a resize gesture rewrites one style instead
+  // of restyling every rendered cell per frame.
+  const columnSizeVars: Record<string, number> = {};
+  for (const leaf of table.getFlatHeaders()) {
+    columnSizeVars[`--col-${leaf.column.id}-size`] = leaf.getSize();
+  }
   return (
     <section
-      style={{
-        height: "100%",
-        minWidth: 0,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
+      style={
+        {
+          height: "100%",
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          ...columnSizeVars,
+        } as CSSProperties
+      }
     >
       <style>{`.grid-stripes { background-image: repeating-linear-gradient(135deg, transparent 0 6px, #ffffff44 6px 12px); } .grid-indeterminate { animation: grid-stripes 1s linear infinite; } @keyframes grid-stripes { to { background-position: 17px 0; } } @media (prefers-reduced-motion: reduce) { .grid-indeterminate { animation: none; } } .task-pending::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--accent); animation: task-shimmer 1s ease-in-out infinite; pointer-events: none; } @keyframes task-shimmer { 50% { opacity: 0.25; } } @media (prefers-reduced-motion: reduce) { .task-pending::after { animation: none; } } [data-task-id]:focus-visible, [role=gridcell]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }`}</style>
       {!mobile && (
@@ -794,50 +1051,41 @@ export function TaskGrid(props: TaskGridProps) {
             top: 0,
           }}
         >
-          <div
-            id={headerId}
-            ref={header}
-            role="row"
-            aria-rowindex={1}
-            style={headerStyle}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={() => {
+              suppressHeaderClick.current = true;
+              setDragging(true);
+            }}
+            onDragEnd={onColumnDragEnd}
+            onDragCancel={endColumnDrag}
           >
-            {table.getHeaderGroups()[0].headers.map((item, index) => (
-              <span
-                role="columnheader"
-                aria-colindex={index + 1}
-                aria-sort={
-                  item.column.getIsSorted() === "asc"
-                    ? "ascending"
-                    : item.column.getIsSorted() === "desc"
-                      ? "descending"
-                      : "none"
-                }
-                key={item.id}
-                onClick={item.column.getToggleSortingHandler()}
-                style={{
-                  flex: `0 0 ${item.getSize()}px`,
-                  background: "var(--bg)",
-                  zIndex:
-                    item.id === "select" || item.id === "name" ? 1 : undefined,
-                  transform:
-                    item.id === "select"
-                      ? "translateX(var(--grid-scroll-left, 0px))"
-                      : item.id === "name"
-                        ? `translateX(max(0px, calc(var(--grid-scroll-left, 0px) - ${widths[1]}px)))`
-                        : undefined,
-                  textAlign: rightAligned.has(item.id as ColumnId)
-                    ? "right"
-                    : "left",
-                }}
+            <SortableContext
+              items={columnOrder}
+              strategy={horizontalListSortingStrategy}
+            >
+              <div
+                id={headerId}
+                ref={header}
+                role="row"
+                aria-rowindex={1}
+                style={headerStyle}
               >
-                {item.id === "select" ? (
-                  <SelectionBox ids={orderedIds} />
-                ) : (
-                  flexRender(item.column.columnDef.header, item.getContext())
-                )}
-              </span>
-            ))}
-          </div>
+                {table.getHeaderGroups()[0].headers.map((item, index) => (
+                  <GridHeader
+                    key={item.id}
+                    header={item}
+                    index={index}
+                    ids={orderedIds}
+                    middleOffset={middleOffset}
+                    sortCount={sorting.length}
+                    suppressClick={suppressHeaderClick}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
         </div>
       )}
       <div
@@ -846,7 +1094,7 @@ export function TaskGrid(props: TaskGridProps) {
         aria-label={t("headers.name")}
         aria-rowcount={total}
         aria-owns={mobile ? undefined : `${headerId} ${bodyId}`}
-        aria-colcount={mobile ? 1 : DEFAULT_COLUMN_ORDER.length}
+        aria-colcount={mobile ? 1 : visibleColumns.length}
         aria-multiselectable="true"
         onKeyDown={onKeyDown}
         onScroll={(event) => {
@@ -900,6 +1148,7 @@ export function TaskGrid(props: TaskGridProps) {
               focused={rows[item.index].id === rovingId}
               focusCell={focusCell}
               onSelect={select}
+              columnsSignature={columnsSignature}
               register={(id, node) => {
                 if (node) nodes.current.set(id, node);
                 else nodes.current.delete(id);

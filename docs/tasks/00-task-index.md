@@ -127,7 +127,7 @@ The application shell, the virtualised grid, the add dialog, the folder browser,
 | [T042](T042-virtualised-task-grid.md) | Render the virtualised task grid and the mobile card list | T021, T040, T041 | done |
 | [T043](T043-playwright-harness-and-grid-performance.md) | Stand up the Playwright harness with the setup and grid-performance specs | T040, T042, T051 | todo |
 | [T044](T044-sidebar-toolbar-and-status-bar.md) | Build the sidebar tree, the toolbar and the status bar | T022, T023, T041, T042 | done |
-| [T045](T045-column-management-and-ui-prefs.md) | Add column management and the UI preference document | T042, T044 | todo |
+| [T045](T045-column-management-and-ui-prefs.md) | Add column management and the UI preference document | T042, T044 | done |
 | [T046](T046-filesystem-roots-and-browse.md) | Serve the filesystem roots and browse endpoints | T007, T008, T020 | todo |
 | [T047](T047-mkdir-free-space-and-folder-browser.md) | Serve mkdir and free space, and build the folder browser dialog | T046, T099 | todo |
 | [T048](T048-detail-pane-and-file-tree.md) | Build the detail pane, its tabs and the file tree | T024, T032, T034, T035, T042 | todo |
@@ -334,7 +334,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T042 | Render the virtualised task grid and the mobile card list | T021, T040, T041 | yes | done | [T042](T042-virtualised-task-grid.md) |
 | T043 | Stand up the Playwright harness with the setup and grid-performance specs | T040, T042, T051 | yes | todo | [T043](T043-playwright-harness-and-grid-performance.md) |
 | T044 | Build the sidebar tree, the toolbar and the status bar | T022, T023, T041, T042 | yes | done | [T044](T044-sidebar-toolbar-and-status-bar.md) |
-| T045 | Add column management and the UI preference document | T042, T044 | no | todo | [T045](T045-column-management-and-ui-prefs.md) |
+| T045 | Add column management and the UI preference document | T042, T044 | no | done | [T045](T045-column-management-and-ui-prefs.md) |
 | T046 | Serve the filesystem roots and browse endpoints | T007, T008, T020 | no | todo | [T046](T046-filesystem-roots-and-browse.md) |
 | T047 | Serve mkdir and free space, and build the folder browser dialog | T046, T099 | no | todo | [T047](T047-mkdir-free-space-and-folder-browser.md) |
 | T048 | Build the detail pane, its tabs and the file tree | T024, T032, T034, T035, T042 | yes | todo | [T048](T048-detail-pane-and-file-tree.md) |

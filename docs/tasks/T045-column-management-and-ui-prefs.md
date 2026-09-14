@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T045 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T042, T044 |
 | **Blocks** | T053, T064, T104 |
 | **Parallel-safe** | no — extends T042's `TaskGrid.tsx`/`TaskGrid.test.tsx` and T044's `Toolbar.tsx` |
@@ -128,12 +128,12 @@ export function ColumnsMenu(props: {
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestDefaultsWhenStorageEmpty`, `TestCorruptStorageFallsBack` and `TestPatchPreservesUnknownMembers`
+- [x] `TestDefaultsWhenStorageEmpty`, `TestCorruptStorageFallsBack` and `TestPatchPreservesUnknownMembers`
       pass.
-- [ ] `TestNoWriteDuringDrag` and `TestSingleDebouncedWrite` pass.
-- [ ] Hiding, reordering and resizing a column survives a remount of the grid.
-- [ ] Header cells expose `aria-sort`, and multi-sort shows the `1`/`2` badge.
-- [ ] `select` and `name` cannot be dragged out of their pinned positions.
+- [x] `TestNoWriteDuringDrag` and `TestSingleDebouncedWrite` pass.
+- [x] Hiding, reordering and resizing a column survives a remount of the grid.
+- [x] Header cells expose `aria-sort`, and multi-sort shows the `1`/`2` badge.
+- [x] `select` and `name` cannot be dragged out of their pinned positions.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -167,7 +167,100 @@ Expected: exactly the paths in the Files table and nothing else. Use `git status
 
 ## Evidence
 
-`<Agent pastes command output here before marking done.>`
+`npm ci --prefix web` installed the pinned dependencies; no pins changed. `@dnd-kit/modifiers`
+is not among the pinned packages, so the horizontal-axis restriction is applied by rendering only
+`transform.x` on the dragged header. `@dnd-kit`'s published declarations reference the global `JSX`
+namespace that React 19 types removed; `TaskGrid.tsx` carries a two-member `declare global` alias
+(`JSX.Element`, `JSX.IntrinsicElements`) because `tsconfig.json` is outside this task's Files table.
+`Toolbar.tsx` cannot import `TaskGrid.tsx` (TaskGrid already imports Toolbar), so the table instance
+reaches the Columns popover through `useGridTable`, a store in `ColumnsMenu.tsx`; off the tasks route
+the toolbar keeps a disabled Columns button, which `Shell.test.tsx` requires. The `theme` member stays
+owned by `lib/theme.ts`: the store re-reads storage at write time so a `storeTheme` write since module
+load is never clobbered, and `Toolbar.toggleTheme` also records the choice through `patch`.
+
+### Acceptance proof
+
+- `TestDefaultsWhenStorageEmpty`, `TestCorruptStorageFallsBack`,
+  `TestPatchPreservesUnknownMembers`, `TestNoWriteDuringDrag`, `TestSingleDebouncedWrite` and
+  `TestResetGridRestoresColumnOrder` live in `src/store/useUiPrefs.test.ts` (6 tests, all passing).
+- `TestColumnPrefsSurviveRemount` hides Destination, moves Size down and resizes it +50 px through the
+  real popover and resize handle, then remounts the grid and re-asserts the column list, the cell count
+  and the `--col-size-size` CSS variable; it also waits for the debounced localStorage write.
+- `TestAriaSortAndMultiSortBadge` asserts `aria-sort` values and the `1`/`2` priority badges on
+  Shift+click multi-sort.
+- `TestPinnedColumnsStayFixed` asserts the popover move buttons are disabled for `select` and `name`,
+  that `moveGridColumn` refuses a pinned source or target, and that a simulated pointer drag on the
+  `name` header changes nothing.
+- `TestTimestampSortUsesInstants` now starts from the persisted `addedOn` descending default; the first
+  click clears to server order and the second ascends, still proving the instant-based comparator.
+
+### Verification
+
+`make lint && make typecheck && make test-web && echo PREFS_OK` exited 0:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ ✓ src/api/client.test.ts (12 tests)
+ ✓ src/lib/format.test.ts (6 tests)
+ ✓ src/store/useTasks.test.ts (12 tests)
+ ✓ src/store/useUiPrefs.test.ts (6 tests)
+ ✓ src/components/Shell/Shell.test.tsx (11 tests)
+ ✓ src/App.test.tsx (55 tests)
+ ✓ src/main.test.ts (1 test)
+ ✓ src/lib/theme.test.ts (9 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (25 tests)
+   ✓ TestRendersDefaultColumns
+   ✓ TestStatusSortsByOrdinal
+   ✓ TestShiftClickSelectsRange
+   ✓ TestRowCheckboxTogglesWithoutClearingOthers mobile=false
+   ✓ TestShrinkingPageKeepsVirtualIndicesInBounds
+   ✓ TestAriaRowcountIsTotalNotDomRows
+   ✓ TestGridKeyboardNavigationAndSelection
+   ✓ TestRowHeightTracksLayoutAndDensity
+   ✓ TestLiveCellsAndSortInvalidation
+   ✓ TestSecondarySortTracksLiveChanges
+   ✓ TestColumnPrefsSurviveRemount
+   ✓ TestPinnedColumnsStayFixed
+
+ Test Files  9 passed (9)
+      Tests  137 passed (137)
+
+PREFS_OK
+```
+
+The file count matches 8 pre-existing `web/src` test files
+(`git ls-files 'web/src' | grep -c '\.test\.'` printed 8) plus `useUiPrefs.test.ts`. Expected
+auth-error responses, the deliberate task-page network failure and React `flushSync` lifecycle
+warnings are omitted above; they are pre-existing noise, not failures.
+
+### Scope
+
+`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort` printed:
+
+```text
+web/src/components/Shell/Toolbar.tsx
+web/src/components/TaskGrid/ColumnsMenu.tsx
+web/src/components/TaskGrid/TaskGrid.test.tsx
+web/src/components/TaskGrid/TaskGrid.tsx
+web/src/locales/en/common.json
+web/src/store/useUiPrefs.test.ts
+web/src/store/useUiPrefs.ts
+```
+
+Exactly the Files table and nothing else.
 
 <details>
 <summary>Historical plan-repair evidence, before implementation</summary>
