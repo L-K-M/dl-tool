@@ -144,8 +144,10 @@ Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && make typecheck && make test-web && echo SHELL_OK
 ```
-Expected: Vitest reports `Test Files  8 passed (8)` including `src/components/Shell/Shell.test.tsx`, every
-test named above appears as passing, and the final line of stdout is exactly `SHELL_OK`.
+Expected: Vitest reports zero failures across all test files, including
+`src/components/Shell/Shell.test.tsx`; every test named above appears as passing; the total equals
+the pre-existing `web/src` test files plus `Shell.test.tsx` (8 at the time of writing); and the
+final line of stdout is exactly `SHELL_OK`.
 
 Also confirm scope:
 ```bash
@@ -172,8 +174,9 @@ Expected: exactly the paths in the Files table and nothing else. Use `git status
 
 ## Blocked
 Resolved by the plan repair: `web/src/App.test.tsx` is now in the `## Files` table with the
-`TestBootRendersLayout` rewrite assigned to step 8, and the `## Verification` expectation reads
-`Test Files  8 passed (8)`. T044 remains unimplemented and `todo`.
+`TestBootRendersLayout` rewrite assigned to step 8, and the `## Verification` expectation counts the
+pre-existing `web/src` test files plus `Shell.test.tsx` instead of hard-coding a total. T044 remains
+unimplemented and `todo`.
 
 Original blocker: `TestBootRendersLayout` asserts `screen.getByRole("banner").textContent === ""`,
 `getByRole("complementary").textContent === ""` and `getByRole("contentinfo").textContent === ""`
