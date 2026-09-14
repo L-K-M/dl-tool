@@ -30,6 +30,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    — file selection is optimistic, force recheck is not.
 5. [`docs/09-web-ui-spec.md` §10.4 Accessibility](../09-web-ui-spec.md#104-accessibility) — the tablist and
    tree roles.
+6. [Doc 09 §3.6 Keyboard](../09-web-ui-spec.md#36-keyboard) — this task's shortcut ownership and
+   cross-component integration rules.
 
 ## Files
 | Path | Action | Purpose |
@@ -37,7 +39,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/DetailPane/DetailPane.tsx` | create | The pane, its tablist and the six panels. |
 | `web/src/components/FileTree/FileTree.tsx` | create | The tri-state, prioritised file tree. |
 | `web/src/components/DetailPane/DetailPane.test.tsx` | create | Tab visibility, field rendering and tree behaviour. |
-| `web/src/App.tsx` | edit | Mount the pane under the grid. |
+| `web/src/components/TaskGrid/TaskGrid.tsx` | edit | Dispatch detail actions with the focused task ID. |
+| `web/src/components/TaskGrid/TaskGrid.test.tsx` | edit | Detail shortcut and editable-target regressions. |
+| `web/src/App.tsx` | edit | Mount the pane under the grid and wire the detail action callback. |
 | `web/src/locales/en/common.json` | edit | Tab labels and detail field labels. |
 
 No other file may be modified.
@@ -118,17 +122,23 @@ assigned imperatively, or the shadcn/ui `checkbox` with `checked="indeterminate"
 8. Log: `GET /tasks/{id}/events`, newest first, each row an absolute timestamp with a relative tooltip, a
    level badge, the code and the message, plus a `Copy all` button.
 9. With more than one row selected, render the aggregate line `N tasks · X · ↓ Y` and no tabs; with nothing
-   selected, collapse to the muted line of doc 09 §6.
+   selected, collapse to the muted line of doc 09 §6. Wire this task's
+   [§3.6 detail shortcuts](../09-web-ui-spec.md#36-keyboard) through the existing grid listener and a
+   typed callback in `App.tsx`. Use the focused task ID, not the previous selection, to select that task
+   and open its pane. Preserve the editable-target guard and avoid duplicate listeners.
 10. Create `DetailPane.test.tsx`: `visibleTabs` hides Trackers and Peers for an `http` task; General shows
     `requested_destination` only when it differs; a folder checkbox toggles every descendant; setting
     `Skip` unticks the row and unticking sets `Skip`; a priority change posts the `PATCH` body of doc 05
-    §5.8.
+    §5.8. Add `TestKeyboardOpensFocusedTask` through the mounted grid and pane: each assigned shortcut
+    opens the focused task when another task is selected, and neither triggers from editable targets.
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestVisibleTabsHidesBitTorrentTabs`, `TestRequestedDestinationOnlyWhenDifferent` pass.
 - [ ] `TestFolderCheckboxSetsDescendants` and `TestSkipAndUnselectAreOneConcept` pass.
 - [ ] `TestPriorityPatchBody` asserts `{"files":[{"index":0,"priority":"high"}]}`.
+- [ ] `TestKeyboardOpensFocusedTask` proves both [§3.6 detail shortcuts](../09-web-ui-spec.md#36-keyboard)
+  open the focused task through the mounted grid and pane, not a stale selection, and respect the guard.
 - [ ] The priority select offers exactly four options and never the integer values.
 - [ ] The Log tab lists newest first and renders the event `code` as its own column.
 

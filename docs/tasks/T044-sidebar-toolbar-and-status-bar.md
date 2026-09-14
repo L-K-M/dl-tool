@@ -28,6 +28,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    [§5.6 `DELETE /tasks/{id}`](../05-api-contract.md#56-delete-tasksid) — action names and the two query flags.
 5. [`docs/09-web-ui-spec.md` §10.6 Toasts and optimistic updates](../09-web-ui-spec.md#106-toasts-and-optimistic-updates)
    — which mutations are optimistic and which are never.
+6. [Doc 09 §3.6 Keyboard](../09-web-ui-spec.md#36-keyboard) — this task's shortcut ownership and
+   cross-component integration rules.
 
 ## Files
 | Path | Action | Purpose |
@@ -36,7 +38,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/Shell/Toolbar.tsx` | create | The fixed-order action bar and the filter box. |
 | `web/src/components/Shell/StatusBar.tsx` | create | The six status segments. |
 | `web/src/components/Shell/Shell.test.tsx` | create | Counts, disabled states, action payloads and segments. |
-| `web/src/App.tsx` | edit | Mount the three regions inside `AppLayout`. |
+| `web/src/components/TaskGrid/TaskGrid.tsx` | edit | Extend the existing listener with this task's action callbacks. |
+| `web/src/components/TaskGrid/TaskGrid.test.tsx` | edit | Guard, dispatch-once and dialog-isolation regressions. |
+| `web/src/App.tsx` | edit | Mount the three regions inside `AppLayout` and wire grid action callbacks. |
 | `web/src/locales/en/common.json` | edit | Sidebar, toolbar and status-bar strings. |
 
 No other file may be modified.
@@ -103,14 +107,21 @@ Sidebar markup, per group:
    optimistic with `onMutate`/`onError`/`onSettled`, and make remove non-optimistic.
 5. Wire `Remove ▾` to a confirmation dialog naming the affected tasks with an unticked
    `Also delete downloaded files` box, which maps to `DELETE /tasks/{id}?delete_data=`. `Shift+Delete`
-   opens the same dialog with the box pre-ticked and says so in the body.
+   opens the same dialog with the box pre-ticked and says so in the body. Integrate this task's
+   [§3.6 shortcuts](../09-web-ui-spec.md#36-keyboard) through typed callbacks in the existing grid
+   listener, wired in `App.tsx` to the shell's filter, confirmation flow and cheat-sheet overlay.
+   Keep mutations behind `useBulkAction`; no duplicate shortcut listener. Use existing dialog primitives
+   and common locale strings for the overlay. Closing either dialog restores focus without clearing the
+   grid selection; cancelling removal sends no request.
 6. Add the theme toggle button calling `applyTheme` and `storeTheme` from T039.
 7. Create `StatusBar.tsx` with the six segments in order, every number through the T041 formatters.
 8. Edit `web/src/App.tsx` to render `Toolbar`, `Sidebar` and `StatusBar` in the three region slots.
 9. Create `Shell.test.tsx`: counts render from a seeded store; a zero-count node is present and dimmed;
    toolbar buttons are disabled with an empty selection; `Pause` posts
    `{"ids":["tsk_…"],"action":"pause"}`; the remove dialog's delete-files box starts unticked; the status
-   bar shows the rates and the active/total counts.
+   bar shows the rates and the active/total counts. Add `TestShellKeyboardActions` through the mounted
+   grid and shell to exercise every shortcut assigned here by §3.6, including the guard, a single
+   action per key, empty-selection removal, cancel-without-request and dialog focus restoration.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -119,6 +130,9 @@ Sidebar markup, per group:
 - [ ] `TestToolbarDisabledWithoutSelection` and `TestPausePostsActionsPayload` pass.
 - [ ] `TestRemoveDialogDeleteFilesUnticked` passes, including the `Shift+Delete` pre-ticked variant.
 - [ ] `TestStatusBarSegments` asserts all six segments in order.
+- [ ] `TestShellKeyboardActions` proves this task's [§3.6 actions](../09-web-ui-spec.md#36-keyboard)
+  through the mounted grid and shell, including editable-target and dialog isolation, and no deletion
+  before confirmation.
 - [ ] No component in this task calls `fetch` directly; every request goes through the T014 client.
 
 ## Verification
