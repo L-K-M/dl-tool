@@ -141,7 +141,8 @@ Run exactly this. Paste the output under "Evidence".
 make lint && make typecheck && make test-web && echo PREFS_OK
 ```
 Expected: Vitest reports `Test Files  N passed (N)` where `N` equals the number of pre-existing
-`web/src` test files plus one for `src/store/useUiPrefs.test.ts` (9 at the time of writing); every test
+`web/src` test files (count them before creating anything: `git ls-files 'web/src' | grep -c '\.test\.'`)
+plus one for `src/store/useUiPrefs.test.ts`; every test
 named above appears as passing, and the final line of stdout is exactly `PREFS_OK`.
 
 Also confirm scope:
@@ -166,8 +167,14 @@ Expected: exactly the paths in the Files table and nothing else. Use `git status
 
 ## Evidence
 
-Plan-repair evidence only, not implementation proof. With the required default sort applied
-(`useState<SortingState>([{ id: "addedOn", desc: true }])` on `d165163`, after `npm ci --prefix web`):
+<Agent pastes command output here before marking done.>
+
+<details>
+<summary>Historical plan-repair evidence, before implementation</summary>
+
+Not implementation proof — run the Verification block and paste fresh output above before marking
+done. With the required default sort applied (`useState<SortingState>([{ id: "addedOn", desc: true }])`
+on `d165163`, after `npm ci --prefix web`):
 
 ```text
  FAIL  src/components/TaskGrid/TaskGrid.test.tsx > TestTimestampSortUsesInstants
@@ -178,6 +185,8 @@ Plan-repair evidence only, not implementation proof. With the required default s
 That is the correct behavior under doc 09 §3.4 — one click on a descending column clears the sort —
 so the existing test, not the sort cycle, had to move. The repair adds the test file and the locale
 file to the Files table; both are required by the task's own rules.
+
+</details>
 
 ## Blocked
 
