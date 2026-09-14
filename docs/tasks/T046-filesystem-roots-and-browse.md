@@ -168,7 +168,69 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Not run — the task stopped before implementation (see ## Blocked), so there is no
+verification output to paste. The wiring claims below were checked against the tree:
+
+```text
+$ git rev-parse --short HEAD
+b0524cb
+$ grep -rln 'huma.Register' internal/api --include='*.go' | grep -v _test.go | sort
+internal/api/auth.go
+internal/api/server.go
+internal/api/settings.go
+internal/api/sse.go
+internal/api/tasks.go
+$ grep -n 'registerOperations\|RegisterOperations' internal/api/server.go
+299:	server.registerOperations()
+390:// registerOperations mounts the placeholder operation that keeps the document
+392:func (s *Server) registerOperations() {
+393:	s.auth.registerOperations(s.API)
+394:	s.tasks.registerOperations(s.API)
+395:	s.settings.registerOperations(s.API)
+396:	s.SSE.RegisterOperations(s.API)
+$ grep -rn 'server\.registerOperations\|\.registerOperations()' . --include='*.go' \
+    | grep -v _test.go
+./internal/api/server.go:299:	server.registerOperations()
+```
+
+Every production `huma.Register` call lives in a file reached only through
+`Server.registerOperations`, and `NewServer` is that method's only caller — server.go:299 is
+the sole invocation of `registerOperations` on the `Server` anywhere outside tests. No file
+in the Files table can install a registration for `/fs/roots` or `/fs/browse`.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+Stopped before implementation: the handler wiring this task's Files-table note requires does
+not exist, and the note names STOP as the response.
+
+The note says `internal/api/server.go` is not edited and the group registers "from
+`NewFSHandlers(...).Register(api)` called by the existing handler wiring". There is no such
+call site. Every operation reaches the Huma API through `Server.registerOperations` and
+`NewServer` in `internal/api/server.go`: all production `huma.Register`/`Register` calls live
+in `auth.go`, `settings.go`, `sse.go`, `tasks.go` and `server.go` itself, each invoked from
+`registerOperations` alone. No file in the Files table can install the call, so the endpoints
+would be built and never wired — the exact defect PLAN-REVIEW.md pattern 1 names. The failure
+shows up twice: `humatest` suites build through `NewServer` (the `tasksTestEnv` pattern in
+`internal/api/tasks_test.go`), so the task's own acceptance tests cannot reach unregistered
+operations, and the `openapi` subcommand renders the committed document through the same
+`NewServer`, so `make gen` could not list `/fs/roots` or `/fs/browse` for T047's client.
+
+The file that should answer it is this task file's own `## Files` table. Two possible fixes,
+both plan-level:
+
+1. Widen the table to include `internal/api/server.go` — one `fs` field on `Server`,
+   `NewFSHandlers(cfg.DataRoots)` in the constructor literal, `s.fs.Register(s.API)` in
+   `registerOperations`. T038 (`internal/engine/qbittorrent/files.go`) and T100
+   (`internal/api/server.go` itself) recorded exactly this widening for the same defect
+   class — a component whose composition-root call site no listed file can hold. I did not
+   widen it myself: this note already considered the missing wiring and pre-decided the
+   response (STOP), where T038 and T100 left the choice to the agent.
+2. Or assign the wiring to a named task. T047 already extends `internal/api/fs.go`, but its
+   Files table does not list `server.go` either, so the gap recurs there unless amended.
+
+Option 1 is the only fix that unblocks this task's own acceptance tests without reordering
+work: under option 2 as scoped to T047 (or any task sequenced after T046), the routes stay
+unregistered while T046 runs, so the humatest suites built through `NewServer` still cannot
+reach them. Option 2 only closes the gap for T047, and would additionally
+require deferring or reworking T046's acceptance tests. The task cannot proceed until the
+Files table is amended or the note's premise is corrected.
