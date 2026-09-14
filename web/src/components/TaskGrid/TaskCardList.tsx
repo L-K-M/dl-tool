@@ -71,6 +71,8 @@ function Card({ id }: { id: string }) {
             <span
               key={index}
               style={{
+                display: "flex",
+                alignItems: "center",
                 whiteSpace: "nowrap",
                 lineHeight: "16px",
                 flexShrink: 0,

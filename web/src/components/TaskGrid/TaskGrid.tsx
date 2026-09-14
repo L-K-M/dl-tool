@@ -1,6 +1,7 @@
 import {
   memo,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -9,7 +10,11 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { useQuery, type QueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import {
   flexRender,
   getCoreRowModel,
@@ -57,6 +62,8 @@ export interface TaskGridProps {
   filter: SidebarFilter;
   category?: string;
   tag?: string;
+  /** Controlled by the preference owner; the grid does not persist it. */
+  density?: "comfortable" | "compact";
 }
 const listKey = ["tasks"];
 const pageLimit = 500;
@@ -66,7 +73,6 @@ const mobileQuery = "(max-width: 639px)";
 const comfortableHeight = 32;
 const compactHeight = 26;
 const mobileHeight = 160;
-const preferencesKey = "dl.ui.prefs.v1";
 
 export function invalidateTaskList(qc: QueryClient): Promise<void> {
   return qc.invalidateQueries({ queryKey: listKey });
@@ -76,6 +82,7 @@ export function useTaskIds(p: TaskGridProps): {
   ids: string[];
   total: number;
   isLoading: boolean;
+  error: Error | null;
 } {
   const query = useQuery({
     queryKey: [...listKey, p.filter, p.category, p.tag],
@@ -106,12 +113,12 @@ export function useTaskIds(p: TaskGridProps): {
       useTasks.getState().hydrate(items);
       return { ids: items.map((task) => task.id), total };
     },
-    throwOnError: true,
   });
   return {
     ids: query.data?.ids ?? emptyIds,
     total: query.data?.total ?? 0,
     isLoading: query.isPending,
+    error: query.error,
   };
 }
 
@@ -244,7 +251,9 @@ export function TaskProgress({ task }: { task: Task }) {
         display: "block",
         position: "relative",
         height: 16,
-        background: "var(--bg-muted)",
+        background: "var(--progress-track)",
+        lineHeight: "16px",
+        fontSize: 12,
         overflow: "hidden",
         textAlign: "center",
       }}
@@ -361,12 +370,14 @@ export const columns: ColumnDef<Task>[] = DEFAULT_COLUMN_ORDER.map(
     size: widths[index],
     enableSorting: id !== "select",
     sortDescFirst: false,
-    accessorFn: (task) =>
-      id === "select"
-        ? null
-        : id === "status"
-          ? STATUS_ORDINAL[task.state]
-          : task[sourceFields[id]],
+    accessorFn: (task) => {
+      if (id === "select") return null;
+      if (id === "status") return STATUS_ORDINAL[task.state];
+      const value = task[sourceFields[id]];
+      if (id === "addedOn" || id === "completedOn")
+        return value ? Date.parse(String(value)) : null;
+      return value;
+    },
     header: () => initI18n().t(`headers.${id}`, { ns: "grid" }),
     cell: ({ row }) => <TaskCell task={row.original} id={id} />,
     sortingFn: (a, b, columnId) => {
@@ -382,32 +393,18 @@ export const columns: ColumnDef<Task>[] = DEFAULT_COLUMN_ORDER.map(
   }),
 );
 
-function readDensity() {
-  try {
-    return JSON.parse(localStorage.getItem(preferencesKey) ?? "null")?.grid
-      ?.density === "compact"
-      ? compactHeight
-      : comfortableHeight;
-  } catch {
-    return comfortableHeight;
-  }
-}
-function useRowHeight() {
-  const [height, setHeight] = useState(() =>
-    window.matchMedia(mobileQuery).matches ? mobileHeight : readDensity(),
+function useRowHeight(density: TaskGridProps["density"]) {
+  const [mobile, setMobile] = useState(
+    () => window.matchMedia(mobileQuery).matches,
   );
   useEffect(() => {
     const media = window.matchMedia(mobileQuery);
-    const update = () =>
-      setHeight(media.matches ? mobileHeight : readDensity());
+    const update = () => setMobile(media.matches);
     media.addEventListener("change", update);
-    window.addEventListener("storage", update);
-    return () => {
-      media.removeEventListener("change", update);
-      window.removeEventListener("storage", update);
-    };
+    return () => media.removeEventListener("change", update);
   }, []);
-  return height;
+  if (mobile) return mobileHeight;
+  return density === "compact" ? compactHeight : comfortableHeight;
 }
 
 function SelectionBox({ ids }: { ids: string[] }) {
@@ -474,7 +471,8 @@ const LiveRow = memo(function LiveRow({
         height,
         width: "100%",
         display: "flex",
-        background: selected ? "var(--bg-selected)" : undefined,
+        background: selected ? "var(--accent)" : "var(--bg)",
+        color: selected ? "var(--accent-fg)" : undefined,
       }}
     >
       {mobile ? (
@@ -503,6 +501,12 @@ const LiveRow = memo(function LiveRow({
                       ? "right"
                       : "left",
                 alignContent: "center",
+                position:
+                  id === "select" || id === "name" ? "sticky" : undefined,
+                left:
+                  id === "select" ? 0 : id === "name" ? widths[0] : undefined,
+                zIndex: id === "select" || id === "name" ? 1 : undefined,
+                background: "inherit",
               }}
             >
               {id === "select" ? (
@@ -528,9 +532,12 @@ const LiveRow = memo(function LiveRow({
 });
 
 export function TaskGrid(props: TaskGridProps) {
-  const { ids, total, isLoading } = useTaskIds(props);
+  const { ids, total, isLoading, error } = useTaskIds(props);
+  const queryClient = useQueryClient();
+  const headerId = useId();
+  const bodyId = useId();
   const { t } = useTranslation("grid");
-  const height = useRowHeight();
+  const height = useRowHeight(props.density);
   const mobile = height === mobileHeight;
   const [sorting, setSorting] = useState<SortingState>([]);
   const [sortRevision, setSortRevision] = useState(0);
@@ -729,7 +736,13 @@ export function TaskGrid(props: TaskGridProps) {
             top: 0,
           }}
         >
-          <div ref={header} role="row" aria-rowindex={1} style={headerStyle}>
+          <div
+            id={headerId}
+            ref={header}
+            role="row"
+            aria-rowindex={1}
+            style={headerStyle}
+          >
             {table.getHeaderGroups()[0].headers.map((item, index) => (
               <span
                 role="columnheader"
@@ -745,6 +758,15 @@ export function TaskGrid(props: TaskGridProps) {
                 onClick={item.column.getToggleSortingHandler()}
                 style={{
                   flex: `0 0 ${item.getSize()}px`,
+                  background: "var(--bg)",
+                  zIndex:
+                    item.id === "select" || item.id === "name" ? 1 : undefined,
+                  transform:
+                    item.id === "select"
+                      ? "translateX(var(--grid-scroll-left, 0px))"
+                      : item.id === "name"
+                        ? `translateX(max(0px, calc(var(--grid-scroll-left, 0px) - ${widths[1]}px)))`
+                        : undefined,
                   textAlign: rightAligned.has(item.id as ColumnId)
                     ? "right"
                     : "left",
@@ -765,15 +787,28 @@ export function TaskGrid(props: TaskGridProps) {
         role="grid"
         aria-label={t("headers.name")}
         aria-rowcount={total}
+        aria-owns={mobile ? undefined : `${headerId} ${bodyId}`}
         aria-colcount={mobile ? 1 : DEFAULT_COLUMN_ORDER.length}
         aria-multiselectable="true"
         onKeyDown={onKeyDown}
         onScroll={(event) => {
+          event.currentTarget.parentElement?.style.setProperty(
+            "--grid-scroll-left",
+            `${event.currentTarget.scrollLeft}px`,
+          );
           if (header.current)
             header.current.style.transform = `translateX(-${event.currentTarget.scrollLeft}px)`;
         }}
         style={{ overflow: "auto", flex: 1, minHeight: 0, minWidth: 0 }}
       >
+        {error && (
+          <p role="alert">
+            {t("loadError")}{" "}
+            <button onClick={() => void invalidateTaskList(queryClient)}>
+              {t("retry")}
+            </button>
+          </p>
+        )}
         {isLoading ? (
           <p role="status">{t("loading")}</p>
         ) : rows.length === 0 ? (
@@ -788,6 +823,7 @@ export function TaskGrid(props: TaskGridProps) {
           </p>
         ) : null}
         <div
+          id={bodyId}
           data-testid="virtual-rows"
           style={{
             height: virtualizer.getTotalSize(),

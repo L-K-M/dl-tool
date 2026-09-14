@@ -145,7 +145,7 @@ beforeEach(() => {
       const end = start + limit;
       return HttpResponse.json({
         items: tasks.slice(start, end),
-        total: reportedTotal,
+        total: start ? reportedTotal + 1 : reportedTotal,
         next_cursor: end < tasks.length ? String(end) : null,
       });
     }),
@@ -162,12 +162,13 @@ afterAll(() => server.close());
 
 async function mount() {
   useTasks.getState().hydrate(tasks);
-  render(
+  const result = render(
     <QueryClientProvider client={qc}>
       <TaskGrid filter="all" />
     </QueryClientProvider>,
   );
   await screen.findByText(tasks[0].name, { exact: true });
+  return result;
 }
 function row(id: string) {
   return document.querySelector<HTMLElement>(`[data-task-id="${id}"]`)!;
@@ -223,6 +224,7 @@ test("TestRendersDefaultColumns", async () => {
   );
   const progress = within(row("one")).getByRole("progressbar");
   expect(progress.getAttribute("aria-valuenow")).toBe("50");
+  expect(progress.style.background).toBe("var(--progress-track)");
   expect(progress.getAttribute("aria-valuemin")).toBe("0");
   expect(progress.getAttribute("aria-valuemax")).toBe("100");
   expect(progress.getAttribute("aria-valuetext")).toBe(
@@ -254,6 +256,7 @@ test("TestShiftClickSelectsRange", async () => {
   fireEvent.click(row("three"), { shiftKey: true });
   expect(selected()).toEqual(["one", "two", "three"]);
   expect(row("two").getAttribute("aria-selected")).toBe("true");
+  expect(row("two").style.background).toContain("var(--accent)");
   fireEvent.click(row("two"), { ctrlKey: true });
   expect(selected()).toEqual(["one", "three"]);
   const header = screen.getByRole("checkbox", {
@@ -381,10 +384,19 @@ test("TestGridKeyboardNavigationAndSelection", async () => {
   }
 });
 
+test("TestDensityIsControlledNotCached", async () => {
+  localStorage.setItem(
+    "dl.ui.prefs.v1",
+    JSON.stringify({ grid: { density: "compact" } }),
+  );
+  await mount();
+  expect(row("one").style.height).toBe("32px");
+});
+
 test("TestRowHeightTracksLayoutAndDensity", async () => {
   tasks = Array.from({ length: 100 }, (_, index) => task(`task-${index}`));
   reportedTotal = tasks.length;
-  await mount();
+  const { rerender } = await mount();
   fireEvent.click(row("task-1"));
   for (const [isMobile, density, expected] of [
     [false, "comfortable", 32],
@@ -393,13 +405,13 @@ test("TestRowHeightTracksLayoutAndDensity", async () => {
     [true, "comfortable", 160],
     [false, "comfortable", 32],
   ] as const) {
-    localStorage.setItem(
-      "dl.ui.prefs.v1",
-      JSON.stringify({ grid: { density } }),
-    );
     mobile = isMobile;
     changeMedia();
-    act(() => window.dispatchEvent(new StorageEvent("storage")));
+    rerender(
+      <QueryClientProvider client={qc}>
+        <TaskGrid filter="all" density={density} />
+      </QueryClientProvider>,
+    );
     await waitFor(() =>
       expect(row("task-0").style.height).toBe(`${expected}px`),
     );
@@ -441,8 +453,10 @@ test.each([320, 375, 639])(
     expect(metadata.textContent).toContain("↓1 kB/s");
     expect(metadata.textContent).toContain("↑2 kB/s");
     expect(metadata.textContent).toContain("1m");
-    for (const item of metadata.children)
+    for (const item of metadata.children) {
       expect((item as HTMLElement).style.whiteSpace).toBe("nowrap");
+      expect((item as HTMLElement).style.display).toBe("flex");
+    }
     const input = screen.getByRole("checkbox") as HTMLElement;
     expect(input.style.width).toBe("44px");
     expect(input.style.height).toBe("44px");
@@ -497,6 +511,48 @@ test("TestLiveCellsAndSortInvalidation", async () => {
   expect(screen.getByText("four")).toBeTruthy();
 });
 
+test("TestTimestampSortUsesInstants", async () => {
+  tasks = [
+    task("later", { added_at: "2026-09-01T01:00:00Z" }),
+    task("earlier", { added_at: "2026-09-01T02:00:00+02:00" }),
+  ];
+  await mount();
+  fireEvent.click(screen.getByRole("columnheader", { name: "Added" }));
+  expect(order()).toEqual(["earlier", "later"]);
+});
+
+test("TestGridOwnsHeaderAndRows", async () => {
+  await mount();
+  const grid = screen.getByRole("grid");
+  const header = screen.getAllByRole("columnheader")[0].parentElement!;
+  const ownership = grid.getAttribute("aria-owns")?.split(" ");
+  expect(ownership).toEqual([header.id, screen.getByTestId("virtual-rows").id]);
+  expect(header.id).not.toBe("");
+});
+
+test("TestPageFailureKeepsGridAndRetries", async () => {
+  server.use(http.get("*/api/v1/tasks", () => HttpResponse.error()));
+  render(
+    <QueryClientProvider client={qc}>
+      <TaskGrid filter="all" />
+    </QueryClientProvider>,
+  );
+  await screen.findByRole("alert");
+  expect(screen.getByRole("grid")).toBeTruthy();
+  expect(useTasks.getState().tasks.size).toBe(0);
+  server.use(
+    http.get("*/api/v1/tasks", () =>
+      HttpResponse.json({
+        items: tasks,
+        total: tasks.length,
+        next_cursor: null,
+      }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await screen.findByText("one");
+});
+
 test("TestOnlyGridScrollsHorizontally", async () => {
   await mount();
   const scrollers = [...document.querySelectorAll<HTMLElement>("*")].filter(
@@ -505,6 +561,11 @@ test("TestOnlyGridScrollsHorizontally", async () => {
   expect(scrollers).toEqual([screen.getByRole("grid")]);
   const grid = screen.getByRole("grid");
   expect(grid.parentElement?.style.overflow).toBe("hidden");
+  const cells = within(row("one")).getAllByRole("gridcell");
+  expect(cells[0].style.position).toBe("sticky");
+  expect(cells[0].style.left).toBe("0px");
+  expect(cells[2].style.position).toBe("sticky");
+  expect(cells[2].style.left).toBe("36px");
   fireEvent.scroll(grid, { target: { scrollLeft: 120 } });
   expect(
     screen.getAllByRole("columnheader")[0].parentElement?.style.transform,
