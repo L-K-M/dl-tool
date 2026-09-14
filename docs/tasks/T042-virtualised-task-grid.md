@@ -39,6 +39,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/TaskGrid/TaskGrid.test.tsx` | create | Rendering, sorting, selection and `aria-rowcount`. |
 | `web/src/locales/en/grid.json` | create | Column headers, status labels and grid empty states. |
 | `web/src/App.tsx` | edit | Render `TasksRoute` through `TaskGrid` instead of the placeholder. |
+| `web/src/main.test.ts` | edit | Replace placeholder-only proof with entrypoint-to-grid proof under the base path. |
+| `web/src/App.test.tsx` | edit | Mock task pages and verify route-to-grid requests while retaining auth and layout coverage. |
 
 No other file may be modified.
 
@@ -124,6 +126,14 @@ aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
    `Status · Size · ↓rate · ↑rate · ETA`, tap targets at least 44 px, rendered below 640 px.
    Use the fixed mobile height from doc 09 §3.9 and the content budget and overflow rules in §10.3.
 8. Edit `web/src/App.tsx` so `TasksRoute` reads `:filter`, `:name` and renders `TaskGrid`.
+   Update `main.test.ts` and `App.test.tsx` with deterministic MSW task-page handlers; retain strict
+   unhandled-request errors. Replace the entrypoint's app-wide placeholder-text assertion with
+   `TestEntrypointRendersTaskGridUnderBase`: boot the real entrypoint under `/dl-tool/`, await a task
+   row from the mocked API, and preserve root mounting, containment and single auth-boot assertions.
+   Add `TestTaskRoutesRequestServerFilters` for the default, state, category and tag routes: assert
+   base-prefixed task requests and the query parameters from doc 05 §5.1, then await the returned row.
+   Preserve existing authentication, CSRF, layout, redirect and route assertions; do not stub TaskGrid
+   or hide task requests to keep placeholder tests passing.
 9. Create `TaskGrid.test.tsx` with `msw` serving a `GET /tasks` page and the store seeded through
    `hydrate`: assert the fifteen headers, a formatted size cell, status sorting by `STATUS_ORDINAL`,
    `Shift+click` range selection, and `aria-rowcount` equal to the reported `total` while a 10 000-row
@@ -137,6 +147,8 @@ aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
+- [ ] `TestEntrypointRendersTaskGridUnderBase` and `TestTaskRoutesRequestServerFilters` pass in the
+  existing entrypoint and App suites, preserving their root, auth, CSRF, layout and routing guarantees.
 - [ ] `TestRendersDefaultColumns`, `TestStatusSortsByOrdinal`, `TestShiftClickSelectsRange` pass.
 - [ ] `TestAriaRowcountIsTotalNotDomRows` passes with 10 000 tasks in the store.
 - [ ] `TestGridKeyboardNavigationAndSelection` proves this task's
@@ -177,8 +189,173 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-Implementation Verification pending. Replace this section with fresh Verification and `make ci` output
-when implementing the grid. The following is plan-repair evidence only, not proof of grid rendering.
+
+### Entrypoint test-scope repair verification
+
+Reproduced the draft's failure on `d99ca34` after `npm ci --prefix web`:
+
+```text
+ FAIL  src/main.test.ts > renders the application root
+AssertionError: expected 'Loading tasks…' to be 'Downloads' // Object.is equality
+ Test Files  1 failed | 5 passed (6)
+      Tests  1 failed | 88 passed (89)
+make: *** [Makefile:44: test-web] Error 1
+```
+
+The install reported two high-severity audit findings; no pins changed. The repair removes the draft's
+unfinished grid changes, leaving production code and tests identical to main at `2ab1c65`.
+Only this canonical task contract changes in the final PR diff. Implementation remains pending.
+
+This scope regression check failed before the repair and passed afterward:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+
+text = Path('docs/tasks/T042-virtualised-task-grid.md').read_text()
+files = text.split('## Files\n', 1)[1].split('No other file', 1)[0]
+for path in ('web/src/main.test.ts', 'web/src/App.test.tsx'):
+    assert f'| `{path}` | edit |' in files, f'T042 omits required integration test: {path}'
+acceptance = text.split('## Acceptance criteria\n', 1)[1].split('## Verification', 1)[0]
+assert 'TestEntrypointRendersTaskGridUnderBase' in acceptance
+assert 'TestTaskRoutesRequestServerFilters' in acceptance
+assert '| **Status** | todo |' in text
+assert '- [x]' not in acceptance
+rows = [line for line in Path('docs/tasks/00-task-index.md').read_text().splitlines()
+        if line.startswith(('| [T042]', '| T042 |'))]
+assert len(rows) == 2 and all('| todo |' in line for line in rows)
+print('ENTRYPOINT_SCOPE_OK: both tests authorized, integration acceptance required, T042 todo')
+PY
+```
+
+Before repair (exit 1, excerpt):
+
+```text
+AssertionError: T042 omits required integration test: web/src/main.test.ts
+```
+
+After repair (exit 0):
+
+```text
+ENTRYPOINT_SCOPE_OK: both tests authorized, integration acceptance required, T042 todo
+```
+
+On the repaired baseline, `make lint && make typecheck && make test-web && echo GRID_OK` exited 0.
+Output excerpts:
+
+```text
+0 issues.
+All matched files use Prettier code style!
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+   Start at  03:23:11
+   Duration  2.32s (transform 760ms, setup 0ms, import 2.84s, tests 2.56s, environment 1.60s)
+
+GRID_OK
+```
+
+This is baseline proof only: the required seventh suite and new integration assertions do not exist
+until T042 is implemented. No acceptance completion is claimed.
+
+`PATH="/tmp/t039-tools:$PATH" make ci` exited 0, using the existing Docker CLI for compose validation.
+Output excerpts:
+
+```text
+0 issues.
+All matched files use Prettier code style!
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./...
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2446 Total (in 245ms) 🔗 574 Unique ✅ 2418 OK 🚫 0 Errors 👻 28 Excluded
+```
+
+### Superseded implementation attempt: scope blocked
+
+Original draft [PR #151](https://github.com/L-K-M/dl-tool/pull/151), implementation commit `7458842`.
+The recovery converted that PR to a plan-only repair and removed its scaffold from the final diff.
+The output below records the failed attempt, not the repaired baseline.
+The scaffold is incomplete. No acceptance box is checked; `TaskGrid.test.tsx` does not exist yet.
+Task status and both index rows remain `todo`. `npm ci --prefix web` succeeded with unchanged pins
+and two high-severity audit findings.
+
+Ran the exact Verification command on this implementation tree:
+
+```bash
+make lint && make typecheck && make test-web && echo GRID_OK
+```
+
+Output excerpts (exit 2; repeated MSW stack traces omitted):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+InternalError: [MSW] Cannot bypass a request when using the "error" strategy for the "onUnhandledRequest" option.
+
+ FAIL  src/main.test.ts > renders the application root
+AssertionError: expected 'Loading tasks…' to be 'Downloads' // Object.is equality
+
+Expected: "Downloads"
+Received: "Loading tasks…"
+
+ ❯ src/main.test.ts:60:54
+     58|   await screen.findByRole("main");
+     59|   expect(mount).toHaveBeenCalledWith(host);
+     60|   expect(screen.getByTestId("app-root").textContent).toBe("Downloads");
+       |                                                      ^
+     61|   expect(host.contains(screen.getByTestId("app-root"))).toBe(true);
+     62|   expect(bootRequests).toBe(1);
+
+ Test Files  1 failed | 5 passed (6)
+      Tests  1 failed | 88 passed (89)
+   Start at  03:14:54
+   Duration  2.44s (transform 773ms, setup 0ms, import 2.64s, tests 2.86s, environment 1.68s)
+
+make: *** [Makefile:44: test-web] Error 1
+```
+
+`GRID_OK` was not printed. `make ci` was not run locally: execution stopped at the scope blocker below.
+No grid acceptance or browser verification is claimed. Review and merge remain pending.
+
+The prescribed `git status` scope command printed nothing because incremental progress was already
+committed. `git diff --name-only origin/main...HEAD -- . ':(exclude)docs'` confirmed the actual code scope:
+
+```text
+web/src/App.tsx
+web/src/components/TaskGrid/TaskCardList.tsx
+web/src/components/TaskGrid/TaskGrid.tsx
+web/src/locales/en/grid.json
+```
+
+`git diff --check` passed. Only the task document changed after this Verification run.
+`make doclint` then exited 0:
+
+```text
+./scripts/doclint.sh
+🔍 2446 Total (in 228ms) 🔗 574 Unique ✅ 2418 OK 🚫 0 Errors 👻 28 Excluded
+```
+
+### Historical plan-repair evidence
+
+Implementation Verification pending. When implementing the grid, replace the entire `## Evidence`
+section, including all repair and superseded-attempt subsections, with fresh Verification and `make ci`
+output. The following is plan-repair evidence only, not proof of grid rendering.
 
 Before repair, this contract check failed; after repair, the same check passed:
 
@@ -405,6 +582,20 @@ docker compose -f compose.yaml -f compose.dev.yaml config -q
 No implementation or acceptance completion is claimed; all three tasks remain `todo`.
 
 ## Blocked
+
+### Resolved: entrypoint test requires the replaced placeholder
+
+`web/src/main.test.ts:60` asserts that the entire authenticated app text equals `Downloads`.
+It mocks only `/auth/me`, not the task list. T042 replaces that placeholder with an API-backed grid;
+the unchanged test now fails with `Loading tasks…`. Both this suite and `web/src/App.test.tsx` also
+reject the newly required `/tasks` requests through MSW's strict unhandled-request policy.
+
+The Files table now authorizes both suites; step 8 and the acceptance criteria require their integration
+proof without weakening existing guarantees. No shared scope exception or production workaround is needed.
+
+Recovery removes the unfinished scaffold from PR #151 through an appended commit and merges only this
+plan repair. Neither test implementation changes here. T042 and both index rows remain `todo`, with
+acceptance unchecked. Retry implementation from main; the discarded scaffold is not acceptance evidence.
 
 ### Resolved: keyboard actions require forbidden components
 
