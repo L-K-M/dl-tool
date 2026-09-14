@@ -592,6 +592,7 @@ function GridHeader({
   middleOffset,
   sortCount,
   suppressClick,
+  onAutoFit,
 }: {
   header: Header<Task, unknown>;
   index: number;
@@ -600,6 +601,7 @@ function GridHeader({
   middleOffset: number;
   sortCount: number;
   suppressClick: { current: boolean };
+  onAutoFit: (id: string) => void;
 }) {
   const id = header.column.id as ColumnId;
   const pinned = PINNED_GRID_COLUMNS.has(id);
@@ -692,7 +694,7 @@ function GridHeader({
           onClick={(event) => event.stopPropagation()}
           onDoubleClick={(event) => {
             event.stopPropagation();
-            header.column.resetSize();
+            onAutoFit(id);
           }}
           style={{
             position: "absolute",
@@ -778,7 +780,13 @@ export function TaskGrid(props: TaskGridProps) {
     state: {
       sorting,
       columnOrder,
-      columnVisibility: gridPrefs.visibility,
+      // Pinned columns stay visible even if a hand-edited document hides them;
+      // their popover checkboxes are disabled, so nothing else could recover.
+      columnVisibility: {
+        ...gridPrefs.visibility,
+        select: true,
+        name: true,
+      },
       columnSizing: gridPrefs.sizing,
       columnSizingInfo,
     },
@@ -815,6 +823,9 @@ export function TaskGrid(props: TaskGridProps) {
   useEffect(() => {
     setDragging(columnSizingInfo.isResizingColumn !== false);
   }, [columnSizingInfo.isResizingColumn, setDragging]);
+  // Unmounting mid-gesture (e.g. a route change during a drag) must not leave
+  // the prefs store in no-write mode for the rest of the session.
+  useEffect(() => () => setDragging(false), [setDragging]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, {
@@ -840,6 +851,39 @@ export function TaskGrid(props: TaskGridProps) {
       String(over),
     );
     if (next !== columnOrder) table.setColumnOrder(next);
+  };
+  // Doc 09 section 3.4: double-click on the grab zone auto-fits to content.
+  // Cells clip their overflow, so scrollWidth measures the full content.
+  const fitColumn = (columnId: string) => {
+    const column = table.getColumn(columnId);
+    if (!column) return;
+    const index = table
+      .getVisibleLeafColumns()
+      .findIndex((leaf) => leaf.id === columnId);
+    let width = 0;
+    const headerNode = header.current?.querySelector<HTMLElement>(
+      `[data-column-id="${columnId}"]`,
+    );
+    if (headerNode) width = headerNode.scrollWidth;
+    for (const node of nodes.current.values()) {
+      const cell =
+        node.querySelectorAll<HTMLElement>('[role="gridcell"]')[index];
+      if (cell) width = Math.max(width, cell.scrollWidth);
+    }
+    // No layout engine (or no rendered content): restore the default width.
+    // resetSize would delete the key, which a deep-merge patch cannot express.
+    if (index < 0 || width <= 0) {
+      table.setColumnSizing({
+        ...table.getState().columnSizing,
+        [columnId]: column.columnDef.size ?? 100,
+      });
+      return;
+    }
+    table.setColumnSizing({
+      ...table.getState().columnSizing,
+      // 8 px of cell padding on each side of the content measurement.
+      [columnId]: Math.min(Math.max(width + 8, 40), 1200),
+    });
   };
   const rows = table.getRowModel().rows;
   const orderedIds = useMemo(() => rows.map((row) => row.id), [rows]);
@@ -1081,6 +1125,7 @@ export function TaskGrid(props: TaskGridProps) {
                     middleOffset={middleOffset}
                     sortCount={sorting.length}
                     suppressClick={suppressHeaderClick}
+                    onAutoFit={fitColumn}
                   />
                 ))}
               </div>

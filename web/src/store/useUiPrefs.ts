@@ -143,10 +143,29 @@ export const useUiPrefs = create<UiPrefsState>()((set, get) => {
     if (writeTimer !== null) clearTimeout(writeTimer);
     writeTimer = setTimeout(() => {
       writeTimer = null;
+      // A gesture can start after this write was armed; doc 09 §3.3 forbids
+      // writing mid-gesture. The gesture end reschedules with the final state.
+      if (dragging) return;
       try {
         // Re-read at write time so members written by other owners since load
-        // (lib/theme.ts owns `theme`) and unknown members survive verbatim.
-        const merged = deepMerge(readStored() ?? {}, documentOf(get()));
+        // and unknown members survive verbatim. This store is the sole owner
+        // of `grid`, so its known members replace storage (a resetGrid must
+        // not resurrect stale sizing keys); nested members it does not define
+        // survive. lib/theme.ts owns `theme`: a stored value wins.
+        const stored = readStored() ?? {};
+        const doc = documentOf(get());
+        const merged: Record<string, unknown> = { ...stored, ...doc };
+        merged.grid = {
+          ...(isObject(stored.grid) ? stored.grid : {}),
+          ...doc.grid,
+        };
+        const storedTheme = stored.theme;
+        if (
+          storedTheme === "system" ||
+          storedTheme === "light" ||
+          storedTheme === "dark"
+        )
+          merged.theme = storedTheme;
         localStorage.setItem(PREFS_KEY, JSON.stringify(merged));
       } catch {
         // Storage can be full or unavailable; the in-memory document still works.
@@ -162,9 +181,22 @@ export const useUiPrefs = create<UiPrefsState>()((set, get) => {
     setDragging: (next) => {
       if (next === dragging) return;
       dragging = next;
-      // A drag's final patch was suppressed; gesture end flushes it.
-      if (!next) scheduleWrite();
+      if (next) {
+        // A write armed before the gesture must not fire mid-gesture.
+        if (writeTimer !== null) {
+          clearTimeout(writeTimer);
+          writeTimer = null;
+        }
+      } else {
+        // A drag's patches were suppressed; gesture end flushes the state.
+        scheduleWrite();
+      }
     },
-    resetGrid: () => get().patch({ grid: clone(defaultPrefs.grid) }),
+    resetGrid: () => {
+      // Replace, not deep-merge: a sizing key removed by the reset must not
+      // survive as a stale member of the merged map.
+      set({ grid: clone(defaultPrefs.grid) });
+      scheduleWrite();
+    },
   };
 });

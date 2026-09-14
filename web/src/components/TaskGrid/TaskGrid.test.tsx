@@ -859,3 +859,43 @@ test("TestPinnedColumnsStayFixed", async () => {
     "queuePos",
   ]);
 });
+
+test("TestStoredPrefsCannotHidePinnedColumn", async () => {
+  // A hand-edited document must not hide a pinned column: its popover
+  // checkbox is disabled, so nothing else could bring it back.
+  useUiPrefs.setState((state) => ({
+    grid: { ...state.grid, visibility: { name: false } },
+  }));
+  await mount();
+  expect(screen.getByRole("columnheader", { name: "Name" })).toBeTruthy();
+});
+
+test("TestUnmountMidResizeStillPersists", async () => {
+  const first = await mount();
+  const handle = document.querySelector('[data-resize-handle="size"]')!;
+  fireEvent.mouseDown(handle, { clientX: 100 });
+  fireEvent.mouseMove(document, { clientX: 150 });
+  // Route change before mouseup: the resize gesture never formally ends.
+  first.unmount();
+  useUiPrefs.getState().patch({ lastDestination: "/data/z" });
+  await waitFor(() =>
+    expect(localStorage.getItem(PREFS_KEY)).toContain("/data/z"),
+  );
+});
+
+test("TestResizeHandleDoubleClickAutoFits", async () => {
+  await mount();
+  const handle = document.querySelector('[data-resize-handle="size"]')!;
+  fireEvent.mouseDown(handle, { clientX: 100 });
+  fireEvent.mouseMove(document, { clientX: 150 });
+  fireEvent.mouseUp(document);
+  expect(useUiPrefs.getState().grid.sizing.size).toBe(140);
+  fireEvent.doubleClick(handle);
+  // jsdom reports no layout, so auto-fit finds nothing measurable and
+  // restores the column's default width.
+  expect(
+    document
+      .querySelector("section")!
+      .style.getPropertyValue("--col-size-size"),
+  ).toBe("90");
+});

@@ -175,14 +175,23 @@ namespace that React 19 types removed; `TaskGrid.tsx` carries a two-member `decl
 `Toolbar.tsx` cannot import `TaskGrid.tsx` (TaskGrid already imports Toolbar), so the table instance
 reaches the Columns popover through `useGridTable`, a store in `ColumnsMenu.tsx`; off the tasks route
 the toolbar keeps a disabled Columns button, which `Shell.test.tsx` requires. The `theme` member stays
-owned by `lib/theme.ts`: the store re-reads storage at write time so a `storeTheme` write since module
-load is never clobbered, and `Toolbar.toggleTheme` also records the choice through `patch`.
+owned by `lib/theme.ts`: at write time a `theme` already in storage wins over the in-memory copy, so a
+`storeTheme` write since module load is never clobbered, and `Toolbar.toggleTheme` also records the
+choice through `patch`.
+
+Review-fix round: `setDragging(true)` now cancels a pending write so an armed debounce cannot fire
+mid-gesture; unmounting the grid mid-gesture clears the no-write flag; the resize double-click
+auto-fits to measured content (`scrollWidth`) instead of only resetting; a stored `visibility` that
+hides a pinned column is overridden at the table boundary; and `resetGrid` replaces `grid` in state so
+stale sizing keys cannot survive the deep-merge (the write-time merge likewise lets the store's `grid`
+replace storage while preserving unknown nested members).
 
 ### Acceptance proof
 
 - `TestDefaultsWhenStorageEmpty`, `TestCorruptStorageFallsBack`,
-  `TestPatchPreservesUnknownMembers`, `TestNoWriteDuringDrag`, `TestSingleDebouncedWrite` and
-  `TestResetGridRestoresColumnOrder` live in `src/store/useUiPrefs.test.ts` (6 tests, all passing).
+  `TestPatchPreservesUnknownMembers`, `TestNoWriteDuringDrag`, `TestSingleDebouncedWrite`,
+  `TestPendingWriteDoesNotFireDuringDrag`, `TestStoredThemeSurvivesPatchWrite` and
+  `TestResetGridRestoresColumnOrder` live in `src/store/useUiPrefs.test.ts` (8 tests, all passing).
 - `TestColumnPrefsSurviveRemount` hides Destination, moves Size down and resizes it +50 px through the
   real popover and resize handle, then remounts the grid and re-asserts the column list, the cell count
   and the `--col-size-size` CSS variable; it also waits for the debounced localStorage write.
@@ -190,7 +199,11 @@ load is never clobbered, and `Toolbar.toggleTheme` also records the choice throu
   Shift+click multi-sort.
 - `TestPinnedColumnsStayFixed` asserts the popover move buttons are disabled for `select` and `name`,
   that `moveGridColumn` refuses a pinned source or target, and that a simulated pointer drag on the
-  `name` header changes nothing.
+  `name` header changes nothing. `TestStoredPrefsCannotHidePinnedColumn` covers the stored-visibility
+  edge case.
+- `TestUnmountMidResizeStillPersists` covers the gesture-abandoned-by-unmount path, and
+  `TestResizeHandleDoubleClickAutoFits` covers the grab-zone double-click (jsdom has no layout, so it
+  asserts the default-width fallback).
 - `TestTimestampSortUsesInstants` now starts from the persisted `addedOn` descending default; the first
   click clears to server order and the second ascends, still proving the instant-based comparator.
 
@@ -216,12 +229,12 @@ cd web && npx vitest run
  ✓ src/api/client.test.ts (12 tests)
  ✓ src/lib/format.test.ts (6 tests)
  ✓ src/store/useTasks.test.ts (12 tests)
- ✓ src/store/useUiPrefs.test.ts (6 tests)
+ ✓ src/store/useUiPrefs.test.ts (8 tests)
  ✓ src/components/Shell/Shell.test.tsx (11 tests)
  ✓ src/App.test.tsx (55 tests)
  ✓ src/main.test.ts (1 test)
  ✓ src/lib/theme.test.ts (9 tests)
- ✓ src/components/TaskGrid/TaskGrid.test.tsx (25 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (28 tests)
    ✓ TestRendersDefaultColumns
    ✓ TestStatusSortsByOrdinal
    ✓ TestShiftClickSelectsRange
@@ -234,9 +247,10 @@ cd web && npx vitest run
    ✓ TestSecondarySortTracksLiveChanges
    ✓ TestColumnPrefsSurviveRemount
    ✓ TestPinnedColumnsStayFixed
+   ✓ TestUnmountMidResizeStillPersists
 
  Test Files  9 passed (9)
-      Tests  137 passed (137)
+      Tests  142 passed (142)
 
 PREFS_OK
 ```

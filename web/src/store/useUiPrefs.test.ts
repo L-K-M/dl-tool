@@ -106,6 +106,39 @@ test("TestSingleDebouncedWrite", async () => {
   expect(written.detailHeight).toBe(100);
 });
 
+test("TestPendingWriteDoesNotFireDuringDrag", async () => {
+  vi.useFakeTimers();
+  const { useUiPrefs } = await freshStore();
+  const spy = vi.spyOn(localStorage, "setItem");
+  const state = useUiPrefs.getState();
+  // A write armed before the gesture starts must not land mid-gesture.
+  state.patch({ sidebarWidth: 280 });
+  vi.advanceTimersByTime(100);
+  state.setDragging(true);
+  vi.advanceTimersByTime(1000);
+  expect(spy).not.toHaveBeenCalled();
+  state.setDragging(false);
+  vi.advanceTimersByTime(600);
+  expect(spy).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(String(spy.mock.calls[0][1])).sidebarWidth).toBe(280);
+});
+
+test("TestStoredThemeSurvivesPatchWrite", async () => {
+  localStorage.setItem(PREFS_KEY, JSON.stringify({ version: 1 }));
+  vi.useFakeTimers();
+  const { useUiPrefs } = await freshStore();
+  useUiPrefs.getState().patch({ sidebarWidth: 280 });
+  // lib/theme.ts writes theme straight to storage without going through patch.
+  localStorage.setItem(
+    PREFS_KEY,
+    JSON.stringify({ version: 1, theme: "dark" }),
+  );
+  vi.advanceTimersByTime(600);
+  const written = JSON.parse(localStorage.getItem(PREFS_KEY)!);
+  expect(written.theme).toBe("dark");
+  expect(written.sidebarWidth).toBe(280);
+});
+
 test("TestResetGridRestoresColumnOrder", async () => {
   const { useUiPrefs, defaultPrefs } = await freshStore();
   const state = useUiPrefs.getState();
