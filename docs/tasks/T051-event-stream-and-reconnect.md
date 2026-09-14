@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | todo |
 | **Depends on** | T011, T025, T041, T044 |
-| **Blocks** | T104 |
+| **Blocks** | T043, T104 |
 | **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/locales/en/common.json` |
 | **Implements** | [NFR-002](../02-requirements.md#nfr-002-recover-cleanly-from-a-dropped-event-stream) |
 | **Decisions** | [ADR-0006](../decisions/0006-sse-with-rid-deltas.md) |
