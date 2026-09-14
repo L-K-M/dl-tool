@@ -38,9 +38,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/fsx/browse.go` | create | Directory-only listing with syscall-level containment. |
 | `internal/api/fs.go` | create | The `GET /fs/roots` and `GET /fs/browse` handlers. |
 | `internal/api/fs_test.go` | create | Handler cases including the root containment and the symlink escape. |
+| `internal/api/server.go` | edit | Call `NewFSHandlers(cfg.DataRoots).Register(api)` once. |
 
-`internal/api/server.go` is not edited: register the group from `NewFSHandlers(...).Register(api)` called by
-the existing handler wiring. If that wiring does not yet exist, STOP and write it under "Blocked".
+No other file may be modified.
 
 ## Interface contract
 
@@ -130,7 +130,10 @@ directory → `404 /problems/not-found`; a missing `path` → `422 /problems/val
    `/data/../etc` and `/data/ok/../../etc` are `403`; a symlink inside a root pointing at `/etc` is not
    traversed; browsing above a root gets `403`, and `parent` is `null` at the root; no response body
    contains a file entry.
-7. Run the verification command and paste its output under `## Evidence`.
+7. Edit `internal/api/server.go` to construct the handlers and call `Register`: one `fs` field on
+   `Server`, `NewFSHandlers(cfg.DataRoots)` in `NewServer`, `s.fs.Register(s.API)` in
+   `registerOperations`.
+8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestSanitiseSegmentTable` runs all thirty rows of doc 12 §3.4 and every one passes.
