@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
@@ -317,7 +319,10 @@ test("TestStoreHasNoTransportImportsOrExtraTaskWriters", () => {
   ]) {
     const source = ts.createSourceFile(
       path,
-      readFileSync(path, "utf8"),
+      readFileSync(
+        resolve(dirname(fileURLToPath(import.meta.url)), "../..", path),
+        "utf8",
+      ),
       ts.ScriptTarget.Latest,
       true,
     );

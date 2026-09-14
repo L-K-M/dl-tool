@@ -181,8 +181,13 @@ Acceptance coverage:
 - Connection ownership: `TestConnectionChangesOnlyThroughSetter`.
 - Hydration/reset delegation: `TestHydrateAndResetDelegateTaskWritesToApplySync`.
 
-Final code at `a1ddae6`, with acceptance and both index rows updated, passed the exact Verification
-command (exit 0):
+Final tree, including the review fix for CWD-independent test paths, passed the exact Verification
+command (exit 0). Before the fix, the store suite launched from the repository root failed with
+`ENOENT: no such file or directory, open 'src/store/useTasks.ts'`. Afterward, all 11 store tests
+passed from both the repository root (`vitest --root web`) and `web/`.
+No production behavior changed during review; deferred suggestions are recorded in PR #147.
+
+Verification output:
 
 ```text
 test -z "$(gofmt -l cmd internal)"
@@ -220,8 +225,8 @@ GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
 
  Test Files  6 passed (6)
       Tests  88 passed (88)
-   Start at  00:15:28
-   Duration  2.36s (transform 705ms, setup 0ms, import 2.78s, tests 2.54s, environment 1.68s)
+   Start at  00:36:56
+   Duration  2.26s (transform 708ms, setup 0ms, import 2.58s, tests 2.56s, environment 1.67s)
 
 STORE_OK
 ```
@@ -238,22 +243,22 @@ Named assertions, `cd web && npx vitest run src/store/useTasks.test.ts src/lib/f
  ✓ src/lib/format.test.ts > TestMagnitudeBoundariesAndLocales 4ms
  ✓ src/lib/format.test.ts > TestDurationRatioAndPercentUseIntl 2ms
  ✓ src/lib/format.test.ts > TestRelativeDateUnitsAndSevenDayBoundary 5ms
- ✓ src/store/useTasks.test.ts > TestApplySyncFullUpdateReplacesMap 4ms
+ ✓ src/store/useTasks.test.ts > TestApplySyncFullUpdateReplacesMap 3ms
  ✓ src/store/useTasks.test.ts > TestApplySyncDeltaMergesFields 1ms
  ✓ src/store/useTasks.test.ts > TestApplySyncRemovesTasksAndSelection 1ms
  ✓ src/store/useTasks.test.ts > TestSeqGapReplacesMap 0ms
  ✓ src/store/useTasks.test.ts > TestUnchangedTaskKeepsIdentity 1ms
  ✓ src/store/useTasks.test.ts > TestReconnectFullUpdateReplacesMap 0ms
  ✓ src/store/useTasks.test.ts > TestSidebarCountsCoverEveryFilterAndState 1ms
- ✓ src/store/useTasks.test.ts > TestCategoryAndTagCounts 1ms
+ ✓ src/store/useTasks.test.ts > TestCategoryAndTagCounts 0ms
  ✓ src/store/useTasks.test.ts > TestConnectionChangesOnlyThroughSetter 2ms
  ✓ src/store/useTasks.test.ts > TestHydrateAndResetDelegateTaskWritesToApplySync 1ms
- ✓ src/store/useTasks.test.ts > TestStoreHasNoTransportImportsOrExtraTaskWriters 36ms
+ ✓ src/store/useTasks.test.ts > TestStoreHasNoTransportImportsOrExtraTaskWriters 35ms
 
  Test Files  2 passed (2)
       Tests  17 passed (17)
-   Start at  00:15:31
-   Duration  946ms (transform 172ms, setup 0ms, import 609ms, tests 96ms, environment 442ms)
+   Start at  00:36:59
+   Duration  919ms (transform 226ms, setup 0ms, import 658ms, tests 92ms, environment 446ms)
 ```
 
 Scope: incremental commits leave the working tree clean. Copied the four committed implementation
@@ -285,18 +290,18 @@ go vet ./...
 cd web && npx tsc --noEmit -p tsconfig.json
 go test -race -count=1 ./...
 ?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
-ok  	github.com/L-K-M/dl-tool/internal/api	87.693s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.112s
-ok  	github.com/L-K-M/dl-tool/internal/engine	21.327s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.198s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.853s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.032s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.532s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.190s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.264s
-ok  	github.com/L-K-M/dl-tool/internal/store	70.933s
+ok  	github.com/L-K-M/dl-tool/internal/api	92.882s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.284s
+ok  	github.com/L-K-M/dl-tool/internal/engine	23.017s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.240s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.916s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.022s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.859s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.204s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.302s
+ok  	github.com/L-K-M/dl-tool/internal/store	73.719s
 ok  	github.com/L-K-M/dl-tool/internal/sync	4.377s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.092s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.074s
 ?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
 cd web && npx vitest run
 
@@ -321,13 +326,13 @@ GET http://localhost:3000/api/v1/auth/me 503 (Service Unavailable)
 
  Test Files  6 passed (6)
       Tests  88 passed (88)
-   Start at  00:17:15
-   Duration  2.27s (transform 898ms, setup 0ms, import 2.71s, tests 2.62s, environment 1.69s)
+   Start at  00:38:49
+   Duration  2.39s (transform 762ms, setup 0ms, import 2.83s, tests 2.56s, environment 1.72s)
 
 docker compose -f compose.yaml config -q
 docker compose -f compose.yaml -f compose.dev.yaml config -q
 ./scripts/doclint.sh
-🔍 2425 Total (in 249ms) 🔗 572 Unique ✅ 2399 OK 🚫 0 Errors 👻 26 Excluded
+🔍 2425 Total (in 232ms) 🔗 572 Unique ✅ 2399 OK 🚫 0 Errors 👻 26 Excluded
 ```
 
 <details>
