@@ -1,0 +1,39 @@
+{
+  "headers": {
+    "select": "Select all tasks",
+    "queuePos": "#",
+    "name": "Name",
+    "size": "Size",
+    "progress": "Progress",
+    "status": "Status",
+    "dlSpeed": "Down",
+    "ulSpeed": "Up",
+    "eta": "ETA",
+    "peers": "Seeds/Peers",
+    "ratio": "Ratio",
+    "uploaded": "Uploaded",
+    "destination": "Destination",
+    "addedOn": "Added",
+    "completedOn": "Completed"
+  },
+  "states": {
+    "downloading": "Downloading",
+    "seeding": "Seeding",
+    "checking": "Checking",
+    "extracting": "Extracting",
+    "moving": "Moving",
+    "queued": "Queued",
+    "paused": "Paused",
+    "completed": "Completed",
+    "error": "Error",
+    "removed": "Removed"
+  },
+  "empty": "No downloads yet — paste a link or drop a .torrent file to start.",
+  "emptyFilter": "No tasks are downloading right now.",
+  "loading": "Loading tasks…",
+  "loadError": "Could not load tasks.",
+  "retry": "Retry",
+  "selectTask": "Select {{name}}",
+  "knownPeers": "{{count}} known peers",
+  "progressValue": "{{percent}} — {{completed}} of {{total}}"
+}
