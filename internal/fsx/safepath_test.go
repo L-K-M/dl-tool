@@ -203,12 +203,19 @@ func TestSafeJoinAllowsUnbuiltTail(t *testing.T) {
 
 	// A dangling symlink reports ENOENT through openat2, same as a
 	// genuinely missing tail; it must still be rejected, not verified
-	// away as the longest existing prefix.
-	if err := os.Symlink("/nonexistent-target-dl-tool", filepath.Join(root, "dangling")); err != nil {
+	// away as the longest existing prefix. Nesting one below an existing
+	// directory pins the case prefix-trimming would have accepted.
+	if err := os.Symlink("/nonexistent-target-dl-tool", filepath.Join(root, "existing", "dangling")); err != nil {
 		t.Fatalf("dangling symlink: %v", err)
 	}
+	if _, err := SafeJoin(root, []string{"existing", "dangling", "file"}); !errors.Is(err, ErrPathRejected) {
+		t.Errorf("SafeJoin through a dangling symlink below an existing dir = %v, want ErrPathRejected", err)
+	}
+	if err := os.Symlink("/nonexistent-target-dl-tool", filepath.Join(root, "dangling")); err != nil {
+		t.Fatalf("top-level dangling symlink: %v", err)
+	}
 	if _, err := SafeJoin(root, []string{"dangling", "file"}); !errors.Is(err, ErrPathRejected) {
-		t.Errorf("SafeJoin through a dangling symlink = %v, want ErrPathRejected", err)
+		t.Errorf("SafeJoin through a top-level dangling symlink = %v, want ErrPathRejected", err)
 	}
 }
 
