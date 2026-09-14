@@ -96,7 +96,9 @@ useVirtualizer({ count: rows.length, getScrollElement, estimateSize: () => rowHe
     <span role="gridcell" aria-colindex={c}> …
 ```
 
-Row heights: `comfortable` 32 px, `compact` 26 px, fixed — never measured.
+Row heights follow [doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation): table density applies only
+at tablet/desktop breakpoints; mobile cards use their own fixed height in either density. Never measure
+rows. Keep the rendered height and virtualiser estimate equal when the breakpoint or density changes.
 Progress bar attributes: `role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}
 aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
 
@@ -117,16 +119,21 @@ aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
    `isContentEditable`. Exactly one row carries `tabIndex={0}`.
 7. Create `TaskCardList.tsx`: name clamped to two lines, the progress bar, then
    `Status · Size · ↓rate · ↑rate · ETA`, tap targets at least 44 px, rendered below 640 px.
+   Use the fixed mobile height from doc 09 §3.9, allowing metadata to wrap without truncation or overlap.
 8. Edit `web/src/App.tsx` so `TasksRoute` reads `:filter`, `:name` and renders `TaskGrid`.
 9. Create `TaskGrid.test.tsx` with `msw` serving a `GET /tasks` page and the store seeded through
    `hydrate`: assert the fifteen headers, a formatted size cell, status sorting by `STATUS_ORDINAL`,
    `Shift+click` range selection, and `aria-rowcount` equal to the reported `total` while a 10 000-row
-   store renders far fewer `role="row"` elements.
+   store renders far fewer `role="row"` elements. Add `TestRowHeightTracksLayoutAndDensity` to check both
+   densities on each side of the mobile breakpoint: rendered heights and virtualiser estimates follow
+   doc 09 §3.9, including after a breakpoint change, with row order and selection preserved.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestRendersDefaultColumns`, `TestStatusSortsByOrdinal`, `TestShiftClickSelectsRange` pass.
 - [ ] `TestAriaRowcountIsTotalNotDomRows` passes with 10 000 tasks in the store.
+- [ ] `TestRowHeightTracksLayoutAndDensity` passes; mobile cards retain the required content and tap
+  targets without overlapping adjacent cards.
 - [ ] Every cell whose source is null or zero renders `—`, and `eta_seconds: null` renders `∞`.
 - [ ] The page body never scrolls horizontally; only the grid's own scroll container does.
 - [ ] No column is added that doc 09 §3.1 defers to v2, and no cell renders a placeholder value.
@@ -160,16 +167,44 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Implementation Verification pending. The following is plan-repair evidence only, not proof of grid
+rendering or mobile geometry.
+
+Before repair, this contract check failed; after repair, the same check passed:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+spec = Path('docs/09-web-ui-spec.md').read_text().split('### 3.9 Virtualisation\n', 1)[1].split('\n---', 1)[0]
+assert 'mobile' in spec.lower(), 'No mobile fixed-height exception in canonical virtualisation contract'
+PY
+```
+
+```text
+AssertionError: No mobile fixed-height exception in canonical virtualisation contract
+```
+
+`npm ci --prefix web` installed the pinned dependencies; npm reported two high-severity audit findings.
+No dependency changed. The first `make ci` attempt reached compose validation but failed because Docker
+was absent from `PATH`. Reusing the existing Docker CLI with
+`PATH="/tmp/t039-tools:$PATH" make ci` exited 0. Output excerpts:
+
+```text
+0 issues.
+All matched files use Prettier code style!
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2430 Total (in 212ms) 🔗 572 Unique ✅ 2404 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+`git diff --check` exited 0. Task status and both T042 index rows were checked and remain `todo`.
+No grid code was added; the new acceptance test remains implementation work.
 
 ## Blocked
-The mobile row-height contract conflicts. This task's Interface contract fixes rows at
-32 px (comfortable) or 26 px (compact), without a mobile exception. Step 7 and
-[doc 09 §10.3](../09-web-ui-spec.md#103-responsive-and-mobile) require multi-line
-cards and tap targets at least 44 px. Those targets cannot fit either row height
-without overlapping adjacent rows; the card's content also cannot fit.
-
-The owner must define a fixed mobile card height in
-[doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation) and explicitly permit it in
-this task's Interface contract. Choosing another height would override the plan.
-No implementation or verification was attempted; both index rows remain `todo`.
+Resolved by the plan repair: [doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation) now separates table
+row density from fixed mobile card height while preserving no auto-measurement and the existing mobile
+content and tap-target requirements. This repairs the missing exception, not the implementation.
+T042 and both index rows remain `todo`; implementation Verification is still pending.

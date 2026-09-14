@@ -385,7 +385,8 @@ Server-side persistence uses `GET /api/v1/prefs` and `PUT /api/v1/prefs` →
   buttons, because drag alone is not accessible.
 - **Show/hide**: `Columns ▾` popover with a search box, a checkbox per column, and *Reset to defaults*. The
   same list is available from the header context menu.
-- **Density**: `comfortable` = 32 px rows, `compact` = 26 px rows. Set in Settings → General.
+- **Density**: set in Settings → General; table row heights and the mobile exception are defined in
+  [§3.9](#39-virtualisation).
 
 ### 3.5 Selection
 
@@ -439,8 +440,12 @@ aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
 
 ### 3.9 Virtualisation
 
-- `@tanstack/react-virtual`'s `useVirtualizer({ count, getScrollElement, estimateSize: () => 32, overscan: 10 })`.
-- Rows are **fixed height** — 32 px comfortable, 26 px compact. No auto-measurement.
+- `@tanstack/react-virtual`'s `useVirtualizer({ count, getScrollElement, estimateSize: () => rowHeight, overscan: 10 })`.
+- Rows are **fixed height**, with no auto-measurement. At tablet and desktop breakpoints, `rowHeight`
+  is 32 px comfortable or 26 px compact. Mobile cards use 160 px in either density, leaving room for
+  the multiline content and touch controls in [§10.3](#103-responsive-and-mobile).
+  Use the active height for both the rendered row and the virtualiser estimate; update both when the
+  breakpoint or density changes, without changing row order or selection.
 - Column virtualisation is not used; at ≤ 40 columns it adds bugs and buys nothing.
 - Exactly one element has `overflow: auto`. The header is a separate sticky row translated in sync with
   `transform: translateX(-scrollLeft)`.
@@ -899,8 +904,10 @@ Breakpoints: `< 640 px` mobile · `640–1023 px` tablet · `≥ 1024 px` deskto
 
 Mobile card: line 1 the name clamped to two lines, line 2 the progress bar, line 3
 `Status · Size · ↓rate · ↑rate · ETA`, and a `⋮` button opening a bottom sheet carrying the §3.7 context
-menu. Long-press enters selection mode with a top action bar. Tap targets are at least 44 × 44 px, and no
-action is hover-only — every hover affordance also exists in the `⋮` menu.
+menu. Card height follows [§3.9](#39-virtualisation), not table density. The metadata may wrap but must
+not be truncated or overlap adjacent cards. Long-press enters selection mode with a top action bar.
+Tap targets are at least 44 × 44 px. No action is hover-only; every hover affordance also exists in the
+`⋮` menu.
 
 A web app manifest, maskable icons, `display: standalone` and a `theme-color` matching the dark background
 ship in v1. The service worker's only jobs are meeting the install criterion and caching static assets.
