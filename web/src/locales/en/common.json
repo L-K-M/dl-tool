@@ -78,6 +78,8 @@
     "needsSelection": "Select at least one task",
     "reconnecting": "Reconnecting…",
     "actionFailed": "Action failed: {{detail}}",
+    "networkError": "Network error",
+    "signOutFailed": "Sign out failed: {{detail}}",
     "sidebar": {
       "download": "Download",
       "categories": "Categories",

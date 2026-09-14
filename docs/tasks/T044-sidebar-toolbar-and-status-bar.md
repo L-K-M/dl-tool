@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T044 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T022, T023, T041, T042 |
 | **Blocks** | T045, T049, T051, T052, T063, T072, T104 |
 | **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/App.test.tsx` and `web/src/locales/en/common.json` |
@@ -197,6 +197,10 @@ Supplemental command: `cd web && npx vitest run --reporter=verbose` (exit 0), ex
 ✓ src/components/Shell/Shell.test.tsx > TestShellKeyboardActions 1204ms
 ✓ src/App.test.tsx > TestBootRendersLayout 218ms
 ✓ src/components/TaskGrid/TaskGrid.test.tsx > TestShellActionCallbacksDispatchOnce 109ms
+✓ src/components/Shell/Shell.test.tsx > TestRemoveDialogRecoversFromTransportFailure
+✓ src/components/Shell/Shell.test.tsx > TestToolbarCollapsesToIconsBelow1100
+✓ src/App.test.tsx > TestSignOutFailureKeepsSession
+✓ src/App.test.tsx > TestSignOutSuccessClearsSession
 ```
 
 ### Verification
@@ -219,9 +223,9 @@ cd web && npx tsc --noEmit -p tsconfig.json
 cd web && npx vitest run
 
  Test Files  8 passed (8)
-      Tests  124 passed (124)
-   Start at  11:08:00
-   Duration  6.66s (transform 1.24s, setup 0ms, import 4.49s, tests 12.06s, environment 2.44s)
+      Tests  128 passed (128)
+   Start at  11:42:35
+   Duration  6.88s (transform 1.34s, setup 0ms, import 4.81s, tests 12.46s, environment 2.50s)
 
 SHELL_OK
 ```
@@ -270,7 +274,7 @@ ok  	github.com/L-K-M/dl-tool/internal/store	70.381s
 ok  	github.com/L-K-M/dl-tool/internal/sync	4.380s
 ok  	github.com/L-K-M/dl-tool/internal/uri	1.079s
  Test Files  8 passed (8)
-      Tests  124 passed (124)
+      Tests  128 passed (128)
 docker compose -f compose.yaml config -q
 docker compose -f compose.yaml -f compose.dev.yaml config -q
 ./scripts/doclint.sh
@@ -291,6 +295,27 @@ and covered by the suite:
 Deferred: a suggestion that the "Remove task and files" menu item should open the dialog with the
 delete-data box pre-ticked. Step 5 and doc 09 §10.6 require the Remove menu's dialog to start
 unticked; only Shift+Delete pre-checks it, so both menu items open the same confirmation.
+
+A second review round on the pushed head flagged three more findings, all fixed with regressions:
+
+- `signOut` cleared local auth in `finally`, so a failed or unreachable logout looked signed out;
+  it now clears local state only after a confirmed success and toasts `shell.signOutFailed`
+  otherwise (`TestSignOutFailureKeepsSession`, `TestSignOutSuccessClearsSession`).
+- A rejected `DELETE` left the removal dialog's `busy` flag set and skipped reconciliation of
+  earlier successes; `confirm` now catches transport failures, resets `busy` in `finally` and still
+  applies confirmed removals (`TestRemoveDialogRecoversFromTransportFailure`).
+- Toolbar labels never collapsed, so right-hand controls were unreachable below the doc 09 §2.5
+  1100 px breakpoint; labels now hide under `max-[1100px]` with `aria-label` preserving each name,
+  icons were added for Edit and Move, and the bar scrolls horizontally as a last resort
+  (`TestToolbarCollapsesToIconsBelow1100`).
+
+The same round recorded a pre-existing defect outside this task's Files table:
+`internal/engine/qbittorrent/client_test.go` `newClient` never registers `Close`, so `Connect`'s
+background pollers outlive their tests. It surfaced once as push-run 34837489148 integration job
+103954541708 failing `TestInspectionBaselineWaitsForSeed/unrelated_torrent` with
+`unexpected request: GET /api/v2/sync/maindata` at `contract_test.go:940` — a leaked poller hitting
+a reused port. The rerun and the pull_request run both passed; the leak itself needs a separate
+prerequisite repair.
 
 ## Blocked
 Resolved by the plan repair: `web/src/App.test.tsx` is now in the `## Files` table with the

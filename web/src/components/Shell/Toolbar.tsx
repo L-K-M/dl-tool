@@ -14,11 +14,13 @@ import { DropdownMenu } from "radix-ui";
 import { toast } from "sonner";
 import { create } from "zustand";
 import {
+  ArrowUpDown,
   Check,
   ChevronDown,
   Columns3,
   Moon,
   Pause,
+  Pencil,
   Play,
   Plus,
   Settings,
@@ -323,14 +325,21 @@ export function RemoveTasksDialog({
     setBusy(true);
     const removed: string[] = [];
     const failures: string[] = [];
-    for (const id of request.ids) {
-      const { error } = await api.DELETE("/tasks/{id}", {
-        params: { path: { id }, query: { delete_data: deleteFiles } },
-      });
-      if (error) failures.push(error.detail ?? error.title ?? id);
-      else removed.push(id);
+    try {
+      for (const id of request.ids) {
+        const { error } = await api.DELETE("/tasks/{id}", {
+          params: { path: { id }, query: { delete_data: deleteFiles } },
+        });
+        if (error) failures.push(error.detail ?? error.title ?? id);
+        else removed.push(id);
+      }
+    } catch {
+      // A transport failure aborts the remaining deletions; the confirmed
+      // removals are still reconciled below.
+      failures.push(t("shell.networkError"));
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
     if (removed.length) {
       // Route through applySync so the store drops the rows and their
       // selection entries exactly the way an SSE tasks_removed would.
@@ -448,6 +457,11 @@ const menuItemClass =
 const separator = (
   <span aria-hidden="true" className="mx-1 w-px self-stretch bg-border" />
 );
+// Doc 09 section 2.5: icons plus text at >= 1100 px, icon-only below. The
+// label span drops out of the accessibility tree, so every labeled control
+// also carries an aria-label (doc 09 section 10: icon-only buttons name
+// themselves).
+const iconLabelClass = "max-[1100px]:hidden";
 
 export function Toolbar(): JSX.Element {
   const { t } = useTranslation();
@@ -487,37 +501,49 @@ export function Toolbar(): JSX.Element {
     setTheme(next);
   };
   return (
-    <div className="flex h-full items-center gap-1 border-b border-border px-2">
+    <div className="flex h-full min-w-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
       <Button
         variant="default"
         size="sm"
         disabled
         aria-disabled="true"
+        aria-label={t("shell.add")}
         title={t("shell.comingAdd")}
       >
-        <Plus aria-hidden="true" /> {t("shell.add")}
+        <Plus aria-hidden="true" />{" "}
+        <span className={iconLabelClass}>{t("shell.add")}</span>
       </Button>
       {separator}
       <Button
         variant="ghost"
         size="sm"
         {...selectionProps}
+        aria-label={t("shell.start")}
         onClick={() => void bulkAction("resume", selectedIds)}
       >
-        <Play aria-hidden="true" /> {t("shell.start")}
+        <Play aria-hidden="true" />{" "}
+        <span className={iconLabelClass}>{t("shell.start")}</span>
       </Button>
       <Button
         variant="ghost"
         size="sm"
         {...selectionProps}
+        aria-label={t("shell.pause")}
         onClick={() => void bulkAction("pause", selectedIds)}
       >
-        <Pause aria-hidden="true" /> {t("shell.pause")}
+        <Pause aria-hidden="true" />{" "}
+        <span className={iconLabelClass}>{t("shell.pause")}</span>
       </Button>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
-          <Button variant="ghost" size="sm" {...selectionProps}>
-            <Trash2 aria-hidden="true" /> {t("shell.remove")}{" "}
+          <Button
+            variant="ghost"
+            size="sm"
+            {...selectionProps}
+            aria-label={t("shell.remove")}
+          >
+            <Trash2 aria-hidden="true" />{" "}
+            <span className={iconLabelClass}>{t("shell.remove")}</span>{" "}
             <ChevronDown aria-hidden="true" />
           </Button>
         </DropdownMenu.Trigger>
@@ -543,15 +569,24 @@ export function Toolbar(): JSX.Element {
         size="sm"
         disabled
         aria-disabled="true"
+        aria-label={t("shell.edit")}
         title={t("shell.comingEdit")}
       >
-        {t("shell.edit")}
+        <Pencil aria-hidden="true" />{" "}
+        <span className={iconLabelClass}>{t("shell.edit")}</span>
       </Button>
       {separator}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
-          <Button variant="ghost" size="sm" {...selectionProps}>
-            {t("shell.move")} <ChevronDown aria-hidden="true" />
+          <Button
+            variant="ghost"
+            size="sm"
+            {...selectionProps}
+            aria-label={t("shell.move")}
+          >
+            <ArrowUpDown aria-hidden="true" />{" "}
+            <span className={iconLabelClass}>{t("shell.move")}</span>{" "}
+            <ChevronDown aria-hidden="true" />
           </Button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -587,6 +622,7 @@ export function Toolbar(): JSX.Element {
               ? t("shell.noCompleted")
               : undefined
         }
+        aria-label={t("shell.clearCompleted")}
         onClick={() =>
           actions.requestRemove(
             [...useTasks.getState().tasks.values()]
@@ -596,17 +632,18 @@ export function Toolbar(): JSX.Element {
           )
         }
       >
-        <Check aria-hidden="true" /> {t("shell.clearCompleted")}
+        <Check aria-hidden="true" />{" "}
+        <span className={iconLabelClass}>{t("shell.clearCompleted")}</span>
       </Button>
       {separator}
-      <span className="relative ml-auto flex items-center">
+      <span className="relative ml-auto flex min-w-0 items-center">
         <Input
           ref={registerFilter}
           value={filter}
           aria-label={t("shell.filterLabel")}
           placeholder={t("shell.filterLabel")}
           onChange={(event) => setFilter(event.target.value)}
-          className="h-7 w-44"
+          className="h-7 w-44 min-w-16 max-[1100px]:w-28"
         />
         {filter ? (
           <button
@@ -625,9 +662,11 @@ export function Toolbar(): JSX.Element {
         size="sm"
         disabled
         aria-disabled="true"
+        aria-label={t("shell.columns")}
         title={t("shell.comingColumns")}
       >
-        <Columns3 aria-hidden="true" /> {t("shell.columns")}{" "}
+        <Columns3 aria-hidden="true" />{" "}
+        <span className={iconLabelClass}>{t("shell.columns")}</span>{" "}
         <ChevronDown aria-hidden="true" />
       </Button>
       <Button

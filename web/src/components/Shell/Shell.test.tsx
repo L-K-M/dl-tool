@@ -29,8 +29,10 @@ import {
   ShellActionsContext,
   Toolbar,
   useShellUi,
+  type RemoveRequest,
   type ShellActions,
 } from "./Toolbar";
+import { Toaster } from "../ui/sonner";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 
@@ -465,4 +467,77 @@ test("TestShellKeyboardActions", async () => {
   expect(document.activeElement).not.toBe(filter);
 
   base.remove();
+});
+
+test("TestRemoveDialogRecoversFromTransportFailure", async () => {
+  useTasks
+    .getState()
+    .hydrate([task("one", { name: "One" }), task("two", { name: "Two" })]);
+  let calls = 0;
+  server.use(
+    http.delete("*/api/v1/tasks/:id", ({ params }) => {
+      calls++;
+      if (params.id === "two") return HttpResponse.error();
+      return HttpResponse.json({
+        removed: true,
+        delete_data: false,
+        files_unlinked: 0,
+        bytes_unlinked: 0,
+        missing: 0,
+      });
+    }),
+  );
+  const onClose = vi.fn();
+  const tree = (request: RemoveRequest | null) => (
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <RemoveTasksDialog request={request} onClose={onClose} />
+        <Toaster theme="system" />
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+  const view = render(tree({ ids: ["one", "two"], deleteFiles: false }));
+  fireEvent.click(
+    within(await screen.findByRole("dialog")).getByRole("button", {
+      name: "Remove",
+    }),
+  );
+  await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  // The confirmed removal reconciles even though the next DELETE rejected.
+  expect(useTasks.getState().tasks.has("one")).toBe(false);
+  expect(useTasks.getState().tasks.has("two")).toBe(true);
+  await screen.findByText("Removal failed: Network error");
+
+  // The wedged busy flag was the bug: a reopened dialog must confirm again.
+  view.rerender(tree({ ids: ["two"], deleteFiles: false }));
+  const again = (await screen.findByRole("button", {
+    name: "Remove",
+  })) as HTMLButtonElement;
+  expect(again.disabled).toBe(false);
+  fireEvent.click(again);
+  await waitFor(() => expect(onClose).toHaveBeenCalledTimes(2));
+  expect(calls).toBe(3);
+});
+
+test("TestToolbarCollapsesToIconsBelow1100", () => {
+  useTasks.getState().setConnection("live");
+  mountToolbar();
+  for (const name of [
+    "Add",
+    "Start",
+    "Pause",
+    "Remove",
+    "Edit",
+    "Move",
+    "Clear completed",
+    "Columns",
+  ]) {
+    const button = screen.getByRole("button", { name });
+    // The aria-label keeps the accessible name when the visible label
+    // drops below 1100 px (doc 09 section 2.5 icon-only mode).
+    expect(button.getAttribute("aria-label")).toBe(name);
+    expect(within(button).getByText(name).className).toContain(
+      "max-[1100px]:hidden",
+    );
+  }
 });

@@ -22,6 +22,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
+import { toast } from "sonner";
 import { api, basePath, setCsrfToken } from "./api/client";
 import type { components } from "./api/schema";
 import { LoginScreen } from "./components/Auth/LoginScreen";
@@ -197,11 +198,32 @@ function AppLayout() {
       focusFilter: focusNameFilter,
       showShortcuts: () => setShortcutsOpen(true),
       signOut: () => {
-        void api.POST("/auth/logout").finally(() => auth.signOut());
+        // Local state drops only after the server confirms the session is
+        // gone; a failed or unreachable logout must not look signed out.
+        void (async () => {
+          try {
+            const { error } = await api.POST("/auth/logout");
+            if (error) {
+              toast.error(
+                t("shell.signOutFailed", {
+                  detail: error.detail ?? error.title ?? error.type,
+                }),
+              );
+              return;
+            }
+            auth.signOut();
+          } catch {
+            toast.error(
+              t("shell.signOutFailed", {
+                detail: t("shell.networkError"),
+              }),
+            );
+          }
+        })();
       },
       userName: session.status === "authenticated" ? session.user.username : "",
     }),
-    [auth, session],
+    [auth, session, t],
   );
   return (
     <ShellActionsContext.Provider value={actions}>

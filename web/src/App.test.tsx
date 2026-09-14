@@ -417,3 +417,49 @@ test("TestBootFailureOffersRetryWithoutGuessingAuth", async () => {
   await screen.findByRole("main");
   await waitFor(() => expect(bootCalls).toBe(1));
 });
+
+test("TestSignOutFailureKeepsSession", async () => {
+  boot();
+  server.use(
+    http.post("*/api/v1/auth/logout", () =>
+      HttpResponse.json(
+        {
+          type: "/problems/logout-failed",
+          title: "Logout failed",
+          detail: "session store unavailable",
+        },
+        { status: status.unavailable },
+      ),
+    ),
+  );
+  mount();
+  await screen.findByRole("main");
+  fireEvent.keyDown(screen.getByRole("button", { name: "User menu" }), {
+    key: "Enter",
+  });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+  await screen.findByText("Sign out failed: session store unavailable");
+  // A failed logout must not flip local auth: the shell stays mounted and
+  // the CSRF token is still held for the live session.
+  expect(screen.getByRole("main")).toBeTruthy();
+  expect(window.location.pathname).toBe("/");
+  expect(client.csrfToken()).toBe(session.csrf_token);
+});
+test("TestSignOutSuccessClearsSession", async () => {
+  boot();
+  server.use(
+    http.post(
+      "*/api/v1/auth/logout",
+      () => new HttpResponse(null, { status: 204 }),
+    ),
+  );
+  mount();
+  await screen.findByRole("main");
+  fireEvent.keyDown(screen.getByRole("button", { name: "User menu" }), {
+    key: "Enter",
+  });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+  await screen.findByRole("heading", { name: "Sign in" });
+  expect(window.location.pathname).toBe("/login");
+  expect(client.csrfToken()).toBeNull();
+});
