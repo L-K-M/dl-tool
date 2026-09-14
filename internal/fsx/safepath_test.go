@@ -206,7 +206,7 @@ func TestSafeJoinAllowsUnbuiltTail(t *testing.T) {
 	// away as the longest existing prefix. Nesting one below an existing
 	// directory pins the case prefix-trimming would have accepted.
 	if err := os.Symlink("/nonexistent-target-dl-tool", filepath.Join(root, "existing", "dangling")); err != nil {
-		t.Fatalf("dangling symlink: %v", err)
+		t.Fatalf("nested dangling symlink: %v", err)
 	}
 	if _, err := SafeJoin(root, []string{"existing", "dangling", "file"}); !errors.Is(err, ErrPathRejected) {
 		t.Errorf("SafeJoin through a dangling symlink below an existing dir = %v, want ErrPathRejected", err)
