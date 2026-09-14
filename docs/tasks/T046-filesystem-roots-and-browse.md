@@ -203,37 +203,8 @@ in the Files table can install a registration for `/fs/roots` or `/fs/browse`.
 
 ## Blocked
 
-Stopped before implementation: the handler wiring this task's Files-table note requires does
-not exist, and the note names STOP as the response.
-
-The note says `internal/api/server.go` is not edited and the group registers "from
-`NewFSHandlers(...).Register(api)` called by the existing handler wiring". There is no such
-call site. Every operation reaches the Huma API through `Server.registerOperations` and
-`NewServer` in `internal/api/server.go`: all production `huma.Register`/`Register` calls live
-in `auth.go`, `settings.go`, `sse.go`, `tasks.go` and `server.go` itself, each invoked from
-`registerOperations` alone. No file in the Files table can install the call, so the endpoints
-would be built and never wired — the exact defect PLAN-REVIEW.md pattern 1 names. The failure
-shows up twice: `humatest` suites build through `NewServer` (the `tasksTestEnv` pattern in
-`internal/api/tasks_test.go`), so the task's own acceptance tests cannot reach unregistered
-operations, and the `openapi` subcommand renders the committed document through the same
-`NewServer`, so `make gen` could not list `/fs/roots` or `/fs/browse` for T047's client.
-
-The file that should answer it is this task file's own `## Files` table. Two possible fixes,
-both plan-level:
-
-1. Widen the table to include `internal/api/server.go` — one `fs` field on `Server`,
-   `NewFSHandlers(cfg.DataRoots)` in the constructor literal, `s.fs.Register(s.API)` in
-   `registerOperations`. T038 (`internal/engine/qbittorrent/files.go`) and T100
-   (`internal/api/server.go` itself) recorded exactly this widening for the same defect
-   class — a component whose composition-root call site no listed file can hold. I did not
-   widen it myself: this note already considered the missing wiring and pre-decided the
-   response (STOP), where T038 and T100 left the choice to the agent.
-2. Or assign the wiring to a named task. T047 already extends `internal/api/fs.go`, but its
-   Files table does not list `server.go` either, so the gap recurs there unless amended.
-
-Option 1 is the only fix that unblocks this task's own acceptance tests without reordering
-work: under option 2 as scoped to T047 (or any task sequenced after T046), the routes stay
-unregistered while T046 runs, so the humatest suites built through `NewServer` still cannot
-reach them. Option 2 only closes the gap for T047, and would additionally
-require deferring or reworking T046's acceptance tests. The task cannot proceed until the
-Files table is amended or the note's premise is corrected.
+None. An earlier session stopped here because `internal/api/server.go` — the registration
+call site of the two `/fs` Huma operations — was missing from the Files table while the
+note below it forbade editing that file. The amendment it proposed is the
+`internal/api/server.go` row above (recorded in pull request #160); the task proceeds with
+no other scope change.
