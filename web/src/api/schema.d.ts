@@ -144,6 +144,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/fs/browse": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the directories under a path
+     * @description Directories only, jailed to the configured roots: the path is resolved with its symlinks and a resolution that leaves the roots is 403 /problems/path-rejected, never a filtered listing. parent is null at a root, so a client cannot walk upwards. show_hidden includes dot-directories.
+     */
+    get: operations["browse-fs"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/fs/roots": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the configured data roots
+     * @description Every DLTOOL_DATA_ROOTS entry with its writability and free space; the folder browser opens at these. The list never probes past statfs — a missing root cannot slow the page down.
+     */
+    get: operations["list-fs-roots"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/sync": {
     parameters: {
       query?: never;
@@ -505,6 +545,11 @@ export interface components {
       url: string | null;
       version: string | null;
     };
+    Entry: {
+      name: string;
+      path: string;
+      writable: boolean;
+    };
     ErrorDetail: {
       /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
       location?: string;
@@ -545,6 +590,14 @@ export interface components {
        * @example https://example.com/errors/example
        */
       type: string;
+    };
+    FSRoot: {
+      /** Format: int64 */
+      free_bytes: number;
+      path: string;
+      /** Format: int64 */
+      total_bytes: number;
+      writable: boolean;
     };
     FTPCredentials: {
       password: string;
@@ -614,6 +667,17 @@ export interface components {
        * @description Rows matching the filter, ignoring the cursor
        */
       total: number;
+    };
+    Listing: {
+      directories: components["schemas"]["Entry"][] | null;
+      /** Format: int64 */
+      free_bytes: number;
+      parent: string | null;
+      path: string;
+      separator: string;
+      /** Format: int64 */
+      total_bytes: number;
+      writable: boolean;
     };
     LoginInputBody: {
       /** @description Account password */
@@ -697,6 +761,9 @@ export interface components {
       detail: string;
       type: string;
       uri: string;
+    };
+    RootsOutputBody: {
+      roots: components["schemas"]["FSRoot"][] | null;
     };
     SetupInputBody: {
       /**
@@ -1106,6 +1173,69 @@ export interface operations {
                 retry?: number;
               }
           )[];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "browse-fs": {
+    parameters: {
+      query: {
+        /** @description Absolute path to list; resolved with its symlinks and must land inside a configured root */
+        path: string;
+        /** @description Include dot-directories */
+        show_hidden?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Listing"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-fs-roots": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RootsOutputBody"];
         };
       };
       /** @description Error */
