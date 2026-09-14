@@ -38,9 +38,11 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/fsx/browse.go` | create | Directory-only listing with syscall-level containment. |
 | `internal/api/fs.go` | create | The `GET /fs/roots` and `GET /fs/browse` handlers. |
 | `internal/api/fs_test.go` | create | Handler cases including the root containment and the symlink escape. |
-| `internal/api/server.go` | edit | Call `NewFSHandlers(cfg.DataRoots).Register(api)` once. |
+| `internal/api/server.go` | edit | Set an `fs` field via `NewFSHandlers(cfg.DataRoots)` in `NewServer`; call `s.fs.Register(s.API)` in `registerOperations`. |
 
-No other file may be modified.
+No other file may be modified, apart from the two generated files of
+[`docs/13-testing-and-verification.md` §7.1](../13-testing-and-verification.md) and this task file's
+`## Evidence` and task-index row.
 
 ## Interface contract
 
@@ -133,7 +135,8 @@ directory → `404 /problems/not-found`; a missing `path` → `422 /problems/val
 7. Edit `internal/api/server.go` to construct the handlers and call `Register`: one `fs` field on
    `Server`, `NewFSHandlers(cfg.DataRoots)` in `NewServer`, `s.fs.Register(s.API)` in
    `registerOperations`.
-8. Run the verification command and paste its output under `## Evidence`.
+8. Run `make gen` and commit the regenerated `api/openapi.json` and `web/src/api/schema.d.ts`
+   (docs/13 §7.1). Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestSanitiseSegmentTable` runs all thirty rows of doc 12 §3.4 and every one passes.
@@ -154,7 +157,8 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the paths in the Files table, in that order, plus the two generated files of
+docs/13 §7.1 (`api/openapi.json`, `web/src/api/schema.d.ts`), and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
