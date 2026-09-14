@@ -38,9 +38,11 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/fsx/browse.go` | create | Directory-only listing with syscall-level containment. |
 | `internal/api/fs.go` | create | The `GET /fs/roots` and `GET /fs/browse` handlers. |
 | `internal/api/fs_test.go` | create | Handler cases including the root containment and the symlink escape. |
+| `internal/api/server.go` | edit | Set an `fs` field via `NewFSHandlers(cfg.DataRoots)` in `NewServer`; call `s.fs.Register(s.API)` in `registerOperations`. |
 
-`internal/api/server.go` is not edited: register the group from `NewFSHandlers(...).Register(api)` called by
-the existing handler wiring. If that wiring does not yet exist, STOP and write it under "Blocked".
+No other file may be modified, apart from the two generated files of
+[`docs/13-testing-and-verification.md` §7.1](../13-testing-and-verification.md), this task file's
+`## Evidence` section, and this task's row in the task index.
 
 ## Interface contract
 
@@ -130,7 +132,13 @@ directory → `404 /problems/not-found`; a missing `path` → `422 /problems/val
    `/data/../etc` and `/data/ok/../../etc` are `403`; a symlink inside a root pointing at `/etc` is not
    traversed; browsing above a root gets `403`, and `parent` is `null` at the root; no response body
    contains a file entry.
-7. Run the verification command and paste its output under `## Evidence`.
+7. Edit `internal/api/server.go` to construct the handlers and call `Register`: one `fs` field on
+   `Server`, `NewFSHandlers(cfg.DataRoots)` in `NewServer`, `s.fs.Register(s.API)` in
+   `registerOperations`.
+8. Run `make gen` to regenerate `api/openapi.json` and `web/src/api/schema.d.ts` (docs/13 §7.1).
+   Run the verification command, paste its output under `## Evidence`, and confirm scope with the
+   `git status` command under `## Verification`. Only then commit everything, including the two
+   regenerated files.
 
 ## Acceptance criteria
 - [ ] `TestSanitiseSegmentTable` runs all thirty rows of doc 12 §3.4 and every one passes.
@@ -151,7 +159,9 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the paths in the Files table plus the two generated files of
+docs/13 §7.1 (`api/openapi.json`, `web/src/api/schema.d.ts`), in the sorted order the command
+prints, and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -200,37 +210,8 @@ in the Files table can install a registration for `/fs/roots` or `/fs/browse`.
 
 ## Blocked
 
-Stopped before implementation: the handler wiring this task's Files-table note requires does
-not exist, and the note names STOP as the response.
-
-The note says `internal/api/server.go` is not edited and the group registers "from
-`NewFSHandlers(...).Register(api)` called by the existing handler wiring". There is no such
-call site. Every operation reaches the Huma API through `Server.registerOperations` and
-`NewServer` in `internal/api/server.go`: all production `huma.Register`/`Register` calls live
-in `auth.go`, `settings.go`, `sse.go`, `tasks.go` and `server.go` itself, each invoked from
-`registerOperations` alone. No file in the Files table can install the call, so the endpoints
-would be built and never wired — the exact defect PLAN-REVIEW.md pattern 1 names. The failure
-shows up twice: `humatest` suites build through `NewServer` (the `tasksTestEnv` pattern in
-`internal/api/tasks_test.go`), so the task's own acceptance tests cannot reach unregistered
-operations, and the `openapi` subcommand renders the committed document through the same
-`NewServer`, so `make gen` could not list `/fs/roots` or `/fs/browse` for T047's client.
-
-The file that should answer it is this task file's own `## Files` table. Two possible fixes,
-both plan-level:
-
-1. Widen the table to include `internal/api/server.go` — one `fs` field on `Server`,
-   `NewFSHandlers(cfg.DataRoots)` in the constructor literal, `s.fs.Register(s.API)` in
-   `registerOperations`. T038 (`internal/engine/qbittorrent/files.go`) and T100
-   (`internal/api/server.go` itself) recorded exactly this widening for the same defect
-   class — a component whose composition-root call site no listed file can hold. I did not
-   widen it myself: this note already considered the missing wiring and pre-decided the
-   response (STOP), where T038 and T100 left the choice to the agent.
-2. Or assign the wiring to a named task. T047 already extends `internal/api/fs.go`, but its
-   Files table does not list `server.go` either, so the gap recurs there unless amended.
-
-Option 1 is the only fix that unblocks this task's own acceptance tests without reordering
-work: under option 2 as scoped to T047 (or any task sequenced after T046), the routes stay
-unregistered while T046 runs, so the humatest suites built through `NewServer` still cannot
-reach them. Option 2 only closes the gap for T047, and would additionally
-require deferring or reworking T046's acceptance tests. The task cannot proceed until the
-Files table is amended or the note's premise is corrected.
+None. An earlier session stopped here because `internal/api/server.go` — the registration
+call site of the two `/fs` Huma operations — was missing from the Files table while the
+note below it forbade editing that file. The amendment it proposed is the
+`internal/api/server.go` row above (recorded in pull request #160); the task proceeds with
+no other scope change.
