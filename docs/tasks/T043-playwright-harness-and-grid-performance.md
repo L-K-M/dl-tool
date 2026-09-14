@@ -154,4 +154,29 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Blocked: Step 4 samples ten idle seconds, not ten update ticks as required by
+[NFR-001](../02-requirements.md#nfr-001-render-a-10-000-row-grid-smoothly) and
+[doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation). `stubTasks` supplies static
+responses, but the shipped SPA neither requests `/sync` nor consumes SSE or polls.
+`TaskGrid` hydrates a task-list query once; the default `QueryClient` adds no timer.
+An idle p95 cannot prove the update budget.
+
+The [task index](00-task-index.md) assigns transport wiring to T051, still `todo`.
+Adding it now requires application files outside this Files table. Injecting a
+separate test-only store or measuring idle time would not prove the shipped path.
+The owner must correct this task's dependency/Files/measurement contract before
+implementation; no budget or row-count reduction is proposed.
+
+Inspection output:
+```text
+web/src/App.tsx:214:  const [queryClient] = useState(() => new QueryClient());
+web/src/components/TaskGrid/TaskGrid.tsx:94:        const { data, error } = await api.GET("/tasks", {
+web/src/components/TaskGrid/TaskGrid.tsx:113:      useTasks.getState().hydrate(items);
+```
+`rg -n 'EventSource|refetchInterval|setInterval|api.GET\("/sync"' web/src --glob
+'!*.test.*' --glob '!schema.d.ts'` returned no matches.
+
+`npm ci --prefix web` succeeded (637 packages added; two high-severity audit
+findings). The existing Playwright pin resolved to `1.62.1`; no dependency changed.
+Verification and `make ci` were not run: implementation stopped at this planning
+contradiction. Acceptance boxes and both index rows remain unchanged.
