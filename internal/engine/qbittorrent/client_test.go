@@ -286,7 +286,13 @@ func newClient(t *testing.T, f *fakeServer) *Client {
 
 	c, err := New(Config{BaseURL: f.srv.URL, Username: testUsername, Password: testPassword}, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	// Report rather than require: FailNow's Goexit inside a cleanup would
+	// abandon the rest of the cleanup queue, including the fake's Close.
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("closing client: %v", err)
+		}
+	})
 	return c
 }
 
