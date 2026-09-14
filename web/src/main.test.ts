@@ -23,9 +23,41 @@ afterEach(async () => {
 });
 afterAll(() => server.close());
 
-test("renders the application root", async () => {
+test("TestEntrypointRendersTaskGridUnderBase", async () => {
   let bootRequests = 0;
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(320);
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1024);
   server.use(
+    http.get("*/dl-tool/api/v1/tasks", ({ request }) => {
+      const url = new URL(request.url);
+      expect(url.searchParams.get("state")).toBe("all");
+      expect(url.searchParams.get("limit")).toBe("500");
+      return HttpResponse.json({
+        items: [
+          {
+            id: "entry-task",
+            name: "Entrypoint download",
+            state: "queued",
+            source_kind: "http",
+            total_bytes: 1024,
+            completed_bytes: 0,
+            progress: 0,
+            download_rate: 0,
+            upload_rate: 0,
+            eta_seconds: null,
+            ratio: 0,
+            total_peers: 0,
+            uploaded_bytes: 0,
+            queue_position: null,
+            destination: "/downloads",
+            added_at: "2026-09-01T00:00:00Z",
+            completed_at: null,
+          },
+        ],
+        total: 1,
+        next_cursor: null,
+      });
+    }),
     http.get("*/dl-tool/api/v1/auth/me", () => {
       bootRequests++;
       return HttpResponse.json({
@@ -57,7 +89,9 @@ test("renders the application root", async () => {
   });
   await screen.findByRole("main");
   expect(mount).toHaveBeenCalledWith(host);
-  expect(screen.getByTestId("app-root").textContent).toBe("Downloads");
+  const task = await screen.findByText("Entrypoint download");
+  expect(screen.getByRole("grid").contains(task)).toBe(true);
+  expect(screen.getByRole("grid").getAttribute("aria-rowcount")).toBe("1");
   expect(host.contains(screen.getByTestId("app-root"))).toBe(true);
   expect(bootRequests).toBe(1);
 });

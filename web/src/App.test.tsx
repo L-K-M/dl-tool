@@ -38,7 +38,33 @@ const status = {
   throttled: 429,
   unavailable: 503,
 };
+const taskPage = {
+  items: [
+    {
+      id: "route-task",
+      name: "Route download",
+      state: "queued",
+      source_kind: "http",
+      total_bytes: 1024,
+      completed_bytes: 0,
+      progress: 0,
+      download_rate: 0,
+      upload_rate: 0,
+      eta_seconds: null,
+      ratio: 0,
+      total_peers: 0,
+      uploaded_bytes: 0,
+      queue_position: null,
+      destination: "/downloads",
+      added_at: "2026-09-01T00:00:00Z",
+      completed_at: null,
+    },
+  ],
+  total: 1,
+  next_cursor: null,
+};
 const server = setupServer();
+let taskRequests: URL[] = [];
 let bootCalls = 0;
 
 function boot(problem?: string) {
@@ -90,6 +116,15 @@ function noPersistedToken() {
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 beforeEach(() => {
   bootCalls = 0;
+  taskRequests = [];
+  server.use(
+    http.get("*/api/v1/tasks", ({ request }) => {
+      taskRequests.push(new URL(request.url));
+      return HttpResponse.json(taskPage);
+    }),
+  );
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(320);
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1024);
   localStorage.clear();
   sessionStorage.clear();
   client.setCsrfToken(null);
@@ -238,6 +273,32 @@ test.each(routes)("TestAuthenticatedRouteUnderBase %s", async (path) => {
   expect(window.location.pathname).toBe(`/dl-tool${path}`);
   expect(bootCalls).toBe(1);
 });
+test.each([
+  ["/", "all", null, null],
+  ["/tasks/downloading", "downloading", null, null],
+  ["/tasks/category/Linux", "all", "Linux", null],
+  ["/tasks/tag/archive", "all", null, "archive"],
+])(
+  "TestTaskRoutesRequestServerFilters %s",
+  async (path, state, category, tag) => {
+    boot();
+    mount(`/dl-tool${path}`, "/dl-tool/");
+    await screen.findByText("Route download");
+    expect(taskRequests.length).toBeGreaterThan(0);
+    for (const url of taskRequests) {
+      expect(url.pathname).toBe("/dl-tool/api/v1/tasks");
+      expect(url.searchParams.get("state")).toBe(state);
+      expect(url.searchParams.get("category")).toBe(category);
+      expect(url.searchParams.get("tag")).toBe(tag);
+      expect(url.searchParams.get("limit")).toBe("500");
+      expect(url.searchParams.get("cursor")).toBeNull();
+    }
+    expect(screen.getByRole("main").className).toContain("overflow-hidden");
+    expect(bootCalls).toBe(1);
+    noPersistedToken();
+  },
+);
+
 test.each(["/login", "/setup"])(
   "TestAuthenticatedPublicRoute %s",
   async (path) => {

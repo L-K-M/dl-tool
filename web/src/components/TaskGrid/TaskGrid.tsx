@@ -36,7 +36,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { api } from "../../api/client";
+import { api, apiUrl } from "../../api/client";
 import { initI18n } from "../../i18n";
 import {
   formatAbsolute,
@@ -85,6 +85,7 @@ export function useTaskIds(p: TaskGridProps): {
       let total = 0;
       do {
         const { data, error } = await api.GET("/tasks", {
+          baseUrl: apiUrl(""),
           signal,
           params: {
             query: {
@@ -359,6 +360,7 @@ export const columns: ColumnDef<Task>[] = DEFAULT_COLUMN_ORDER.map(
     id,
     size: widths[index],
     enableSorting: id !== "select",
+    sortDescFirst: false,
     accessorFn: (task) =>
       id === "select"
         ? null
