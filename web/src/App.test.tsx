@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { StrictMode } from "react";
 import { HttpResponse, http } from "msw";
@@ -163,9 +164,18 @@ test("TestBootRendersLayout", async () => {
   boot();
   mount();
   await screen.findByRole("main");
-  expect(screen.getByRole("banner").textContent).toBe("");
-  expect(screen.getByRole("complementary").textContent).toBe("");
-  expect(screen.getByRole("contentinfo").textContent).toBe("");
+  const banner = screen.getByRole("banner");
+  expect(within(banner).getByRole("button", { name: "Add" })).toBeTruthy();
+  expect(
+    within(banner).getByRole("textbox", { name: "Filter tasks by name" }),
+  ).toBeTruthy();
+  const sidebar = screen.getByRole("complementary");
+  expect(
+    within(sidebar).getByRole("link", { name: /Downloading/ }),
+  ).toBeTruthy();
+  expect(within(sidebar).getByRole("link", { name: /Settings/ })).toBeTruthy();
+  const statusBar = screen.getByRole("contentinfo");
+  expect(within(statusBar).getByRole("status")).toBeTruthy();
   expect(screen.getByTestId("app-root").className).toContain(
     "grid-cols-[220px_minmax(0,1fr)]",
   );
@@ -190,7 +200,7 @@ test("TestLoginStoresCsrfToken", async () => {
   mount("/login?next=%2Fsearch%3Fquery%3Dlinux%23results");
   await screen.findByRole("heading", { name: "Sign in" });
   login();
-  await screen.findByRole("heading", { name: "Search" });
+  await screen.findByRole("heading", { name: "Search", level: 1 });
   expect(
     window.location.pathname + window.location.search + window.location.hash,
   ).toBe("/search?query=linux#results");

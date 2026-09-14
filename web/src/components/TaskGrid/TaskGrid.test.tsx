@@ -26,6 +26,7 @@ import {
   invalidateTaskList,
 } from "./TaskGrid";
 import { useTasks, type Task } from "../../store/useTasks";
+import { useShellUi } from "../Shell/Toolbar";
 import { formatBytes } from "../../lib/format";
 
 const task = (id: string, patch: Partial<Task> = {}): Task => ({
@@ -81,6 +82,12 @@ const viewportHeight = 320;
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 beforeEach(() => {
   useTasks.getState().reset();
+  useShellUi.setState({
+    nameFilter: "",
+    debouncedFilter: "",
+    pending: new Set(),
+    filterInput: null,
+  });
   localStorage.clear();
   tasks = [task("one"), task("two"), task("three")];
   reportedTotal = tasks.length;
@@ -421,6 +428,70 @@ test("TestGridKeyboardNavigationAndSelection", async () => {
     });
     expect(event.defaultPrevented).toBe(false);
   }
+});
+
+test("TestShellActionCallbacksDispatchOnce", async () => {
+  const actions = {
+    requestRemove: vi.fn(),
+    focusFilter: vi.fn(),
+    showShortcuts: vi.fn(),
+  };
+  useTasks.getState().hydrate(tasks);
+  render(
+    <QueryClientProvider client={qc}>
+      <TaskGrid filter="all" actions={actions} />
+    </QueryClientProvider>,
+  );
+  await screen.findByText("one", { exact: true });
+  const grid = screen.getByRole("grid");
+  // An empty selection never dispatches and never suppresses the key.
+  const empty = new KeyboardEvent("keydown", {
+    key: "Delete",
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => {
+    grid.dispatchEvent(empty);
+  });
+  expect(empty.defaultPrevented).toBe(false);
+  expect(actions.requestRemove).not.toHaveBeenCalled();
+  act(() => useTasks.getState().setSelection(["one", "two"]));
+  fireEvent.keyDown(grid, { key: "Delete" });
+  expect(actions.requestRemove).toHaveBeenCalledTimes(1);
+  expect(actions.requestRemove).toHaveBeenLastCalledWith(["one", "two"], false);
+  fireEvent.keyDown(grid, { key: "Delete", shiftKey: true });
+  expect(actions.requestRemove).toHaveBeenCalledTimes(2);
+  expect(actions.requestRemove).toHaveBeenLastCalledWith(["one", "two"], true);
+  fireEvent.keyDown(grid, { key: "f", ctrlKey: true });
+  fireEvent.keyDown(grid, { key: "f", metaKey: true });
+  fireEvent.keyDown(grid, { key: "f" });
+  expect(actions.focusFilter).toHaveBeenCalledTimes(2);
+  fireEvent.keyDown(grid, { key: "?" });
+  expect(actions.showShortcuts).toHaveBeenCalledTimes(1);
+  // Editable targets never dispatch.
+  const input = document.createElement("input");
+  grid.appendChild(input);
+  fireEvent.keyDown(input, { key: "Delete" });
+  fireEvent.keyDown(input, { key: "f", ctrlKey: true });
+  fireEvent.keyDown(input, { key: "?" });
+  input.remove();
+  expect(actions.requestRemove).toHaveBeenCalledTimes(2);
+  expect(actions.focusFilter).toHaveBeenCalledTimes(2);
+  expect(actions.showShortcuts).toHaveBeenCalledTimes(1);
+  // A name filter that hides every row leaves the selection live; the shell
+  // keys must still dispatch (doc 09 section 3.6 ownership rules).
+  act(() => useShellUi.setState({ debouncedFilter: "zzz" }));
+  await waitFor(() =>
+    expect(document.querySelectorAll("[data-task-id]")).toHaveLength(0),
+  );
+  fireEvent.keyDown(grid, { key: "Delete" });
+  expect(actions.requestRemove).toHaveBeenCalledTimes(3);
+  expect(actions.requestRemove).toHaveBeenLastCalledWith(["one", "two"], false);
+  fireEvent.keyDown(grid, { key: "f", ctrlKey: true });
+  fireEvent.keyDown(grid, { key: "?" });
+  expect(actions.focusFilter).toHaveBeenCalledTimes(3);
+  expect(actions.showShortcuts).toHaveBeenCalledTimes(2);
+  act(() => useShellUi.setState({ debouncedFilter: "" }));
 });
 
 test("TestDensityIsControlledNotCached", async () => {

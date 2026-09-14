@@ -129,15 +129,15 @@ Sidebar markup, per group:
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestSidebarCountsComeFromStore`, `TestZeroCountNodeStaysVisible` and `TestActiveNodeHasAriaCurrent`
+- [x] `TestSidebarCountsComeFromStore`, `TestZeroCountNodeStaysVisible` and `TestActiveNodeHasAriaCurrent`
       pass.
-- [ ] `TestToolbarDisabledWithoutSelection` and `TestPausePostsActionsPayload` pass.
-- [ ] `TestRemoveDialogDeleteFilesUnticked` passes, including the `Shift+Delete` pre-ticked variant.
-- [ ] `TestStatusBarSegments` asserts all six segments in order.
-- [ ] `TestShellKeyboardActions` proves this task's [§3.6 actions](../09-web-ui-spec.md#36-keyboard)
+- [x] `TestToolbarDisabledWithoutSelection` and `TestPausePostsActionsPayload` pass.
+- [x] `TestRemoveDialogDeleteFilesUnticked` passes, including the `Shift+Delete` pre-ticked variant.
+- [x] `TestStatusBarSegments` asserts all six segments in order.
+- [x] `TestShellKeyboardActions` proves this task's [§3.6 actions](../09-web-ui-spec.md#36-keyboard)
   through the mounted grid and shell, including editable-target and dialog isolation, and no deletion
   before confirmation.
-- [ ] No component in this task calls `fetch` directly; every request goes through the T014 client.
+- [x] No component in this task calls `fetch` directly; every request goes through the T014 client.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -169,13 +169,134 @@ Expected: exactly the paths in the Files table and nothing else. Use `git status
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`npm ci --prefix web` installed the pinned dependencies; no pins changed.
+
+### Acceptance proof
+
+`TestShellKeyboardActions` drives Delete, Shift+Delete, Ctrl/Cmd+F, `?` and Escape through the
+mounted grid and shell, covering the editable-target guard, dialog-Escape isolation,
+cancel-without-request, no-op removal on empty selection and focus restoration to the invoking row.
+`TestShellActionCallbacksDispatchOnce` in the grid suite proves the single keydown listener
+dispatches each typed callback once, including when the name filter leaves zero visible rows while
+the selection stays live. `TestRemoveDialogDeleteFilesUnticked` covers both the unticked default and
+the Shift+Delete pre-ticked variant. `grep -rn 'fetch(' web/src/components/Shell` returns nothing;
+every request uses the T014 client.
+
+Supplemental command: `cd web && npx vitest run --reporter=verbose` (exit 0), excerpts:
+
+```text
+✓ src/components/Shell/Shell.test.tsx > TestSidebarCountsComeFromStore 104ms
+✓ src/components/Shell/Shell.test.tsx > TestZeroCountNodeStaysVisible 27ms
+✓ src/components/Shell/Shell.test.tsx > TestActiveNodeHasAriaCurrent 23ms
+✓ src/components/Shell/Shell.test.tsx > TestToolbarDisabledWithoutSelection 84ms
+✓ src/components/Shell/Shell.test.tsx > TestPausePostsActionsPayload 68ms
+✓ src/components/Shell/Shell.test.tsx > TestRemoveDialogDeleteFilesUnticked unticked 41ms
+✓ src/components/Shell/Shell.test.tsx > TestRemoveDialogDeleteFilesUnticked shiftDeletePreChecked 22ms
+✓ src/components/Shell/Shell.test.tsx > TestStatusBarSegments 8ms
+✓ src/components/Shell/Shell.test.tsx > TestShellKeyboardActions 1204ms
+✓ src/App.test.tsx > TestBootRendersLayout 218ms
+✓ src/components/TaskGrid/TaskGrid.test.tsx > TestShellActionCallbacksDispatchOnce 109ms
+```
+
+### Verification
+
+`make lint && make typecheck && make test-web && echo SHELL_OK` exited 0:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ Test Files  8 passed (8)
+      Tests  124 passed (124)
+   Start at  11:08:00
+   Duration  6.66s (transform 1.24s, setup 0ms, import 4.49s, tests 12.06s, environment 2.44s)
+
+SHELL_OK
+```
+
+Expected auth-error responses, the deliberately failed task-page request and React scheduler
+warnings from the test harness are omitted above.
+
+### Scope
+
+`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```text
+web/src/App.test.tsx
+web/src/App.tsx
+web/src/components/Shell/Shell.test.tsx
+web/src/components/Shell/Sidebar.tsx
+web/src/components/Shell/StatusBar.tsx
+web/src/components/Shell/Toolbar.tsx
+web/src/components/TaskGrid/TaskGrid.test.tsx
+web/src/components/TaskGrid/TaskGrid.tsx
+web/src/locales/en/common.json
+```
+
+Exactly the Files table.
+
+### Full gate
+
+`PATH="/tmp/t039-tools:$PATH" make ci` exited 0, reusing the existing Docker CLI for compose
+validation. Output excerpts:
+
+```text
+0 issues.
+All matched files use Prettier code style!
+go vet ./...
+go test -race -count=1 ./...
+ok  	github.com/L-K-M/dl-tool/internal/api	87.173s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.137s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.298s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.224s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.868s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.024s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.757s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.184s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.106s
+ok  	github.com/L-K-M/dl-tool/internal/store	70.381s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.380s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.079s
+ Test Files  8 passed (8)
+      Tests  124 passed (124)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2450 Total (in 232ms) 🔗 573 Unique ✅ 2424 OK 🚫 0 Errors 👻 26 Excluded
+```
+
+### Review record
+
+The independent diff review against this file flagged three correctness findings; all were fixed
+and covered by the suite:
+
+- Queue-move rollback snapshotted only the selected ids; it now snapshots every task the optimistic
+  patch touched so unselected rows revert on failure.
+- Shell shortcuts ran after the grid's zero-row early return; Delete, Ctrl/Cmd+F, `?` and Escape now
+  run before it so they work when the client-side filter empties the grid with a live selection.
+- The category and tag fallback `NavLink`s could prefix-match child routes; both now use `end`.
+
+Deferred: a suggestion that the "Remove task and files" menu item should open the dialog with the
+delete-data box pre-ticked. Step 5 and doc 09 §10.6 require the Remove menu's dialog to start
+unticked; only Shift+Delete pre-checks it, so both menu items open the same confirmation.
 
 ## Blocked
 Resolved by the plan repair: `web/src/App.test.tsx` is now in the `## Files` table with the
 `TestBootRendersLayout` rewrite assigned to step 8, and the `## Verification` expectation derives the
 `N passed (N)` total from the pre-existing `web/src` test files plus `Shell.test.tsx` instead of
-hard-coding a number. T044 remains unimplemented and `todo`.
+hard-coding a number. The repair unblocked the task; the implementation landed as described above.
 
 Original blocker: `TestBootRendersLayout` asserts `screen.getByRole("banner").textContent === ""`,
 `getByRole("complementary").textContent === ""` and `getByRole("contentinfo").textContent === ""`

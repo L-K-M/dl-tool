@@ -1,4 +1,10 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -24,6 +30,17 @@ import { Toaster } from "./components/ui/sonner";
 import { initI18n } from "./i18n";
 import { readStoredTheme } from "./lib/theme";
 import { TaskGrid } from "./components/TaskGrid/TaskGrid";
+import {
+  RemoveTasksDialog,
+  ShellActionsContext,
+  ShortcutsDialog,
+  Toolbar,
+  focusNameFilter,
+  type RemoveRequest,
+  type ShellActions,
+} from "./components/Shell/Toolbar";
+import { Sidebar } from "./components/Shell/Sidebar";
+import { StatusBar } from "./components/Shell/StatusBar";
 import type { SidebarFilter } from "./store/useTasks";
 
 type AuthEnvelope = components["schemas"]["AuthEnvelope"];
@@ -102,6 +119,12 @@ export function useAuthActions() {
         status: "anonymous",
       });
     },
+    signOut: () => {
+      setCsrfToken(null);
+      queryClient.setQueryData<SessionState>(sessionKey, {
+        status: "anonymous",
+      });
+    },
   };
 }
 
@@ -161,18 +184,50 @@ function AuthRoute({ screen }: { screen: "setup" | "login" }) {
 
 function AppLayout() {
   const { t } = useTranslation();
+  const session = useSession();
+  const auth = useAuthActions();
+  const [removeRequest, setRemoveRequest] = useState<RemoveRequest | null>(
+    null,
+  );
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const actions = useMemo<ShellActions>(
+    () => ({
+      requestRemove: (ids, deleteFiles) =>
+        setRemoveRequest({ ids, deleteFiles }),
+      focusFilter: focusNameFilter,
+      showShortcuts: () => setShortcutsOpen(true),
+      signOut: () => {
+        void api.POST("/auth/logout").finally(() => auth.signOut());
+      },
+      userName: session.status === "authenticated" ? session.user.username : "",
+    }),
+    [auth, session],
+  );
   return (
-    <div
-      data-testid="app-root"
-      className="grid h-dvh grid-cols-[220px_minmax(0,1fr)] grid-rows-[48px_minmax(0,1fr)_28px] overflow-hidden"
-    >
-      <header aria-label={t("regions.header")} className="col-span-2" />
-      <aside aria-label={t("regions.sidebar")} />
-      <main className="min-w-0 overflow-hidden">
-        <Outlet />
-      </main>
-      <footer aria-label={t("regions.statusBar")} className="col-span-2" />
-    </div>
+    <ShellActionsContext.Provider value={actions}>
+      <div
+        data-testid="app-root"
+        className="grid h-dvh grid-cols-[220px_minmax(0,1fr)] grid-rows-[48px_minmax(0,1fr)_28px] overflow-hidden"
+      >
+        <header aria-label={t("regions.header")} className="col-span-2">
+          <Toolbar />
+        </header>
+        <aside aria-label={t("regions.sidebar")}>
+          <Sidebar />
+        </aside>
+        <main className="min-w-0 overflow-hidden">
+          <Outlet />
+        </main>
+        <footer aria-label={t("regions.statusBar")} className="col-span-2">
+          <StatusBar />
+        </footer>
+      </div>
+      <RemoveTasksDialog
+        request={removeRequest}
+        onClose={() => setRemoveRequest(null)}
+      />
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+    </ShellActionsContext.Provider>
   );
 }
 
@@ -189,6 +244,7 @@ function TasksRoute({
   group?: "category" | "tag";
 }) {
   const params = useParams();
+  const shell = useContext(ShellActionsContext);
   const state = filter ?? params.filter ?? "all";
   const filters: SidebarFilter[] = [
     "all",
@@ -204,8 +260,9 @@ function TasksRoute({
   return (
     <TaskGrid
       filter={state as SidebarFilter}
-      category={group === "category" ? params.name : undefined}
-      tag={group === "tag" ? params.name : undefined}
+      category={group === "category" ? (params.name ?? "") : undefined}
+      tag={group === "tag" ? (params.name ?? "") : undefined}
+      actions={shell ?? undefined}
     />
   );
 }
@@ -234,9 +291,14 @@ export default function App() {
                   element={<TasksRoute group="category" />}
                 />
                 <Route
+                  path="/tasks/category"
+                  element={<TasksRoute group="category" />}
+                />
+                <Route
                   path="/tasks/tag/:name"
                   element={<TasksRoute group="tag" />}
                 />
+                <Route path="/tasks/tag" element={<TasksRoute group="tag" />} />
                 <Route
                   path="/search"
                   element={<Placeholder screen="search" />}

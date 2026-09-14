@@ -53,10 +53,18 @@ import {
   formatWhen,
 } from "../../lib/format";
 import { useTasks, type SidebarFilter, type Task } from "../../store/useTasks";
+import { useDebouncedNameFilter, useTaskPending } from "../Shell/Toolbar";
 import strings from "../../locales/en/grid.json";
 import { TaskCardList } from "./TaskCardList";
 
 initI18n().addResourceBundle("en", "grid", strings);
+
+/** The shell callbacks this task's doc 09 §3.6 keys dispatch to; wired in App.tsx. */
+export interface TaskGridActions {
+  requestRemove?: (ids: string[], deleteFiles: boolean) => void;
+  focusFilter?: () => void;
+  showShortcuts?: () => void;
+}
 
 export interface TaskGridProps {
   filter: SidebarFilter;
@@ -64,6 +72,7 @@ export interface TaskGridProps {
   tag?: string;
   /** Controlled by the preference owner; the grid does not persist it. */
   density?: "comfortable" | "compact";
+  actions?: TaskGridActions;
 }
 const listKey = ["tasks"];
 const pageLimit = 500;
@@ -452,6 +461,7 @@ const LiveRow = memo(function LiveRow({
 }) {
   const task = useTasks((state) => state.tasks.get(row.id));
   const selected = useTasks((state) => state.selection.has(row.id));
+  const pending = useTaskPending(row.id);
   const { t } = useTranslation("grid");
   if (!task) return null;
   const mobile = height === mobileHeight;
@@ -461,8 +471,10 @@ const LiveRow = memo(function LiveRow({
       role="row"
       aria-rowindex={index + 2}
       aria-selected={selected}
+      aria-busy={pending || undefined}
       tabIndex={focused && focusCell === null ? 0 : -1}
       data-task-id={row.id}
+      className={pending ? "task-pending" : undefined}
       onClick={(event) => onSelect(row.id, event)}
       style={{
         position: "absolute",
@@ -563,13 +575,17 @@ export function TaskGrid(props: TaskGridProps) {
       }),
     [ids, sorting],
   );
+  const nameFilter = useDebouncedNameFilter();
   const data = useMemo(() => {
     void sortRevision;
+    const needle = nameFilter.trim().toLowerCase();
     return ids.flatMap((id) => {
       const task = useTasks.getState().tasks.get(id);
-      return task ? [task] : [];
+      if (!task) return [];
+      if (needle && !task.name.toLowerCase().includes(needle)) return [];
+      return [task];
     });
-  }, [ids, sortRevision]);
+  }, [ids, sortRevision, nameFilter]);
   const table = useReactTable({
     data,
     columns,
@@ -647,11 +663,41 @@ export function TaskGrid(props: TaskGridProps) {
       target.isContentEditable
     )
       return;
+    const command = event.ctrlKey || event.metaKey;
+    const state = useTasks.getState();
+    // Shell actions and selection clearing do not need visible rows: the name
+    // filter can empty the grid while a selection is still live, and Ctrl+F/?/
+    // Delete must still work then (doc 09 section 3.6 ownership rules).
+    switch (event.key) {
+      case "Delete": {
+        // Empty-selection removal is a no-op; it neither dispatches nor
+        // suppresses the key.
+        if (!props.actions?.requestRemove || state.selection.size === 0) return;
+        props.actions.requestRemove([...state.selection], event.shiftKey);
+        event.preventDefault();
+        return;
+      }
+      case "f":
+      case "F":
+        if (!command || !props.actions?.focusFilter) return;
+        props.actions.focusFilter();
+        event.preventDefault();
+        return;
+      case "?":
+        if (!props.actions?.showShortcuts) return;
+        props.actions.showShortcuts();
+        event.preventDefault();
+        return;
+      case "Escape":
+        state.clearSelection();
+        event.preventDefault();
+        return;
+      default:
+        break;
+    }
     if (!rows.length) return;
     const current = Math.max(0, orderedIds.indexOf(rovingId));
     let next = current;
-    const command = event.ctrlKey || event.metaKey;
-    const state = useTasks.getState();
     const viewportRows = Math.max(
       1,
       Math.floor((scroll.current?.clientHeight ?? height) / height),
@@ -689,10 +735,6 @@ export function TaskGrid(props: TaskGridProps) {
       case "A":
         if (!command) return;
         state.setSelection(orderedIds);
-        event.preventDefault();
-        return;
-      case "Escape":
-        state.clearSelection();
         event.preventDefault();
         return;
       default:
@@ -733,7 +775,7 @@ export function TaskGrid(props: TaskGridProps) {
         overflow: "hidden",
       }}
     >
-      <style>{`.grid-stripes { background-image: repeating-linear-gradient(135deg, transparent 0 6px, #ffffff44 6px 12px); } .grid-indeterminate { animation: grid-stripes 1s linear infinite; } @keyframes grid-stripes { to { background-position: 17px 0; } } @media (prefers-reduced-motion: reduce) { .grid-indeterminate { animation: none; } } [data-task-id]:focus-visible, [role=gridcell]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }`}</style>
+      <style>{`.grid-stripes { background-image: repeating-linear-gradient(135deg, transparent 0 6px, #ffffff44 6px 12px); } .grid-indeterminate { animation: grid-stripes 1s linear infinite; } @keyframes grid-stripes { to { background-position: 17px 0; } } @media (prefers-reduced-motion: reduce) { .grid-indeterminate { animation: none; } } .task-pending::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--accent); animation: task-shimmer 1s ease-in-out infinite; pointer-events: none; } @keyframes task-shimmer { 50% { opacity: 0.25; } } [data-task-id]:focus-visible, [role=gridcell]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }`}</style>
       {!mobile && (
         <div
           style={{
