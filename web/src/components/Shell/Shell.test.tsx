@@ -510,7 +510,7 @@ test("TestRemoveDialogRecoversFromTransportFailure", async () => {
   // The confirmed removal reconciles even though the next DELETE rejected.
   expect(useTasks.getState().tasks.has("one")).toBe(false);
   expect(useTasks.getState().tasks.has("two")).toBe(true);
-  await screen.findByText(/Removal failed:/);
+  await screen.findByText("Removal failed: Network error");
 
   // The wedged busy flag was the bug: a reopened dialog must confirm again.
   view.rerender(tree({ ids: ["two"], deleteFiles: false }));

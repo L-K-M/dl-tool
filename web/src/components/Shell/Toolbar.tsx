@@ -335,7 +335,11 @@ export function RemoveTasksDialog({
           const { error } = await api.DELETE("/tasks/{id}", {
             params: { path: { id }, query: { delete_data: deleteFiles } },
           });
-          if (error) throw new Error(String(error.detail ?? error.title ?? id));
+          if (error)
+            throw Object.assign(
+              new Error(String(error.detail ?? error.title ?? id)),
+              { fromApi: true },
+            );
           return id;
         }),
       );
@@ -343,7 +347,8 @@ export function RemoveTasksDialog({
         if (result.status === "fulfilled") removed.push(result.value);
         else
           failures.push(
-            result.reason instanceof Error
+            result.reason instanceof Error &&
+              (result.reason as { fromApi?: boolean }).fromApi
               ? result.reason.message
               : t("shell.networkError"),
           );
