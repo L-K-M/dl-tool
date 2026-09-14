@@ -163,4 +163,13 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+The mobile row-height contract conflicts. This task's Interface contract fixes rows at
+32 px (comfortable) or 26 px (compact), without a mobile exception. Step 7 and
+[doc 09 §10.3](../09-web-ui-spec.md#103-responsive-and-mobile) require multi-line
+cards and tap targets at least 44 px. Those targets cannot fit either row height
+without overlapping adjacent rows; the card's content also cannot fit.
+
+The owner must define a fixed mobile card height in
+[doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation) and explicitly permit it in
+this task's Interface contract. Choosing another height would override the plan.
+No implementation or verification was attempted; both index rows remain `todo`.
