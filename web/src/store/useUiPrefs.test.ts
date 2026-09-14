@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { PREFS_KEY } from "./useUiPrefs";
-import { DEFAULT_COLUMN_ORDER } from "../components/TaskGrid/TaskGrid";
+import { DEFAULT_COLUMN_ORDER } from "../components/TaskGrid/ColumnsMenu";
 
 async function freshStore() {
   vi.resetModules();

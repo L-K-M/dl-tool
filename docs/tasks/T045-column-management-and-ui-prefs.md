@@ -186,6 +186,14 @@ hides a pinned column is overridden at the table boundary; and `resetGrid` repla
 stale sizing keys cannot survive the deep-merge (the write-time merge likewise lets the store's `grid`
 replace storage while preserving unknown nested members).
 
+Second review round: the resize grab zone is a focusable `separator` with ArrowLeft/ArrowRight sizing
+(its name rides `title`, because a descendant `aria-label` would leak into the columnheader's
+name-from-content); the popover disables Move buttons while the filter is active and clears the filter
+on Reset; `loadInitial` validates the scalar members; `patch` clones its input and can no longer set
+`version`; `DEFAULT_COLUMN_ORDER` moved to `ColumnsMenu.tsx` so the store test does not import the
+component graph; and the dead `KeyboardSensor` was removed — header keyboard-drag would conflict with
+click-to-sort on the same keys, and the spec's keyboard reorder path is the popover's Move buttons.
+
 ### Acceptance proof
 
 - `TestDefaultsWhenStorageEmpty`, `TestCorruptStorageFallsBack`,
@@ -234,7 +242,7 @@ cd web && npx vitest run
  ✓ src/App.test.tsx (55 tests)
  ✓ src/main.test.ts (1 test)
  ✓ src/lib/theme.test.ts (9 tests)
- ✓ src/components/TaskGrid/TaskGrid.test.tsx (28 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (31 tests)
    ✓ TestRendersDefaultColumns
    ✓ TestStatusSortsByOrdinal
    ✓ TestShiftClickSelectsRange
@@ -248,9 +256,10 @@ cd web && npx vitest run
    ✓ TestColumnPrefsSurviveRemount
    ✓ TestPinnedColumnsStayFixed
    ✓ TestUnmountMidResizeStillPersists
+   ✓ TestResetRestoresLiveGrid
 
  Test Files  9 passed (9)
-      Tests  142 passed (142)
+      Tests  145 passed (145)
 
 PREFS_OK
 ```

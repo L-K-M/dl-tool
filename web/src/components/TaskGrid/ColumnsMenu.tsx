@@ -20,6 +20,25 @@ export const PINNED_GRID_COLUMNS: ReadonlySet<string> = new Set([
   "name",
 ]);
 
+/** The spec's default column order (doc 09 section 3.4). */
+export const DEFAULT_COLUMN_ORDER = [
+  "select",
+  "queuePos",
+  "name",
+  "size",
+  "progress",
+  "status",
+  "dlSpeed",
+  "ulSpeed",
+  "eta",
+  "peers",
+  "ratio",
+  "uploaded",
+  "destination",
+  "addedOn",
+  "completedOn",
+] as const;
+
 /**
  * The grid's TanStack Table instance, published by TaskGrid so the toolbar's
  * Columns popover can reach it without a shared parent. Null off the tasks
@@ -168,7 +187,9 @@ export function ColumnsMenu({ table }: { table: Table<Task> }): JSX.Element {
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  disabled={index <= 0}
+                  // A filtered list hides the neighbour a move swaps with;
+                  // disable rather than reorder columns the user cannot see.
+                  disabled={needle !== "" || index <= 0}
                   aria-label={t("shell.columnsMenu.moveUp", { name: label })}
                   onClick={() => move(id, -1)}
                 >
@@ -177,7 +198,9 @@ export function ColumnsMenu({ table }: { table: Table<Task> }): JSX.Element {
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  disabled={index < 0 || index === movable.length - 1}
+                  disabled={
+                    needle !== "" || index < 0 || index === movable.length - 1
+                  }
                   aria-label={t("shell.columnsMenu.moveDown", { name: label })}
                   onClick={() => move(id, 1)}
                 >
@@ -187,7 +210,14 @@ export function ColumnsMenu({ table }: { table: Table<Task> }): JSX.Element {
             );
           })}
         </div>
-        <Button variant="outline" size="sm" onClick={resetGrid}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            resetGrid();
+            setQuery("");
+          }}
+        >
           {t("shell.columnsMenu.reset")}
         </Button>
       </PopoverContent>

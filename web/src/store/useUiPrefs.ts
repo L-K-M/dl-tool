@@ -56,7 +56,7 @@ export const defaultPrefs: UiPrefs = {
 
 export interface UiPrefsState extends UiPrefs {
   /** Deep-merges a patch, then schedules one write 500 ms later. */
-  patch: (p: Partial<UiPrefs>) => void;
+  patch: (p: Omit<Partial<UiPrefs>, "version">) => void;
   /** Called by the grid on gesture end; a write is never scheduled during a drag. */
   setDragging: (dragging: boolean) => void;
   resetGrid: () => void;
@@ -117,6 +117,19 @@ function loadInitial(): UiPrefs {
     grid.density = "comfortable";
   if (merged.theme !== "light" && merged.theme !== "dark")
     merged.theme = "system";
+  if (typeof merged.sidebarWidth !== "number")
+    merged.sidebarWidth = defaultPrefs.sidebarWidth;
+  if (typeof merged.sidebarCollapsed !== "boolean")
+    merged.sidebarCollapsed = defaultPrefs.sidebarCollapsed;
+  if (typeof merged.detailHeight !== "number")
+    merged.detailHeight = defaultPrefs.detailHeight;
+  if (typeof merged.detailTab !== "string")
+    merged.detailTab = defaultPrefs.detailTab;
+  if (
+    merged.lastDestination !== null &&
+    typeof merged.lastDestination !== "string"
+  )
+    merged.lastDestination = defaultPrefs.lastDestination;
   return merged;
 }
 
@@ -175,7 +188,8 @@ export const useUiPrefs = create<UiPrefsState>()((set, get) => {
   return {
     ...loadInitial(),
     patch: (p) => {
-      set((state) => deepMerge(state, p));
+      // Clone so the store never shares a mutable reference with the caller.
+      set((state) => deepMerge(state, clone(p)));
       scheduleWrite();
     },
     setDragging: (next) => {

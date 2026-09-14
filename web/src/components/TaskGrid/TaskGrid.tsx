@@ -17,7 +17,6 @@ import {
 } from "@tanstack/react-query";
 import {
   DndContext,
-  KeyboardSensor,
   PointerSensor,
   closestCenter,
   useSensor,
@@ -27,7 +26,6 @@ import {
 import {
   SortableContext,
   horizontalListSortingStrategy,
-  sortableKeyboardCoordinates,
   useSortable,
 } from "@dnd-kit/sortable";
 import {
@@ -75,6 +73,7 @@ import { useDebouncedNameFilter, useTaskPending } from "../Shell/Toolbar";
 import strings from "../../locales/en/grid.json";
 import { TaskCardList } from "./TaskCardList";
 import {
+  DEFAULT_COLUMN_ORDER,
   PINNED_GRID_COLUMNS,
   moveGridColumn,
   normalizeGridOrder,
@@ -165,23 +164,7 @@ export function useTaskIds(p: TaskGridProps): {
   };
 }
 
-export const DEFAULT_COLUMN_ORDER = [
-  "select",
-  "queuePos",
-  "name",
-  "size",
-  "progress",
-  "status",
-  "dlSpeed",
-  "ulSpeed",
-  "eta",
-  "peers",
-  "ratio",
-  "uploaded",
-  "destination",
-  "addedOn",
-  "completedOn",
-] as const;
+export { DEFAULT_COLUMN_ORDER };
 type ColumnId = (typeof DEFAULT_COLUMN_ORDER)[number];
 export const STATUS_ORDINAL: Record<Task["state"], number> = {
   downloading: 0,
@@ -605,6 +588,7 @@ function GridHeader({
 }) {
   const id = header.column.id as ColumnId;
   const pinned = PINNED_GRID_COLUMNS.has(id);
+  const { t: tc } = useTranslation();
   const { setNodeRef, listeners, transform, transition, isDragging } =
     useSortable({ id: header.id, disabled: pinned });
   const sorted = header.column.getIsSorted();
@@ -686,12 +670,32 @@ function GridHeader({
       )}
       {header.column.getCanResize() ? (
         <span
-          aria-hidden="true"
+          role="separator"
+          aria-orientation="vertical"
+          // title, not aria-label: a descendant's label leaks into the
+          // columnheader's name-from-content; title is not consulted there.
+          title={tc("shell.resizeColumn", {
+            name: initI18n().t(`headers.${id}`, { ns: "grid" }),
+          })}
+          tabIndex={0}
           data-resize-handle={id}
           onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={header.getResizeHandler()}
           onTouchStart={header.getResizeHandler()}
           onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            event.stopPropagation();
+            const delta = event.key === "ArrowLeft" ? -16 : 16;
+            header.getContext().table.setColumnSizing((old) => ({
+              ...old,
+              [id]: Math.min(
+                Math.max(header.column.getSize() + delta, 40),
+                1200,
+              ),
+            }));
+          }}
           onDoubleClick={(event) => {
             event.stopPropagation();
             onAutoFit(id);
@@ -826,11 +830,11 @@ export function TaskGrid(props: TaskGridProps) {
   // Unmounting mid-gesture (e.g. a route change during a drag) must not leave
   // the prefs store in no-write mode for the rest of the session.
   useEffect(() => () => setDragging(false), [setDragging]);
+  // No KeyboardSensor: headers carry the click-to-sort handler, so a focusable
+  // sortable would start a drag on the same Enter/Space that sorts. Keyboard
+  // reordering is the Columns popover's Move buttons (doc 09 section 3.4).
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
   );
   const suppressHeaderClick = useRef(false);
   const endColumnDrag = () => {

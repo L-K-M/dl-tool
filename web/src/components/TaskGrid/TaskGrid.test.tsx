@@ -899,3 +899,31 @@ test("TestResizeHandleDoubleClickAutoFits", async () => {
       .style.getPropertyValue("--col-size-size"),
   ).toBe("90");
 });
+
+test("TestResizeHandleArrowKeys", async () => {
+  await mount();
+  const handle = document.querySelector('[data-resize-handle="size"]')!;
+  expect(handle.getAttribute("role")).toBe("separator");
+  fireEvent.keyDown(handle, { key: "ArrowRight" });
+  expect(useUiPrefs.getState().grid.sizing.size).toBe(106);
+  fireEvent.keyDown(handle, { key: "ArrowLeft" });
+  fireEvent.keyDown(handle, { key: "ArrowLeft" });
+  expect(useUiPrefs.getState().grid.sizing.size).toBe(74);
+});
+
+test("TestGridUnmountPublishesNullTable", async () => {
+  const first = await mount();
+  expect(useGridTable.getState().table).not.toBeNull();
+  first.unmount();
+  expect(useGridTable.getState().table).toBeNull();
+});
+
+test("TestResetRestoresLiveGrid", async () => {
+  await mount();
+  await openColumnsMenu();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Destination" }));
+  fireEvent.click(screen.getByRole("button", { name: "Move Size down" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
+  expect(columnIds()).toEqual([...DEFAULT_COLUMN_ORDER]);
+  expect(within(row("one")).getAllByRole("gridcell")).toHaveLength(15);
+});
