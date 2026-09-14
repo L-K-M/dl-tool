@@ -146,7 +146,7 @@ Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && make typecheck && make test-web && echo GRID_OK
 ```
-Expected: Vitest reports `Test Files  6 passed (6)` including
+Expected: Vitest reports `Test Files  7 passed (7)` including
 `src/components/TaskGrid/TaskGrid.test.tsx`, every test named above appears as passing, and the final line
 of stdout is exactly `GRID_OK`.
 
@@ -286,14 +286,68 @@ GRID_OK
 This is baseline evidence only. No grid acceptance test exists yet. `npm ci --prefix web`
 installed the pinned dependencies and reported two high-severity audit findings; no pins changed.
 
+### Suite-count repair verification
+
+The following contract check failed before the repair and passed afterward:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import re
+p = Path('docs/tasks/T042-virtualised-task-grid.md').read_text()
+verification = p.split('## Verification\n', 1)[1].split('## Out of scope', 1)[0]
+existing = list(Path('web/src').rglob('*.test.ts')) + list(Path('web/src').rglob('*.test.tsx'))
+required = re.findall(r'\| `(web/[^`]+\.test\.tsx?)` \| create \|', p)
+expected = len(set(map(str, existing)) | set(required))
+actual = int(re.search(r'Test Files  (\d+) passed', verification)[1])
+print(f'existing={len(existing)}, required new={len(required)}, expected={expected}, documented={actual}', flush=True)
+assert actual == expected, 'T042 suite count excludes its required new test file'
+PY
+```
+
+```text
+existing=6, required new=1, expected=7, documented=6
+AssertionError: T042 suite count excludes its required new test file
+```
+
+```text
+existing=6, required new=1, expected=7, documented=7
+```
+
+Fresh `npm ci --prefix web` installed the pinned dependencies and again reported two high-severity
+findings; no pins changed. The Verification command exited 0 on the unchanged implementation:
+
+```text
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+   Start at  02:05:41
+   Duration  2.34s (transform 862ms, setup 0ms, import 3.02s, tests 2.58s, environment 1.62s)
+
+GRID_OK
+```
+
+This is baseline proof, not grid acceptance. `make ci` initially failed because it ran alongside the
+Verification command and golangci-lint rejected concurrent execution. Rerunning sequentially with
+`PATH="/tmp/t039-tools:$PATH" make ci` reused the existing Docker CLI and exited 0. Output excerpts:
+
+```text
+0 issues.
+All matched files use Prettier code style!
+ Test Files  6 passed (6)
+      Tests  89 passed (89)
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2431 Total (in 223ms) 🔗 573 Unique ✅ 2404 OK 🚫 0 Errors 👻 27 Excluded
+```
+
+Only this task document changed. The task and both index rows remain `todo`.
+
 ## Blocked
 
-Current blocker: Verification requires `Test Files  6 passed (6)` **including** the new
-`TaskGrid.test.tsx`, but the unchanged baseline already runs six test files (output above).
-Step 9 and the Files table require a seventh file. Meeting the stated count would require
-removing or excluding an existing suite, which the forbidden shortcuts prohibit.
-The owner must correct the expected count before implementation resumes. No code was added;
-the task and both index rows remain `todo`. Stopped under IMPLEMENTING.md's plan-error rule.
+Resolved: the Verification suite count now includes the required new `TaskGrid.test.tsx`
+without removing or excluding existing suites. No code was added; the task and both index rows
+remain `todo`. Grid implementation and acceptance verification remain pending.
 
 Previous blocker, resolved by the plan repair: [doc 09 §3.9](../09-web-ui-spec.md#39-virtualisation) now separates table
 row density from fixed mobile card height while preserving no auto-measurement and the existing mobile
