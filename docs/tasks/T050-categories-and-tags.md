@@ -182,8 +182,10 @@ should answer it is this task file:
    `docs/13-testing-and-verification.md` §7.1 (`api/openapi.json`, `web/src/api/schema.d.ts`), the
    wording T046's repaired file already uses — registering Huma operations necessarily changes both.
 3. Record the `default_destination` decision where it is governed: amend the resolution table's third
-   row to name the settings read and the out-of-roots outcome (`403 /problems/path-rejected` via
-   `fsx.ResolveDestination`), so the spec — not only this note — answers the implementer.
+   row to name the settings read, the unset-or-empty outcome (the migration seeds no value; the row's
+   existing "else the first root" fallback covers it), and the out-of-roots outcome
+   (`403 /problems/path-rejected` via `fsx.ResolveDestination`), so the spec — not only this note —
+   answers the implementer.
 
 Three smaller points the repair should settle so the implementation does not re-block or guess:
 
@@ -195,8 +197,8 @@ Three smaller points the repair should settle so the implementation does not re-
   omitted field from an explicit `""`, while doc 05 §8.1 makes an empty name `422`. `*string` fields are
   required; treating explicit-empty as omitted would contradict §8.1 and needs a spec change first.
 - The resolution table's third row needs a `default_destination` settings read the migration does not
-  seed; step 3 above owns the out-of-roots outcome. The read itself fits the table either way — an
-  inline query in `tasks.go` (the `queryConcurrencySettings` precedent) or a `SettingsStore` method in
-  `settings.go`. Also note `store.Category`/`store.Tag` would live in `settings.go` (`models.go` is
-  outside the table) and there is no `store.ErrConflict` sentinel yet for the `409` mapping; the
-  implementation would add it there.
+  seed; step 3 above owns the out-of-roots outcome. The read is a `SettingsStore` method in
+  `settings.go` — T027's Files row makes that file the home of every settings-table query — rather
+  than another inline query in `tasks.go`. Also note `store.Category`/`store.Tag` would live in
+  `settings.go` (`models.go` is outside the table) and there is no `store.ErrConflict` sentinel yet
+  for the `409` mapping; the implementation would add it there.
