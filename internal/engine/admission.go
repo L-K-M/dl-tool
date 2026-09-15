@@ -1064,8 +1064,9 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 		// candidate re-adds through this same branch — the requeue is what
 		// keeps its paused row from being adopted to downloading out from
 		// under the retry.
-		a.requeuePendingSelection(ctx, cand)
-		a.resumeForMetadata(ctx, e, newID, cand)
+		if a.requeuePendingSelection(ctx, cand) {
+			a.resumeForMetadata(ctx, e, newID, cand)
+		}
 		return intentErr
 	}
 	if intentErr != nil {
@@ -1093,17 +1094,21 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 // a selection to, and queued is the one state the reconciler never
 // adopts engine state over — left paused, the sweep would adopt the
 // metadata fetch's downloading report and the selection would never be
-// retried. Queued candidates skip the write; a failure is a warning,
-// because the pass retries the same path on the next tick either way.
-func (a *Admitter) requeuePendingSelection(ctx context.Context, cand store.Candidate) {
+// retried. Queued candidates skip the write. The bool says whether the
+// caller may run the transfer: a parked row whose requeue failed must
+// not move, because running it would let the sweep adopt the row before
+// the next pass can retry.
+func (a *Admitter) requeuePendingSelection(ctx context.Context, cand store.Candidate) bool {
 	if cand.State != string(StatePaused) {
-		return
+		return true
 	}
 	if err := a.tasks.Transition(ctx, cand.ID, string(StateQueued), store.CodeTaskResumed,
 		"file selection waits for the engine's file listing; requeued for retry"); err != nil {
 		a.log.Warn("could not requeue the parked task whose file listing is pending",
 			"task_id", cand.ID, "engine", cand.Engine, "error", err)
+		return false
 	}
+	return true
 }
 
 // resumeForMetadata starts a transfer whose file selection is waiting on

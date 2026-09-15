@@ -2454,8 +2454,12 @@ func TestPassAppliesPersistedRateLimits(t *testing.T) {
 	if calls[0].down == nil || *calls[0].down != 1024 || calls[0].up == nil || *calls[0].up != 512 {
 		t.Errorf("SetRateLimits = %+v, want down 1024 up 512", calls[0])
 	}
-	if calls[0].id != *taskEngineRef(t, env, id) && calls[0].id != engine.NameAria2+":"+*taskEngineRef(t, env, id) {
-		t.Errorf("SetRateLimits id = %q, want the recorded handle", calls[0].id)
+	ref := taskEngineRef(t, env, id)
+	if ref == nil {
+		t.Fatalf("engine_ref not recorded for %s", id)
+	}
+	if want := engine.NameAria2 + ":" + *ref; calls[0].id != want {
+		t.Errorf("SetRateLimits id = %q, want the recorded handle %q", calls[0].id, want)
 	}
 	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
 		t.Errorf("state = %q, want downloading", state)

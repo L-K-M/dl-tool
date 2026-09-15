@@ -521,13 +521,16 @@ func (r *Reconciler) resubmit(ctx context.Context, name string, e Engine, task s
 	intentErr := applyPersistedIntent(ctx, e, newID, task.DLLimit, task.ULLimit, sel)
 	switch {
 	case errors.Is(intentErr, errSelectionPending):
-		if err := e.Resume(ctx, newID); err != nil {
-			r.log.Warn("re-submitted but could not run the transfer whose file listing is pending",
-				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
-		}
+		// Queue first, then run the transfer: a crash between the two
+		// leaves a queued row the admission pass retries, while resuming
+		// first could leave a non-queued row running a transfer the sweep
+		// then adopts out from under the pending selection.
 		if err := r.tasks.Transition(ctx, task.ID, string(StateQueued), CodeTaskReconciled,
 			"re-submitted; file selection waits for the engine's file listing"); err != nil {
 			r.log.Warn("re-submitted with a pending file selection but could not requeue the task for the admission pass",
+				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
+		} else if err := e.Resume(ctx, newID); err != nil {
+			r.log.Warn("re-submitted but could not run the transfer whose file listing is pending",
 				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
 		}
 	case intentErr != nil:

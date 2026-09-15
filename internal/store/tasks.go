@@ -1419,11 +1419,30 @@ type SelectionIntent struct {
 
 // DecodeSelectionIntent parses the stored select_files document. A
 // malformed value is an error, not a silent default: applying a guessed
-// selection would download files the operator skipped.
+// selection would download files the operator skipped. The same goes for
+// a document that parses but carries no sane intent — a negative index
+// or a priority outside the doc 04 §4.3 set — so the decode validates
+// what it hands the engine.
 func DecodeSelectionIntent(raw string) (SelectionIntent, error) {
 	var sel SelectionIntent
 	if err := json.Unmarshal([]byte(raw), &sel); err != nil {
 		return SelectionIntent{}, fmt.Errorf("store: decode select_files: %w", err)
+	}
+	if sel.Indices == nil {
+		sel.Indices = []int{}
+	}
+	if sel.Priorities == nil {
+		sel.Priorities = map[int]int{}
+	}
+	for _, idx := range sel.Indices {
+		if idx < 0 {
+			return SelectionIntent{}, fmt.Errorf("store: decode select_files: negative file index %d", idx)
+		}
+	}
+	for idx, pri := range sel.Priorities {
+		if idx < 0 || (pri != 0 && pri != 1 && pri != 6 && pri != 7) {
+			return SelectionIntent{}, fmt.Errorf("store: decode select_files: invalid priority %d for file index %d", pri, idx)
+		}
 	}
 
 	return sel, nil
