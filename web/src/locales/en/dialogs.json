@@ -13,6 +13,7 @@
     "notWritable": "This folder is not writable.",
     "pathRejected": "That folder is outside the allowed download roots.",
     "notFound": "Folder not found or unreadable.",
+    "unreachable": "The server could not be reached.",
     "mkdirFailed": "The folder could not be created.",
     "nameConflict": "A file or folder with that name already exists."
   }

@@ -159,10 +159,10 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-`make lint && make test && echo BROWSER_OK` on the final tree — lint clean,
-every Go package `ok`, Vitest 151/151 across 10 files including the five
-`FolderBrowserDialog.test.tsx` tests, and the final line of stdout is
-`BROWSER_OK`:
+`make lint && make test && echo BROWSER_OK` on the final tree, re-run after
+the review fixes — lint clean, every Go package `ok`, Vitest 154/154 across
+10 files including the eight `FolderBrowserDialog.test.tsx` tests, and the
+final line of stdout is `BROWSER_OK`:
 
 ```text
 $ make lint && make test && echo BROWSER_OK
@@ -193,9 +193,9 @@ ok  	github.com/L-K-M/dl-tool/internal/sync	4.378s
 ok  	github.com/L-K-M/dl-tool/internal/uri	1.082s
 ?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
 cd web && npx vitest run
- ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (5 tests) 480ms
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (8 tests) 777ms
  Test Files  10 passed (10)
-      Tests  151 passed (151)
+      Tests  154 passed (154)
 BROWSER_OK
 ```
 
@@ -220,12 +220,18 @@ run inside `FolderBrowserDialog.test.tsx` (Vitest reports the file, not per-test
 names — the vitest run above is their pass). The msw server listens with
 `onUnhandledRequest: "error"`, so any request outside the four `/api/v1/fs/*`
 handlers would fail the suite — the fifth acceptance criterion's enforcement.
+The review round added `TestMkdirConflictKeepsNamingOpen`,
+`TestInitialPathOpensThere` and `TestStaleBrowseResponseCannotOverwrite` to the
+same file.
 
-Scope check — exactly the Files table plus the two generated files of
-docs/13 §7.1 (`make gen` after registering the two operations):
+Scope check — the whole task diff against `origin/main` (all files are
+committed, so `git diff` is the equivalent of the `git status` check, which
+exists to catch untracked files): exactly the Files table plus the two
+generated files of docs/13 §7.1 (`make gen` after registering the two
+operations):
 
 ```text
-$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+$ git diff --name-only origin/main...HEAD -- . ':(exclude)docs' | sort
 api/openapi.json
 internal/api/fs.go
 internal/api/fs_test.go

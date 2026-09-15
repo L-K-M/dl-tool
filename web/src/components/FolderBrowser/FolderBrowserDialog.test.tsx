@@ -6,7 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { HttpResponse, http } from "msw";
+import { HttpResponse, delay, http } from "msw";
 import { setupServer } from "msw/node";
 import {
   afterAll,
@@ -241,4 +241,74 @@ test("TestNewFolderPostsAndRelists", async () => {
   expect(mkdirBodies).toEqual([{ path: "/data", name: "fresh" }]);
   expect(browseCalls.length).toBeGreaterThan(before);
   expect(browseCalls[browseCalls.length - 1]).toBe("/data");
+});
+
+test("TestMkdirConflictKeepsNamingOpen", async () => {
+  mount();
+  await screen.findByText("iso");
+
+  fireEvent.click(screen.getByRole("button", { name: "New folder" }));
+  const nameField = screen.getByRole("textbox", { name: "Folder name" });
+  fireEvent.change(nameField, { target: { value: "iso" } });
+  fireEvent.keyDown(nameField, { key: "Enter" });
+
+  await screen.findByText("A file or folder with that name already exists.");
+  // The naming row stays open so the name can be corrected and retried.
+  expect(screen.getByRole("textbox", { name: "Folder name" })).toBeTruthy();
+  expect(mkdirBodies).toEqual([{ path: "/data", name: "iso" }]);
+});
+
+test("TestInitialPathOpensThere", async () => {
+  render(
+    <FolderBrowserDialog
+      open
+      initialPath="/data/iso"
+      onSelect={vi.fn()}
+      onOpenChange={vi.fn()}
+    />,
+  );
+
+  // initialPath is browsed directly — no roots round-trip first.
+  await screen.findByText("archive");
+  expect(browseCalls).toEqual(["/data/iso"]);
+});
+
+test("TestStaleBrowseResponseCannotOverwrite", async () => {
+  dirs["/data/slow"] = { parent: "/data", dirs: [dir("/data/slow/child")] };
+  server.use(
+    http.get("*/api/v1/fs/browse", async ({ request }) => {
+      const path = new URL(request.url).searchParams.get("path") ?? "";
+      browseCalls.push(path);
+      if (path === "/data/slow") await delay(150);
+      if (!(path in dirs)) {
+        return HttpResponse.json(
+          { type: "/problems/not-found", title: "Not Found", status: 404 },
+          { status: 404 },
+        );
+      }
+      return listing(path);
+    }),
+  );
+
+  mount();
+  await screen.findByText("iso");
+
+  // Commit a slow path, then a fast one; the slow answer landing last
+  // must not clobber the newer listing.
+  const field = screen.getByRole("textbox", { name: "Path" });
+  fireEvent.change(field, { target: { value: "/data/slow" } });
+  fireEvent.blur(field);
+  fireEvent.change(field, { target: { value: "/data/iso" } });
+  fireEvent.blur(field);
+
+  await screen.findByText("archive");
+  await waitFor(() => expect(browseCalls).toContain("/data/slow"));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  // Still the /data/iso listing — the stale /data/slow answer was dropped.
+  expect(screen.getByText("archive")).toBeTruthy();
+  expect(screen.queryByText("child")).toBeNull();
+  expect(
+    (screen.getByRole("textbox", { name: "Path" }) as HTMLInputElement).value,
+  ).toBe("/data/iso");
 });

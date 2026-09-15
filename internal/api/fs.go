@@ -242,6 +242,13 @@ func (h *FSHandlers) Mkdir(ctx context.Context, in *MkdirInput) (*MkdirOutput, e
 		case errors.Is(merr, fs.ErrExist):
 			return nil, Problem(SlugConflict, http.StatusConflict,
 				"a file or directory with that name already exists")
+		case errors.Is(merr, unix.ENAMETOOLONG), errors.Is(merr, unix.EINVAL):
+			// The sanitised name is capped under ext4's 255, but a
+			// filesystem with a tighter NAME_MAX (eCryptfs, some FUSE)
+			// still answers ENAMETOOLONG — a client-input answer, not a
+			// server fault.
+			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity,
+				"name must be a single path component")
 		case errors.Is(merr, fs.ErrNotExist), errors.Is(merr, fs.ErrPermission), errors.Is(merr, unix.ENOTDIR):
 			return nil, Problem(SlugNotFound, http.StatusNotFound,
 				"the path does not exist or is not a readable directory")
@@ -271,6 +278,14 @@ func (h *FSHandlers) FreeSpace(ctx context.Context, in *FreeSpaceInput) (*FreeSp
 
 	space, err := fsx.FreeSpace(resolved)
 	if err != nil {
+		// The resolved path's ancestors may vanish or refuse the stat
+		// between resolution and statfs — the same not-found the sibling
+		// endpoints answer for a directory that is gone or unreadable.
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+			return nil, Problem(SlugNotFound, http.StatusNotFound,
+				"the path does not exist or is not a readable directory")
+		}
+
 		return nil, internalFailure(ctx, "free space", err)
 	}
 

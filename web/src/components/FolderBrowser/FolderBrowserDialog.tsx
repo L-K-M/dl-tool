@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent,
 } from "react";
@@ -32,7 +33,8 @@ import { Label } from "../ui/label";
 initI18n().addResourceBundle("en", "dialogs", strings);
 
 type DirListing = components["schemas"]["Listing"];
-type Fault = "pathRejected" | "notFound" | "nameConflict" | "mkdirFailed";
+type Fault =
+  "pathRejected" | "notFound" | "unreachable" | "nameConflict" | "mkdirFailed";
 
 // One row of the listing: the ".." parent row first when the server sent
 // a parent, then the directories. The parent row is navigation only —
@@ -108,14 +110,25 @@ export function FolderBrowserDialog({
   const targetPath = highlighted?.path ?? listing?.path ?? null;
 
   // GET /fs/browse for one path. A rejection keeps the previous listing
-  // on screen and only swaps the error line (doc 09 section 4.1).
+  // on screen and only swaps the error line (doc 09 section 4.1). The
+  // token keeps a slow earlier answer from overwriting a newer
+  // navigation: only the latest request may touch the dialog state.
+  const navToken = useRef(0);
   const navigate = useCallback(async (path: string): Promise<boolean> => {
+    const token = ++navToken.current;
     try {
       const { data, response } = await api.GET("/fs/browse", {
         params: { query: { path } },
       });
+      if (token !== navToken.current) return true; // superseded
       if (!data) {
-        setFault(response.status === 403 ? "pathRejected" : "notFound");
+        setFault(
+          response.status === 403
+            ? "pathRejected"
+            : response.status >= 500
+              ? "unreachable"
+              : "notFound",
+        );
         return false;
       }
       setListing(data);
@@ -126,7 +139,8 @@ export function FolderBrowserDialog({
       setNaming(false);
       return true;
     } catch {
-      setFault("notFound");
+      if (token !== navToken.current) return true;
+      setFault("unreachable");
       return false;
     }
   }, []);
@@ -156,12 +170,12 @@ export function FolderBrowserDialog({
         }
         void navigate(first.path);
       } catch {
-        setFault("notFound");
+        setFault("unreachable");
       }
     })();
-    // navigate is stable; initialPath is read once per opening — the open
-    // transition always reloads.
-  }, [open, navigate]);
+    // The open transition always reloads; a changed initialPath re-aims
+    // the dialog at the new starting directory.
+  }, [open, initialPath, navigate]);
 
   // GET /fs/free-space for the highlighted directory — the free-space
   // line follows the prospective selection. The current directory's own
@@ -256,16 +270,20 @@ export function FolderBrowserDialog({
         return;
       }
       if (response.status === 409) setFault("nameConflict");
-      else setFault(response.status === 403 ? "pathRejected" : "mkdirFailed");
+      else if (response.status === 403) setFault("pathRejected");
+      else setFault(response.status >= 500 ? "unreachable" : "mkdirFailed");
     } catch {
-      setFault("mkdirFailed");
+      setFault("unreachable");
     }
   }
 
   const breadcrumb = useMemo(() => {
     if (!listing) return [];
+    // No synthetic "/" crumb: the jail can never browse it, so it would
+    // be a dead control — unless the listing path literally is "/".
+    if (listing.path === "/") return [{ name: "/", path: "/" }];
     const segments = listing.path.split("/").filter((s) => s !== "");
-    const crumbs: { name: string; path: string }[] = [{ name: "/", path: "/" }];
+    const crumbs: { name: string; path: string }[] = [];
     let prefix = "";
     for (const segment of segments) {
       prefix += "/" + segment;
@@ -400,7 +418,11 @@ export function FolderBrowserDialog({
                   }
                 }}
               />
-              <Button size="sm" onClick={() => void createFolder()}>
+              <Button
+                size="sm"
+                disabled={!newName.trim()}
+                onClick={() => void createFolder()}
+              >
                 {t("folderBrowser.createFolder")}
               </Button>
             </span>
