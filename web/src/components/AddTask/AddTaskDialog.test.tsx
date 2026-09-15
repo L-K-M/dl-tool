@@ -615,6 +615,8 @@ test("TestSelectFilesLaterPageReadOnly", async () => {
     name: "Select beta.iso",
   })) as HTMLInputElement;
   expect(betaBox.disabled).toBe(true);
+  // The preview shows the default the torrent will download with.
+  expect(betaBox.checked).toBe(true);
   expect(
     (screen.getByRole("button", { name: "All" }) as HTMLButtonElement).disabled,
   ).toBe(true);
