@@ -118,13 +118,13 @@ Version: `@playwright/test@1.62.1` (doc 09 §1).
 6. Run the verification command twice and paste both outputs under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `make e2e` starts the server itself; no manual step and no `docker compose` is required.
-- [ ] `first run creates the admin`, `a second setup attempt is rejected` and
+- [x] `make e2e` starts the server itself; no manual step and no `docker compose` is required.
+- [x] `first run creates the admin`, `a second setup attempt is rejected` and
       `the grid stays inside the scripting budget` all pass in Chromium.
-- [ ] The run leaves nothing inside the repository: the state directory is under the OS temp directory.
-- [ ] The performance test satisfies [doc 13 §6.3](../13-testing-and-verification.md#63-grid-update-performance),
+- [x] The run leaves nothing inside the repository: the state directory is under the OS temp directory.
+- [x] The performance test satisfies [doc 13 §6.3](../13-testing-and-verification.md#63-grid-update-performance),
       including rendered-update assertions, trace, printed samples/p95 and the one-off negative-control evidence.
-- [ ] Re-running `make e2e` twice in a row passes both times.
+- [x] Re-running `make e2e` twice in a row passes both times.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -156,27 +156,70 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 
-Plan repair only; task Verification and the browser benchmark remain unrun. No acceptance box or
-status changed. `npm ci --prefix web` installed the existing pins. The first `make ci` stopped because
-Docker CLI was absent; provisioning the CLI outside the repository allowed the full rerun below.
+Verified 2026-09-15 on this branch merged with `origin/main` at `6139aed` (includes the shipped-UI
+repairs from PR #182 and PR #183). `npx playwright install --with-deps chromium` needs root and fails
+in this environment, so `make e2e` ran with the cached Chromium per the environment note under
+"Blocked" (`LD_LIBRARY_PATH` for the browser libs, `PATH` with the Go toolchain).
+
+Negative control — `emitDelta` in `fixtures.ts` temporarily suppressed delivery (one-off, restored
+before commit). The visible-update assertion fails on the stale seed; an idle page can never pass:
 
 ```text
-$ PATH="/tmp/dltool-recovery-tools/docker:$PATH" make ci > /tmp/dltool-153-ci-final.log 2>&1 && printf 'CI_OK\n'
-CI_OK
-$ python3 /tmp/dltool-153-plan-check.py
-PLAN_OK: T043 todo; dependency rows agree; T051 blocks T043; dependency closure acyclic; canonical measurement linked
-$ make doclint
-./scripts/doclint.sh
-🔍 2450 Total (in 211ms) 🔗 573 Unique ✅ 2424 OK 🚫 0 Errors 👻 26 Excluded
+  ✘  1 [chromium] › e2e/setup.spec.ts:53:1 › the grid stays inside the scripting budget (11.0s)
+    Error: expect(received).toBeCloseTo(expected, precision)
+    Expected: 34
+    Received: 30
+      84 |   await expect
+      85 |     .poll(() => readProgressNow(page, watchId))
+    > 86 |       .toBeCloseTo(fixture.progressAt(1) * 100, 4);
 ```
 
-The same dependency check against pre-repair `origin/main` exited 1:
+Restored run 1:
+
 ```text
-AssertionError: T043 lacks the production transport prerequisite T051
-BASELINE_EXIT=1
+$ make e2e && echo E2E_OK
+Running 3 tests using 1 worker
+  ✓  1 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin (543ms)
+  ✓  2 [chromium] › e2e/setup.spec.ts:41:1 › a second setup attempt is rejected (13ms)
+grid perf: 30 changed rows per tick, 10 measured ticks
+grid perf deltas (ms): 6.007, 6.777, 7.976, 6.108, 5.427, 6.279, 6.152, 4.263, 7.221, 6.215
+grid perf p95: 7.976 ms (budget 8 ms)
+  ✓  3 [chromium] › e2e/setup.spec.ts:53:1 › the grid stays inside the scripting budget (16.8s)
+  3 passed (31.9s)
+E2E_OK
 ```
 
-`git diff --check` passed. These are plan-repair checks, not T043 completion evidence.
+Restored run 2 (consecutive):
+
+```text
+$ make e2e && echo E2E_OK
+Running 3 tests using 1 worker
+  ✓  1 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin
+  ✓  2 [chromium] › e2e/setup.spec.ts:41:1 › a second setup attempt is rejected
+grid perf: 30 changed rows per tick, 10 measured ticks
+grid perf deltas (ms): 6.223, 6.703, 3.621, 3.984, 5.492, 5.514, 5.877, 5.811, 4.989, 3.991
+grid perf p95: 6.703 ms (budget 8 ms)
+  ✓  3 [chromium] › e2e/setup.spec.ts:53:1 › the grid stays inside the scripting budget
+  3 passed (29.9s)
+E2E_OK
+```
+
+Each run retains its CDP trace at `${os.tmpdir()}/dl-tool-e2e/cdp-trace.json`; nothing is written
+inside the repository. Scope check (the task's Files-table files are all committed, so `git status`
+is clean and the branch diff is shown instead):
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+$ git diff --name-only origin/main...HEAD | sort
+docs/tasks/T043-playwright-harness-and-grid-performance.md
+web/e2e/fixtures.ts
+web/e2e/setup.spec.ts
+web/package.json
+web/playwright.config.ts
+```
+
+`web/package-lock.json` (a Files-table row) needs no diff: `origin/main` already pins
+`@playwright/test` `1.62.1`, matching `web/package.json`.
 
 ## Blocked
 **2026-09-15 — shipped UI misses the 8 ms budget; fix needs files outside the Files table.**
@@ -226,9 +269,13 @@ needs root and fails here; the cached browser launches with
 `LD_LIBRARY_PATH=$HOME/.local/share/goodebics-validation/browser/lib/x86_64-linux-gnu:$HOME/.local/share/goodebics-validation/browser/usr/lib/x86_64-linux-gnu:$HOME/opt/mesa-root/usr/lib/x86_64-linux-gnu`
 and `PATH` including `$HOME/.local/go/bin` and `/tmp/dltool-recovery-tools/docker`.
 
+Resolved on `fix/*` branches and merged to main ahead of this task: PR #182 made per-tick
+store/subscriber work proportional to the changed ids, and PR #183 removed per-tick selector
+allocations in the grid cells. The task's Files table stayed untouched; evidence is above.
+
 Resolved by the plan repair: T051 is now a prerequisite, and
 [doc 13 §6.3](../13-testing-and-verification.md#63-grid-update-performance) defines the executable
-update fixture and measurement contract within this Files table. T043 remains unimplemented and `todo`.
+update fixture and measurement contract within this Files table. T043 stayed `todo` at that point.
 
 Original blocker: Step 4 sampled ten idle seconds, not ten update ticks as required by
 [NFR-001](../02-requirements.md#nfr-001-render-a-10-000-row-grid-smoothly) and
