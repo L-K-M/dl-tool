@@ -81,6 +81,7 @@ type Problem = components["schemas"]["ErrorModel"];
 
 const MAX_URIS = 50;
 const uriCap = MAX_URIS;
+const EMPTY_TASKS: ReadonlyMap<string, Task> = new Map();
 const recognisedScheme = /^(https?|ftps?|sftp|magnet):/i;
 const hexInfohash = /^[0-9a-f]{40}$/i;
 const base32Infohash = /^[2-7a-z]{32}$/i;
@@ -405,8 +406,13 @@ export function AddTaskDialog({
   const [selectDraft, setSelectDraft] = useState<AddTaskDraft | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const tasks = useTasks((state) => state.tasks);
+  // The duplicate-source set is only consulted while the dialog is open; the
+  // tasksVersion key keeps the scan off the per-tick update path when closed
+  // while still tracking the in-place merges that leave the map ref unchanged.
+  const revision = useTasks((state) => (open ? state.tasksVersion : -1));
   const known = useMemo(() => {
+    void revision;
+    const tasks = open ? useTasks.getState().tasks : EMPTY_TASKS;
     const set = new Set<string>();
     for (const task of tasks.values()) {
       if (task.source_uri !== null) set.add(task.source_uri);
@@ -414,7 +420,7 @@ export function AddTaskDialog({
       if (task.infohash_v2 !== null) set.add(task.infohash_v2);
     }
     return set;
-  }, [tasks]);
+  }, [revision, open]);
 
   // Seeding reads the props once per open: later initialUris changes belong
   // to the next opening, not to the draft the user is editing.
