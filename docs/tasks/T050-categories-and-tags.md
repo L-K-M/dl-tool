@@ -206,7 +206,7 @@ duplicate name · `422` for an empty name or a name containing `/`.
    a provided `save_path` goes through `fsx.ResolveDestination` like create's — then `UpdateCategory`
    (`ErrNotFound` → 404, `ErrConflict` → 409), then `CategoryByName` on the effective post-update name —
    `newName` when provided, else `name` — for the 200 response; an `ErrNotFound` from that read-back is
-   the row vanishing mid-request, not another 404.
+   the row vanishing mid-request after a committed update — 500, not another 404.
 5. Implement `DELETE` so tasks in the category become uncategorised and no task and no file is touched.
 6. Edit `internal/api/tasks.go` to apply the resolution table above when the create body carries a category
    and no destination, setting `requested_destination` only when the resolved path differs from the
