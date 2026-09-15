@@ -335,6 +335,9 @@ func (s *SettingsStore) DefaultDestination(ctx context.Context) (string, error) 
 	}
 
 	var value string
+	if valueJSON == "" {
+		return "", nil
+	}
 	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
 		return "", fmt.Errorf("store: decode settings key %s: want a JSON string: %w", settingDefaultDestination, err)
 	}
