@@ -228,7 +228,7 @@ Notes for the reviewer:
   render the shell (`App`, `Shell`, `DetailPane`, `TaskGrid` and `main`
   tests — none editable under this task's Files table) the ladder then probes
   `GET /api/v1/sync`, which msw logs as unhandled under its `error` strategy.
-  That output is stderr noise only — all 191 tests pass; the probe's rejection
+  That output is stderr noise only — all 193 tests pass; the probe's rejection
   is caught inside `fetchSync` and treated as a failed fetch.
 - Mutating controls were already disabled with the `Reconnecting…` tooltip by
   T044's Toolbar (`connection !== "live" && !== "polling"`); the optimistic
