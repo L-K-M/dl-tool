@@ -71,18 +71,20 @@ type Tag struct {
 
 func (s *SettingsStore) ListCategories(ctx context.Context) ([]Category, error)
 
-// CategoryByName resolves one row by its unique name. ErrNotFound means no
-// category carries it.
+// CategoryByName resolves one row by its unique name, carrying the same
+// task_count the list does — the PATCH handler builds its 200 response
+// from it. ErrNotFound means no category carries it.
 func (s *SettingsStore) CategoryByName(ctx context.Context, name string) (Category, error)
 
 // CreateCategory inserts one row; a name already taken is ErrConflict.
 func (s *SettingsStore) CreateCategory(ctx context.Context, c Category) error
 
-// UpdateCategory writes the effective name and save_path of the addressed
-// row: the PATCH handler reads the row first and merges the optional
-// fields, so every argument is the post-merge value. ErrNotFound means
-// name addresses no row; ErrConflict means newName belongs to another row.
-func (s *SettingsStore) UpdateCategory(ctx context.Context, name, newName, savePath string) error
+// UpdateCategory writes the addressed row's name and save_path; a nil
+// argument leaves that column untouched, so the merge happens in the
+// UPDATE itself and two concurrent PATCHes cannot lose each other's field.
+// ErrNotFound means name addresses no row; ErrConflict means newName
+// belongs to another row.
+func (s *SettingsStore) UpdateCategory(ctx context.Context, name string, newName, savePath *string) error
 
 // DeleteCategory removes the row. ON DELETE SET NULL uncategorises its
 // tasks and watch folders; no task row and no file is touched. ErrNotFound
@@ -183,9 +185,9 @@ destination, else the category save_path, else `DefaultDestination`, else `""` �
 
 | Request | Effective `destination` | `requested_destination` |
 |---|---|---|
-| explicit `destination` | that path, through `fsx.ResolveDestination` | `null` |
-| none, category with a `save_path` | the category `save_path`, through `fsx.ResolveDestination` | `null` |
-| none, no category | the `default_destination` settings row read through `SettingsStore.DefaultDestination`, through `fsx.ResolveDestination`; the migration seeds no row and an unset or empty value falls back to the first root | `null` |
+| explicit `destination` | that path, through `fsx.ResolveDestination` | the request verbatim when the resolved path differs — an alias or a `..` that folds, or a `create_subfolder` move — else `null` |
+| none, category with a `save_path` | the category `save_path`, through `fsx.ResolveDestination` | `null` — nothing was requested |
+| none, no category | the `default_destination` settings row read through `SettingsStore.DefaultDestination`, through `fsx.ResolveDestination`; the migration seeds no row and an unset or empty value falls back to the first root | `null` — nothing was requested |
 
 Statuses, exactly doc 05 §8.1: `200`/`201`/`204` ·
 `403 /problems/path-rejected` for a `save_path` outside the roots · `404` · `409 /problems/conflict` on a
@@ -200,20 +202,24 @@ duplicate name · `422` for an empty name or a name containing `/`.
 3. Validate `save_path` through `fsx.ResolveDestination` against the configured roots, rejecting anything
    outside with `403 /problems/path-rejected`; store the resolved path, the same treatment a task
    destination gets.
-4. Implement `PATCH` by reading the row (`ErrNotFound` → 404), merging the non-nil fields, validating the
-   merged name and save_path exactly like create, then `UpdateCategory` (`ErrConflict` → 409).
+4. Implement `PATCH` by validating each provided field — a `new_name` that is empty or carries `/` is 422,
+   a provided `save_path` goes through `fsx.ResolveDestination` like create's — then `UpdateCategory`
+   (`ErrNotFound` → 404, `ErrConflict` → 409) and `CategoryByName` on the outcome for the 200 response.
 5. Implement `DELETE` so tasks in the category become uncategorised and no task and no file is touched.
 6. Edit `internal/api/tasks.go` to apply the resolution table above when the create body carries a category
    and no destination, setting `requested_destination` only when the resolved path differs from the
    requested one.
 7. For `GET /tags`, count every non-removed task carrying the tag, including tags whose count is zero.
+   Both list handlers initialise their slice, so an empty result encodes `[]` — matching the array types
+   the regenerated `schema.d.ts` declares — never `null`.
 8. Edit `internal/api/server.go` to construct the handlers and call `Register`: one `categories` field on
    `Server`, `NewCategoryHandlers(db, cfg.DataRoots)` in `NewServer`, `s.categories.Register(s.API)` in
    `registerOperations`.
 9. Create `internal/api/categories_test.go`: create, list, rename, delete; a duplicate name is `409`; a
    name containing `/` is `422`; a `save_path` of `/etc` is `403`; creating a
    task in category `linux` with no destination resolves to `/data/linux`; deleting the category leaves its
-   tasks present and uncategorised; `GET /tags` lists a tag with `task_count: 0`.
+   tasks present and uncategorised; `GET /tags` lists a tag with `task_count: 0`; both list endpoints
+   answer `[]` when empty, never `null`.
 10. Run `make gen` to regenerate `api/openapi.json` and `web/src/api/schema.d.ts` (docs/13 §7.1).
     Run the verification command, paste its output under `## Evidence`, and confirm scope with the
     `git status` command under `## Verification`. Only then commit everything, including the two
@@ -250,6 +256,9 @@ prints, and nothing else. Use `git status`, not
 - Do NOT add a per-category engine, ratio limit or automation setting; v1 has name and save path only.
 - Do NOT move or delete any downloaded data when a category is renamed or deleted.
 - Do NOT let a category `save_path` escape `DLTOOL_DATA_ROOTS`; it is checked like any destination.
+- Do NOT validate `default_destination` at settings-write time; `PATCH /settings` is T092's. A stale
+  stored value outside the roots answers `403 /problems/path-rejected` on every destination-less
+  create — the create-time check is the only guard this task adds.
 
 ## Forbidden shortcuts
 - Do NOT skip/xfail a test, weaken an assertion, or delete a test to make a check pass.
