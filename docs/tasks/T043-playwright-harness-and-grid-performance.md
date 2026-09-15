@@ -179,6 +179,53 @@ BASELINE_EXIT=1
 `git diff --check` passed. These are plan-repair checks, not T043 completion evidence.
 
 ## Blocked
+**2026-09-15 — shipped UI misses the 8 ms budget; fix needs files outside the Files table.**
+
+The harness is complete and correct: `make e2e` boots the server, all three specs
+run, the first two pass, and the performance spec delivers and verifies all ten
+update ticks. It then fails the p95 assertion because the shipped update path —
+not the fixture — costs ~35–58 ms of scripting per tick at 10 000 rows:
+
+```text
+grid perf: 30 changed rows per tick, 10 measured ticks
+grid perf deltas (ms): 35.494, 58.174, 37.972, 34.421, 44.537, 38.673, 39.616, 42.196, 42.067, 42.703
+grid perf p95: 58.174 ms (budget 8 ms)
+```
+
+In-page probe (same payload, timed around the dispatch + the following frame):
+
+```text
+tick 2: {"emit":3.5,"raf1":34.9,"raf2":11.4}
+tick 3: {"emit":3.5,"raf1":30.5,"raf2":3.1}
+tick 4: {"emit":3.7,"raf1":30.6,"raf2":3.3}
+```
+
+So the emit/reducer path is ~3.5 ms and the render pass is ~30 ms every tick.
+That pass is dominated by O(10 000)-per-notification work outside this task's
+Files table:
+
+- `applySync` rebuilds `new Map(state.tasks)` (10k entries) per delta —
+  `web/src/store/useTasks.ts`.
+- `TaskGrid`'s `useTasks.subscribe` sort-diff scans all 10 000 ids on every
+  store change — `web/src/components/TaskGrid/TaskGrid.tsx` (~line 763).
+- `Sidebar` runs `selectFilterCounts` + `selectCategoryCounts` +
+  `selectTagCounts` (each O(10k); the tag count allocates a `Set` per task) and
+  two `[...tasks.values()]` memos per tick — `web/src/components/Shell/Sidebar.tsx`.
+- `Toolbar` runs `selectFilterCounts` per tick — `web/src/components/Shell/Toolbar.tsx`.
+
+Fixing it means making per-tick subscriber work O(changed) — e.g. maintain
+filter/category/tag counts incrementally inside `applySync`, or memoize the
+selectors on changed ids — plus dropping the 10k sort-diff scan. All of those
+files are outside the Files table, and the task forbids weakening the 8 ms
+budget or the 10 000-row count. This is a plan defect (the shipped shell
+misses NFR-001): it needs either a new performance task ahead of T043 or a
+Files-table amendment.
+
+Environment note for the next run: `npx playwright install --with-deps chromium`
+needs root and fails here; the cached browser launches with
+`LD_LIBRARY_PATH=$HOME/.local/share/goodebics-validation/browser/lib/x86_64-linux-gnu:$HOME/.local/share/goodebics-validation/browser/usr/lib/x86_64-linux-gnu:$HOME/opt/mesa-root/usr/lib/x86_64-linux-gnu`
+and `PATH` including `$HOME/.local/go/bin` and `/tmp/dltool-recovery-tools/docker`.
+
 Resolved by the plan repair: T051 is now a prerequisite, and
 [doc 13 §6.3](../13-testing-and-verification.md#63-grid-update-performance) defines the executable
 update fixture and measurement contract within this Files table. T043 remains unimplemented and `todo`.
