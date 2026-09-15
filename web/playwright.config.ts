@@ -14,7 +14,9 @@ export default defineConfig({
   use: { baseURL: BASE_URL, trace: "retain-on-failure" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "npm run e2e:server",
+    // The wipe is anchored to the throwaway STATE_DIR constant here so the
+    // npm script stays safe to run by hand against any config directory.
+    command: `rm -rf "${STATE_DIR}" && npm run e2e:server`,
     url: `${BASE_URL}/healthz`,
     timeout: 180_000,
     reuseExistingServer: false,
