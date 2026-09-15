@@ -464,3 +464,22 @@ func TestFreeSpaceOutsideRoots(t *testing.T) {
 		"Authorization: Bearer "+env.bearer)
 	assertProblem(t, response, http.StatusForbidden, SlugPathRejected)
 }
+
+// TestFreeSpaceFileAncestor asserts the endpoint classifies a path that
+// can never be a directory the same way browse does — 404, not a 500.
+// The resolver resolves the request lexically inside the root, so both
+// a file as the path itself and a file mid-path reach FreeSpace.
+func TestFreeSpaceFileAncestor(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	file := filepath.Join(env.dataRoot, "notes.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	for _, path := range []string{file, filepath.Join(file, "sub")} {
+		response := env.api.Get("/fs/free-space?path="+url.QueryEscape(path),
+			"Authorization: Bearer "+env.bearer)
+		assertProblem(t, response, http.StatusNotFound, SlugNotFound)
+	}
+}

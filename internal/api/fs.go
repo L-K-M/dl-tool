@@ -248,7 +248,7 @@ func (h *FSHandlers) Mkdir(ctx context.Context, in *MkdirInput) (*MkdirOutput, e
 			// still answers ENAMETOOLONG — a client-input answer, not a
 			// server fault.
 			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity,
-				"name must be a single path component")
+				"name is too long or invalid for this filesystem")
 		case errors.Is(merr, fs.ErrNotExist), errors.Is(merr, fs.ErrPermission), errors.Is(merr, unix.ENOTDIR):
 			return nil, Problem(SlugNotFound, http.StatusNotFound,
 				"the path does not exist or is not a readable directory")
@@ -276,12 +276,25 @@ func (h *FSHandlers) FreeSpace(ctx context.Context, in *FreeSpaceInput) (*FreeSp
 			"the path is outside the configured data roots")
 	}
 
+	// fsx climbs a missing leaf to its nearest existing ancestor (a
+	// destination may not exist yet), but fails closed — with an
+	// unwrapped error — when that ancestor or the resolved path itself
+	// is a regular file. Classify it here so the endpoint answers the
+	// same 404 its siblings do for a path that cannot be a directory.
+	if info, err := os.Stat(resolved); err == nil && !info.IsDir() ||
+		errors.Is(err, unix.ENOTDIR) ||
+		errors.Is(err, fs.ErrPermission) {
+		return nil, Problem(SlugNotFound, http.StatusNotFound,
+			"the path does not exist or is not a readable directory")
+	}
+
 	space, err := fsx.FreeSpace(resolved)
 	if err != nil {
 		// The resolved path's ancestors may vanish or refuse the stat
 		// between resolution and statfs — the same not-found the sibling
 		// endpoints answer for a directory that is gone or unreadable.
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) ||
+			errors.Is(err, unix.ENOTDIR) {
 			return nil, Problem(SlugNotFound, http.StatusNotFound,
 				"the path does not exist or is not a readable directory")
 		}

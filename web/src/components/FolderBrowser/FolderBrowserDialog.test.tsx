@@ -258,6 +258,26 @@ test("TestMkdirConflictKeepsNamingOpen", async () => {
   expect(mkdirBodies).toEqual([{ path: "/data", name: "iso" }]);
 });
 
+test("TestEmptyNameSubmitsNothing", async () => {
+  mount();
+  await screen.findByText("iso");
+
+  fireEvent.click(screen.getByRole("button", { name: "New folder" }));
+  const nameField = screen.getByRole("textbox", { name: "Folder name" });
+  // Whitespace-only and empty: neither the key path nor the button may
+  // issue the POST.
+  fireEvent.change(nameField, { target: { value: "   " } });
+  fireEvent.keyDown(nameField, { key: "Enter" });
+  fireEvent.change(nameField, { target: { value: "" } });
+  fireEvent.keyDown(nameField, { key: "Enter" });
+  expect(
+    screen.getByRole("button", { name: "Create" }).hasAttribute("disabled"),
+  ).toBe(true);
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(mkdirBodies).toEqual([]);
+});
+
 test("TestInitialPathOpensThere", async () => {
   render(
     <FolderBrowserDialog

@@ -160,8 +160,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 `make lint && make test && echo BROWSER_OK` on the final tree, re-run after
-the review fixes — lint clean, every Go package `ok`, Vitest 154/154 across
-10 files including the eight `FolderBrowserDialog.test.tsx` tests, and the
+the review fixes — lint clean, every Go package `ok`, Vitest 155/155 across
+10 files including the nine `FolderBrowserDialog.test.tsx` tests, and the
 final line of stdout is `BROWSER_OK`:
 
 ```text
@@ -193,9 +193,9 @@ ok  	github.com/L-K-M/dl-tool/internal/sync	4.378s
 ok  	github.com/L-K-M/dl-tool/internal/uri	1.082s
 ?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
 cd web && npx vitest run
- ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (8 tests) 777ms
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 865ms
  Test Files  10 passed (10)
-      Tests  154 passed (154)
+      Tests  155 passed (155)
 BROWSER_OK
 ```
 
@@ -220,9 +220,10 @@ run inside `FolderBrowserDialog.test.tsx` (Vitest reports the file, not per-test
 names — the vitest run above is their pass). The msw server listens with
 `onUnhandledRequest: "error"`, so any request outside the four `/api/v1/fs/*`
 handlers would fail the suite — the fifth acceptance criterion's enforcement.
-The review round added `TestMkdirConflictKeepsNamingOpen`,
-`TestInitialPathOpensThere` and `TestStaleBrowseResponseCannotOverwrite` to the
-same file.
+The review rounds added `TestMkdirConflictKeepsNamingOpen`,
+`TestEmptyNameSubmitsNothing`, `TestInitialPathOpensThere` and
+`TestStaleBrowseResponseCannotOverwrite` to the same file, and
+`TestFreeSpaceFileAncestor` to `fs_test.go`.
 
 Scope check — the whole task diff against `origin/main` (all files are
 committed, so `git diff` is the equivalent of the `git status` check, which
