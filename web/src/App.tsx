@@ -25,6 +25,7 @@ import {
 } from "react-router-dom";
 import { toast } from "sonner";
 import { api, basePath, setCsrfToken } from "./api/client";
+import { useEventStream } from "./api/events";
 import type { components } from "./api/schema";
 import { LoginScreen } from "./components/Auth/LoginScreen";
 import { SetupScreen } from "./components/Auth/SetupScreen";
@@ -46,6 +47,7 @@ import {
   type ShellActions,
 } from "./components/Shell/Toolbar";
 import { Sidebar } from "./components/Shell/Sidebar";
+import { ReconnectBanner } from "./components/Shell/ReconnectBanner";
 import { StatusBar } from "./components/Shell/StatusBar";
 import { useTasks, type SidebarFilter } from "./store/useTasks";
 
@@ -199,6 +201,9 @@ function AppLayout() {
   const { t } = useTranslation();
   const session = useSession();
   const auth = useAuthActions();
+  const { retryNow, nextRetryIn } = useEventStream();
+  // Doc 09 section 10.8 rule 1: silence past two heartbeats dims the grid.
+  const offline = useTasks((s) => s.connection === "offline");
   const [removeRequest, setRemoveRequest] = useState<RemoveRequest | null>(
     null,
   );
@@ -243,13 +248,20 @@ function AppLayout() {
         data-testid="app-root"
         className="grid h-dvh grid-cols-[220px_minmax(0,1fr)] grid-rows-[48px_minmax(0,1fr)_28px] overflow-hidden"
       >
-        <header aria-label={t("regions.header")} className="col-span-2">
+        <header
+          aria-label={t("regions.header")}
+          className="relative col-span-2"
+        >
           <Toolbar />
+          <ReconnectBanner retryNow={retryNow} nextRetryIn={nextRetryIn} />
         </header>
         <aside aria-label={t("regions.sidebar")}>
           <Sidebar />
         </aside>
-        <main className="min-w-0 overflow-hidden">
+        <main
+          className="min-w-0 overflow-hidden"
+          style={{ opacity: offline ? 0.7 : undefined }}
+        >
           <Outlet />
         </main>
         <footer aria-label={t("regions.statusBar")} className="col-span-2">
