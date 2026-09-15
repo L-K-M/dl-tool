@@ -517,9 +517,13 @@ func TestShutdownStopsBackgroundLoops(t *testing.T) {
 	}
 
 	// Two poll windows pass with the store closed: any loop still alive
-	// would log its failure cadence into the buffer.
+	// would log its failure cadence into the buffer. Poll rather than
+	// sleep so a leak fails at its first line instead of at the deadline.
 	mark := logs.Len()
-	time.Sleep(2200 * time.Millisecond)
+	deadline := time.Now().Add(2200 * time.Millisecond)
+	for logs.Len() == mark && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
 	if grew := logs.String()[mark:]; grew != "" {
 		t.Errorf("background loop logged after Shutdown: %s", grew)
 	}

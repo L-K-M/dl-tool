@@ -305,9 +305,10 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		server.bg.Add(1)
 		go func() {
 			defer server.bg.Done()
-			// Loop returns nil once its context is cancelled; anything else
-			// is a defect worth a log line even though the loop runs detached.
-			if err := hub.Loop(bgCtx, time.Second, sseHandlers.Snapshot); err != nil {
+			// Loop returns the context's error once it is cancelled, so
+			// shutdown is quiet; anything else is a defect worth a log
+			// line even though the loop runs detached.
+			if err := hub.Loop(bgCtx, time.Second, sseHandlers.Snapshot); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("sync loop stopped", slog.String("err", err.Error()))
 			}
 		}()
