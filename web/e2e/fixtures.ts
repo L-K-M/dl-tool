@@ -229,8 +229,9 @@ export async function stubTasks(page, n) {
 
   await page.route("**/api/v1/tasks*", (route) => {
     const url = new URL(route.request().url());
-    // The glob also matches detail paths like /api/v1/tasks/{id}; those belong
-    // to the real server, not the list stub.
+    // Stub only the exact list endpoint: same-prefix siblings (e.g.
+    // /api/v1/tasks-export) belong to the real server. Playwright's `*` never
+    // crosses a "/", so detail paths like /api/v1/tasks/{id} were never matched.
     if (url.pathname !== "/api/v1/tasks") return route.continue();
     const offset = Number(url.searchParams.get("cursor") ?? 0) || 0;
     const limit =

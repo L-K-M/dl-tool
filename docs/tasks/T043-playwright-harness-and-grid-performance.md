@@ -194,13 +194,13 @@ Restored run 2 (consecutive):
 ```text
 $ make e2e && echo E2E_OK
 Running 3 tests using 1 worker
-  ✓  1 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin
-  ✓  2 [chromium] › e2e/setup.spec.ts:41:1 › a second setup attempt is rejected
+  ✓  1 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin (878ms)
+  ✓  2 [chromium] › e2e/setup.spec.ts:41:1 › a second setup attempt is rejected (17ms)
 grid perf: 30 changed rows per tick, 10 measured ticks
-grid perf deltas (ms): 6.223, 6.703, 3.621, 3.984, 5.492, 5.514, 5.877, 5.811, 4.989, 3.991
-grid perf p95: 6.703 ms (budget 8 ms)
-  ✓  3 [chromium] › e2e/setup.spec.ts:53:1 › the grid stays inside the scripting budget
-  3 passed (29.9s)
+grid perf deltas (ms): 5.249, 5.753, 5.581, 6.650, 5.582, 6.624, 6.886, 5.842, 5.767, 5.549
+grid perf p95: 6.886 ms (budget 8 ms)
+  ✓  3 [chromium] › e2e/setup.spec.ts:53:1 › the grid stays inside the scripting budget (18.3s)
+  3 passed (31.8s)
 E2E_OK
 ```
 
