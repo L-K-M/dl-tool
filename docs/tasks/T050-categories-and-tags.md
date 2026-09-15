@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T017, T020, T021 |
 | **Blocks** | T049, T053, T073, T107, T119 |
-| **Parallel-safe** | no — extends `internal/store/settings.go` and `internal/api/tasks.go` |
+| **Parallel-safe** | no — extends `internal/store/settings.go`, `internal/api/tasks.go` and `internal/api/server.go` |
 | **Implements** | [FR-030](../02-requirements.md#fr-030-manage-categories-with-a-save-path), [FR-031](../02-requirements.md#fr-031-assign-free-form-tags-and-filter-by-them) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md) |
 | **Est. size** | 2 new files, ~330 LOC |
@@ -31,15 +31,31 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 |---|---|---|
 | `internal/api/categories.go` | create | Category CRUD and `GET /tags`. |
 | `internal/api/categories_test.go` | create | CRUD, conflict and resolution cases. |
-| `internal/store/settings.go` | edit | Category and tag queries. |
+| `internal/store/settings.go` | edit | Category and tag queries, the `default_destination` read, `ErrConflict`. |
 | `internal/api/tasks.go` | edit | Resolve a missing destination from the category save path. |
+| `internal/api/server.go` | edit | Set a `categories` field via `NewCategoryHandlers(db, cfg.DataRoots)` in `NewServer`; call `s.categories.Register(s.API)` in `registerOperations`. |
 
-No other file may be modified.
+No other file may be modified, apart from the two generated files of
+[`docs/13-testing-and-verification.md` §7.1](../13-testing-and-verification.md), this task file's
+`## Evidence` section, and this task's row in the task index.
 
 ## Interface contract
 
 ```go
 package store
+
+// Category, Tag and their queries live in settings.go beside the engines
+// queries: T027's Files row makes that file the home of every
+// configuration-table query, and its existing methods are all
+// (s *SettingsStore). (Doc 14 §2.4 names models.go the home of row
+// structs; the file this task extends is outside that rule's reach — it is
+// not in the Files table — and the implemented stores already colocate row
+// structs with their queries: Engine here, Task in tasks.go.)
+
+// ErrConflict is the sentinel a duplicate-name write returns; the handlers
+// map it to 409 /problems/conflict. isUniqueViolation already detects the
+// driver's SQLITE_CONSTRAINT_UNIQUE for it.
+var ErrConflict = errors.New("store: conflict")
 
 type Category struct {
 	ID        string `db:"id"        json:"-"`
@@ -53,15 +69,35 @@ type Tag struct {
 	TaskCount int    `db:"task_count" json:"task_count"`
 }
 
-func ListCategories(ctx context.Context, db *sqlx.DB) ([]Category, error)
-func CategoryByName(ctx context.Context, db *sqlx.DB, name string) (Category, error)
-func CreateCategory(ctx context.Context, db *sqlx.DB, c Category) error
-func RenameCategory(ctx context.Context, db *sqlx.DB, name, newName, savePath string) error
-func DeleteCategory(ctx context.Context, db *sqlx.DB, name string) error
+func (s *SettingsStore) ListCategories(ctx context.Context) ([]Category, error)
+
+// CategoryByName resolves one row by its unique name. ErrNotFound means no
+// category carries it.
+func (s *SettingsStore) CategoryByName(ctx context.Context, name string) (Category, error)
+
+// CreateCategory inserts one row; a name already taken is ErrConflict.
+func (s *SettingsStore) CreateCategory(ctx context.Context, c Category) error
+
+// UpdateCategory writes the effective name and save_path of the addressed
+// row: the PATCH handler reads the row first and merges the optional
+// fields, so every argument is the post-merge value. ErrNotFound means
+// name addresses no row; ErrConflict means newName belongs to another row.
+func (s *SettingsStore) UpdateCategory(ctx context.Context, name, newName, savePath string) error
+
+// DeleteCategory removes the row. ON DELETE SET NULL uncategorises its
+// tasks and watch folders; no task row and no file is touched. ErrNotFound
+// means name addresses no row.
+func (s *SettingsStore) DeleteCategory(ctx context.Context, name string) error
 
 // ListTags returns every row of tags sorted by name, including tags with no tasks. task_count
 // counts every non-removed task carrying the tag.
-func ListTags(ctx context.Context, db *sqlx.DB) ([]Tag, error)
+func (s *SettingsStore) ListTags(ctx context.Context) ([]Tag, error)
+
+// DefaultDestination returns the default_destination settings row's value
+// (docs/11-config-reference.md §5). The migration seeds no row: an absent
+// row or an empty value returns "" with a nil error, and the caller's
+// first-root fallback applies.
+func (s *SettingsStore) DefaultDestination(ctx context.Context) (string, error)
 ```
 
 ```go
@@ -73,19 +109,58 @@ type CategoryDTO struct {
 	TaskCount int    `json:"task_count"`
 }
 
+type TagDTO struct {
+	Name      string `json:"name"`
+	TaskCount int    `json:"task_count"`
+}
+
 type CreateCategoryInput struct {
 	Body struct {
 		Name     string `json:"name"      required:"true" minLength:"1"`
 		SavePath string `json:"save_path" required:"true"`
 	}
 }
+
+// The PATCH fields are pointers: an omitted field is nil and stays
+// untouched, while an explicit "" still answers 422 (doc 05 §8.1) —
+// string+omitempty cannot tell the two apart.
 type PatchCategoryInput struct {
 	Name string `path:"name"`
 	Body struct {
-		NewName  string `json:"new_name,omitempty"`
-		SavePath string `json:"save_path,omitempty"`
+		NewName  *string `json:"new_name,omitempty"`
+		SavePath *string `json:"save_path,omitempty"`
 	}
 }
+type DeleteCategoryInput struct {
+	Name string `path:"name"`
+}
+
+type ListCategoriesOutput struct {
+	Body struct {
+		Categories []CategoryDTO `json:"categories"`
+	}
+}
+
+// CategoryOutput carries 201 from Create and 200 from Patch.
+type CategoryOutput struct {
+	Status int `json:"-"`
+	Body   CategoryDTO
+}
+
+type ListTagsOutput struct {
+	Body struct {
+		Tags []TagDTO `json:"tags"`
+	}
+}
+
+// CategoryHandlers wraps db in store.NewSettingsStore exactly like
+// NewSettingsHandlers does; roots is DLTOOL_DATA_ROOTS in configured
+// order, for the save_path check. NewTaskHandlers gains a SettingsStore
+// field over the same db — built inside the constructor like its
+// TaskStore, so its signature and call site do not change — for the
+// DefaultDestination read.
+func NewCategoryHandlers(db *sqlx.DB, roots []string) *CategoryHandlers
+func (h *CategoryHandlers) Register(api huma.API)
 
 func (h *CategoryHandlers) List(ctx context.Context, in *struct{}) (*ListCategoriesOutput, error)
 func (h *CategoryHandlers) Create(ctx context.Context, in *CreateCategoryInput) (*CategoryOutput, error)
@@ -94,35 +169,55 @@ func (h *CategoryHandlers) Delete(ctx context.Context, in *DeleteCategoryInput) 
 func (h *CategoryHandlers) ListTags(ctx context.Context, in *struct{}) (*ListTagsOutput, error)
 ```
 
-Destination resolution, added to the create path in `internal/api/tasks.go`:
+The `Register` mounts five operations — `GET`/`POST /categories`, `PATCH`/`DELETE /categories/{name}`
+and `GET /tags` — the four category operations tagged `categories`, the tag list tagged `tags`, all
+`credentialRequired`, with `DefaultStatus: http.StatusNoContent` on DELETE. Error mapping: `store.ErrNotFound` → `404` (FromStore),
+`store.ErrConflict` → `409 /problems/conflict`, `fsx.ErrPathRejected` → `403 /problems/path-rejected`, an
+empty or `/`-carrying name → `422 /problems/validation-failed`.
+
+Destination resolution, added to the create path in `internal/api/tasks.go`. The category read switches
+to `SettingsStore.CategoryByName` so the save_path is in hand (its `ErrNotFound` maps to the existing
+422 for an unknown category; `queryCategoryIDByName` leaves with it). The raw candidate — explicit
+destination, else the category save_path, else `DefaultDestination`, else `""` — goes through the one
+`fsx.ResolveDestination` call, so every out-of-roots answer is `403 /problems/path-rejected`:
 
 | Request | Effective `destination` | `requested_destination` |
 |---|---|---|
 | explicit `destination` | that path, through `fsx.ResolveDestination` | `null` |
-| none, category with a `save_path` inside the roots | the category `save_path` | `null` |
-| none, no category | the `default_destination` setting, else the first root | `null` |
+| none, category with a `save_path` | the category `save_path`, through `fsx.ResolveDestination` | `null` |
+| none, no category | the `default_destination` settings row read through `SettingsStore.DefaultDestination`, through `fsx.ResolveDestination`; the migration seeds no row and an unset or empty value falls back to the first root | `null` |
 
 Statuses, exactly doc 05 §8.1: `200`/`201`/`204` ·
 `403 /problems/path-rejected` for a `save_path` outside the roots · `404` · `409 /problems/conflict` on a
 duplicate name · `422` for an empty name or a name containing `/`.
 
 ## Steps
-1. Add the five category functions and `ListTags` to `internal/store/settings.go`, computing `task_count`
-   with a `LEFT JOIN` over non-`removed` tasks in one statement, never one query per row.
+1. Add `Category`, `Tag`, `ErrConflict`, the five category methods, `ListTags` and `DefaultDestination` to
+   `internal/store/settings.go` as `(s *SettingsStore)` methods, computing `task_count` with a `LEFT JOIN`
+   over non-`removed` tasks in one statement, never one query per row.
 2. Create `internal/api/categories.go` with `CategoryHandlers`, its constructor and `Register`, mirroring
    the shape T027 used for `SettingsHandlers`.
 3. Validate `save_path` through `fsx.ResolveDestination` against the configured roots, rejecting anything
-   outside with `403 /problems/path-rejected`.
-4. Implement `DELETE` so tasks in the category become uncategorised and no task and no file is touched.
-5. Edit `internal/api/tasks.go` to apply the resolution table above when the create body carries a category
+   outside with `403 /problems/path-rejected`; store the resolved path, the same treatment a task
+   destination gets.
+4. Implement `PATCH` by reading the row (`ErrNotFound` → 404), merging the non-nil fields, validating the
+   merged name and save_path exactly like create, then `UpdateCategory` (`ErrConflict` → 409).
+5. Implement `DELETE` so tasks in the category become uncategorised and no task and no file is touched.
+6. Edit `internal/api/tasks.go` to apply the resolution table above when the create body carries a category
    and no destination, setting `requested_destination` only when the resolved path differs from the
    requested one.
-6. For `GET /tags`, count every non-removed task carrying the tag, including tags whose count is zero.
-7. Create `internal/api/categories_test.go`: create, list, rename, delete; a duplicate name is `409`; a
+7. For `GET /tags`, count every non-removed task carrying the tag, including tags whose count is zero.
+8. Edit `internal/api/server.go` to construct the handlers and call `Register`: one `categories` field on
+   `Server`, `NewCategoryHandlers(db, cfg.DataRoots)` in `NewServer`, `s.categories.Register(s.API)` in
+   `registerOperations`.
+9. Create `internal/api/categories_test.go`: create, list, rename, delete; a duplicate name is `409`; a
    name containing `/` is `422`; a `save_path` of `/etc` is `403`; creating a
    task in category `linux` with no destination resolves to `/data/linux`; deleting the category leaves its
    tasks present and uncategorised; `GET /tags` lists a tag with `task_count: 0`.
-8. Run the verification command and paste its output under `## Evidence`.
+10. Run `make gen` to regenerate `api/openapi.json` and `web/src/api/schema.d.ts` (docs/13 §7.1).
+    Run the verification command, paste its output under `## Evidence`, and confirm scope with the
+    `git status` command under `## Verification`. Only then commit everything, including the two
+    regenerated files.
 
 ## Acceptance criteria
 - [ ] `TestCategoryCrud` and `TestDuplicateCategoryConflicts` pass.
@@ -143,7 +238,9 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the paths in the Files table plus the two generated files of
+docs/13 §7.1 (`api/openapi.json`, `web/src/api/schema.d.ts`), in the sorted order the command
+prints, and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -163,43 +260,33 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-Stopped before implementation: `internal/api/server.go` is not in the `## Files` table, but it is the
-only composition point where a new operation group can register. `Server.registerOperations` calls each
-handler group's `Register` (`s.auth`, `s.tasks`, `s.settings`, `s.fs`, `s.SSE`), so a `CategoryHandlers`
-built in `categories.go` has no caller: `/categories` and `/tags` would never route, `make gen` would
-produce no paths for them, and no acceptance test could observe them through `server.API`.
 
-This is the same defect T046 recorded and commit `ba88361` repaired by adding the row
-`| internal/api/server.go | edit | ... |`; T065 and T068 carry it natively ("Call
-`NewXHandlers(...).Register(api)` once"). The repair for this task is the same shape, and the file that
-should answer it is this task file:
+Resolved by the plan repair. The record below was merged in pull request #169; the repair amended this
+file as it prescribed:
 
-1. Add `internal/api/server.go` to the `## Files` table: construct `CategoryHandlers` in `NewServer`
-   (the constructor takes `db` and `cfg.DataRoots`, wrapping `db` in `store.NewSettingsStore` exactly
-   like `NewSettingsHandlers` does) and call `s.categories.Register(s.API)` in `registerOperations`,
-   plus a matching `## Steps` entry.
-2. Extend the `## Verification` scope check with the two generated files of
-   `docs/13-testing-and-verification.md` §7.1 (`api/openapi.json`, `web/src/api/schema.d.ts`), the
-   wording T046's repaired file already uses — registering Huma operations necessarily changes both.
-3. Record the `default_destination` decision where it is governed: amend the resolution table's third
-   row to name the settings read, the unset-or-empty outcome (the migration seeds no value; the row's
-   existing "else the first root" fallback covers it), and the out-of-roots outcome
-   (`403 /problems/path-rejected` via `fsx.ResolveDestination`), so the spec — not only this note —
-   answers the implementer.
+- `internal/api/server.go` joined the `## Files` table with a wiring row (the `categories` field,
+  `NewCategoryHandlers(db, cfg.DataRoots)` in `NewServer`, `s.categories.Register(s.API)` in
+  `registerOperations`), matching the shape T046's repair added and T065/T068 carry natively, and step 8
+  owns it.
+- The `## Verification` scope check now names the two generated files of docs/13 §7.1 — registering Huma
+  operations necessarily changes `api/openapi.json` and `web/src/api/schema.d.ts` — with the wording
+  T046's repaired file uses, and the Files-table note carries the same carve-out.
+- The resolution table's third row now names the `SettingsStore.DefaultDestination` read, the
+  unset-or-empty first-root fallback (the migration seeds no `default_destination` row), and sends every
+  candidate through the one `fsx.ResolveDestination` call, so an out-of-roots configured value is
+  `403 /problems/path-rejected`.
+- The store contract is `(s *SettingsStore)` methods, not package-level functions — the file is
+  `SettingsStore` method territory — with `Category`, `Tag` and the new `ErrConflict` sentinel living in
+  `settings.go` (`models.go` is outside the Files table; the implemented stores already colocate row
+  structs with their queries). `RenameCategory` became `UpdateCategory`: PATCH also writes save_path.
+- `PatchCategoryInput` carries `*string` fields so an omitted field is distinguishable from an explicit
+  `""` — which must still answer 422 per doc 05 §8.1.
+- `NewTaskHandlers` builds its `SettingsStore` over the same db inside the constructor, like its
+  `TaskStore`, so the `default_destination` read changes no signature or call site; the tasks.go
+  category read switches to `CategoryByName` so the save_path is in hand.
 
-Three smaller points the repair should settle so the implementation does not re-block or guess:
-
-- The interface contract shows package-level store functions (`ListCategories(ctx, db)`), but the file
-  it extends is `SettingsStore` method territory — T027's Files row says "every later task that adds a
-  settings-table query extends this file" and `ListEngines`/`EnsureEngine`/`TouchEngine`/`EngineByID`
-  are all `(s *SettingsStore)` methods. The implementation would follow the file, not the sketch.
-- `PatchCategoryInput` carries `new_name`/`save_path` as `string` with `omitempty`, which cannot tell an
-  omitted field from an explicit `""`, while doc 05 §8.1 makes an empty name `422`. `*string` fields are
-  required; treating explicit-empty as omitted would contradict §8.1 and needs a spec change first.
-- The resolution table's third row needs a `default_destination` settings read the migration does not
-  seed; step 3 above owns the out-of-roots outcome. The read is a `SettingsStore` method in
-  `settings.go` — T027's Files row makes that file the home of new settings-table queries — rather
-  than another inline query in `tasks.go`; relocating the existing `queryConcurrencySettings` is out
-  of scope. Also note `store.Category`/`store.Tag` would live in
-  `settings.go` (`models.go` is outside the table) and there is no `store.ErrConflict` sentinel yet
-  for the `409` mapping; the implementation would add it there.
+Original defect, recorded before implementation: `internal/api/server.go` was absent from the `## Files`
+table while `Server.registerOperations` is the only composition point where a new operation group can
+register — a `CategoryHandlers` built in `categories.go` had no caller, so `/categories` and `/tags`
+would never route and no acceptance test could observe them through `server.API`. The same defect T046
+recorded and pull request #161 repaired.
