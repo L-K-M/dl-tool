@@ -26,7 +26,9 @@ export async function readSetupToken() {
   const deadline = Date.now() + SETUP_TOKEN_POLL_MS;
   for (;;) {
     try {
-      return fs.readFileSync(SETUP_TOKEN_PATH, "utf8").trim();
+      const token = fs.readFileSync(SETUP_TOKEN_PATH, "utf8").trim();
+      if (token !== "") return token;
+      throw new Error("setup-token exists but is still empty");
     } catch (error) {
       if (Date.now() >= deadline) throw error;
       await new Promise((resolve) =>
@@ -107,7 +109,8 @@ export async function readProgressNow(page, taskId) {
     const el = document.querySelector(
       `[data-task-id="${id}"] [role="progressbar"]`,
     );
-    return el === null ? null : Number(el.getAttribute("aria-valuenow"));
+    const raw = el ? el.getAttribute("aria-valuenow") : null;
+    return raw === null || raw === "" ? null : Number(raw);
   }, taskId);
 }
 
@@ -115,7 +118,8 @@ export async function readProgressNow(page, taskId) {
 export async function scriptDuration(cdp) {
   const { metrics } = await cdp.send("Performance.getMetrics");
   const metric = metrics.find((m) => m.name === "ScriptDuration");
-  return metric ? metric.value : 0;
+  if (!metric) throw new Error("CDP did not report ScriptDuration");
+  return metric.value;
 }
 
 const BASE_TIME_MS = Date.parse("2026-09-01T00:00:00Z");
@@ -225,6 +229,9 @@ export async function stubTasks(page, n) {
 
   await page.route("**/api/v1/tasks*", (route) => {
     const url = new URL(route.request().url());
+    // The glob also matches detail paths like /api/v1/tasks/{id}; those belong
+    // to the real server, not the list stub.
+    if (url.pathname !== "/api/v1/tasks") return route.continue();
     const offset = Number(url.searchParams.get("cursor") ?? 0) || 0;
     const limit =
       Number(url.searchParams.get("limit") ?? PAGE_SIZE_LIMIT) ||

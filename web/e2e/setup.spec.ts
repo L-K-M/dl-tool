@@ -114,7 +114,11 @@ test("the grid stays inside the scripting budget", async ({
   let trace = "";
   for (;;) {
     const chunk = await cdp.send("IO.read", { handle: stream });
-    trace += chunk.data;
+    if (chunk.data) {
+      trace += chunk.base64Encoded
+        ? Buffer.from(chunk.data, "base64").toString("utf8")
+        : chunk.data;
+    }
     if (chunk.eof) break;
   }
   await cdp.send("IO.close", { handle: stream });
@@ -124,6 +128,8 @@ test("the grid stays inside the scripting budget", async ({
     .slice(1)
     .map((value, i) => (value - samples[i]) * 1000);
   const sorted = [...deltas].sort((a, b) => a - b);
+  // Nearest-rank p95 over ten samples is the maximum: the budget tolerates no
+  // outlier tick at all.
   const p95 = sorted[Math.ceil(0.95 * sorted.length) - 1];
   console.log(
     `grid perf: ${changedIds.length} changed rows per tick, ${deltas.length} measured ticks`,
