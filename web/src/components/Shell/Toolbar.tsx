@@ -76,6 +76,7 @@ export type BulkAction =
 // component modules depend on each other in both directions.
 const listKey = ["tasks"] as const;
 const nameFilterDebounceMs = 250;
+const EMPTY_TASKS: ReadonlyMap<string, Task> = new Map();
 const optimisticActions = new Set<BulkAction>([
   "pause",
   "resume",
@@ -239,12 +240,17 @@ export function useBulkAction(): (
         const task = tasks.get(id);
         if (task) previous.set(id, task);
       }
-      const merged = new Map(tasks);
-      for (const [id, patch] of patches) {
-        const base = merged.get(id);
-        if (base) merged.set(id, { ...base, ...patch });
-      }
-      useTasks.setState({ tasks: merged });
+      const store = useTasks.getState();
+      store.applySync({
+        rid: store.rid,
+        full_update: false,
+        seq_gap: false,
+        tasks: Object.fromEntries(
+          [...patches].filter(([id]) => previous.has(id)),
+        ),
+        tasks_removed: [],
+        stats: store.stats,
+      });
       return { previous };
     },
     onSuccess: (results) => {
@@ -256,9 +262,15 @@ export function useBulkAction(): (
     },
     onError: (error, _variables, context) => {
       if (context?.previous) {
-        const tasks = new Map(useTasks.getState().tasks);
-        for (const [id, task] of context.previous) tasks.set(id, task);
-        useTasks.setState({ tasks });
+        const store = useTasks.getState();
+        store.applySync({
+          rid: store.rid,
+          full_update: false,
+          seq_gap: false,
+          tasks: Object.fromEntries(context.previous),
+          tasks_removed: [],
+          stats: store.stats,
+        });
       }
       toast.error(error.message);
     },
@@ -331,7 +343,10 @@ export function RemoveTasksDialog({
   useEffect(() => {
     if (request) setDeleteFiles(request.deleteFiles);
   }, [request]);
-  const tasks = useTasks((state) => state.tasks);
+  // Names only matter while the dialog is open; rid tracks the in-place task
+  // merges that leave the map reference unchanged.
+  const revision = useTasks((state) => (request ? state.rid : -1));
+  const tasks = revision >= 0 ? useTasks.getState().tasks : EMPTY_TASKS;
   const names = (request?.ids ?? []).map((id) => tasks.get(id)?.name ?? id);
   const confirm = async () => {
     if (!request || busy) return;

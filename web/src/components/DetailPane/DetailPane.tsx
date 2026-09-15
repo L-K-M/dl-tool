@@ -19,6 +19,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Copy, FolderOpen, Pencil } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { api } from "../../api/client";
 import type { components } from "../../api/schema";
 import { initI18n } from "../../i18n";
@@ -401,7 +402,7 @@ function TransferPanel({ task }: { task: Task }) {
   return (
     <div className="flex flex-col gap-2 text-sm">
       <div>
-        <TaskProgress task={task} />
+        <TaskProgress taskId={task.id} />
       </div>
       {task.state === "extracting" ? (
         <div>
@@ -1169,15 +1170,19 @@ function ResizeHandle({
 export function DetailPane(): JSX.Element {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const selection = useTasks((state) => state.selection);
-  const tasks = useTasks((state) => state.tasks);
+  // Selecting the resolved tasks keeps the pane idle through ticks that only
+  // touch rows it does not show.
+  const selected = useTasks(
+    useShallow((state) =>
+      [...state.selection].flatMap((id) => {
+        const task = state.tasks.get(id);
+        return task ? [task] : [];
+      }),
+    ),
+  );
   const storedHeight = useUiPrefs((state) => state.detailHeight);
   const storedTab = useUiPrefs((state) => state.detailTab);
   const [liveHeight, setLiveHeight] = useState<number | null>(null);
-  const selected = [...selection].flatMap((id) => {
-    const task = tasks.get(id);
-    return task ? [task] : [];
-  });
   if (selected.length === 0) {
     return (
       <section

@@ -22,6 +22,50 @@ const relativeDays = 7;
 const millisecondsPerSecond = 1000;
 const maxRatio = 9999;
 
+// Intl formatter construction costs far more than format(), and every grid
+// cell calls these per render; cache one instance per locale/options pair.
+const numberFormats = new Map<string, Intl.NumberFormat>();
+const dateTimeFormats = new Map<string, Intl.DateTimeFormat>();
+const relativeTimeFormats = new Map<string, Intl.RelativeTimeFormat>();
+
+function numberFormat(
+  locale: string | undefined,
+  options: Intl.NumberFormatOptions,
+): Intl.NumberFormat {
+  const key = `${locale}\0${JSON.stringify(options)}`;
+  let format = numberFormats.get(key);
+  if (format === undefined) {
+    format = new Intl.NumberFormat(locale, options);
+    numberFormats.set(key, format);
+  }
+  return format;
+}
+
+function dateTimeFormat(
+  locale: string | undefined,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const key = `${locale}\0${JSON.stringify(options)}`;
+  let format = dateTimeFormats.get(key);
+  if (format === undefined) {
+    format = new Intl.DateTimeFormat(locale, options);
+    dateTimeFormats.set(key, format);
+  }
+  return format;
+}
+
+function relativeTimeFormat(
+  locale: string | undefined,
+): Intl.RelativeTimeFormat {
+  const key = locale ?? "";
+  let format = relativeTimeFormats.get(key);
+  if (format === undefined) {
+    format = new Intl.RelativeTimeFormat(locale);
+    relativeTimeFormats.set(key, format);
+  }
+  return format;
+}
+
 function formatMagnitude(
   value: number,
   kind: "bytes" | "rate",
@@ -39,7 +83,7 @@ function formatMagnitude(
     kind === "rate"
       ? `${byteUnits[magnitude]}-per-second`
       : byteUnits[magnitude];
-  return new Intl.NumberFormat(locale, {
+  return numberFormat(locale, {
     style: "unit",
     unit,
     unitDisplay: "short",
@@ -68,7 +112,7 @@ export function formatEta(seconds: number | null, locale?: string): string {
     if (value === 0 && (unit !== "second" || parts.length > 0)) continue;
 
     parts.push(
-      new Intl.NumberFormat(locale, {
+      numberFormat(locale, {
         style: "unit",
         unit,
         unitDisplay: "narrow",
@@ -79,16 +123,20 @@ export function formatEta(seconds: number | null, locale?: string): string {
   return parts.join(" ");
 }
 
+export function formatInteger(value: number, locale?: string): string {
+  return numberFormat(locale, {}).format(value);
+}
+
 export function formatRatio(ratio: number, locale?: string): string {
   if (ratio > maxRatio) return infinite;
-  return new Intl.NumberFormat(locale, {
+  return numberFormat(locale, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(ratio);
 }
 
 export function formatPercent(progress: number, locale?: string): string {
-  return new Intl.NumberFormat(locale, {
+  return numberFormat(locale, {
     style: "percent",
     maximumFractionDigits: 1,
   }).format(progress);
@@ -102,22 +150,17 @@ export function formatWhen(
   const date = new Date(rfc3339);
   const seconds = (date.getTime() - now.getTime()) / millisecondsPerSecond;
   if (Math.abs(seconds) >= relativeDays * secondsPerDay) {
-    return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(
-      date,
-    );
+    return dateTimeFormat(locale, { dateStyle: "medium" }).format(date);
   }
 
   const [unit, divisor] = durationUnits.find(
     ([, size]) => Math.abs(seconds) >= size,
   ) ?? ["second", 1];
-  return new Intl.RelativeTimeFormat(locale).format(
-    Math.round(seconds / divisor),
-    unit,
-  );
+  return relativeTimeFormat(locale).format(Math.round(seconds / divisor), unit);
 }
 
 export function formatAbsolute(rfc3339: string, locale?: string): string {
-  return new Intl.DateTimeFormat(locale, {
+  return dateTimeFormat(locale, {
     dateStyle: "full",
     timeStyle: "long",
   }).format(new Date(rfc3339));
