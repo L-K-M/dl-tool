@@ -483,7 +483,7 @@ func MkdirBeneath(root, dir, leaf string, perm fs.FileMode) (err error) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return ErrPathRejected
 	}
-	if leaf == "" || leaf == "." || leaf == ".." || strings.ContainsRune(leaf, '/') {
+	if leaf == "" || leaf == "." || leaf == ".." || strings.ContainsRune(leaf, '/') || strings.ContainsRune(leaf, 0) {
 		return ErrPathRejected
 	}
 
@@ -541,6 +541,11 @@ func openBeneathDir(rootFD int, rel string) (int, error) {
 	switch {
 	case oerr == nil:
 		return fd, nil
+	case errors.Is(oerr, unix.EAGAIN):
+		// The kernel could not prove confinement across every retry — a
+		// component kept moving under sustained churn. Refuse rather than
+		// surfacing a 500; the refusal of ELOOP and EXDEV stays absolute.
+		return -1, ErrPathRejected
 	case errors.Is(oerr, unix.ELOOP) || errors.Is(oerr, unix.EXDEV):
 		return -1, ErrPathRejected
 	case errors.Is(oerr, unix.ENOSYS) || errors.Is(oerr, unix.EINVAL):
@@ -562,14 +567,17 @@ func openBeneathDirWalk(rootFD int, rel string) (dirfd int, err error) {
 		rel = "."
 	}
 
-	dirfd = rootFD
+	// cur tracks the deepest descriptor the walk owns. The named dirfd is
+	// assigned only by the successful return: a `return -1, …` must not
+	// clobber the descriptor the deferred cleanup still has to close.
+	cur := rootFD
 	owns := false
 	defer func() {
 		// On the failure path the deepest verified descriptor is released
 		// here; on success the caller owns it. rootFD is never closed —
 		// it belongs to the caller.
 		if err != nil && owns {
-			err = errors.Join(err, unix.Close(dirfd))
+			err = errors.Join(err, unix.Close(cur))
 		}
 	}()
 
@@ -587,7 +595,7 @@ func openBeneathDirWalk(rootFD int, rel string) (dirfd int, err error) {
 		// the same pair verifyBeneathWalk uses. The O_NOFOLLOW on the
 		// descend itself catches a swap landing between the two calls.
 		var st unix.Stat_t
-		if serr := unix.Fstatat(dirfd, part, &st, unix.AT_SYMLINK_NOFOLLOW); serr != nil {
+		if serr := unix.Fstatat(cur, part, &st, unix.AT_SYMLINK_NOFOLLOW); serr != nil {
 			return -1, &os.PathError{Op: "openat", Path: part, Err: serr}
 		}
 		if st.Mode&unix.S_IFMT == unix.S_IFLNK {
@@ -598,7 +606,7 @@ func openBeneathDirWalk(rootFD int, rel string) (dirfd int, err error) {
 		// descriptor the caller owns, never rootFD itself — the caller
 		// closes what it gets, and a shared descriptor would be closed
 		// twice.
-		next, oerr := unix.Openat(dirfd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		next, oerr := unix.Openat(cur, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if oerr != nil {
 			if errors.Is(oerr, unix.ELOOP) {
 				// Swapped for a symlink between the fstatat and the
@@ -608,11 +616,11 @@ func openBeneathDirWalk(rootFD int, rel string) (dirfd int, err error) {
 
 			return -1, &os.PathError{Op: "openat", Path: part, Err: oerr}
 		}
-		// dirfd moves to next before prev is closed: on a close error the
+		// cur moves to next before prev is closed: on a close error the
 		// deferred cleanup owns next, and prev — already released by the
 		// failed close — is never closed twice (verifyBeneathWalk's order).
-		prev := dirfd
-		dirfd = next
+		prev := cur
+		cur = next
 		if owns {
 			if cerr := unix.Close(prev); cerr != nil {
 				return -1, fmt.Errorf("fsx: close walked descriptor: %w", cerr)
@@ -621,5 +629,5 @@ func openBeneathDirWalk(rootFD int, rel string) (dirfd int, err error) {
 		owns = true
 	}
 
-	return dirfd, nil
+	return cur, nil
 }

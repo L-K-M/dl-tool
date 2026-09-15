@@ -386,6 +386,18 @@ func TestMkdirBeneathMissingParent(t *testing.T) {
 	if err := MkdirBeneath(root, filepath.Join(root, "file.txt"), "leaf", 0o777); !errors.Is(err, unix.ENOTDIR) {
 		t.Errorf("MkdirBeneath file parent = %v, want ENOTDIR", err)
 	}
+
+	// A dir outside the root and a leaf carrying a NUL are both refused
+	// outright: the relative form escapes the anchor, and a NUL would
+	// only reach mkdirat as EINVAL — hostile input is ErrPathRejected,
+	// not a 500.
+	outside := t.TempDir()
+	if err := MkdirBeneath(root, outside, "leaf", 0o777); !errors.Is(err, ErrPathRejected) {
+		t.Errorf("MkdirBeneath outside dir = %v, want ErrPathRejected", err)
+	}
+	if err := MkdirBeneath(root, root, "a\x00b", 0o777); !errors.Is(err, ErrPathRejected) {
+		t.Errorf("MkdirBeneath NUL leaf = %v, want ErrPathRejected", err)
+	}
 }
 
 // TestOpenBeneathDirWalk exercises the ENOSYS fallback directly — the
@@ -466,4 +478,60 @@ func TestOpenBeneathDirWalk(t *testing.T) {
 	if err := unix.Close(fd); err != nil {
 		t.Errorf("close walked descriptor: %v", err)
 	}
+}
+
+// TestOpenBeneathDirWalkReleasesTheWalkOnFailure pins the descriptor
+// contract of the error path: a refusal that lands mid-descent must not
+// leak the deepest verified descriptor — the walk cursor and the named
+// return share a variable only on success.
+func TestOpenBeneathDirWalkReleasesTheWalkOnFailure(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "data")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(filepath.Join(root, "a"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Mkdir(outside, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// The swapped component sits beneath a real directory, so the refusal
+	// lands after the walk already owns a descended descriptor.
+	if err := os.Symlink(outside, filepath.Join(root, "a", "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	rootFD, err := unix.Openat(unix.AT_FDCWD, root, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() {
+		if err := unix.Close(rootFD); err != nil {
+			t.Errorf("close root descriptor: %v", err)
+		}
+	}()
+
+	before := countOpenFDs(t)
+	for range 8 {
+		if _, err := openBeneathDirWalk(rootFD, "a/link/deep"); !errors.Is(err, ErrPathRejected) {
+			t.Fatalf("walk through a swapped component = %v, want ErrPathRejected", err)
+		}
+		if _, err := openBeneathDirWalk(rootFD, "a/gone/deep"); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("walk through a missing interior = %v, want fs.ErrNotExist", err)
+		}
+	}
+	if after := countOpenFDs(t); after != before {
+		t.Errorf("fd count grew from %d to %d across failing walks — the error path leaks its deepest descriptor", before, after)
+	}
+}
+
+// countOpenFDs reads the process descriptor table. The package is
+// Linux-only — openat2 — so /proc is always there.
+func countOpenFDs(t *testing.T) int {
+	t.Helper()
+
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("read fd table: %v", err)
+	}
+	return len(entries)
 }
