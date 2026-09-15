@@ -954,7 +954,7 @@ func TestListTasksFilterAndSort(t *testing.T) {
 	// POST /tasks requires the category to exist already.
 	_, err := env.db.ExecContext(t.Context(),
 		`INSERT INTO categories (id, name, save_path, created_at, updated_at)
-VALUES (?, 'linux', '/data/linux', 0, 0)`, store.NewID(store.PrefixCategory))
+VALUES (?, 'linux', ?, 0, 0)`, store.NewID(store.PrefixCategory), filepath.Join(env.dataRoot, "linux"))
 	if err != nil {
 		t.Fatalf("seed category: %v", err)
 	}

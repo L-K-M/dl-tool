@@ -111,6 +111,10 @@ type Server struct {
 	// /settings operations T092 adds to the same handlers.
 	settings *SettingsHandlers
 
+	// categories owns the category operations of doc 05 section 8.1 and
+	// the tag list of section 8.2.
+	categories *CategoryHandlers
+
 	// fs owns the /fs browse operations of doc 05 section 7.
 	fs *FSHandlers
 
@@ -269,18 +273,19 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	}
 
 	server := &Server{
-		Router:   root,
-		Base:     base,
-		V1:       v1,
-		API:      humachi.New(v1, humaConfig),
-		db:       db,
-		Health:   health,
-		auth:     auth,
-		Engines:  engines,
-		tasks:    NewTaskHandlers(db, engines, cfg.DataRoots),
-		settings: NewSettingsHandlers(db, engines),
-		fs:       NewFSHandlers(cfg.DataRoots),
-		SSE:      sseHandlers,
+		Router:     root,
+		Base:       base,
+		V1:         v1,
+		API:        humachi.New(v1, humaConfig),
+		db:         db,
+		Health:     health,
+		auth:       auth,
+		Engines:    engines,
+		tasks:      NewTaskHandlers(db, engines, cfg.DataRoots),
+		settings:   NewSettingsHandlers(db, engines),
+		categories: NewCategoryHandlers(db, cfg.DataRoots),
+		fs:         NewFSHandlers(cfg.DataRoots),
+		SSE:        sseHandlers,
 	}
 	// The two credentials of docs/05-api-contract.md section 1.2, so the
 	// generated document tells clients how the API is protected. Individual
@@ -397,6 +402,7 @@ func (s *Server) registerOperations() {
 	s.auth.registerOperations(s.API)
 	s.tasks.registerOperations(s.API)
 	s.settings.registerOperations(s.API)
+	s.categories.Register(s.API)
 	s.fs.Register(s.API)
 	s.SSE.RegisterOperations(s.API)
 

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -219,18 +218,27 @@ type TaskDTO struct {
 // TaskHandlers owns the /tasks collection operations: create, list and
 // get; the patch, action and file operations arrive with their own tasks.
 type TaskHandlers struct {
-	db      *sqlx.DB
-	tasks   *store.TaskStore
-	engines *engine.Registry
-	roots   []string
+	db       *sqlx.DB
+	tasks    *store.TaskStore
+	settings *store.SettingsStore
+	engines  *engine.Registry
+	roots    []string
 }
 
 // NewTaskHandlers builds the task handlers. db is the store the task rows
-// are written through; engines is the routing-time availability table — a
-// URI whose routed engine is not registered answers 503; roots is
-// DLTOOL_DATA_ROOTS in configured order.
+// are written through — the SettingsStore for the category read and the
+// default_destination fallback is built over it here, like the TaskStore,
+// so the signature and call site do not change; engines is the
+// routing-time availability table — a URI whose routed engine is not
+// registered answers 503; roots is DLTOOL_DATA_ROOTS in configured order.
 func NewTaskHandlers(db *sqlx.DB, engines *engine.Registry, roots []string) *TaskHandlers {
-	return &TaskHandlers{db: db, tasks: store.NewTaskStore(db), engines: engines, roots: roots}
+	return &TaskHandlers{
+		db:       db,
+		tasks:    store.NewTaskStore(db),
+		settings: store.NewSettingsStore(db),
+		engines:  engines,
+		roots:    roots,
+	}
 }
 
 // registerOperations mounts the /tasks operations on the Huma API;
@@ -332,12 +340,16 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 		)
 	}
 
-	destination, err := fsx.ResolveDestination(h.roots, in.Body.Destination)
+	category, err := h.resolveCategory(ctx, in.Body.Category)
 	if err != nil {
-		return nil, destinationRejected(in.Body.Destination)
+		return nil, err
+	}
+	var categoryID *string
+	if category != nil {
+		categoryID = &category.ID
 	}
 
-	categoryID, err := h.resolveCategory(ctx, in.Body.Category)
+	destination, err := h.resolveDestination(ctx, in.Body.Destination, category)
 	if err != nil {
 		return nil, err
 	}
@@ -800,18 +812,17 @@ func (h *TaskHandlers) recordRequestedDestination(ctx context.Context, taskID, r
 	return nil
 }
 
-// resolveCategory maps a category name to its id. The category must already
-// exist (doc 05 section 5.2); an unknown name is a validation failure before
-// any row is written. The categories store arrives with the settings tasks;
-// until then this read is the only category access the create path needs.
-func (h *TaskHandlers) resolveCategory(ctx context.Context, name string) (*string, error) {
+// resolveCategory maps a category name to its row. The category must
+// already exist (doc 05 section 5.2); an unknown name is a validation
+// failure before any row is written. The row — not just the id — comes
+// back because its save_path is a destination-resolution candidate.
+func (h *TaskHandlers) resolveCategory(ctx context.Context, name string) (*store.Category, error) {
 	if name == "" {
 		return nil, nil
 	}
 
-	var id string
-	err := h.db.GetContext(ctx, &id, queryCategoryIDByName, name)
-	if errors.Is(err, sql.ErrNoRows) {
+	category, err := h.settings.CategoryByName(ctx, name)
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, Problem(
 			SlugValidationFailed,
 			http.StatusUnprocessableEntity,
@@ -822,7 +833,38 @@ func (h *TaskHandlers) resolveCategory(ctx context.Context, name string) (*strin
 		return nil, internalFailure(ctx, "resolve category", err)
 	}
 
-	return &id, nil
+	return &category, nil
+}
+
+// resolveDestination applies the destination resolution table of doc 05
+// section 5.2: an explicit request destination wins; otherwise the
+// category's save_path; otherwise the default_destination settings row
+// read through SettingsStore.DefaultDestination — which the migration
+// seeds no row for, so an unset or empty value leaves the empty string
+// that ResolveDestination answers with the first root. Every candidate
+// goes through the one fsx.ResolveDestination call, so an out-of-roots
+// answer is 403 /problems/path-rejected wherever the value came from.
+func (h *TaskHandlers) resolveDestination(ctx context.Context, requested string, category *store.Category) (string, error) {
+	candidate := requested
+	if candidate == "" {
+		switch {
+		case category != nil:
+			candidate = category.SavePath
+		default:
+			stored, err := h.settings.DefaultDestination(ctx)
+			if err != nil {
+				return "", internalFailure(ctx, "read default destination", err)
+			}
+			candidate = stored
+		}
+	}
+
+	destination, err := fsx.ResolveDestination(h.roots, candidate)
+	if err != nil {
+		return "", destinationRejected(candidate)
+	}
+
+	return destination, nil
 }
 
 // ensureTags creates the tag rows of a submission (doc 05 section 5.2,
