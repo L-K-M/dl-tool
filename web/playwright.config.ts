@@ -4,6 +4,9 @@ import { BASE_URL, STATE_DIR } from "./e2e/fixtures";
 
 export default defineConfig({
   testDir: "./e2e",
+  // Retry traces and .last-run.json land under the throwaway state directory,
+  // not the repository — keeping `npx prettier --check .` and the tree clean.
+  outputDir: path.join(STATE_DIR, "test-results"),
   fullyParallel: false,
   reporter: [["list"]],
   use: { baseURL: BASE_URL, trace: "on-first-retry" },
