@@ -196,7 +196,7 @@ type FreeSpaceOutput struct {
 // create. The process umask decides the mode.
 func (h *FSHandlers) Mkdir(ctx context.Context, in *MkdirInput) (*MkdirOutput, error) {
 	name := in.Body.Name
-	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') {
+	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.ContainsRune(name, 0) {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity,
 			"name must be a single path component")
 	}
