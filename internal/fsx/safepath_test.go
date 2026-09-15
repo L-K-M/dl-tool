@@ -5,12 +5,15 @@ package fsx
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 )
 
 // TestSanitiseSegmentTable carries every row of the hostile-path table of
@@ -266,4 +269,269 @@ func TestBrowseHidesCrossRootSymlink(t *testing.T) {
 			t.Error("cross-root symlink listed although browsing it is rejected")
 		}
 	}
+}
+
+// TestMkdirBeneathCreatesInsideRoot covers the ordinary create: directly
+// at the root and below a nested resolved parent.
+func TestMkdirBeneathCreatesInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if err := MkdirBeneath(root, root, "top", 0o777); err != nil {
+		t.Fatalf("MkdirBeneath at root = error %v", err)
+	}
+	if err := MkdirBeneath(root, nested, "leaf", 0o777); err != nil {
+		t.Fatalf("MkdirBeneath nested = error %v", err)
+	}
+	for _, dir := range []string{filepath.Join(root, "top"), filepath.Join(nested, "leaf")} {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			t.Errorf("%s missing or not a directory: %v", dir, err)
+		}
+	}
+
+	if err := MkdirBeneath(root, root, "top", 0o777); !errors.Is(err, fs.ErrExist) {
+		t.Errorf("repeat MkdirBeneath = %v, want fs.ErrExist", err)
+	}
+}
+
+// TestMkdirBeneathRefusesSwappedParent is the deterministic parent-swap
+// regression: the parent is resolved inside the root, then replaced by a
+// symlink pointing outside before the anchored create runs — the window a
+// ResolveDestination-time check cannot see. The anchored open must refuse
+// with ErrPathRejected and nothing may appear at the symlink's target.
+// Opening the resolved path itself — the shape this fix replaces — would
+// have followed the link and created the directory outside the root.
+func TestMkdirBeneathRefusesSwappedParent(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "data")
+	outside := filepath.Join(base, "outside")
+	for _, dir := range []string{root, outside, filepath.Join(root, "victim")} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	resolvedRoot, resolved, err := ResolveDestinationRoot([]string{root}, filepath.Join(root, "victim"))
+	if err != nil {
+		t.Fatalf("ResolveDestinationRoot = error %v", err)
+	}
+
+	// The swap lands after resolution, exactly where an attacker with
+	// write access to the data root would place it.
+	if err := os.Remove(resolved); err != nil {
+		t.Fatalf("remove parent: %v", err)
+	}
+	if err := os.Symlink(outside, resolved); err != nil {
+		t.Fatalf("swap parent for symlink: %v", err)
+	}
+
+	if err := MkdirBeneath(resolvedRoot, resolved, "payload", 0o777); !errors.Is(err, ErrPathRejected) {
+		t.Fatalf("MkdirBeneath swapped parent = %v, want ErrPathRejected", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "payload")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the create escaped the root: outside payload stat err = %v", err)
+	}
+}
+
+// TestMkdirBeneathRefusesSwappedComponent proves the same refusal when an
+// intermediate component — not the leaf parent itself — is the one
+// swapped for an outside-pointing symlink.
+func TestMkdirBeneathRefusesSwappedComponent(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "data")
+	outside := filepath.Join(base, "outside")
+	for _, dir := range []string{root, outside, filepath.Join(root, "victim", "deep")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	resolvedRoot, resolved, err := ResolveDestinationRoot([]string{root}, filepath.Join(root, "victim", "deep"))
+	if err != nil {
+		t.Fatalf("ResolveDestinationRoot = error %v", err)
+	}
+
+	if err := os.RemoveAll(filepath.Join(root, "victim")); err != nil {
+		t.Fatalf("remove intermediate component: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "victim")); err != nil {
+		t.Fatalf("swap intermediate for symlink: %v", err)
+	}
+
+	if err := MkdirBeneath(resolvedRoot, resolved, "payload", 0o777); !errors.Is(err, ErrPathRejected) {
+		t.Fatalf("MkdirBeneath swapped component = %v, want ErrPathRejected", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "payload")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the create escaped the root: outside payload stat err = %v", err)
+	}
+}
+
+// TestMkdirBeneathMissingParent reports the parent that vanished outright
+// — not swapped, simply gone — with fs.ErrNotExist so the endpoint can
+// answer its 404. A parent that exists as a plain file answers ENOTDIR,
+// which the endpoint maps the same way.
+func TestMkdirBeneathMissingParent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	if err := MkdirBeneath(root, filepath.Join(root, "gone"), "leaf", 0o777); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("MkdirBeneath missing parent = %v, want fs.ErrNotExist", err)
+	}
+	if err := MkdirBeneath(root, filepath.Join(root, "file.txt"), "leaf", 0o777); !errors.Is(err, unix.ENOTDIR) {
+		t.Errorf("MkdirBeneath file parent = %v, want ENOTDIR", err)
+	}
+
+	// A dir outside the root and a leaf carrying a NUL are both refused
+	// outright: the relative form escapes the anchor, and a NUL would
+	// only reach mkdirat as EINVAL — hostile input is ErrPathRejected,
+	// not a 500.
+	outside := t.TempDir()
+	if err := MkdirBeneath(root, outside, "leaf", 0o777); !errors.Is(err, ErrPathRejected) {
+		t.Errorf("MkdirBeneath outside dir = %v, want ErrPathRejected", err)
+	}
+	if err := MkdirBeneath(root, root, "a\x00b", 0o777); !errors.Is(err, ErrPathRejected) {
+		t.Errorf("MkdirBeneath NUL leaf = %v, want ErrPathRejected", err)
+	}
+}
+
+// TestOpenBeneathDirWalk exercises the ENOSYS fallback directly — the
+// openat2 path hides it on kernels that answer openat2. The contract is
+// the same one openBeneathDir promises: an owned descriptor on the
+// directory, ErrPathRejected on a symlink, raw ENOENT on a gap.
+func TestOpenBeneathDirWalk(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "data")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(filepath.Join(root, "a", "b"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Mkdir(outside, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	rootFD, err := unix.Openat(unix.AT_FDCWD, root, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() {
+		if err := unix.Close(rootFD); err != nil {
+			t.Errorf("close root descriptor: %v", err)
+		}
+	}()
+
+	// "." must still hand back a descriptor the caller owns — returning
+	// rootFD itself would double-close under the caller's cleanup.
+	fd, err := openBeneathDirWalk(rootFD, ".")
+	if err != nil {
+		t.Fatalf("walk \".\" = error %v", err)
+	}
+	if fd == rootFD {
+		t.Fatal("walk \".\" returned the caller's descriptor, want an owned one")
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR {
+		t.Errorf("walk \".\" stat: mode %o, err %v", st.Mode, err)
+	}
+	if err := unix.Close(fd); err != nil {
+		t.Errorf("close walked descriptor: %v", err)
+	}
+
+	fd, err = openBeneathDirWalk(rootFD, "a/b")
+	if err != nil {
+		t.Fatalf("walk nested = error %v", err)
+	}
+	if err := unix.Close(fd); err != nil {
+		t.Errorf("close walked descriptor: %v", err)
+	}
+
+	if _, err := openBeneathDirWalk(rootFD, "link"); !errors.Is(err, ErrPathRejected) {
+		t.Errorf("walk symlink = %v, want ErrPathRejected", err)
+	}
+	if _, err := openBeneathDirWalk(rootFD, "link/deep"); !errors.Is(err, ErrPathRejected) {
+		t.Errorf("walk through symlink = %v, want ErrPathRejected", err)
+	}
+	if _, err := openBeneathDirWalk(rootFD, "gone"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("walk missing = %v, want fs.ErrNotExist", err)
+	}
+	if _, err := openBeneathDirWalk(rootFD, "gone/deeper"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("walk missing interior = %v, want fs.ErrNotExist", err)
+	}
+	if _, err := openBeneathDirWalk(rootFD, "a/../../b"); !errors.Is(err, ErrPathRejected) {
+		t.Errorf("walk dot-dot = %v, want ErrPathRejected", err)
+	}
+	fd, err = openBeneathDirWalk(rootFD, "")
+	if err != nil {
+		t.Fatalf("walk empty rel = %v, want an owned descriptor on the root", err)
+	}
+	if fd == rootFD {
+		t.Error("walk empty rel returned the caller's descriptor, want an owned one")
+	}
+	if err := unix.Close(fd); err != nil {
+		t.Errorf("close walked descriptor: %v", err)
+	}
+}
+
+// TestOpenBeneathDirWalkReleasesTheWalkOnFailure pins the descriptor
+// contract of the error path: a refusal that lands mid-descent must not
+// leak the deepest verified descriptor — the walk cursor and the named
+// return share a variable only on success.
+func TestOpenBeneathDirWalkReleasesTheWalkOnFailure(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "data")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(filepath.Join(root, "a"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Mkdir(outside, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// The swapped component sits beneath a real directory, so the refusal
+	// lands after the walk already owns a descended descriptor.
+	if err := os.Symlink(outside, filepath.Join(root, "a", "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	rootFD, err := unix.Openat(unix.AT_FDCWD, root, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open root: %v", err)
+	}
+	defer func() {
+		if err := unix.Close(rootFD); err != nil {
+			t.Errorf("close root descriptor: %v", err)
+		}
+	}()
+
+	before := countOpenFDs(t)
+	for range 8 {
+		if _, err := openBeneathDirWalk(rootFD, "a/link/deep"); !errors.Is(err, ErrPathRejected) {
+			t.Fatalf("walk through a swapped component = %v, want ErrPathRejected", err)
+		}
+		if _, err := openBeneathDirWalk(rootFD, "a/gone/deep"); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("walk through a missing interior = %v, want fs.ErrNotExist", err)
+		}
+	}
+	if after := countOpenFDs(t); after != before {
+		t.Errorf("fd count grew from %d to %d across failing walks — the error path leaks its deepest descriptor", before, after)
+	}
+}
+
+// countOpenFDs reads the process descriptor table. The package is
+// Linux-only — openat2 — so /proc is always there.
+func countOpenFDs(t *testing.T) int {
+	t.Helper()
+
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("read fd table: %v", err)
+	}
+	return len(entries)
 }

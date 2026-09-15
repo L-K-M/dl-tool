@@ -168,6 +168,10 @@ func main() {
 					slog.Error("http shutdown failed", "err", err)
 				}
 			}
+			// The server's background loops — sync hub, reconciler and
+			// admission — must stop before the store closes; Shutdown
+			// cancels their context and joins each goroutine.
+			server.Shutdown()
 			if err := db.Close(); err != nil {
 				slog.Error("database close failed", "err", err)
 			}

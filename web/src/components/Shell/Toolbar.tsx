@@ -76,6 +76,7 @@ export type BulkAction =
 // component modules depend on each other in both directions.
 const listKey = ["tasks"] as const;
 const nameFilterDebounceMs = 250;
+const EMPTY_TASKS: ReadonlyMap<string, Task> = new Map();
 const optimisticActions = new Set<BulkAction>([
   "pause",
   "resume",
@@ -201,6 +202,21 @@ function optimisticPatch(
   }
 }
 
+/** Optimistic local patches ride the same merge path as server deltas so the
+ *  reducer remains the single writer of the task map; the envelope is
+ *  fabricated in exactly one place. */
+function applyLocalPatches(tasks: Record<string, Partial<Task>>) {
+  const store = useTasks.getState();
+  store.applySync({
+    rid: store.rid,
+    full_update: false,
+    seq_gap: false,
+    tasks,
+    tasks_removed: [],
+    stats: store.stats,
+  });
+}
+
 /** POST /api/v1/tasks/actions with {ids, action}. Optimistic for pause, resume and the queue moves. */
 export function useBulkAction(): (
   action: BulkAction,
@@ -239,12 +255,9 @@ export function useBulkAction(): (
         const task = tasks.get(id);
         if (task) previous.set(id, task);
       }
-      const merged = new Map(tasks);
-      for (const [id, patch] of patches) {
-        const base = merged.get(id);
-        if (base) merged.set(id, { ...base, ...patch });
-      }
-      useTasks.setState({ tasks: merged });
+      applyLocalPatches(
+        Object.fromEntries([...patches].filter(([id]) => previous.has(id))),
+      );
       return { previous };
     },
     onSuccess: (results) => {
@@ -256,9 +269,7 @@ export function useBulkAction(): (
     },
     onError: (error, _variables, context) => {
       if (context?.previous) {
-        const tasks = new Map(useTasks.getState().tasks);
-        for (const [id, task] of context.previous) tasks.set(id, task);
-        useTasks.setState({ tasks });
+        applyLocalPatches(Object.fromEntries(context.previous));
       }
       toast.error(error.message);
     },
@@ -331,7 +342,10 @@ export function RemoveTasksDialog({
   useEffect(() => {
     if (request) setDeleteFiles(request.deleteFiles);
   }, [request]);
-  const tasks = useTasks((state) => state.tasks);
+  // Names only matter while the dialog is open; tasksVersion tracks the
+  // in-place task merges that leave the map reference unchanged.
+  const revision = useTasks((state) => (request ? state.tasksVersion : -1));
+  const tasks = revision >= 0 ? useTasks.getState().tasks : EMPTY_TASKS;
   const names = (request?.ids ?? []).map((id) => tasks.get(id)?.name ?? id);
   const confirm = async () => {
     if (!request || busy) return;

@@ -67,11 +67,17 @@ type Task struct {
 	ETASeconds     *int64  `db:"eta_seconds" json:"eta_seconds"`
 	Sequential     int     `db:"sequential" json:"sequential"`
 	QueuePosition  *int64  `db:"queue_position" json:"queue_position"`
-	AddedAt        int64   `db:"added_at" json:"added_at"`
-	StartedAt      *int64  `db:"started_at" json:"started_at"`
-	CompletedAt    *int64  `db:"completed_at" json:"completed_at"`
-	CreatedAt      int64   `db:"created_at" json:"created_at"`
-	UpdatedAt      int64   `db:"updated_at" json:"updated_at"`
+	// SelectFiles is the persisted create-time file selection of
+	// docs/05-api-contract.md section 5.2, one JSON SelectionIntent — the
+	// selection the admission pass and re-submissions apply to the engine.
+	SelectFiles *string `db:"select_files" json:"select_files"`
+	DLLimit     int64   `db:"dl_limit" json:"dl_limit"`
+	ULLimit     int64   `db:"ul_limit" json:"ul_limit"`
+	AddedAt     int64   `db:"added_at" json:"added_at"`
+	StartedAt   *int64  `db:"started_at" json:"started_at"`
+	CompletedAt *int64  `db:"completed_at" json:"completed_at"`
+	CreatedAt   int64   `db:"created_at" json:"created_at"`
+	UpdatedAt   int64   `db:"updated_at" json:"updated_at"`
 }
 
 // TaskEvent is one row of the task_events table (docs/04-data-model.md

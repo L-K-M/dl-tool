@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -493,6 +495,9 @@ func newCapableQBTEnv(t *testing.T, caps []engine.Capability) *tasksTestEnv {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// Registered after the store's cleanup, so the background loops stop
+	// before the database they poll closes.
+	t.Cleanup(server.Shutdown)
 
 	env := &tasksTestEnv{
 		api:         humatest.Wrap(t, server.API),
@@ -525,6 +530,45 @@ func TestSelectFilesAcceptedOnCapableEngine(t *testing.T) {
 	}
 	if env.countTasks(t) != 1 {
 		t.Errorf("tasks = %d, want 1", env.countTasks(t))
+	}
+}
+
+// TestSelectFilesPersistedAtCreation pins the persistence half of doc 05
+// section 5.2: the resolved selection lands in the task row's
+// select_files document, which is what the admission pass applies when it
+// hands the task to its engine — including after a restart, because the
+// intent lives in the row, not in memory.
+func TestSelectFilesPersistedAtCreation(t *testing.T) {
+	env := newCapableQBTEnv(t, []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority})
+
+	payload := []byte(`{"select_files":[{"index":0,"selected":true,"priority":"high"},{"index":1,"selected":false}]}`)
+	body, contentType := multipartForm(t, payload, UploadedFile{Name: "evil.torrent", Bytes: []byte(uploadTorrentFixture)})
+	response := env.postForm(t, body, contentType)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+
+	var stored *string
+	if err := env.db.GetContext(t.Context(), &stored, `SELECT select_files FROM tasks`); err != nil {
+		t.Fatalf("read select_files: %v", err)
+	}
+	if stored == nil {
+		t.Fatalf("select_files is NULL, want the resolved selection persisted")
+	}
+
+	sel, err := store.DecodeSelectionIntent(*stored)
+	if err != nil {
+		t.Fatalf("decode select_files %q: %v", *stored, err)
+	}
+	// File 0 at high, file 1 skipped: the selection names index 0 alone,
+	// and the resolved priority map carries both entries.
+	if !slices.Equal(sel.Indices, []int{0}) {
+		t.Errorf("intent indices = %v, want [0]", sel.Indices)
+	}
+	wantPriorities := map[int]int{0: 6, 1: 0}
+	if !maps.Equal(sel.Priorities, wantPriorities) {
+		t.Errorf("intent priorities = %v, want %v", sel.Priorities, wantPriorities)
 	}
 }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState, type JSX, type ReactNode } from "react";
+import { useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router-dom";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -115,7 +115,9 @@ function Group({
   );
 }
 
-function sortedEntries(counts: Map<string, number>): [string, number][] {
+function sortedEntries(
+  counts: ReadonlyMap<string, number>,
+): [string, number][] {
   return [...counts.entries()].sort(([left], [right]) =>
     left.localeCompare(right),
   );
@@ -127,7 +129,8 @@ export function Sidebar(): JSX.Element {
   const filters = useTasks(useShallow(selectFilterCounts));
   const categories = useTasks(useShallow(selectCategoryCounts));
   const tags = useTasks(useShallow(selectTagCounts));
-  const tasks = useTasks((state) => state.tasks);
+  const uncategorised = useTasks((state) => state.uncategorisedCount);
+  const untagged = useTasks((state) => state.untaggedCount);
   const namedCategories = sortedEntries(
     new Map(
       [...categories.entries()].filter(
@@ -135,14 +138,6 @@ export function Sidebar(): JSX.Element {
         (entry): entry is [string, number] => entry[0] != null,
       ),
     ),
-  );
-  const uncategorised = useMemo(
-    () => [...tasks.values()].filter((task) => !task.category).length,
-    [tasks],
-  );
-  const untagged = useMemo(
-    () => [...tasks.values()].filter((task) => !task.tags?.length).length,
-    [tasks],
   );
   return (
     <div className="flex h-full flex-col gap-1 overflow-y-auto border-r border-border py-2">

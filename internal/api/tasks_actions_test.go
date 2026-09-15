@@ -109,6 +109,9 @@ func newActionsTestEnvWithEngines(t *testing.T, engines ...engine.Engine) *actio
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// Registered after the store's cleanup, so the background loops stop
+	// before the database they poll closes.
+	t.Cleanup(server.Shutdown)
 
 	for _, e := range engines {
 		server.Engines.Register(e)
@@ -196,15 +199,18 @@ func (e *actionEngine) Add(context.Context, engine.AddRequest) (string, error) {
 	return "", engine.ErrNotSupported
 }
 func (e *actionEngine) List(context.Context) ([]engine.TaskInfo, error) { return nil, nil }
-func (e *actionEngine) Get(_ context.Context, _ string) (engine.TaskInfo, error) {
-	// The parked-release confirmation reads ErrNotFound as "the engine
-	// lost the handle" by default; a test overrides it to fail that probe
-	// the way a down engine fails every call.
-	if e.getErr == nil {
-		return engine.TaskInfo{}, engine.ErrNotFound
+func (e *actionEngine) Get(_ context.Context, id string) (engine.TaskInfo, error) {
+	e.record("Get " + id)
+
+	// The release's handle check runs before its intent and resume calls:
+	// the stored handle answers as a live stopped transfer by default, and
+	// a test overrides it to fail the way a down engine fails every call
+	// or to answer the vanished-handle ErrNotFound.
+	if e.getErr != nil {
+		return engine.TaskInfo{}, e.getErr
 	}
 
-	return engine.TaskInfo{}, e.getErr
+	return engine.TaskInfo{ID: id, Engine: e.name, State: engine.StatePaused}, nil
 }
 func (e *actionEngine) Files(context.Context, string) ([]engine.FileEntry, error) {
 	return nil, engine.ErrNotSupported
@@ -1718,24 +1724,20 @@ func pauseAdmittingPolicy(destination string) engine.Policy {
 	return engine.Policy{Roots: []string{destination}, MinFree: map[string]int64{destination: 0}}
 }
 
-// waitResumeRecorded parks until the admission pass's engine call appears
-// in the stand-in's log — the observable proof the pass holds the task's
-// lease, because that call runs only under it (T128's ordering).
-func (e *pauseEnv) waitResumeRecorded(t *testing.T) {
+// waitPassCallRecorded parks until the admission pass's blocked engine
+// call appears at the tail of the stand-in's log — the observable proof
+// the pass holds the task's lease, because that call runs only under it
+// (T128's ordering).
+func (e *pauseEnv) waitPassCallRecorded(t *testing.T, want string) {
 	t.Helper()
 
-	want := "Resume aria2:" + aria2GID
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
-		if calls := e.aria2.recorded(); len(calls) > 0 {
-			if calls[0] != want {
-				t.Fatalf("engine calls = %v, want the pass's blocked %q first", calls, want)
-			}
-
+		if calls := e.aria2.recorded(); len(calls) > 0 && calls[len(calls)-1] == want {
 			return
 		}
 	}
 
-	t.Fatal("the admission pass never reached its blocked engine call")
+	t.Fatalf("the admission pass never reached its blocked %q", want)
 }
 
 // TestOperatorPauseTakesOverAParkedRow pins the takeover itself: an
@@ -1904,7 +1906,7 @@ func TestOperatorPauseWaitsForTheAdmissionRelease(t *testing.T) {
 			t.Errorf("admission pass: %v", err)
 		}
 	}()
-	env.waitResumeRecorded(t)
+	env.waitPassCallRecorded(t, "Resume aria2:"+aria2GID)
 
 	// The operator's pause joins the lease behind the pass — waiting mode,
 	// never a busy failure. The goroutine is not synchronised with the
@@ -1934,8 +1936,8 @@ func TestOperatorPauseWaitsForTheAdmissionRelease(t *testing.T) {
 	}
 
 	if calls := env.aria2.recorded(); !slices.Equal(calls,
-		[]string{"Resume aria2:" + aria2GID, "Pause aria2:" + aria2GID}) {
-		t.Errorf("aria2 calls = %v, want the release's Resume then the action's Pause", calls)
+		[]string{"Get aria2:" + aria2GID, "Resume aria2:" + aria2GID, "Pause aria2:" + aria2GID}) {
+		t.Errorf("aria2 calls = %v, want the release's handle check and Resume, then the action's Pause", calls)
 	}
 	if codes := env.taskEventCodes(t, id); !slices.Equal(codes,
 		[]string{eventTaskResumed, eventTaskPaused}) {
@@ -1959,12 +1961,11 @@ func TestOperatorPauseAfterAFailedRelease(t *testing.T) {
 	id := env.seedParkedRow(t, engine.ErrorCodeDiskFull,
 		"no space left on device; the task resumes once space returns")
 
-	// The pass claims the row and fails both of its engine calls with
-	// ErrUnavailable while holding the lease; the row is left exactly as
-	// parked — the release cleanup's clear refuses paused rows.
+	// The pass claims the row and fails its Resume with ErrUnavailable
+	// while holding the lease; the row is left exactly as parked — the
+	// release cleanup's clear refuses paused rows.
 	env.aria2.resumeGate = make(chan struct{})
 	env.aria2.resumeErr = engine.ErrUnavailable
-	env.aria2.getErr = engine.ErrUnavailable
 	passDone := make(chan struct{})
 	go func() {
 		defer close(passDone)
@@ -1973,7 +1974,7 @@ func TestOperatorPauseAfterAFailedRelease(t *testing.T) {
 			t.Errorf("admission pass: %v", err)
 		}
 	}()
-	env.waitResumeRecorded(t)
+	env.waitPassCallRecorded(t, "Resume aria2:"+aria2GID)
 
 	pauseDone := make(chan ActionResult, 1)
 	go func() { pauseDone <- env.pauseStale(t.Context(), t, id, string(engine.StatePaused)) }()
@@ -1991,10 +1992,11 @@ func TestOperatorPauseAfterAFailedRelease(t *testing.T) {
 		t.Fatalf("result = %+v, want ok", result)
 	}
 
-	// The action added no engine call to the failed release's Resume, and
+	// The action added no engine call to the failed release's pair, and
 	// the idempotent branch wrote no pause event beside the stamp clear.
-	if calls := env.aria2.recorded(); !slices.Equal(calls, []string{"Resume aria2:" + aria2GID}) {
-		t.Errorf("aria2 calls = %v, want only the failed release's Resume", calls)
+	if calls := env.aria2.recorded(); !slices.Equal(calls,
+		[]string{"Get aria2:" + aria2GID, "Resume aria2:" + aria2GID}) {
+		t.Errorf("aria2 calls = %v, want only the failed release's Get and Resume", calls)
 	}
 	if codes := env.taskEventCodes(t, id); len(codes) != 0 {
 		t.Errorf("event codes = %v, want none", codes)
@@ -2032,7 +2034,7 @@ func TestOperatorPauseTimesOutBehindTheLease(t *testing.T) {
 			t.Errorf("admission pass: %v", err)
 		}
 	}()
-	env.waitResumeRecorded(t)
+	env.waitPassCallRecorded(t, "Resume aria2:"+aria2GID)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
 	defer cancel()
@@ -2045,9 +2047,10 @@ func TestOperatorPauseTimesOutBehindTheLease(t *testing.T) {
 
 	// The action mutated nothing: the row is exactly what the blocked pass
 	// left — the parked pair — and the engine has seen only the pass's
-	// Resume.
-	if calls := env.aria2.recorded(); !slices.Equal(calls, []string{"Resume aria2:" + aria2GID}) {
-		t.Errorf("aria2 calls = %v, want only the pass's blocked Resume", calls)
+	// handle check and blocked Resume.
+	if calls := env.aria2.recorded(); !slices.Equal(calls,
+		[]string{"Get aria2:" + aria2GID, "Resume aria2:" + aria2GID}) {
+		t.Errorf("aria2 calls = %v, want only the pass's Get and blocked Resume", calls)
 	}
 	if state := env.taskState(t, id); state != string(engine.StatePaused) {
 		t.Errorf("state = %q, want still the parked paused", state)
@@ -2065,8 +2068,8 @@ func TestOperatorPauseTimesOutBehindTheLease(t *testing.T) {
 		t.Fatalf("retry result = %+v, want ok after the holder released", result)
 	}
 	if calls := env.aria2.recorded(); !slices.Equal(calls,
-		[]string{"Resume aria2:" + aria2GID, "Pause aria2:" + aria2GID}) {
-		t.Errorf("aria2 calls = %v, want the release's Resume then the retry's Pause", calls)
+		[]string{"Get aria2:" + aria2GID, "Resume aria2:" + aria2GID, "Pause aria2:" + aria2GID}) {
+		t.Errorf("aria2 calls = %v, want the release's Get and Resume, then the retry's Pause", calls)
 	}
 	if state := env.taskState(t, id); state != string(engine.StatePaused) {
 		t.Errorf("state = %q, want paused by the retry", state)

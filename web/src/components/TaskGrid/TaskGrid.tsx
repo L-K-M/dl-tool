@@ -56,12 +56,14 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useShallow } from "zustand/react/shallow";
 import { api, apiUrl } from "../../api/client";
 import { initI18n } from "../../i18n";
 import {
   formatAbsolute,
   formatBytes,
   formatEta,
+  formatInteger,
   formatPercent,
   formatRate,
   formatRatio,
@@ -234,12 +236,21 @@ const sourceFields: Record<Exclude<ColumnId, "select">, keyof Task> = {
   completedOn: "completed_at",
 };
 
-export function TaskStatus({ task }: { task: Task }) {
+/** Status cell: subscribes to only the fields it renders, so sync ticks that
+ *  touch unrelated fields leave the mounted status cells undisturbed. */
+export function TaskStatus({ taskId }: { taskId: string }) {
+  const [state, errorMessage, errorCode] = useTasks(
+    useShallow((store) => {
+      const task = store.tasks.get(taskId);
+      return [task?.state, task?.error_message, task?.error_code];
+    }),
+  );
   const { t } = useTranslation("grid");
-  const Icon = statusIcons[task.state];
+  if (state === undefined) return null;
+  const Icon = statusIcons[state];
   return (
     <span
-      title={task.error_message ?? undefined}
+      title={errorMessage ?? undefined}
       style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
     >
       <span
@@ -248,32 +259,42 @@ export function TaskStatus({ task }: { task: Task }) {
           width: 6,
           height: 6,
           borderRadius: "50%",
-          background: `var(${statusTokens[task.state]})`,
+          background: `var(${statusTokens[state]})`,
         }}
       />
       <Icon aria-hidden="true" size={14} />
-      {t(`states.${task.state}`)}
-      {task.state === "error" && task.error_code ? `: ${task.error_code}` : ""}
+      {t(`states.${state}`)}
+      {state === "error" && errorCode ? `: ${errorCode}` : ""}
     </span>
   );
 }
 
-export function TaskProgress({ task }: { task: Task }) {
-  const { t, i18n } = useTranslation("grid");
-  const percent = formatPercent(task.progress, i18n.language);
-  const indeterminate = ["checking", "extracting", "moving"].includes(
-    task.state,
+export function TaskProgress({ taskId }: { taskId: string }) {
+  const [progress, completedBytes, totalBytes, state] = useTasks(
+    useShallow((store) => {
+      const task = store.tasks.get(taskId);
+      return [
+        task?.progress,
+        task?.completed_bytes,
+        task?.total_bytes,
+        task?.state,
+      ];
+    }),
   );
+  const { t, i18n } = useTranslation("grid");
+  if (progress === undefined || state === undefined) return null;
+  const percent = formatPercent(progress, i18n.language);
+  const indeterminate = ["checking", "extracting", "moving"].includes(state);
   return (
     <span
       role="progressbar"
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={task.progress * 100}
+      aria-valuenow={progress * 100}
       aria-valuetext={t("progressText", {
         percent,
-        completed: formatBytes(task.completed_bytes, i18n.language),
-        total: formatBytes(task.total_bytes, i18n.language),
+        completed: formatBytes(completedBytes ?? 0, i18n.language),
+        total: formatBytes(totalBytes ?? 0, i18n.language),
       })}
       style={{
         display: "block",
@@ -290,7 +311,7 @@ export function TaskProgress({ task }: { task: Task }) {
         className={
           indeterminate
             ? "grid-stripes grid-indeterminate"
-            : task.state === "paused"
+            : state === "paused"
               ? "grid-stripes"
               : undefined
         }
@@ -298,75 +319,106 @@ export function TaskProgress({ task }: { task: Task }) {
         style={{
           position: "absolute",
           inset: 0,
-          width: indeterminate ? "100%" : `${task.progress * 100}%`,
-          backgroundColor: `var(${statusTokens[task.state]})`,
+          width: indeterminate ? "100%" : `${progress * 100}%`,
+          backgroundColor: `var(${statusTokens[state]})`,
         }}
       />
       <span style={{ position: "relative", mixBlendMode: "difference" }}>
-        {task.progress ? percent : missing}
+        {progress ? percent : missing}
       </span>
     </span>
   );
 }
 
-function TaskCell({ task, id }: { task: Task; id: ColumnId }) {
+/** Fields each column renders; the cell's store subscription selects exactly
+ *  these, so a sync tick re-renders only cells whose displayed value moved.
+ *  Progress and status delegate to self-subscribing leaf components. */
+const cellFields: Record<
+  Exclude<ColumnId, "select">,
+  readonly (keyof Task)[]
+> = {
+  name: ["name", "source_kind"],
+  progress: [],
+  status: [],
+  size: ["total_bytes"],
+  dlSpeed: ["download_rate"],
+  ulSpeed: ["upload_rate"],
+  eta: ["eta_seconds"],
+  peers: ["connected_seeders", "connected_leechers", "total_peers"],
+  ratio: ["ratio"],
+  uploaded: ["uploaded_bytes"],
+  queuePos: ["queue_position"],
+  destination: ["destination"],
+  addedOn: ["added_at"],
+  completedOn: ["completed_at"],
+};
+
+function TaskCell({ taskId, id }: { taskId: string; id: ColumnId }) {
+  const values = useTasks(
+    useShallow((state) => {
+      const task = state.tasks.get(taskId);
+      const fields = id === "select" ? [] : cellFields[id];
+      return fields.map((field) => task?.[field]);
+    }),
+  );
   const { t, i18n } = useTranslation("grid");
   const locale = i18n.language;
   switch (id) {
     case "select":
       return null;
     case "name": {
+      const [name, sourceKind] = values as [string, Task["source_kind"]];
       const Icon =
-        task.source_kind === "magnet"
+        sourceKind === "magnet"
           ? Magnet
-          : task.source_kind === "torrent"
+          : sourceKind === "torrent"
             ? FileDown
             : Globe;
       return (
-        <span
-          title={task.name}
-          style={{ display: "flex", gap: 4, minWidth: 0 }}
-        >
+        <span title={name} style={{ display: "flex", gap: 4, minWidth: 0 }}>
           <Icon size={14} aria-hidden="true" style={{ flexShrink: 0 }} />
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-            {task.name || missing}
+            {name || missing}
           </span>
         </span>
       );
     }
     case "progress":
-      return <TaskProgress task={task} />;
+      return <TaskProgress taskId={taskId} />;
     case "status":
-      return <TaskStatus task={task} />;
+      return <TaskStatus taskId={taskId} />;
     case "size":
-      return formatBytes(task.total_bytes, locale);
+      return formatBytes(values[0] as number | null, locale);
     case "dlSpeed":
-      return formatRate(task.download_rate, locale);
+      return formatRate(values[0] as number, locale);
     case "ulSpeed":
-      return formatRate(task.upload_rate, locale);
+      return formatRate(values[0] as number, locale);
     case "eta":
-      return task.eta_seconds === 0
+      return values[0] === 0
         ? missing
-        : formatEta(task.eta_seconds, locale);
+        : formatEta(values[0] as number | null, locale);
     case "ratio":
-      return task.ratio ? formatRatio(task.ratio, locale) : missing;
+      return values[0] ? formatRatio(values[0] as number, locale) : missing;
     case "uploaded":
-      return formatBytes(task.uploaded_bytes, locale);
-    case "peers":
-      return task.total_peers ? (
-        <span title={t("knownPeers", { count: task.total_peers })}>
-          {new Intl.NumberFormat(locale).format(task.connected_seeders)} /{" "}
-          {new Intl.NumberFormat(locale).format(task.connected_leechers)}
+      return formatBytes(values[0] as number | null, locale);
+    case "peers": {
+      const [seeders, leechers, totalPeers] = values as [
+        number,
+        number,
+        number,
+      ];
+      return totalPeers ? (
+        <span title={t("knownPeers", { count: totalPeers })}>
+          {formatInteger(seeders, locale)} / {formatInteger(leechers, locale)}
         </span>
       ) : (
         missing
       );
+    }
     case "queuePos":
-      return task.queue_position
-        ? new Intl.NumberFormat(locale).format(task.queue_position)
-        : missing;
+      return values[0] ? formatInteger(values[0] as number, locale) : missing;
     case "destination": {
-      const path = task.destination;
+      const path = values[0] as string;
       return (
         <span title={path} style={{ display: "flex", minWidth: 0 }}>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -380,7 +432,7 @@ function TaskCell({ task, id }: { task: Task; id: ColumnId }) {
     }
     case "addedOn":
     case "completedOn": {
-      const value = id === "addedOn" ? task.added_at : task.completed_at;
+      const value = values[0] as string | null;
       return value ? (
         <span title={formatAbsolute(value, locale)}>
           {formatWhen(value, new Date(), locale)}
@@ -409,7 +461,7 @@ export const columns: ColumnDef<Task>[] = DEFAULT_COLUMN_ORDER.map(
       return value;
     },
     header: () => initI18n().t(`headers.${id}`, { ns: "grid" }),
-    cell: ({ row }) => <TaskCell task={row.original} id={id} />,
+    cell: ({ row }) => <TaskCell taskId={row.id} id={id} />,
     sortingFn: (a, b, columnId) => {
       const left = a.getValue<string | number | null>(columnId);
       const right = b.getValue<string | number | null>(columnId);
@@ -442,8 +494,12 @@ function useRowHeight(density: TaskGridProps["density"]) {
 
 function SelectionBox({ ids }: { ids: string[] }) {
   const { t } = useTranslation("grid");
-  const selected = useTasks(
-    (state) => ids.filter((id) => state.selection.has(id)).length,
+  // selection keeps its reference across data-only ticks, so the visible-id
+  // scan runs on real selection changes, not on every sync.
+  const selection = useTasks((state) => state.selection);
+  const selected = useMemo(
+    () => ids.filter((id) => selection.has(id)).length,
+    [selection, ids],
   );
   const ref = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
@@ -486,11 +542,14 @@ const LiveRow = memo(function LiveRow({
    *  re-render rows whose cell list changed while their row object stayed. */
   columnsSignature: string;
 }) {
-  const task = useTasks((state) => state.tasks.get(row.id));
+  // The row subscribes to the name alone; per-column cells subscribe to their
+  // own fields, so a tick touching other fields skips the row entirely. The
+  // name doubles as the removal sentinel: a dropped row unmounts itself.
+  const taskName = useTasks((state) => state.tasks.get(row.id)?.name);
   const selected = useTasks((state) => state.selection.has(row.id));
   const pending = useTaskPending(row.id);
   const { t } = useTranslation("grid");
-  if (!task) return null;
+  if (taskName === undefined) return null;
   const mobile = height === mobileHeight;
   return (
     <div
@@ -552,15 +611,12 @@ const LiveRow = memo(function LiveRow({
                 <input
                   type="checkbox"
                   tabIndex={-1}
-                  aria-label={t("selectTask", { name: task.name })}
+                  aria-label={t("selectTask", { name: taskName })}
                   checked={selected}
                   readOnly
                 />
               ) : (
-                flexRender(cell.column.columnDef.cell, {
-                  ...context,
-                  row: { ...row, original: task },
-                })
+                flexRender(cell.column.columnDef.cell, context)
               )}
             </span>
           );
@@ -757,20 +813,32 @@ export function TaskGrid(props: TaskGridProps) {
   const header = useRef<HTMLDivElement>(null);
   const nodes = useRef(new Map<string, HTMLDivElement>());
   const pendingFocus = useRef(false);
-  // Live cells subscribe individually. Only sort-key changes rebuild the table model.
+  // Live cells subscribe individually. Only sort-key changes rebuild the table
+  // model, and the changed-id set keeps each check proportional to the delta.
+  const idSet = useMemo(() => new Set(ids), [ids]);
   useEffect(
     () =>
-      useTasks.subscribe((next, previous) => {
+      // Delta merges mutate the shared task map, so the pre-update value comes
+      // from changedFrom, not from the previous state object. Its identity
+      // also gates the diff: non-sync updates (selection, stats-only ticks)
+      // keep the last sync's changedIds, and re-diffing them would spuriously
+      // rebuild the 10k-row table model on e.g. every selection click.
+      useTasks.subscribe((next, prev) => {
+        if (next.changedFrom === prev.changedFrom) return;
         const changed = sorting.some(({ id: columnId }) => {
           const field = sourceFields[columnId as Exclude<ColumnId, "select">];
-          return ids.some(
-            (id) =>
-              next.tasks.get(id)?.[field] !== previous.tasks.get(id)?.[field],
-          );
+          for (const id of next.changedIds) {
+            if (!idSet.has(id)) continue;
+            if (
+              next.tasks.get(id)?.[field] !== next.changedFrom.get(id)?.[field]
+            )
+              return true;
+          }
+          return false;
         });
         if (changed) setSortRevision((revision) => revision + 1);
       }),
-    [ids, sorting],
+    [idSet, sorting],
   );
   const nameFilter = useDebouncedNameFilter();
   const data = useMemo(() => {

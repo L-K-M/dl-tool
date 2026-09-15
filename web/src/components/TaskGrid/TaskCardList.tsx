@@ -10,7 +10,7 @@ function Card({ id }: { id: string }) {
   if (!task) return null;
   const locale = i18n.language;
   const metadata = [
-    <TaskStatus task={task} />,
+    <TaskStatus taskId={task.id} />,
     formatBytes(task.total_bytes, locale),
     `↓${formatRate(task.download_rate, locale)}`,
     `↑${formatRate(task.upload_rate, locale)}`,
@@ -56,7 +56,7 @@ function Card({ id }: { id: string }) {
         >
           {task.name}
         </span>
-        <TaskProgress task={task} />
+        <TaskProgress taskId={task.id} />
         <div
           data-testid="card-metadata"
           style={{

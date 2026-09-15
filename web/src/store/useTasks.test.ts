@@ -110,8 +110,10 @@ test("TestApplySyncDeltaMergesFields", () => {
     tags: ["new"],
   });
   expect(selectTask("b")(state())).toBe(inserted);
-  expect(state().tasks).not.toBe(before);
-  expect(before.get("a")).toBe(original);
+  // Delta merges patch the shared map in place; entries keep per-task
+  // immutability so per-id selectors still observe a new object.
+  expect(state().tasks).toBe(before);
+  expect(state().tasks.get("a")).not.toBe(original);
   expect(original.total_bytes).toBe(500);
   expect(state().rid).toBe(2);
   expect(state().stats).toBe(msg.stats);
@@ -130,7 +132,9 @@ test("TestApplySyncRemovesTasksAndSelection", () => {
     state().applySync(msg);
     expect([...state().tasks.keys()]).toEqual(["b"]);
     expect(state().selection).toEqual(new Set(["b"]));
-    expect(before.tasks.has("a")).toBe(true);
+    // The delta path merges in place, so the pre-update task survives in
+    // changedFrom rather than in a frozen previous map.
+    expect(state().changedFrom.get("a")?.id).toBe("a");
     expect(before.selection).toEqual(new Set(["a", "b", "missing"]));
     expect(state().stats).toBe(msg.stats);
   }
@@ -149,13 +153,15 @@ test("TestSeqGapReplacesMap", () => {
 
 test("TestUnchangedTaskKeepsIdentity", () => {
   state().hydrate([task("a"), task("b")]);
-  const before = state();
+  const taskA = selectTask("a")(state());
+  const taskB = selectTask("b")(state());
   state().applySync(
     message({ tasks: { a: { progress: 0.5 } }, tasks_removed: null }),
   );
-  expect(selectTask("b")(state())).toBe(selectTask("b")(before));
-  expect(selectTask("a")(state())).not.toBe(selectTask("a")(before));
-  expect(selectTask("a")(before)?.progress).toBe(0);
+  expect(selectTask("b")(state())).toBe(taskB);
+  expect(selectTask("a")(state())).not.toBe(taskA);
+  expect(state().changedFrom.get("a")).toBe(taskA);
+  expect(state().changedFrom.get("a")?.progress).toBe(0);
 });
 
 test("TestReconnectFullUpdateReplacesMap", () => {
@@ -267,6 +273,102 @@ test("TestCategoryAndTagCounts", () => {
   );
   expect(selectCategoryCounts(state())).toEqual(new Map([[null, 3]]));
   expect(selectTagCounts(state())).toEqual(new Map());
+});
+
+test("TestDeltaAdjustsCountsIncrementally", () => {
+  state().hydrate([
+    task("a", { state: "downloading", category: "linux", tags: ["iso"] }),
+    task("b", { state: "queued", category: "linux", tags: [] }),
+    task("c", { state: "paused" }),
+  ]);
+  state().applySync(
+    message({
+      tasks: {
+        a: { state: "completed", category: null, tags: ["iso", "win"] },
+        d: task("d", { state: "error", tags: null }),
+      },
+      tasks_removed: ["b"],
+    }),
+  );
+  expect(selectFilterCounts(state())).toEqual({
+    all: 3,
+    downloading: 0,
+    completed: 1,
+    active: 0,
+    inactive: 2,
+    stopped: 1,
+    error: 1,
+  });
+  expect(selectCategoryCounts(state())).toEqual(new Map([[null, 3]]));
+  expect(selectTagCounts(state())).toEqual(
+    new Map([
+      ["iso", 1],
+      ["win", 1],
+    ]),
+  );
+  expect(state().uncategorisedCount).toBe(3);
+  expect(state().untaggedCount).toBe(2);
+});
+
+test("TestDeltaKeepsCountAndSelectionReferencesWhenNothingCountedMoves", () => {
+  state().hydrate([task("a"), task("b")]);
+  state().setSelection(["a"]);
+  const before = state();
+  state().applySync(
+    message({ tasks: { a: { progress: 0.5 } }, tasks_removed: [] }),
+  );
+  expect(state().filterCounts).toBe(before.filterCounts);
+  expect(state().categoryCounts).toBe(before.categoryCounts);
+  expect(state().tagCounts).toBe(before.tagCounts);
+  expect(state().uncategorisedCount).toBe(before.uncategorisedCount);
+  expect(state().untaggedCount).toBe(before.untaggedCount);
+  expect(state().selection).toBe(before.selection);
+  state().applySync(message({ tasks: { x: task("x") } }));
+  expect(state().filterCounts).not.toBe(before.filterCounts);
+  expect(state().filterCounts.all).toBe(3);
+});
+
+test("TestChangedIdsTracksDeltaAndSnapshot", () => {
+  state().hydrate([task("a"), task("b"), task("c")]);
+  state().applySync(
+    message({ tasks: { a: { progress: 0.5 } }, tasks_removed: ["b"] }),
+  );
+  expect(state().changedIds).toEqual(new Set(["a", "b"]));
+  state().applySync(message({ full_update: true, tasks: { a: task("a") } }));
+  // A full snapshot recomputes changedIds against the pre-snapshot map: "a"
+  // differs, "c" is dropped by absence, and the already-removed "b" is not
+  // re-reported. Consumers must treat full_update as full reconciliation,
+  // since pending delta ids such as "b" are discarded here.
+  expect(state().changedIds).toEqual(new Set(["a", "c"]));
+});
+
+test("TestDeltaBumpsTasksVersionAndReplacesChangedFrom", () => {
+  state().hydrate([task("a"), task("b")]);
+  const version0 = state().tasksVersion;
+  state().applySync(message({ tasks: { a: { progress: 0.5 } } }));
+  expect(state().tasksVersion).toBe(version0 + 1);
+  expect([...state().changedFrom.keys()]).toEqual(["a"]);
+  // The next delta hands consumers a fresh changedFrom map — entries never
+  // accumulate across messages, so the map stays bounded by one message.
+  const firstFrom = state().changedFrom;
+  state().applySync(message({ tasks: { b: { progress: 0.7 } } }));
+  expect(state().tasksVersion).toBe(version0 + 2);
+  expect(state().changedFrom).not.toBe(firstFrom);
+  expect([...state().changedFrom.keys()]).toEqual(["b"]);
+});
+
+test("TestStatsOnlyTickKeepsDeltaBookkeepingStable", () => {
+  state().hydrate([task("a")]);
+  state().applySync(message({ tasks: { a: { progress: 0.5 } } }));
+  const before = state();
+  state().applySync(
+    message({ rid: 99, tasks: {}, stats: { ...before.stats, active: 3 } }),
+  );
+  expect(state().stats.active).toBe(3);
+  expect(state().rid).toBe(99);
+  expect(state().tasksVersion).toBe(before.tasksVersion);
+  expect(state().changedIds).toBe(before.changedIds);
+  expect(state().changedFrom).toBe(before.changedFrom);
 });
 
 test("TestConnectionChangesOnlyThroughSetter", () => {

@@ -189,18 +189,19 @@ type FreeSpaceOutput struct {
 
 // Mkdir serves POST /fs/mkdir. name is one path component — a separator
 // or a ".." is a validation failure, not a sanitisation job — and the
-// create runs through a descriptor anchored at the resolved parent, so a
-// component swapped for a symlink after the containment check cannot lift
-// the new directory out of the root (the anchored-open guarantee
-// fsx.browseRoot gives the listing). The process umask decides the mode.
+// create runs anchored at the resolved configured root through
+// fsx.MkdirBeneath, so a component of the parent swapped for a symlink
+// after the containment check cannot lift the new directory out of the
+// root: the anchored open refuses the escape instead of redirecting the
+// create. The process umask decides the mode.
 func (h *FSHandlers) Mkdir(ctx context.Context, in *MkdirInput) (*MkdirOutput, error) {
 	name := in.Body.Name
-	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') {
+	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') || strings.ContainsRune(name, 0) {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity,
 			"name must be a single path component")
 	}
 
-	resolved, err := fsx.ResolveDestination(h.roots, in.Body.Path)
+	root, resolved, err := fsx.ResolveDestinationRoot(h.roots, in.Body.Path)
 	if err != nil {
 		return nil, Problem(SlugPathRejected, http.StatusForbidden,
 			"the path is outside the configured data roots")
@@ -222,23 +223,17 @@ func (h *FSHandlers) Mkdir(ctx context.Context, in *MkdirInput) (*MkdirOutput, e
 		}
 	}
 
-	parent, err := os.OpenRoot(resolved)
-	if err != nil {
-		switch {
-		case errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission), errors.Is(err, unix.ENOTDIR):
-			return nil, Problem(SlugNotFound, http.StatusNotFound,
-				"the path does not exist or is not a readable directory")
-		default:
-			return nil, internalFailure(ctx, "open mkdir parent", err)
-		}
-	}
-
 	// 0o777 before umask: mkdir applies the process umask and sets no
 	// mode of its own (doc 05 section 7.1).
-	merr := parent.Mkdir(filepath.Base(joined), 0o777)
-	cerr := parent.Close()
+	merr := fsx.MkdirBeneath(root, resolved, filepath.Base(joined), 0o777)
 	if merr != nil {
 		switch {
+		case errors.Is(merr, fsx.ErrPathRejected):
+			// A component of the parent resolved to a symlink that leaves
+			// the root between the containment check and the anchored
+			// open — the swap the root-anchored create exists to refuse.
+			return nil, Problem(SlugPathRejected, http.StatusForbidden,
+				"the path is outside the configured data roots")
 		case errors.Is(merr, fs.ErrExist):
 			return nil, Problem(SlugConflict, http.StatusConflict,
 				"a file or directory with that name already exists")
@@ -255,9 +250,6 @@ func (h *FSHandlers) Mkdir(ctx context.Context, in *MkdirInput) (*MkdirOutput, e
 		default:
 			return nil, internalFailure(ctx, "mkdir", merr)
 		}
-	}
-	if cerr != nil {
-		return nil, internalFailure(ctx, "close mkdir parent", cerr)
 	}
 
 	output := &MkdirOutput{Status: http.StatusCreated}

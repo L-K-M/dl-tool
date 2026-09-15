@@ -65,6 +65,9 @@ func newAuthTestServer(t *testing.T, configure ...func(*config.Config)) (*Server
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// Registered after the store's cleanup, so the background loops stop
+	// before the database they poll closes.
+	t.Cleanup(server.Shutdown)
 
 	return server, db
 }
@@ -658,6 +661,9 @@ func TestStoreFailureIs500(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// The test closes the store itself below; the loops only have to be
+	// joined when the test ends.
+	t.Cleanup(server.Shutdown)
 	api := humatest.Wrap(t, server.API)
 	huma.Register(api, huma.Operation{
 		OperationID: "auth-probe-read",
