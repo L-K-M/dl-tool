@@ -247,7 +247,7 @@ export const useTasks = create<TasksState>((set, get) => ({
       // keeps changedIds/changedFrom/tasksVersion reference-stable so diff
       // subscribers and derived lists do not re-run for nothing.
       if (!changedIds.size) {
-        return { stats: msg.stats, rid: msg.rid };
+        return { selection, stats: msg.stats, rid: msg.rid };
       }
       const counts = replace
         ? recount(tasks)
