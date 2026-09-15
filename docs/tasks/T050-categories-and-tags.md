@@ -198,7 +198,8 @@ Three smaller points the repair should settle so the implementation does not re-
   required; treating explicit-empty as omitted would contradict §8.1 and needs a spec change first.
 - The resolution table's third row needs a `default_destination` settings read the migration does not
   seed; step 3 above owns the out-of-roots outcome. The read is a `SettingsStore` method in
-  `settings.go` — T027's Files row makes that file the home of every settings-table query — rather
-  than another inline query in `tasks.go`. Also note `store.Category`/`store.Tag` would live in
+  `settings.go` — T027's Files row makes that file the home of new settings-table queries — rather
+  than another inline query in `tasks.go`; relocating the existing `queryConcurrencySettings` is out
+  of scope. Also note `store.Category`/`store.Tag` would live in
   `settings.go` (`models.go` is outside the table) and there is no `store.ErrConflict` sentinel yet
   for the `409` mapping; the implementation would add it there.
