@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useMemo,
   useState,
@@ -30,7 +31,11 @@ import { SetupScreen } from "./components/Auth/SetupScreen";
 import { Toaster } from "./components/ui/sonner";
 import { initI18n } from "./i18n";
 import { readStoredTheme } from "./lib/theme";
-import { TaskGrid } from "./components/TaskGrid/TaskGrid";
+import { TaskGrid, type TaskGridActions } from "./components/TaskGrid/TaskGrid";
+import {
+  DetailPane,
+  OperatorContext,
+} from "./components/DetailPane/DetailPane";
 import {
   RemoveTasksDialog,
   ShellActionsContext,
@@ -42,7 +47,7 @@ import {
 } from "./components/Shell/Toolbar";
 import { Sidebar } from "./components/Shell/Sidebar";
 import { StatusBar } from "./components/Shell/StatusBar";
-import type { SidebarFilter } from "./store/useTasks";
+import { useTasks, type SidebarFilter } from "./store/useTasks";
 
 type AuthEnvelope = components["schemas"]["AuthEnvelope"];
 export type SessionState =
@@ -284,15 +289,32 @@ function TasksRoute({
     "stopped",
     "error",
   ];
+  // Doc 09 §3.6: Enter/F2 selects the focused task — which need not be in the
+  // current selection — and the single selection opens the detail pane.
+  const openDetail = useCallback(
+    (id: string) => useTasks.getState().setSelection([id]),
+    [],
+  );
+  const gridActions = useMemo<TaskGridActions>(
+    () => ({ ...(shell ?? {}), openDetail }),
+    [shell, openDetail],
+  );
   if (!filters.includes(state as SidebarFilter))
     return <Navigate to="/tasks/all" replace />;
   return (
-    <TaskGrid
-      filter={state as SidebarFilter}
-      category={group === "category" ? (params.name ?? "") : undefined}
-      tag={group === "tag" ? (params.name ?? "") : undefined}
-      actions={shell ?? undefined}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 min-w-0 flex-1">
+        <TaskGrid
+          filter={state as SidebarFilter}
+          category={group === "category" ? (params.name ?? "") : undefined}
+          tag={group === "tag" ? (params.name ?? "") : undefined}
+          actions={gridActions}
+        />
+      </div>
+      <OperatorContext.Provider value={shell?.userName ?? null}>
+        <DetailPane />
+      </OperatorContext.Provider>
+    </div>
   );
 }
 

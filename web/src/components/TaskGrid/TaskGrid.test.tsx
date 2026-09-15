@@ -549,6 +549,54 @@ test("TestShellActionCallbacksDispatchOnce", async () => {
   act(() => useShellUi.setState({ debouncedFilter: "" }));
 });
 
+test("TestDetailShortcutDispatchesFocusedId", async () => {
+  const actions = { openDetail: vi.fn() };
+  useTasks.getState().hydrate(tasks);
+  render(
+    <QueryClientProvider client={qc}>
+      <TaskGrid filter="all" actions={actions} />
+    </QueryClientProvider>,
+  );
+  await screen.findByText("one", { exact: true });
+  const grid = screen.getByRole("grid");
+  // Focus and selection diverge: the key must carry the focused row's id.
+  fireEvent.click(row("one"));
+  fireEvent.keyDown(grid, { key: "ArrowDown" });
+  await waitFor(() =>
+    expect(
+      document.activeElement
+        ?.closest("[data-task-id]")
+        ?.getAttribute("data-task-id"),
+    ).toBe("two"),
+  );
+  expect(selected()).toEqual(["one"]);
+  for (const key of ["Enter", "F2"]) {
+    fireEvent.keyDown(grid, { key });
+    expect(actions.openDetail).toHaveBeenCalledTimes(1);
+    expect(actions.openDetail).toHaveBeenLastCalledWith("two");
+    actions.openDetail.mockClear();
+  }
+  // Editable targets never dispatch, and the key is left unconsumed.
+  for (const tag of ["input", "textarea", "div"]) {
+    const editable = document.createElement(tag);
+    if (tag === "div") editable.contentEditable = "true";
+    grid.appendChild(editable);
+    for (const key of ["Enter", "F2"]) {
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        editable.dispatchEvent(event);
+      });
+      expect(event.defaultPrevented).toBe(false);
+    }
+    editable.remove();
+  }
+  expect(actions.openDetail).not.toHaveBeenCalled();
+});
+
 test("TestDensityIsControlledNotCached", async () => {
   localStorage.setItem(
     "dl.ui.prefs.v1",

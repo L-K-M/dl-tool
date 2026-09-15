@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T048 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T024, T032, T034, T035, T042 |
 | **Blocks** | T049, T052, T104 |
 | **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/locales/en/common.json` |
@@ -134,13 +134,13 @@ assigned imperatively, or the shadcn/ui `checkbox` with `checked="indeterminate"
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestVisibleTabsHidesBitTorrentTabs`, `TestRequestedDestinationOnlyWhenDifferent` pass.
-- [ ] `TestFolderCheckboxSetsDescendants` and `TestSkipAndUnselectAreOneConcept` pass.
-- [ ] `TestPriorityPatchBody` asserts `{"files":[{"index":0,"priority":"high"}]}`.
-- [ ] `TestKeyboardOpensFocusedTask` proves both [§3.6 detail shortcuts](../09-web-ui-spec.md#36-keyboard)
+- [x] `TestVisibleTabsHidesBitTorrentTabs`, `TestRequestedDestinationOnlyWhenDifferent` pass.
+- [x] `TestFolderCheckboxSetsDescendants` and `TestSkipAndUnselectAreOneConcept` pass.
+- [x] `TestPriorityPatchBody` asserts `{"files":[{"index":0,"priority":"high"}]}`.
+- [x] `TestKeyboardOpensFocusedTask` proves both [§3.6 detail shortcuts](../09-web-ui-spec.md#36-keyboard)
   open the focused task through the mounted grid and pane, not a stale selection, and respect the guard.
-- [ ] The priority select offers exactly four options and never the integer values.
-- [ ] The Log tab lists newest first and renders the event `code` as its own column.
+- [x] The priority select offers exactly four options and never the integer values.
+- [x] The Log tab lists newest first and renders the event `code` as its own column.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -171,7 +171,61 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make typecheck && make test-web && echo DETAIL_OK` on the final
+tree — gofmt and golangci-lint clean, eslint and prettier clean, `tsc
+--noEmit` clean, Vitest 165/165 across 11 files including the nine
+`DetailPane.test.tsx` tests, and the final line of stdout is `DETAIL_OK`:
+
+```text
+$ make lint && make typecheck && make test-web && echo DETAIL_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+ ✓ src/api/client.test.ts (12 tests)
+ ✓ src/lib/format.test.ts (6 tests)
+ ✓ src/store/useUiPrefs.test.ts (8 tests)
+ ✓ src/store/useTasks.test.ts (12 tests)
+ ✓ src/main.test.ts (1 test)
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests)
+ ✓ src/components/DetailPane/DetailPane.test.tsx (9 tests)
+ ✓ src/components/Shell/Shell.test.tsx (11 tests)
+ ✓ src/lib/theme.test.ts (9 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (33 tests)
+ ✓ src/App.test.tsx (55 tests)
+ Test Files  11 passed (11)
+      Tests  165 passed (165)
+DETAIL_OK
+```
+
+Scope check on the same tree — exactly the Files table paths and nothing else:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+web/src/App.tsx
+web/src/components/DetailPane/DetailPane.test.tsx
+web/src/components/DetailPane/DetailPane.tsx
+web/src/components/FileTree/FileTree.tsx
+web/src/components/TaskGrid/TaskGrid.test.tsx
+web/src/components/TaskGrid/TaskGrid.tsx
+web/src/locales/en/common.json
+```
+
+`TestPriorityPatchBody` captured the wire body `{files:[{index:0,priority:"high"}]}`;
+`TestPrioritySelectHasExactlyFourOptions` asserts `skip, normal, high, maximum`
+in order and that no option value is an integer. `TestKeyboardOpensFocusedTask`
+runs against the mounted grid plus pane: Enter and F2 each select and open the
+focused row while another row is selected, and INPUT/TEXTAREA/contenteditable
+targets leave the keys unconsumed.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
