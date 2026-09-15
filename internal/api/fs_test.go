@@ -381,7 +381,7 @@ func TestMkdirConflict(t *testing.T) {
 func TestMkdirRejectsSeparatorInName(t *testing.T) {
 	env := newTasksTestEnv(t)
 
-	for _, name := range []string{"a/b", "..", ".", ""} {
+	for _, name := range []string{"a/b", "..", ".", "", "a\x00b"} {
 		response := env.mkdir(t, env.dataRoot, name)
 		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 	}
