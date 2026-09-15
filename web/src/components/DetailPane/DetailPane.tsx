@@ -689,13 +689,24 @@ function TrackersPanel({ task }: { task: Task }) {
   );
 }
 
+/** qBittorrent's letter flags, passed through verbatim by the peers endpoint
+ *  (internal/engine/qbittorrent/peers.go). Order follows the engine's legend. */
 const PEER_FLAG_LEGEND: [string, string][] = [
   ["D", "detail.peers.flagD"],
   ["d", "detail.peers.flagd"],
   ["U", "detail.peers.flagU"],
   ["u", "detail.peers.flagu"],
+  ["O", "detail.peers.flagO"],
+  ["S", "detail.peers.flagS"],
+  ["I", "detail.peers.flagI"],
   ["K", "detail.peers.flagK"],
-  ["?", "detail.peers.flagUnknown"],
+  ["?", "detail.peers.flagQuestion"],
+  ["X", "detail.peers.flagX"],
+  ["H", "detail.peers.flagH"],
+  ["E", "detail.peers.flagE"],
+  ["e", "detail.peers.flage"],
+  ["P", "detail.peers.flagP"],
+  ["L", "detail.peers.flagL"],
 ];
 
 function PeersPanel({ task }: { task: Task }) {
@@ -957,9 +968,10 @@ function LogPanel({ task }: { task: Task }) {
     queryFn: async ({ signal }) => {
       const items: TaskEvent[] = [];
       const seen = new Set<string>();
+      const eventIds = new Set<string>();
       let cursor: string | undefined;
       // Cap and dedupe the cursor walk: a server bug echoing a cursor must
-      // not loop forever.
+      // neither loop forever nor re-render the same page's rows.
       do {
         const { data, error } = await api.GET("/tasks/{id}/events", {
           params: {
@@ -970,7 +982,11 @@ function LogPanel({ task }: { task: Task }) {
         });
         if (error || !data)
           throw new Error(problemDetail(error) ?? t("shell.networkError"));
-        items.push(...(data.items ?? []));
+        for (const item of data.items ?? []) {
+          if (eventIds.has(item.id)) continue;
+          eventIds.add(item.id);
+          items.push(item);
+        }
         cursor = data.next_cursor ?? undefined;
         if (cursor !== undefined) {
           if (seen.has(cursor) || seen.size >= MAX_EVENT_PAGES) break;
@@ -1082,6 +1098,9 @@ function ResizeHandle({
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     // Keep mouse drags from selecting page text.
     event.preventDefault();
+    // preventDefault also cancels implicit focus; restore it so arrow keys
+    // keep resizing right after a pointer drag.
+    event.currentTarget.focus();
     drag.current = { y: event.clientY, height };
     // No writes mid-gesture (doc 09 §3.3); pointer-up flushes once.
     useUiPrefs.getState().setDragging(true);

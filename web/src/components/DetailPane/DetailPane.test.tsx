@@ -382,6 +382,39 @@ test("TestLogTabNewestFirstWithCodeColumn", async () => {
   expect(rows[0].querySelector("td")!.getAttribute("title")).not.toBeNull();
 });
 
+test("TestLogEchoedCursorDoesNotDuplicateRows", async () => {
+  useUiPrefs.setState({ detailTab: "log" });
+  const page = [
+    {
+      id: "evt_2",
+      at: "2026-09-01T09:41:52Z",
+      level: "info",
+      code: "engine.accepted",
+      message: "qbittorrent accepted the torrent",
+      detail: null,
+    },
+    {
+      id: "evt_1",
+      at: "2026-09-01T09:41:50Z",
+      level: "info",
+      code: "task.created",
+      message: "task created by alice",
+      detail: null,
+    },
+  ];
+  // A broken server echoes the same cursor and the same page forever; the
+  // walk must terminate and must not render the echoed page twice.
+  server.use(
+    http.get("*/api/v1/tasks/:id/events", () =>
+      HttpResponse.json({ items: page, next_cursor: "c1", total: 2 }),
+    ),
+  );
+  await mountPane();
+  await within(pane()).findByText("engine.accepted");
+  expect(within(pane()).getAllByText("engine.accepted")).toHaveLength(1);
+  expect(within(pane()).getAllByText("task.created")).toHaveLength(1);
+});
+
 test("TestMixedSubfolderPriorityShowsDash", () => {
   // A folder whose subfolder disagrees internally must not inherit the
   // sibling leaf's priority — "—" is the only honest display.
@@ -422,6 +455,20 @@ test("TestTreeRovingFocusAndControlKeys", () => {
   select.dispatchEvent(leaked);
   expect(leaked.defaultPrevented).toBe(false);
   expect(document.activeElement).toBe(second);
+});
+
+test("TestClickOnSelectKeepsControlFocus", () => {
+  render(
+    <FileTree
+      nodes={buildTree([file(0, "ubuntu/a.iso"), file(1, "ubuntu/b.txt")])}
+      onChange={() => undefined}
+    />,
+  );
+  // Focusing a control on a row that isn't focusPath bubbles focusin to the
+  // row and sets focusPath; the effect must not yank DOM focus back.
+  const select = screen.getByRole("combobox", { name: "Priority for b.txt" });
+  act(() => select.focus());
+  expect(document.activeElement).toBe(select);
 });
 
 test("TestAggregateLineAndCollapsedStates", async () => {

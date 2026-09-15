@@ -250,8 +250,11 @@ export function FileTree({
     ? focusPath
     : rows[0]?.node.path;
   useEffect(() => {
-    if (focusPath !== null)
-      rowRefs.current.get(focusPath)?.focus({ preventScroll: true });
+    const row = focusPath === null ? undefined : rowRefs.current.get(focusPath);
+    // Clicking a nested control bubbles focusin to the row, which sets
+    // focusPath — the row already contains the focus, so don't yank it back.
+    if (row && !row.contains(document.activeElement))
+      row.focus({ preventScroll: true });
   }, [focusPath]);
   const all = useMemo(() => nodes.flatMap(leaves), [nodes]);
   const showProgress = all.some((node) => node.progress !== undefined);

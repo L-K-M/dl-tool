@@ -172,9 +172,9 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 `make lint && make typecheck && make test-web && echo DETAIL_OK` on the final
-tree, re-run after the review fixes — gofmt and golangci-lint clean, eslint
-and prettier clean, `tsc --noEmit` clean, Vitest 167/167 across 11 files
-including the eleven `DetailPane.test.tsx` tests, and the final line of
+tree, re-run after both review rounds — gofmt and golangci-lint clean, eslint
+and prettier clean, `tsc --noEmit` clean, Vitest 169/169 across 11 files
+including the thirteen `DetailPane.test.tsx` tests, and the final line of
 stdout is `DETAIL_OK`:
 
 ```text
@@ -197,14 +197,14 @@ cd web && npx vitest run
  ✓ src/store/useUiPrefs.test.ts (8 tests)
  ✓ src/store/useTasks.test.ts (12 tests)
  ✓ src/main.test.ts (1 test)
- ✓ src/components/DetailPane/DetailPane.test.tsx (11 tests)
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests)
  ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests)
  ✓ src/components/Shell/Shell.test.tsx (11 tests)
  ✓ src/lib/theme.test.ts (9 tests)
  ✓ src/components/TaskGrid/TaskGrid.test.tsx (33 tests)
  ✓ src/App.test.tsx (55 tests)
  Test Files  11 passed (11)
-      Tests  167 passed (167)
+      Tests  169 passed (169)
 DETAIL_OK
 ```
 
