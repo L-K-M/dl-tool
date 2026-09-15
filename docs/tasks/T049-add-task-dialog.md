@@ -187,10 +187,10 @@ Expected: exactly the paths in the Files table and nothing else. Use `git status
 
 ## Evidence
 `make lint && make typecheck && make test-web && echo ADD_DIALOG_OK` on the
-final tree, re-run after the review round — gofmt and golangci-lint clean,
-eslint and prettier clean, `tsc --noEmit` clean, Vitest 179/179 across 12
-files including the nine `AddTaskDialog.test.tsx` tests, and the final line
-of stdout is `ADD_DIALOG_OK`:
+final tree, re-run after the second review round — gofmt and golangci-lint
+clean, eslint and prettier clean, `tsc --noEmit` clean, Vitest 181/181 across
+12 files including the eleven `AddTaskDialog.test.tsx` tests, and the final
+line of stdout is `ADD_DIALOG_OK`:
 
 ```text
 $ make lint && make typecheck && make test-web && echo ADD_DIALOG_OK
@@ -214,13 +214,13 @@ cd web && npx vitest run
  ✓ src/main.test.ts (1 test)
  ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests)
  ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests)
- ✓ src/components/AddTask/AddTaskDialog.test.tsx (9 tests)
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (11 tests)
  ✓ src/lib/theme.test.ts (9 tests)
  ✓ src/components/Shell/Shell.test.tsx (12 tests)
  ✓ src/components/TaskGrid/TaskGrid.test.tsx (33 tests)
  ✓ src/App.test.tsx (55 tests)
  Test Files  12 passed (12)
-      Tests  179 passed (179)
+      Tests  181 passed (181)
 ADD_DIALOG_OK
 ```
 

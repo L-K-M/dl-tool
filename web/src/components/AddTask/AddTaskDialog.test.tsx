@@ -273,7 +273,7 @@ test("TestJsonSubmissionBody", async () => {
       return HttpResponse.json(created[0]);
     }),
   );
-  mount();
+  const { onOpenChange } = mount();
   const dialog = await screen.findByRole("dialog");
   fireEvent.change(urisBox(), {
     target: {
@@ -323,6 +323,8 @@ test("TestJsonSubmissionBody", async () => {
     { id: "task-one", body: { dl_limit: 1024, ul_limit: 2048 } },
     { id: "task-two", body: { dl_limit: 1024, ul_limit: 2048 } },
   ]);
+  // A clean submission closes the dialog.
+  await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
 });
 
 test("TestMultipartSubmissionForTorrent", async () => {
@@ -431,4 +433,105 @@ test("TestVerbatimLabels", async () => {
     ),
   ).toBeTruthy();
   expect(dialog.textContent).not.toContain("KB/s");
+});
+
+test("TestRejectedEntriesToast", async () => {
+  useTasks.getState().setConnection("live");
+  server.use(
+    http.post("*/api/v1/tasks", () =>
+      HttpResponse.json(
+        {
+          created: [task("kept")],
+          rejected: [
+            {
+              uri: "https://bad.example.org/x",
+              detail: "scheme not allowed",
+              type: "/problems/unsupported-scheme",
+            },
+          ],
+        },
+        { status: 201 },
+      ),
+    ),
+  );
+  mount();
+  await screen.findByRole("dialog");
+  fireEvent.change(urisBox(), {
+    target: {
+      value: "https://good.example.org/a\nhttps://bad.example.org/x",
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  // Partial success: the refused URI surfaces with the server's detail.
+  expect(
+    await screen.findByText(/bad\.example\.org\/x — scheme not allowed/),
+  ).toBeTruthy();
+});
+
+test("TestSelectFilesStepPostsSelection", async () => {
+  useTasks.getState().setConnection("live");
+  const magnet = "magnet:?xt=urn:btih:aaaabbbbccccdddd000011112222333344445555";
+  let body: Record<string, unknown> | null = null;
+  server.use(
+    http.post("*/api/v1/tasks/inspect", () =>
+      HttpResponse.json({
+        manifests: [
+          {
+            source_uri: magnet,
+            kind: "torrent",
+            name: "ubuntu",
+            total_size: 3000,
+            file_count: 2,
+            metadata_pending: false,
+            infohash_v1: "aaaabbbbccccdddd000011112222333344445555",
+            infohash_v2: null,
+            files: [
+              { index: 0, path: "ubuntu/one.iso", size: 2000 },
+              { index: 1, path: "ubuntu/readme.txt", size: 1000 },
+            ],
+          },
+        ],
+        rejected: [],
+      }),
+    ),
+    http.post("*/api/v1/tasks", async ({ request }) => {
+      body = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json(
+        { created: [task("selected")], rejected: [] },
+        { status: 201 },
+      );
+    }),
+  );
+  mount();
+  await screen.findByRole("dialog");
+  fireEvent.change(urisBox(), { target: { value: magnet } });
+  fireEvent.click(
+    screen.getByRole("checkbox", {
+      name: "Show dialog to select files for download",
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+  // Second page: the FileTree renders the manifest's files.
+  expect(
+    await screen.findByText("Select files to download — ubuntu"),
+  ).toBeTruthy();
+  // Skip readme.txt; a skipped file posts selected:false + priority skip.
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "Select readme.txt" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+  await waitFor(() => expect(body).not.toBeNull());
+  expect(body).toEqual({
+    uris: [magnet],
+    paused: false,
+    sequential: false,
+    create_subfolder: false,
+    tags: [],
+    select_files: [
+      { index: 0, selected: true, priority: "normal" },
+      { index: 1, selected: false, priority: "skip" },
+    ],
+  });
 });

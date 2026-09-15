@@ -254,7 +254,8 @@ export function clipboardHandled(value: string): boolean {
 }
 
 function problemDetail(error: Problem | undefined, fallback: string): string {
-  return error?.detail ?? error?.title ?? error?.type ?? fallback;
+  // `type` is an RFC 7807 URI, not user copy — it never surfaces in a toast.
+  return error?.detail ?? error?.title ?? fallback;
 }
 
 /** A placeholder row shown while a URI-only submission is in flight (doc 09
@@ -286,8 +287,8 @@ function placeholderTask(
     destination: draft.destination,
     requested_destination: null,
     content_path: null,
-    infohash_v1: infohashKeys(uri)[0] ?? null,
-    infohash_v2: null,
+    infohash_v1: infohashKeys(uri).find((hash) => hash.length === 40) ?? null,
+    infohash_v2: infohashKeys(uri).find((hash) => hash.length === 64) ?? null,
     error_code: null,
     error_message: null,
     total_bytes: 0,
@@ -397,6 +398,7 @@ export function AddTaskDialog({
   const [moreOpen, setMoreOpen] = useState(false);
   const [browseOpen, setBrowseOpen] = useState(false);
   const [inspecting, setInspecting] = useState(false);
+  const [creatingCategory, setCreatingCategory] = useState(false);
   const [gutterScroll, setGutterScroll] = useState(0);
   const [step, setStep] = useState<"add" | "select">("add");
   const [manifests, setManifests] = useState<Manifest[]>([]);
@@ -447,6 +449,7 @@ export function AddTaskDialog({
     setSelectFiles(false);
     setMoreOpen(false);
     setInspecting(false);
+    setCreatingCategory(false);
     setGutterScroll(0);
   }, [open]);
 
@@ -715,9 +718,20 @@ export function AddTaskDialog({
             detail: rejected.detail,
           }),
         );
+      const manifests = data.manifests ?? [];
+      // Every source rejected means there is nothing to select: the step
+      // stays on the add page with the rejected toasts already shown.
+      if (manifests.length === 0) return;
       setSelectDraft(draft);
-      setManifests(data.manifests ?? []);
+      setManifests(manifests);
       setStep("select");
+    } catch (error) {
+      toast.error(
+        t("addTask.inspectFailed", {
+          detail:
+            error instanceof Error ? error.message : t("shell.networkError"),
+        }),
+      );
     } finally {
       setInspecting(false);
     }
@@ -780,24 +794,30 @@ export function AddTaskDialog({
   };
 
   const createCategory = async () => {
+    if (creatingCategory) return;
     const name = newCategory.name.trim();
     const savePath = newCategory.savePath.trim();
     if (name === "" || savePath === "") return;
-    const { data, error } = await api.POST("/categories", {
-      body: { name, save_path: savePath },
-    });
-    if (!data) {
-      toast.error(
-        t("addTask.categoryFailed", {
-          detail: problemDetail(error, t("shell.networkError")),
-        }),
-      );
-      return;
+    setCreatingCategory(true);
+    try {
+      const { data, error } = await api.POST("/categories", {
+        body: { name, save_path: savePath },
+      });
+      if (!data) {
+        toast.error(
+          t("addTask.categoryFailed", {
+            detail: problemDetail(error, t("shell.networkError")),
+          }),
+        );
+        return;
+      }
+      setCategory(data.name);
+      setCategoryOpen(false);
+      setNewCategory({ name: "", savePath: "" });
+      void queryClient.invalidateQueries({ queryKey: ["categories"] });
+    } finally {
+      setCreatingCategory(false);
     }
-    setCategory(data.name);
-    setCategoryOpen(false);
-    setNewCategory({ name: "", savePath: "" });
-    void queryClient.invalidateQueries({ queryKey: ["categories"] });
   };
 
   const nothingToSubmit = lines.length === 0 && files.length === 0;
@@ -873,6 +893,9 @@ export function AddTaskDialog({
                     spellCheck={false}
                     autoCapitalize="off"
                     autoCorrect="off"
+                    // Soft wrap would stack a logical line over several visual
+                    // rows and break the one-badge-per-line gutter alignment.
+                    wrap="off"
                     value={urisText}
                     onChange={(event) => setUrisText(event.target.value)}
                     onScroll={(event) =>
@@ -887,11 +910,11 @@ export function AddTaskDialog({
                   <span className="shrink-0 text-right tabular-nums">
                     {overCap
                       ? t("addTask.lineCounterOver", {
-                          count: lines.length,
+                          total: lines.length,
                           max: uriCap,
                         })
                       : t("addTask.lineCounter", {
-                          count: lines.length,
+                          total: lines.length,
                           max: uriCap,
                         })}
                     {overCap ? (
@@ -909,29 +932,35 @@ export function AddTaskDialog({
               </div>
 
               <div
-                role="button"
-                tabIndex={0}
-                aria-label={t("addTask.dropzone")}
-                onClick={() => fileInput.current?.click()}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    fileInput.current?.click();
-                  }
-                }}
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={(event) => void onDropzoneDrop(event)}
-                className="rounded-lg border border-dashed border-input px-3 py-2 text-sm text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
               >
-                {files.length === 0 ? (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-label={t("addTask.dropzone")}
+                  onClick={() => fileInput.current?.click()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      fileInput.current?.click();
+                    }
+                  }}
+                  className="rounded-lg border border-dashed border-input px-3 py-2 text-sm text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
                   <span className="flex items-center gap-2">
                     <Upload className="size-4" aria-hidden="true" />
-                    {t("addTask.dropzone")}
+                    {files.length === 0
+                      ? t("addTask.dropzone")
+                      : t("addTask.dropzoneFiles", { total: files.length })}
                   </span>
-                ) : (
-                  <span className="flex flex-col gap-1">
+                </div>
+                {files.length > 0 ? (
+                  // Interactive controls never nest inside the role=button
+                  // dropzone; the picked-file list sits beside it.
+                  <ul className="mt-1 flex flex-col gap-1 text-sm">
                     {files.map((file, index) => (
-                      <span
+                      <li
                         key={`${file.name}-${index}`}
                         className="flex items-center gap-2 text-foreground"
                       >
@@ -949,19 +978,18 @@ export function AddTaskDialog({
                           aria-label={t("addTask.removeFile", {
                             name: file.name,
                           })}
-                          onClick={(event) => {
-                            event.stopPropagation();
+                          onClick={() =>
                             setFiles((previous) =>
                               previous.filter((_, i) => i !== index),
-                            );
-                          }}
+                            )
+                          }
                         >
                           <X className="size-3.5" aria-hidden="true" />
                         </button>
-                      </span>
+                      </li>
                     ))}
-                  </span>
-                )}
+                  </ul>
+                ) : null}
               </div>
               <input
                 ref={fileInput}
@@ -1066,16 +1094,30 @@ export function AddTaskDialog({
                         {t("addTask.category")}
                       </Label>
                       <Select
-                        value={category ?? ""}
+                        // Radix rejects an empty-string item value, so the
+                        // "none" item rides a sentinel. A real category named
+                        // after either sentinel still wins — the sentinel only
+                        // acts when no category bears its name.
+                        value={category ?? "__none__"}
                         onValueChange={(value) => {
-                          if (value === "__new__") {
+                          const names = new Set(
+                            (categoriesQuery.data ?? []).map(
+                              (item) => item.name,
+                            ),
+                          );
+                          if (value === "__new__" && !names.has("__new__")) {
                             setNewCategory({
                               name: "",
                               savePath: destination,
                             });
                             setCategoryOpen(true);
+                          } else if (
+                            value === "__none__" &&
+                            !names.has("__none__")
+                          ) {
+                            setCategory(null);
                           } else {
-                            setCategory(value === "" ? null : value);
+                            setCategory(value);
                           }
                         }}
                       >
@@ -1089,7 +1131,7 @@ export function AddTaskDialog({
                           />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">
+                          <SelectItem value="__none__">
                             {t("addTask.categoryNone")}
                           </SelectItem>
                           {(categoriesQuery.data ?? []).map((item) => (
@@ -1198,6 +1240,7 @@ export function AddTaskDialog({
                         <Button
                           size="sm"
                           disabled={
+                            creatingCategory ||
                             newCategory.name.trim() === "" ||
                             newCategory.savePath.trim() === ""
                           }

@@ -164,8 +164,17 @@ export function FileSelectionDialog({
   });
   const freeBytes = freeQuery.data?.free_bytes ?? null;
 
-  const wantedBytes = files.reduce(
-    (sum, file) => sum + (entryFor(file.index).selected ? (file.size ?? 0) : 0),
+  // The shortfall counts the whole submission, not just the visible page:
+  // unvisited manifests download at their defaults (doc 09 §5).
+  const wantedBytes = manifests.reduce(
+    (sum, m, manifestIndex) =>
+      sum +
+      (m.files ?? []).reduce((inner, file) => {
+        const entry = pages.get(manifestIndex)?.get(file.index) ?? {
+          selected: true,
+        };
+        return inner + (entry.selected ? (file.size ?? 0) : 0);
+      }, 0),
     0,
   );
   const shortfall = freeBytes !== null && wantedBytes > freeBytes;
@@ -352,7 +361,7 @@ export function FileSelectionDialog({
               <span className="text-sm tabular-nums">
                 {t("addTask.select.pager", {
                   index: page + 1,
-                  count: manifests.length,
+                  total: manifests.length,
                 })}
               </span>
               <Button

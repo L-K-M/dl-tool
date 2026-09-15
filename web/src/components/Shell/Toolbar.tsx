@@ -554,11 +554,20 @@ export function Toolbar(): JSX.Element {
     const onDragOver = (event: DragEvent) => {
       if (
         event.dataTransfer?.types.includes("Files") ||
-        event.dataTransfer?.types.includes("text/plain")
+        event.dataTransfer?.types.includes("text/plain") ||
+        event.dataTransfer?.types.includes("text/uri-list")
       )
         event.preventDefault();
     };
     const onDrop = (event: DragEvent) => {
+      const target = event.target;
+      // Editable elements keep their native drop behaviour (text insertion);
+      // the dialog's own dropzone handles itself before the event bubbles.
+      if (
+        target instanceof HTMLElement &&
+        target.closest("input, textarea, [contenteditable]")
+      )
+        return;
       // onDragOver already claimed these drops; declining without
       // preventDefault would let the browser navigate away to the payload.
       event.preventDefault();
@@ -568,13 +577,15 @@ export function Toolbar(): JSX.Element {
         return;
       }
       if (event.dataTransfer.files.length > 0) {
-        void expandDroppedFiles(event.dataTransfer.files).then((expansion) => {
-          expansion.nzb.forEach(() => toast.error(t("dialogs:addTask.nzb")));
-          for (const name of expansion.unsupported)
-            toast.error(t("dialogs:addTask.unsupportedFile", { name }));
-          if (expansion.uris.length > 0 || expansion.files.length > 0)
-            openAdd({ uris: expansion.uris, files: expansion.files });
-        });
+        void expandDroppedFiles(event.dataTransfer.files)
+          .then((expansion) => {
+            expansion.nzb.forEach(() => toast.error(t("dialogs:addTask.nzb")));
+            for (const name of expansion.unsupported)
+              toast.error(t("dialogs:addTask.unsupportedFile", { name }));
+            if (expansion.uris.length > 0 || expansion.files.length > 0)
+              openAdd({ uris: expansion.uris, files: expansion.files });
+          })
+          .catch(() => toast.error(t("dialogs:addTask.fileReadFailed")));
         return;
       }
       const text =
@@ -600,6 +611,7 @@ export function Toolbar(): JSX.Element {
       openAdd({ uris });
     };
     const onFocus = () => {
+      if (addOpenRef.current) return;
       void (async () => {
         try {
           if (typeof navigator.clipboard?.readText !== "function") return;
@@ -704,14 +716,17 @@ export function Toolbar(): JSX.Element {
         onChange={(event) => {
           const picked = event.target.files;
           if (picked && picked.length > 0)
-            void expandDroppedFiles(picked).then((expansion) => {
-              expansion.nzb.forEach(() =>
-                toast.error(t("dialogs:addTask.nzb")),
-              );
-              for (const name of expansion.unsupported)
-                toast.error(t("dialogs:addTask.unsupportedFile", { name }));
-              openAdd({ uris: expansion.uris, files: expansion.files });
-            });
+            void expandDroppedFiles(picked)
+              .then((expansion) => {
+                expansion.nzb.forEach(() =>
+                  toast.error(t("dialogs:addTask.nzb")),
+                );
+                for (const name of expansion.unsupported)
+                  toast.error(t("dialogs:addTask.unsupportedFile", { name }));
+                if (expansion.uris.length > 0 || expansion.files.length > 0)
+                  openAdd({ uris: expansion.uris, files: expansion.files });
+              })
+              .catch(() => toast.error(t("dialogs:addTask.fileReadFailed")));
           event.target.value = "";
         }}
       />
