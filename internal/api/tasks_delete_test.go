@@ -65,6 +65,9 @@ func newDeleteTestEnv(t *testing.T) *deleteTestEnv {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// Registered after the store's cleanup, so the background loops stop
+	// before the database they poll closes.
+	t.Cleanup(server.Shutdown)
 
 	aria2 := newActionEngine(engine.NameAria2, acceptsAria2Lanes)
 	server.Engines.Register(aria2)

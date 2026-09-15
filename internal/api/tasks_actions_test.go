@@ -109,6 +109,9 @@ func newActionsTestEnvWithEngines(t *testing.T, engines ...engine.Engine) *actio
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// Registered after the store's cleanup, so the background loops stop
+	// before the database they poll closes.
+	t.Cleanup(server.Shutdown)
 
 	for _, e := range engines {
 		server.Engines.Register(e)

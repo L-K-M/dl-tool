@@ -1474,6 +1474,9 @@ func TestConformBootCorrection(t *testing.T) {
 	registered, ok := server.Engines.Get(engine.NameQBittorrent)
 	require.True(t, ok)
 	t.Cleanup(func() { require.NoError(t, registered.Close()) })
+	// Registered after the engine's cleanup, so the background loops stop
+	// before the engine they poll closes, not just before the store.
+	t.Cleanup(server.Shutdown)
 	require.Equal(t, false, preferences()["auto_tmm_enabled"], "boot must force ATM off")
 	assertAutomationOff()
 

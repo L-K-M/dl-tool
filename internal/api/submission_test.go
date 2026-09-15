@@ -493,6 +493,9 @@ func newCapableQBTEnv(t *testing.T, caps []engine.Capability) *tasksTestEnv {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// Registered after the store's cleanup, so the background loops stop
+	// before the database they poll closes.
+	t.Cleanup(server.Shutdown)
 
 	env := &tasksTestEnv{
 		api:         humatest.Wrap(t, server.API),
