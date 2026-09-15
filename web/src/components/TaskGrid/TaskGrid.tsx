@@ -365,7 +365,7 @@ function TaskCell({ taskId, id }: { taskId: string; id: ColumnId }) {
   // Keeping the per-tick selector work allocation-free matters: every store
   // update re-runs every mounted cell's selector (~30 rows x 14 columns).
   const singleValue = useTasks((state) =>
-    single === null ? null : (state.tasks.get(taskId)?.[single] ?? null),
+    single === null ? null : state.tasks.get(taskId)?.[single],
   );
   const tuple = useTasks(
     useShallow((state) => {
@@ -374,6 +374,8 @@ function TaskCell({ taskId, id }: { taskId: string; id: ColumnId }) {
       return fields.map((field) => task?.[field]);
     }),
   );
+  // Render-local for single-field cells (fresh array each render): index into
+  // it below, but never use `values` in hook deps or memo prop comparisons.
   const values: readonly unknown[] = single === null ? tuple : [singleValue];
   const { t, i18n } = useTranslation("grid");
   const locale = i18n.language;
