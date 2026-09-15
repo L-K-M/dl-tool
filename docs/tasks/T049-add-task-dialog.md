@@ -5,9 +5,9 @@
 | **ID** | T049 |
 | **Milestone** | M3 |
 | **Status** | todo |
-| **Depends on** | T020, T031, T033, T044, T047, T048 |
+| **Depends on** | T020, T031, T033, T044, T047, T048, T050 |
 | **Blocks** | T052, T104 |
-| **Parallel-safe** | no — extends T044's `Toolbar.tsx` |
+| **Parallel-safe** | no — extends T044's `Toolbar.tsx` and `Shell.test.tsx` |
 | **Implements** | — (renders [FR-001](../02-requirements.md#fr-001-add-tasks-from-a-batch-of-pasted-uris), [FR-005](../02-requirements.md#fr-005-add-tasks-from-an-uploaded-file), [FR-006](../02-requirements.md#fr-006-inspect-a-submission-before-committing-it) and [FR-009](../02-requirements.md#fr-009-supply-ftp-credentials-for-a-single-task), covered by T020, T031 and T033) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 3 new files, ~440 LOC. The selection step is the second page of the same dialog flow and cannot be reached without it. |
@@ -28,7 +28,12 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    the multipart form and the partial-success response.
 4. [`docs/05-api-contract.md` §5.3 `POST /tasks/inspect`](../05-api-contract.md#53-post-tasksinspect) — the
    manifest, `metadata_pending` and `rejected[]`.
-5. [`docs/09-web-ui-spec.md` §10.6 Toasts and optimistic updates](../09-web-ui-spec.md#106-toasts-and-optimistic-updates)
+5. [`docs/05-api-contract.md` §5.5 `PATCH /tasks/{id}`](../05-api-contract.md#55-patch-tasksid) —
+   `dl_limit`/`ul_limit` are patched onto each created task; the create body has no limit fields.
+6. [`docs/05-api-contract.md` §8.1 Categories](../05-api-contract.md#81-categories) and
+   [§8.2 Tags](../05-api-contract.md#82-tags) — the combobox reads `GET /categories`, its inline create
+   posts `POST /categories` and the Tags control seeds from `GET /tags`.
+7. [`docs/09-web-ui-spec.md` §10.6 Toasts and optimistic updates](../09-web-ui-spec.md#106-toasts-and-optimistic-updates)
    — a magnet is never added optimistically.
 
 ## Files
@@ -38,6 +43,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/AddTask/FileSelectionDialog.tsx` | create | The selection step over T048's `FileTree`. |
 | `web/src/components/AddTask/AddTaskDialog.test.tsx` | create | Badges, uploads, drops, submission bodies. |
 | `web/src/components/Shell/Toolbar.tsx` | edit | Wire the `+ Add` split button to the dialog. |
+| `web/src/components/Shell/Shell.test.tsx` | edit | Update the `+ Add` placeholder assertions to the wired behaviour. |
 | `web/src/locales/en/dialogs.json` | edit | Add-dialog and selection-step strings. |
 
 No other file may be modified.
@@ -97,11 +103,18 @@ Verbatim labels, which must not be reworded: `Authentication required (for ftp:/
 
 Submission: JSON `POST /api/v1/tasks` when only URIs are present; the multipart form of doc 05 §5.2 with a
 `payload` part plus one `file` part per uploaded `.torrent` otherwise. A `.txt` is read client-side and its
-lines appended to the textarea, so it never leaves the browser as a file part.
+lines appended to the textarea, so it never leaves the browser as a file part. `dl_limit` and `ul_limit`
+are not create-body fields (doc 05 §5.2); a non-zero limit is patched onto every created task with
+`PATCH /api/v1/tasks/{id}` after the create response (doc 05 §5.5). The chosen `category` and the `tags`
+do travel in the create body itself (doc 05 §5.2: the category must already exist, tags are created on
+demand).
 
 ## Steps
 1. Create `AddTaskDialog.tsx` on shadcn/ui's `dialog` with the exact field order of the doc 09 §4
-   wireframe, `More options` collapsed by default.
+   wireframe, `More options` collapsed by default. Under `More options`: the Category combobox lists
+   `GET /categories` and offers the inline create that posts `POST /categories`; Tags is a multi-select
+   with free entry seeded from `GET /tags`; the Download/Upload limit fields take integers in bytes per
+   second, `0` meaning unlimited.
 2. Destination is read-only text plus a `Select` button opening T047's `FolderBrowserDialog`, with the free
    space line refreshed from `GET /fs/free-space?path=` on every change, and the last destination taken
    from `useUiPrefs.lastDestination` when the setting allows.
@@ -122,13 +135,18 @@ lines appended to the textarea, so it never leaves the browser as a file part.
    wanted size exceeds the free space.
 9. Submit through the T014 client; close the dialog immediately and show optimistic `queued` rows for URI
    submissions only, rolling back and naming the offending URI on failure; render `rejected[]` entries as
-   one toast each.
+   one toast each. A non-zero `dl_limit`/`ul_limit` is applied with `PATCH /tasks/{id}` on each created
+   task after the response — the create body has no limit fields (doc 05 §5.5). A failed PATCH never
+   rolls back a created task: the row stays, the limit stays unset and a toast names the task.
 10. Edit `Toolbar.tsx` so `+ Add` opens the dialog, with the menu items *Add URLs…*, *Add .torrent file…*
-    and *Add from clipboard*.
+    and *Add from clipboard*. In `Shell.test.tsx`, replace `TestToolbarDisabledWithoutSelection`'s
+    disabled-and-`Coming with the add dialog` assertions on `+ Add` with assertions of the wired
+    behaviour, renaming the test when `+ Add` is no longer part of its disabled checks.
 11. Create `AddTaskDialog.test.tsx`: badge classification for a magnet, a bare 40-hex infohash, a
     32-character base32 infohash and rubbish; a `.txt` drop appends its lines; a `.nzb` drop is refused; the
-    JSON body carries `paused`, `sequential`, `create_subfolder` and byte-per-second limits; a `.torrent`
-    upload produces a multipart request with a `payload` part; `Ctrl+Enter` submits and `Enter` does not.
+    JSON body carries `paused`, `sequential`, `create_subfolder`, `category` and `tags`, and non-zero
+    byte-per-second limits arrive as `PATCH /tasks/{id}` calls on each created task; a `.torrent` upload
+    produces a multipart request with a `payload` part; `Ctrl+Enter` submits and `Enter` does not.
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -143,15 +161,15 @@ Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && make typecheck && make test-web && echo ADD_DIALOG_OK
 ```
-Expected: Vitest reports `Test Files  10 passed (10)` including
-`src/components/AddTask/AddTaskDialog.test.tsx`, every test named above appears as passing, and the final
-line of stdout is exactly `ADD_DIALOG_OK`.
+Expected: Vitest reports `Test Files  N passed (N)` where `N` equals the number of pre-existing `web/src`
+test files plus one for `src/components/AddTask/AddTaskDialog.test.tsx`; every test named above appears
+as passing; and the final line of stdout is exactly `ADD_DIALOG_OK`.
 
 Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the paths in the Files table and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -171,32 +189,29 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-This task cannot pass `make test-web` without editing `web/src/components/Shell/Shell.test.tsx`, which is
-not in the `## Files` table ("No other file may be modified").
+Resolved by the plan repair: `web/src/components/Shell/Shell.test.tsx` is now in the `## Files` table with
+the placeholder-assertion update assigned to step 10; T050 is now a dependency, so `GET`/`POST /categories`
+and `GET /tags` exist for the Category combobox and Tags control; the `## Verification` expectation derives
+the `N passed (N)` total from the pre-existing `web/src` test files plus `AddTaskDialog.test.tsx` instead of
+hard-coding a number; and `dl_limit`/`ul_limit` are specified as `PATCH /tasks/{id}` calls after creation,
+matching doc 05 §5.5. T049 remains unimplemented and `todo`.
 
-- `TestToolbarDisabledWithoutSelection` asserts the `+ Add` button is `disabled` and that
-  `getAttribute("title")` is `"Coming with the add dialog"` (`web/src/components/Shell/Shell.test.tsx`,
-  written by T044 commit `d165163` / PR #155 as a placeholder while the dialog did not exist).
-- Step 10 requires `+ Add` to open the dialog — an enabled, working button. A disabled button cannot open
-  anything, so there is no compliant implementation that keeps the assertion. The fix is the same shape
-  as the T044 repair (commit `b939571` / PR #154): add `web/src/components/Shell/Shell.test.tsx` to the
-  `## Files` table so the placeholder assertions can be updated to the wired behaviour.
+Original blocker: `TestToolbarDisabledWithoutSelection` asserted the `+ Add` button is `disabled` with
+`getAttribute("title")` of `"Coming with the add dialog"` (`web/src/components/Shell/Shell.test.tsx`,
+written by T044 commit `d165163` / PR #155 as a placeholder while the dialog did not exist), while step 10
+requires `+ Add` to open the dialog — and the file was outside the `## Files` table. Three further plan
+defects were recorded with it:
 
-Three more plan repairs are needed in this task file before it can run to green:
-
-1. `## Verification` expects `Test Files  10 passed (10)`, but `web/src` already contains 11 test files;
-   adding `AddTaskDialog.test.tsx` makes Vitest report `Test Files  12 passed (12)`. Same staleness as
-   the T044/T045 suite-count fixes — best written drift-proof, e.g. require zero failed tests and every
-   test file passing, without hardcoding the file count.
-2. Doc 09 §4 specifies the Category control as "Existing categories plus inline create", and this task's
-   out-of-scope note allows "the inline create that posts `POST /categories` (T050)". T050 is still
-   `todo`: `/categories` is absent from `api/openapi.json` and `web/src/api/schema.d.ts`, so the typed
-   client cannot call it and a direct `fetch` is forbidden. Either this task must state that the combobox
-   lists only categories already in use (the Sidebar's source) with inline create deferred to T050, or
-   T049 must take a dependency on T050.
-3. `AddTaskDraft` and step 11 carry `dl_limit`/`ul_limit` and want "byte-per-second limits" in the JSON
+1. `## Verification` expected `Test Files  10 passed (10)`, but `web/src` already contained 11 test files;
+   adding `AddTaskDialog.test.tsx` makes Vitest report `Test Files  12 passed (12)`. Same staleness as the
+   T044/T045 suite-count fixes.
+2. Doc 09 §4 specifies the Category control as "Existing categories plus inline create". T050 was still
+   `todo` and not a dependency: `/categories` was absent from `api/openapi.json` and
+   `web/src/api/schema.d.ts`, so the typed client could not call it and a direct `fetch` is forbidden. The
+   in-use-categories alternative was rejected: no category can exist before T050 serves `POST /categories`
+   (the create body and `PATCH` both validate against the categories table), so the combobox would have been
+   permanently empty and doc 09 §4's inline create would have had no implementing task.
+3. `AddTaskDraft` and step 11 carried `dl_limit`/`ul_limit` and wanted "byte-per-second limits" in the JSON
    submission body, but `CreateTasksBody` has `additionalProperties: false` and no limit fields
    (`internal/api/tasks.go`, `api/openapi.json`) — `POST /tasks` would answer `422`. The documented way to
    set limits is `PATCH /tasks/{id}` (doc 05 §5.5: "applied immediately, including to a running task").
-   If POST-then-PATCH per created task is the intended path, the task should say the limits are patched
-   on after creation rather than carried in the create body.
