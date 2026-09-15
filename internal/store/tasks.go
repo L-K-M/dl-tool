@@ -117,13 +117,13 @@ const (
 (id, engine, engine_ref, source_kind, source_uri, name, infohash_v1, infohash_v2, state,
  error_code, error_message, destination, content_path, category_id, total_bytes, completed_bytes,
  uploaded_bytes, download_rate, upload_rate, eta_seconds, sequential, queue_position,
- added_at, started_at, completed_at, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+ select_files, added_at, started_at, completed_at, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	queryGetTask = `SELECT id, engine, engine_ref, source_kind, source_uri, name, infohash_v1, infohash_v2,
  state, error_code, error_message, destination, content_path, category_id, total_bytes, completed_bytes,
  uploaded_bytes, download_rate, upload_rate, eta_seconds, sequential, queue_position,
- added_at, started_at, completed_at, created_at, updated_at
+ select_files, dl_limit, ul_limit, added_at, started_at, completed_at, created_at, updated_at
 FROM tasks
 WHERE id = ?`
 
@@ -200,6 +200,13 @@ WHERE task_id = ? AND file_index NOT IN (
 SET selected = ?, priority = ?, updated_at = ?
 WHERE task_id = ? AND file_index = ?`
 
+	// The persisted selection intent of tasks.select_files: rewritten by
+	// the files PATCH so admission and re-submissions always restore the
+	// operator's selection, never the engine's default.
+	querySetTaskSelectionIntent = `UPDATE tasks
+SET select_files = ?, updated_at = ?
+WHERE id = ?`
+
 	// A tracker listing replaces the task's rows wholesale (T034): the
 	// delete and the re-insert run in one transaction, so the table holds
 	// exactly the rows of the last successful listing.
@@ -221,7 +228,8 @@ ORDER BY queue_position, id`
 	// only three that end a transfer for dl-tool's purposes), so a
 	// completed or removed row is never a candidate whatever the engine
 	// reports.
-	queryListNonTerminalByEngine = `SELECT id, engine_ref, state, source_uri, infohash_v1, destination
+	queryListNonTerminalByEngine = `SELECT id, engine_ref, state, source_uri, infohash_v1, destination,
+ select_files, dl_limit, ul_limit
 FROM tasks
 WHERE engine = ? AND engine_ref IS NOT NULL AND state NOT IN ('completed', 'removed', 'error')`
 
@@ -229,14 +237,19 @@ WHERE engine = ? AND engine_ref IS NOT NULL AND state NOT IN ('completed', 'remo
 SET queue_position = ?, updated_at = ?
 WHERE id = ?`
 
-	// One grouped query over the four states a concurrency limit counts
+	// One grouped query over the states a concurrency limit counts
 	// (docs/04-data-model.md section 4.7). seeding is excluded in SQL
 	// rather than in Go: the exclusion is a fact of the counted set, not a
 	// caller's choice, and every reader — the admission pass, a resume
-	// action — must see the same set.
+	// action — must see the same set. A queued row holding an engine
+	// handle counts too: it is mid-release — a file selection waiting on
+	// the engine's file listing or an interrupted first start — and the
+	// transfer it owns is already running or already committed, so the
+	// slot is spent whether or not the row has reached downloading.
 	queryCountActive = `SELECT engine, COUNT(*) AS active
 FROM tasks
 WHERE state IN ('downloading', 'checking', 'extracting', 'moving')
+   OR (state = 'queued' AND engine_ref IS NOT NULL)
 GROUP BY engine`
 
 	// process_order is creation date (FR-095): oldest added_at first, the
@@ -249,6 +262,7 @@ GROUP BY engine`
 	// reach the Go constant, so the two are pinned together by
 	// TestOperatorPausedTaskIsNotACandidate.
 	querySelectQueuedCandidates = `SELECT id, engine, engine_ref, source_uri, infohash_v1, destination,
+ select_files, dl_limit, ul_limit,
  state, total_bytes, COALESCE(completed_bytes, 0) AS completed_bytes
 FROM tasks
 WHERE state = 'queued' OR (state = 'paused' AND error_code = 'disk_full')
@@ -269,6 +283,7 @@ ORDER BY added_at ASC, id ASC`
 	querySumRemainingByDestination = `SELECT destination, SUM(MAX(COALESCE(total_bytes, 0) - COALESCE(completed_bytes, 0), 0)) AS remaining
 FROM tasks
 WHERE state IN ('downloading', 'checking', 'extracting', 'moving')
+   OR (state = 'queued' AND engine_ref IS NOT NULL)
 GROUP BY destination`
 
 	// The release cleanup's guard: a hold-code clear may never wipe a
@@ -420,7 +435,7 @@ func insertTaskRow(ctx context.Context, ext sqlx.ExtContext, t Task) error {
 		t.InfohashV1, t.InfohashV2, t.State, t.ErrorCode, t.ErrorMessage,
 		t.Destination, t.ContentPath, t.CategoryID, t.TotalBytes, t.CompletedBytes,
 		t.UploadedBytes, t.DownloadRate, t.UploadRate, t.ETASeconds,
-		t.Sequential, t.QueuePosition, t.AddedAt, t.StartedAt, t.CompletedAt,
+		t.Sequential, t.QueuePosition, t.SelectFiles, t.AddedAt, t.StartedAt, t.CompletedAt,
 		t.CreatedAt, t.UpdatedAt,
 	)
 
@@ -475,6 +490,12 @@ type Reconcilable struct {
 	SourceURI   *string `db:"source_uri"`
 	InfohashV1  *string `db:"infohash_v1"`
 	Destination string  `db:"destination"`
+	// SelectFiles, DLLimit and ULLimit are the persisted intent a
+	// re-submission must restore on the fresh engine handle — the same
+	// columns Candidate carries for the admission pass.
+	SelectFiles *string `db:"select_files"`
+	DLLimit     int64   `db:"dl_limit"`
+	ULLimit     int64   `db:"ul_limit"`
 }
 
 // ListNonTerminalByEngine returns engine_ref -> Reconcilable for one
@@ -520,6 +541,14 @@ type Candidate struct {
 	SourceURI   *string `db:"source_uri"`
 	InfohashV1  *string `db:"infohash_v1"`
 	Destination string  `db:"destination"`
+	// SelectFiles is the persisted selection intent the release applies
+	// to the engine; DLLimit and ULLimit are the persisted per-task rate
+	// limits a PATCH may have written before admission — the release
+	// applies them before the transfer starts (docs/05-api-contract.md
+	// section 5.5: an unadmitted task gets its limits at admission).
+	SelectFiles *string `db:"select_files"`
+	DLLimit     int64   `db:"dl_limit"`
+	ULLimit     int64   `db:"ul_limit"`
 	// State is queued for a waiting candidate and paused for one the
 	// disk-space guard parked (FR-048); the pass releases both, resuming
 	// the paused one's partial data instead of restarting it.
@@ -1369,6 +1398,73 @@ func (s *TaskStore) UpdateFileSelection(ctx context.Context, taskID string, sel 
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: update file selection of task %q: commit: %w", taskID, err)
+	}
+
+	return nil
+}
+
+// SelectionIntent is the JSON document tasks.select_files persists: the
+// file selection dl-tool believes the task should have, written at
+// creation from select_files and rewritten by PATCH /tasks/{id}/files so
+// a re-admission or engine-handle recreation restores the operator's
+// selection rather than the engine's default. Indices are the files to
+// download — an index absent from the listing and the map is skipped —
+// and Priorities carries the resolved per-file integer of
+// docs/04-data-model.md section 4.3 (0, 1, 6, 7), empty for an engine
+// that drives selection alone.
+type SelectionIntent struct {
+	Indices    []int       `json:"indices"`
+	Priorities map[int]int `json:"priorities"`
+}
+
+// DecodeSelectionIntent parses the stored select_files document. A
+// malformed value is an error, not a silent default: applying a guessed
+// selection would download files the operator skipped.
+func DecodeSelectionIntent(raw string) (SelectionIntent, error) {
+	var sel SelectionIntent
+	if err := json.Unmarshal([]byte(raw), &sel); err != nil {
+		return SelectionIntent{}, fmt.Errorf("store: decode select_files: %w", err)
+	}
+
+	return sel, nil
+}
+
+// SelectionIntentFromFiles builds the intent a task_files listing
+// encodes: every selected index, and every file's stored priority —
+// which is nil only on an engine without per-file priority. The rows
+// mirror the engine's listing, so the intent they build is the
+// selection the engine currently holds.
+func SelectionIntentFromFiles(files []TaskFile) *SelectionIntent {
+	sel := &SelectionIntent{Indices: []int{}, Priorities: map[int]int{}}
+	for _, file := range files {
+		if file.Selected == 1 {
+			sel.Indices = append(sel.Indices, file.FileIndex)
+		}
+		if file.Priority != nil {
+			sel.Priorities[file.FileIndex] = *file.Priority
+		}
+	}
+
+	return sel
+}
+
+// SetSelectionIntent rewrites a task's persisted select_files document —
+// the write PATCH /tasks/{id}/files makes after the engine accepted the
+// change, so the stored intent always matches what the engine holds. A
+// nil intent clears the column.
+func (s *TaskStore) SetSelectionIntent(ctx context.Context, taskID string, sel *SelectionIntent) error {
+	var encoded *string
+	if sel != nil {
+		raw, err := json.Marshal(sel)
+		if err != nil {
+			return fmt.Errorf("store: encode file selection of task %q: %w", taskID, err)
+		}
+		text := string(raw)
+		encoded = &text
+	}
+
+	if _, err := s.db.ExecContext(ctx, querySetTaskSelectionIntent, encoded, time.Now().UnixMilli(), taskID); err != nil {
+		return fmt.Errorf("store: write file selection of task %q: %w", taskID, err)
 	}
 
 	return nil

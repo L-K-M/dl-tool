@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -717,3 +719,41 @@ func TestPatchFilesWithoutEngineHandle(t *testing.T) {
 
 // strPtr is intPtr for the wire vocabulary.
 func strPtr(s string) *string { return &s }
+
+// TestPatchTaskFilesRewritesPersistedIntent pins the select_files column's
+// second writer: after the engine accepts a PATCH, the stored intent is
+// rebuilt from the task_files rows so a re-admission or engine-handle
+// recreation restores this PATCH's outcome, not the create-time one.
+func TestPatchTaskFilesRewritesPersistedIntent(t *testing.T) {
+	env := newFilesTestEnv(t)
+	id := env.seedQBTTask(t)
+
+	response := env.patchFiles(t, id, map[string]any{
+		"files": []map[string]any{{"index": 1, "selected": false}},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	var stored *string
+	if err := env.db.GetContext(t.Context(), &stored, `SELECT select_files FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read select_files of %s: %v", id, err)
+	}
+	if stored == nil {
+		t.Fatalf("select_files is NULL, want the intent the PATCH produced")
+	}
+
+	sel, err := store.DecodeSelectionIntent(*stored)
+	if err != nil {
+		t.Fatalf("decode select_files %q: %v", *stored, err)
+	}
+	// File 1 is deselected: the intent keeps 0 and 2, and the priorities
+	// mirror the engine's listing — index 1 at skip.
+	if !slices.Equal(sel.Indices, []int{0, 2}) {
+		t.Errorf("intent indices = %v, want [0 2]", sel.Indices)
+	}
+	wantPriorities := map[int]int{0: 1, 1: 0, 2: 1}
+	if !maps.Equal(sel.Priorities, wantPriorities) {
+		t.Errorf("intent priorities = %v, want %v", sel.Priorities, wantPriorities)
+	}
+}

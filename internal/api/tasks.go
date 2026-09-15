@@ -2,9 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -302,6 +302,9 @@ type plannedTask struct {
 	// manifest is the parsed .torrent of an uploaded part; nil for every
 	// other submission.
 	manifest *uri.Manifest
+	// selection is the create-time select_files intent when this task is
+	// the submission's target; nil for every other planned task.
+	selection *store.SelectionIntent
 }
 
 // CreateTasks accepts up to 50 sources — payload uris, the lines of .txt
@@ -373,9 +376,15 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 	rejected = append(rejected, uriRejected...)
 	planned = append(planned, blobPlanned...)
 
-	// select_files precedes every insert: a refusal creates nothing.
-	if err := h.validateSelection(ctx, &in.Body, planned); err != nil {
+	// select_files precedes every insert: a refusal creates nothing. The
+	// resolved intent lands on the one task it addresses, and insertPlanned
+	// persists it for the admission pass to apply.
+	target, selection, err := h.validateSelection(ctx, &in.Body, planned)
+	if err != nil {
 		return nil, err
+	}
+	if selection != nil {
+		planned[target].selection = selection
 	}
 
 	if len(planned) == 0 {
@@ -553,27 +562,26 @@ func magnetFromManifest(m uri.Manifest) string {
 // first multi-file manifest of the submission, the routed engine must
 // declare per_file_select, and a high or maximum priority is 422 unless
 // the engine declares per_file_priority (task step 7) — skip and normal
-// are selection outcomes every per_file_select engine honours. The
-// resolved indices and priorities travel no further than the validation:
-// the admission pass owns Engine.Add and no create-time selection store
-// exists yet, a wiring gap this task cannot close inside its Files table
-// (noted in the PR); the debug line is the honest trace of that boundary.
-func (h *TaskHandlers) validateSelection(ctx context.Context, body *CreateTasksBody, planned []plannedTask) error {
+// are selection outcomes every per_file_select engine honours. It
+// returns the index of the one task the entries address and the resolved
+// intent; the caller attaches it so the row persists it for the
+// admission pass, which owns Engine.Add.
+func (h *TaskHandlers) validateSelection(ctx context.Context, body *CreateTasksBody, planned []plannedTask) (int, *store.SelectionIntent, error) {
 	if len(body.SelectFiles) == 0 {
-		return nil
+		return -1, nil, nil
 	}
 
-	engineName, fileCount, ok := selectionTarget(planned)
+	target, engineName, fileCount, ok := selectionTarget(planned)
 	if !ok {
-		return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, selectionNoManifestDetail)
+		return -1, nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, selectionNoManifestDetail)
 	}
 
 	e, registered := h.engines.Get(engineName)
 	if !registered {
-		return engineUnavailable(engineName)
+		return -1, nil, engineUnavailable(engineName)
 	}
 	if !hasCapability(e, engine.CapPerFileSelect) {
-		return Problem(
+		return -1, nil, Problem(
 			SlugValidationFailed,
 			http.StatusUnprocessableEntity,
 			fmt.Sprintf(selectionCapDetailFormat, engineName),
@@ -582,13 +590,13 @@ func (h *TaskHandlers) validateSelection(ctx context.Context, body *CreateTasksB
 
 	indices, priorities, err := applySelection(body.SelectFiles, fileCount)
 	if err != nil {
-		return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, sentinelDetail(err, ErrInvalidSelection))
+		return -1, nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, sentinelDetail(err, ErrInvalidSelection))
 	}
 
 	if !hasCapability(e, engine.CapPerFilePriority) {
 		for _, priority := range priorities {
 			if priority == priorityHigh || priority == priorityMaximum {
-				return Problem(
+				return -1, nil, Problem(
 					SlugValidationFailed,
 					http.StatusUnprocessableEntity,
 					fmt.Sprintf(selectionPrioCapFormat, engineName),
@@ -597,10 +605,7 @@ func (h *TaskHandlers) validateSelection(ctx context.Context, body *CreateTasksB
 		}
 	}
 
-	logFromContext(ctx).Debug("file selection accepted at creation",
-		slog.String("engine", engineName), slog.Any("indices", indices), slog.Any("priorities", priorities))
-
-	return nil
+	return target, &store.SelectionIntent{Indices: indices, Priorities: priorities}, nil
 }
 
 // selectionTarget finds the submission the select_files entries address
@@ -609,21 +614,21 @@ func (h *TaskHandlers) validateSelection(ctx context.Context, body *CreateTasksB
 // whose manifest cannot be known at create time — a magnet or torrent URI,
 // an unparsed metalink part — which the engine judges at add time. Only
 // known single-file submissions remain, and those cannot take a selection.
-func selectionTarget(planned []plannedTask) (engineName string, fileCount int, ok bool) {
-	for _, p := range planned {
+func selectionTarget(planned []plannedTask) (target int, engineName string, fileCount int, ok bool) {
+	for i, p := range planned {
 		if p.manifest != nil && len(p.manifest.Files) > 1 {
-			return p.engine, len(p.manifest.Files), true
+			return i, p.engine, len(p.manifest.Files), true
 		}
 	}
-	for _, p := range planned {
+	for i, p := range planned {
 		unknown := p.manifest == nil &&
 			(p.normalized.Kind == uri.KindMagnet || p.normalized.Kind == uri.KindTorrent || p.normalized.Kind == uri.KindMetalink)
 		if unknown {
-			return p.engine, -1, true
+			return i, p.engine, -1, true
 		}
 	}
 
-	return "", 0, false
+	return -1, "", 0, false
 }
 
 // planURIs normalises and routes every URI, collecting a rejection for each
@@ -746,6 +751,16 @@ func (h *TaskHandlers) insertPlanned(
 		totalBytes = &size
 	}
 
+	var selectFiles *string
+	if p.selection != nil {
+		raw, err := json.Marshal(p.selection)
+		if err != nil {
+			return TaskDTO{}, internalFailure(ctx, "encode file selection", err)
+		}
+		text := string(raw)
+		selectFiles = &text
+	}
+
 	// CreateLogged writes the row and its task.created event in one
 	// transaction (FR-150): a task can never persist without the first
 	// entry of its event log.
@@ -761,6 +776,7 @@ func (h *TaskHandlers) insertPlanned(
 		CategoryID:  categoryID,
 		Sequential:  boolToInt(body.Sequential),
 		TotalBytes:  totalBytes,
+		SelectFiles: selectFiles,
 		// extract_password and create_subfolder have no store.Task field yet:
 		// their columns are owned by the auto-extract and upload tasks, which
 		// extend the store with them.

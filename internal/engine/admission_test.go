@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/fsx"
@@ -41,15 +44,47 @@ func unlimitedFloor(l engine.Limits) engine.Policy {
 type admitEngine struct {
 	name string
 
-	mu         sync.Mutex
-	next       int
-	adds       []string // the URIs of every accepted submission
-	resumes    []string // the engine task ids every Resume saw
-	pauses     []string // the engine task ids every Pause saw
-	removes    []string // the engine task ids every Remove saw
-	addErr     error
-	resumeErr  error
-	pauseFails int // Pause calls that fail before the first recorded one
+	caps       []engine.Capability
+	files      []engine.FileEntry
+	filesErr   error
+	setFileErr error
+	rateErr    error
+	// deadHandle, when set, makes the per-transfer calls on that id
+	// answer ErrNotFound — a handle the daemon forgot.
+	deadHandle string
+	// getInfo, when set, is the canned answer of Get for every live
+	// handle — the stopped-result shape the parked re-add path inspects.
+	// Nil answers a stopped live transfer.
+	getInfo *engine.TaskInfo
+
+	mu          sync.Mutex
+	next        int
+	adds        []string // the URIs of every accepted submission
+	addRequests []engine.AddRequest
+	resumes     []string // the engine task ids every Resume saw
+	pauses      []string // the engine task ids every Pause saw
+	removes     []string // the engine task ids every Remove saw
+	fileCalls   []setFilesRecord
+	rateCalls   []rateLimitRecord
+	ops         []string // the ordered record of intent and resume calls
+	addErr      error
+	resumeErr   error
+	pauseFails  int // Pause calls that fail before the first recorded one
+}
+
+// setFilesRecord is one Engine.SetFiles invocation the admission tests
+// assert on; selected keeps the nil-versus-empty distinction.
+type setFilesRecord struct {
+	id         string
+	selected   []int
+	priorities map[int]int
+}
+
+// rateLimitRecord is one Engine.SetRateLimits invocation.
+type rateLimitRecord struct {
+	id   string
+	down *int64
+	up   *int64
 }
 
 func newAdmitEngine(name string) *admitEngine {
@@ -57,7 +92,7 @@ func newAdmitEngine(name string) *admitEngine {
 }
 
 func (e *admitEngine) Name() string                      { return e.name }
-func (e *admitEngine) Capabilities() []engine.Capability { return nil }
+func (e *admitEngine) Capabilities() []engine.Capability { return e.caps }
 func (e *admitEngine) Accepts(string) bool               { return false }
 func (e *admitEngine) Connect(context.Context) error     { return nil }
 func (e *admitEngine) Close() error                      { return nil }
@@ -74,6 +109,7 @@ func (e *admitEngine) Add(_ context.Context, req engine.AddRequest) (string, err
 	}
 	e.next++
 	e.adds = append(e.adds, req.URIs...)
+	e.addRequests = append(e.addRequests, req)
 
 	return fmt.Sprintf("%s:gid%03d", e.name, e.next), nil
 }
@@ -82,6 +118,7 @@ func (e *admitEngine) Resume(_ context.Context, id string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	e.ops = append(e.ops, "resume:"+id)
 	if e.resumeErr != nil {
 		return e.resumeErr
 	}
@@ -109,6 +146,7 @@ func (e *admitEngine) Pause(_ context.Context, id string) error {
 		return errors.New("pause: injected failure")
 	}
 	e.pauses = append(e.pauses, id)
+	e.ops = append(e.ops, "pause:"+id)
 
 	return nil
 }
@@ -141,21 +179,95 @@ func (e *admitEngine) recordedRemoves() []string {
 	return append([]string(nil), e.removes...)
 }
 
+func (e *admitEngine) recordedAddRequests() []engine.AddRequest {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return append([]engine.AddRequest(nil), e.addRequests...)
+}
+
+func (e *admitEngine) recordedFileCalls() []setFilesRecord {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return append([]setFilesRecord(nil), e.fileCalls...)
+}
+
+func (e *admitEngine) recordedRateCalls() []rateLimitRecord {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return append([]rateLimitRecord(nil), e.rateCalls...)
+}
+
+func (e *admitEngine) recordedOps() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	return append([]string(nil), e.ops...)
+}
+
 func (e *admitEngine) List(context.Context) ([]engine.TaskInfo, error) { panic("not called") }
-func (e *admitEngine) Get(context.Context, string) (engine.TaskInfo, error) {
-	panic("not called")
+func (e *admitEngine) Get(_ context.Context, id string) (engine.TaskInfo, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.ops = append(e.ops, "get:"+id)
+	if id == e.deadHandle {
+		return engine.TaskInfo{}, engine.ErrNotFound
+	}
+	if e.getInfo != nil {
+		return *e.getInfo, nil
+	}
+
+	return engine.TaskInfo{ID: id, Engine: e.name, State: engine.StatePaused}, nil
 }
-func (e *admitEngine) Files(context.Context, string) ([]engine.FileEntry, error) {
-	panic("not called")
+func (e *admitEngine) Files(_ context.Context, id string) ([]engine.FileEntry, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.ops = append(e.ops, "files:"+id)
+	if id == e.deadHandle {
+		return nil, engine.ErrNotFound
+	}
+	if e.filesErr != nil {
+		return nil, e.filesErr
+	}
+
+	return append([]engine.FileEntry(nil), e.files...), nil
 }
-func (e *admitEngine) SetFiles(context.Context, string, []int, map[int]int) error {
-	panic("not called")
+func (e *admitEngine) SetFiles(_ context.Context, id string, selected []int, priorities map[int]int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.ops = append(e.ops, "setfiles:"+id)
+	e.fileCalls = append(e.fileCalls, setFilesRecord{id: id, selected: selected, priorities: priorities})
+	if id == e.deadHandle {
+		return engine.ErrNotFound
+	}
+	if e.setFileErr != nil {
+		return e.setFileErr
+	}
+
+	return nil
 }
 func (e *admitEngine) SetLocation(context.Context, string, string) error { panic("not called") }
 func (e *admitEngine) Rename(context.Context, string, string) error      { panic("not called") }
 func (e *admitEngine) SetCategory(context.Context, string, string) error { panic("not called") }
-func (e *admitEngine) SetRateLimits(context.Context, string, *int64, *int64) error {
-	panic("not called")
+func (e *admitEngine) SetRateLimits(_ context.Context, id string, down, up *int64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.ops = append(e.ops, "ratelimits:"+id)
+	e.rateCalls = append(e.rateCalls, rateLimitRecord{id: id, down: down, up: up})
+	if id == e.deadHandle {
+		return engine.ErrNotFound
+	}
+	if e.rateErr != nil {
+		return e.rateErr
+	}
+
+	return nil
 }
 func (e *admitEngine) SetShareLimits(context.Context, string, *float64, *int64) error {
 	panic("not called")
@@ -170,6 +282,7 @@ func (e *admitEngine) Events(context.Context) (<-chan engine.TaskEvent, error) {
 // are the pass's collaborators, and a fake store would test nothing but
 // the fake.
 type admitEnv struct {
+	db       *sqlx.DB
 	tasks    *store.TaskStore
 	aria2    *admitEngine
 	qbt      *admitEngine
@@ -200,6 +313,7 @@ func newAdmitEnv(t *testing.T) *admitEnv {
 	tasks := store.NewTaskStore(db)
 
 	return &admitEnv{
+		db:       db,
 		tasks:    tasks,
 		aria2:    aria2,
 		qbt:      qbt,
@@ -252,6 +366,16 @@ func (e *admitEnv) taskState(t *testing.T, id string) string {
 	}
 
 	return task.State
+}
+
+// setLimits writes a task's persisted rate limits the way a PATCH on an
+// unadmitted task leaves them: in the row, untouched by any engine.
+func (e *admitEnv) setLimits(t *testing.T, id string, dl, ul int64) {
+	t.Helper()
+
+	if _, err := e.db.ExecContext(t.Context(), "UPDATE tasks SET dl_limit = ?, ul_limit = ? WHERE id = ?", dl, ul, id); err != nil {
+		t.Fatalf("set limits on task %s: %v", id, err)
+	}
 }
 
 // taskErrorCode reads one task's error_code, "" when none is stored.
@@ -2301,5 +2425,430 @@ func TestLeaseIsHeldThroughTheReleaseWrites(t *testing.T) {
 		t.Fatalf("Try after the completed iteration = %v, want the freed lease", err)
 	} else {
 		release()
+	}
+}
+
+// A queued task's persisted dl_limit/ul_limit — the values a PATCH
+// recorded while the admission pass had not handed the task to an engine
+// — reach the engine through SetRateLimits before the release is
+// recorded, the "gets its limits at admission time" half of
+// applyLiveRateLimits (internal/api/tasks_actions.go).
+func TestPassAppliesPersistedRateLimits(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	id := env.seedTask(t, engine.NameAria2, "limited", nil)
+	env.setLimits(t, id, 1024, 512)
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want exactly %s", released, id)
+	}
+
+	calls := env.aria2.recordedRateCalls()
+	if len(calls) != 1 {
+		t.Fatalf("SetRateLimits calls = %+v, want exactly one", calls)
+	}
+	if calls[0].down == nil || *calls[0].down != 1024 || calls[0].up == nil || *calls[0].up != 512 {
+		t.Errorf("SetRateLimits = %+v, want down 1024 up 512", calls[0])
+	}
+	if calls[0].id != *taskEngineRef(t, env, id) && calls[0].id != engine.NameAria2+":"+*taskEngineRef(t, env, id) {
+		t.Errorf("SetRateLimits id = %q, want the recorded handle", calls[0].id)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading", state)
+	}
+}
+
+// taskEngineRef reads a task's stored bare engine_ref.
+func taskEngineRef(t *testing.T, env *admitEnv, id string) *string {
+	t.Helper()
+
+	task, err := env.tasks.Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("read task %s: %v", id, err)
+	}
+
+	return task.EngineRef
+}
+
+// The persisted create-time selection reaches an engine whose Add cannot
+// take it: qBittorrent's WebAPI ignores AddRequest.SelectFiles, so the
+// pass applies the stored intent through SetFiles on the fresh handle —
+// the indices to download plus the resolved per-file priorities.
+func TestPassAppliesPersistedSelection(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.qbt.caps = []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority}
+	env.qbt.files = []engine.FileEntry{{Index: 0}, {Index: 1}, {Index: 2}}
+
+	id := env.seedTask(t, engine.NameQBittorrent, "picked", func(task *store.Task) {
+		task.SelectFiles = ptr(`{"indices":[0,2],"priorities":{"0":1,"1":0,"2":6}}`)
+	})
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want exactly %s", released, id)
+	}
+
+	calls := env.qbt.recordedFileCalls()
+	if len(calls) != 1 {
+		t.Fatalf("SetFiles calls = %+v, want exactly one", calls)
+	}
+	if !slices.Equal(calls[0].selected, []int{0, 2}) {
+		t.Errorf("SetFiles selected = %v, want [0 2]", calls[0].selected)
+	}
+	wantPriorities := map[int]int{0: 1, 1: 0, 2: 6}
+	if !maps.Equal(calls[0].priorities, wantPriorities) {
+		t.Errorf("SetFiles priorities = %v, want %v", calls[0].priorities, wantPriorities)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading", state)
+	}
+}
+
+// A selection the engine cannot apply while its file listing is empty —
+// a magnet whose metadata has not arrived — is a wait, not a refusal:
+// the row stays queued and the next pass applies the intent once the
+// listing exists.
+func TestPassSelectionWaitsForFileListing(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.qbt.caps = []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority}
+	// An empty listing stands in for metadata that has not arrived.
+	env.qbt.setFileErr = errors.New("the daemon rejected file ids as out of range")
+
+	id := env.seedTask(t, engine.NameQBittorrent, "magnet", func(task *store.Task) {
+		task.SelectFiles = ptr(`{"indices":[0],"priorities":{"0":1}}`)
+	})
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none while the listing is pending", released)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateQueued) {
+		t.Errorf("state = %q, want queued: the selection is pending, not refused", state)
+	}
+	// The handle is recorded and the transfer runs for its metadata —
+	// the pass keeps the row, and the reconciler leaves queued rows alone.
+	if ref := taskEngineRef(t, env, id); ref == nil {
+		t.Errorf("engine_ref not recorded while the selection is pending")
+	}
+	if resumes := env.qbt.recordedResumes(); len(resumes) != 1 {
+		t.Errorf("resumes = %v, want the metadata-fetch start", resumes)
+	}
+
+	// Metadata arrived: the next pass applies the selection and releases.
+	env.qbt.files = []engine.FileEntry{{Index: 0}, {Index: 1}}
+	env.qbt.setFileErr = nil
+
+	released, err = env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want %s once the listing exists", released, id)
+	}
+	if calls := env.qbt.recordedFileCalls(); len(calls) != 2 {
+		t.Errorf("SetFiles calls = %+v, want the refused attempt then the applied one", calls)
+	}
+}
+
+// On the resume path the persisted intent lands before the transfer may
+// move a byte: rate limits and file selection run ahead of Resume on the
+// stored handle.
+func TestPassAppliesIntentBeforeResume(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.qbt.caps = []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority}
+	env.qbt.files = []engine.FileEntry{{Index: 0}, {Index: 1}}
+
+	ref := "parked-handle"
+	id := env.seedTask(t, engine.NameQBittorrent, "resume-intent", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr(engine.ErrorCodeDiskFull)
+		task.EngineRef = &ref
+		task.SelectFiles = ptr(`{"indices":[0],"priorities":{"0":1,"1":0}}`)
+	})
+	env.setLimits(t, id, 2048, 0)
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want %s", released, id)
+	}
+
+	handle := engine.NameQBittorrent + ":" + ref
+	wantOps := []string{"get:" + handle, "ratelimits:" + handle, "setfiles:" + handle, "resume:" + handle}
+	if ops := env.qbt.recordedOps(); !slices.Equal(ops, wantOps) {
+		t.Errorf("engine ops = %v, want %v — the intent lands before Resume", ops, wantOps)
+	}
+	calls := env.qbt.recordedRateCalls()
+	if len(calls) != 1 || calls[0].down == nil || *calls[0].down != 2048 || calls[0].up != nil {
+		t.Errorf("SetRateLimits = %+v, want down 2048 and no upload limit", calls)
+	}
+}
+
+// A queued task whose stored handle vanished is re-added, and the
+// persisted intent lands on the fresh handle — the engine-handle
+// recreation of the same admission path.
+func TestPassReAddAppliesIntent(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.qbt.caps = []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority}
+	env.qbt.files = []engine.FileEntry{{Index: 0}}
+
+	ref := "vanished-handle"
+	env.qbt.deadHandle = engine.NameQBittorrent + ":" + ref
+	id := env.seedTask(t, engine.NameQBittorrent, "orphaned-intent", func(task *store.Task) {
+		task.EngineRef = &ref
+		task.SelectFiles = ptr(`{"indices":[0],"priorities":{"0":1}}`)
+	})
+	env.setLimits(t, id, 4096, 0)
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want %s", released, id)
+	}
+
+	requests := env.qbt.recordedAddRequests()
+	if len(requests) != 1 {
+		t.Fatalf("Add calls = %+v, want one re-add after the vanished handle", requests)
+	}
+	if !slices.Equal(requests[0].SelectFiles, []int{0}) {
+		t.Errorf("AddRequest.SelectFiles = %v, want [0]", requests[0].SelectFiles)
+	}
+	if !requests[0].StartPaused {
+		t.Errorf("AddRequest.StartPaused = false, want true while intent is owed")
+	}
+
+	newHandle := engine.NameQBittorrent + ":" + *taskEngineRef(t, env, id)
+	// The handle check finds the vanished handle before any intent call
+	// touches it, so the whole application lands on the fresh handle.
+	calls := env.qbt.recordedFileCalls()
+	if len(calls) != 1 || calls[0].id != newHandle {
+		t.Errorf("SetFiles calls = %+v, want one on the fresh handle %q", calls, newHandle)
+	}
+	rates := env.qbt.recordedRateCalls()
+	if len(rates) != 1 || rates[0].id != newHandle {
+		t.Errorf("SetRateLimits calls = %+v, want one on the fresh handle %q", rates, newHandle)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading", state)
+	}
+}
+
+// A parked task whose handle is an aria2 stopped disk-full result must
+// be re-added before any intent call: SetRateLimits and SetFiles answer
+// a wrong-state GID with a generic fault, so applying intent first would
+// misread the shape as a refusal and error a task the recovery owns.
+func TestPassReAddsStoppedResultBeforeIntent(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.aria2.caps = []engine.Capability{engine.CapPerFileSelect}
+	env.aria2.getInfo = &engine.TaskInfo{
+		ID: engine.NameAria2 + ":stopped-result", Engine: engine.NameAria2,
+		State: engine.StateError, ErrorCode: engine.ErrorCodeDiskFull,
+	}
+
+	ref := "stopped-result"
+	id := env.seedTask(t, engine.NameAria2, "parked", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr(engine.ErrorCodeDiskFull)
+		task.EngineRef = &ref
+	})
+	env.setLimits(t, id, 2048, 0)
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want %s", released, id)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading after the re-add, not an error", state)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 1 {
+		t.Fatalf("adds = %v, want one re-add of the stopped result", adds)
+	}
+	// The stopped result never saw an intent call: every rate-limit call
+	// landed on the fresh handle the re-add minted.
+	rates := env.aria2.recordedRateCalls()
+	if len(rates) != 1 || rates[0].id == engine.NameAria2+":"+ref {
+		t.Errorf("SetRateLimits calls = %+v, want one on the fresh handle, none on the stopped result", rates)
+	}
+}
+
+// A parked task whose stored handle is gone re-adds through the fresh-add
+// branch; when the listing is still pending there, the row must requeue —
+// left paused, the reconciler would adopt the metadata fetch's running
+// report and the pending selection would never be retried.
+func TestPassReAddPendingRequeuesTheParkedRow(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.qbt.caps = []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority}
+	// The fresh handle's listing is empty — a re-submitted magnet still
+	// fetching its metadata — and the daemon cannot take file ids yet.
+	env.qbt.files = nil
+	env.qbt.setFileErr = errors.New("file ids out of range")
+
+	ref := "lost"
+	env.qbt.deadHandle = engine.NameQBittorrent + ":" + ref
+	id := env.seedTask(t, engine.NameQBittorrent, "parked-magnet", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr(engine.ErrorCodeDiskFull)
+		task.EngineRef = &ref
+		task.SelectFiles = ptr(`{"indices":[0],"priorities":{"0":1}}`)
+	})
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none while the listing is pending", released)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateQueued) {
+		t.Errorf("state = %q, want queued: a pending re-add must not stay adopted-able paused", state)
+	}
+	if code := env.taskErrorCode(t, id); code != "" {
+		t.Errorf("error_code = %q, want the disk-full stamp cleared with the requeue", code)
+	}
+	newRef := taskEngineRef(t, env, id)
+	if newRef == nil || *newRef == ref {
+		t.Fatalf("engine_ref = %v, want the fresh handle", newRef)
+	}
+	if resumes := env.qbt.recordedResumes(); len(resumes) != 1 {
+		t.Errorf("resumes = %v, want the metadata-fetch start on the fresh handle", resumes)
+	}
+}
+
+// A selection owed to a transfer that is already running — an earlier
+// pass started it for metadata — lands on it stopped first: aria2's
+// select-file faults on an active GID, so applying without the pause
+// would misread a transient wrong-state fault as a real refusal.
+func TestPassPausesARunningTransferBeforeApplyingTheSelection(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.qbt.caps = []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority}
+	env.qbt.files = []engine.FileEntry{{Index: 0}, {Index: 1}}
+
+	ref := "running-magnet"
+	handle := engine.NameQBittorrent + ":" + ref
+	env.qbt.getInfo = &engine.TaskInfo{ID: handle, Engine: engine.NameQBittorrent, State: engine.StateDownloading}
+	id := env.seedTask(t, engine.NameQBittorrent, "mid-release-magnet", func(task *store.Task) {
+		task.EngineRef = &ref
+		task.SelectFiles = ptr(`{"indices":[0],"priorities":{"0":1,"1":0}}`)
+	})
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want %s", released, id)
+	}
+	wantOps := []string{"get:" + handle, "pause:" + handle, "setfiles:" + handle, "resume:" + handle}
+	if ops := env.qbt.recordedOps(); !slices.Equal(ops, wantOps) {
+		t.Errorf("engine ops = %v, want %v — the selection lands on the stopped transfer", ops, wantOps)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading", state)
+	}
+}
+
+// A selection the engine cannot express — aria2 answers an all-skip
+// intent with ErrNotSupported, "select nothing" is inexpressible — is a
+// refusal, never a silent inversion that downloads every file.
+func TestPassRefusesInexpressibleSelection(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.aria2.caps = []engine.Capability{engine.CapPerFileSelect}
+	env.aria2.files = []engine.FileEntry{{Index: 0}, {Index: 1}}
+	env.aria2.setFileErr = engine.ErrNotSupported
+
+	id := env.seedTask(t, engine.NameAria2, "all-skip", func(task *store.Task) {
+		task.SelectFiles = ptr(`{"indices":[],"priorities":{"0":0,"1":0}}`)
+	})
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none", released)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateError) {
+		t.Errorf("state = %q, want error: the selection is unfulfillable, not silently inverted", state)
+	}
+	if removes := env.aria2.recordedRemoves(); len(removes) != 1 {
+		t.Errorf("removes = %v, want the refused transfer removed", removes)
+	}
+}
+
+// A queued task already holding an engine handle is mid-release: its
+// slot was spent on the pass that recorded the handle, and the counted
+// set already includes it — re-gating it against the limits would stamp
+// a hold over a running transfer.
+func TestPassMidReleaseBypassesTheHoldGates(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	ref := "mid-release"
+	id := env.seedTask(t, engine.NameAria2, "mid-release", func(task *store.Task) {
+		task.EngineRef = &ref
+	})
+
+	// The one slot is spent — by this very task, which the counted set
+	// includes as a queued row holding a handle. A gate that re-judged it
+	// would stamp concurrency_limit over its own running transfer.
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 1}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want %s — its own slot must not block it", released, id)
+	}
+	if code := env.taskErrorCode(t, id); code != "" {
+		t.Errorf("error_code = %q, want none: the mid-release task is not held", code)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading", state)
+	}
+}
+
+// A selection the engine refuses on a populated listing is a real
+// rejection: the task errors and the transfer this pass created is
+// removed, so nothing orphaned keeps running.
+func TestPassRefusedSelectionRemovesNewTransfer(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.qbt.caps = []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority}
+	env.qbt.files = []engine.FileEntry{{Index: 0}}
+	env.qbt.setFileErr = errors.New("the daemon rejected file ids 9 as out of range")
+
+	id := env.seedTask(t, engine.NameQBittorrent, "overpicked", func(task *store.Task) {
+		task.SelectFiles = ptr(`{"indices":[9],"priorities":{"9":1}}`)
+	})
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none", released)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateError) {
+		t.Errorf("state = %q, want error", state)
+	}
+	if removes := env.qbt.recordedRemoves(); len(removes) != 1 {
+		t.Errorf("removes = %v, want the refused transfer removed", removes)
 	}
 }

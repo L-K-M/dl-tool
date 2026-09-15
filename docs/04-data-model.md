@@ -289,6 +289,8 @@ CREATE TABLE tasks (
   ratio_limit REAL, seeding_time_limit INTEGER,          -- seconds
   sequential INTEGER NOT NULL DEFAULT 0 CHECK (sequential IN (0,1)),
   queue_position INTEGER,
+  select_files TEXT,                      -- JSON selection intent: {indices, priorities};
+                                           -- written at create (5.2), rewritten by PATCH files (5.8)
   unzip_progress INTEGER,               -- 0-100, only while state = 'extracting'
   extract_password TEXT,                -- secret: never returned by an API, never logged; encrypted
                                          -- at rest with DLTOOL_SECRET_KEY (11-config-reference.md §6)

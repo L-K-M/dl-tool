@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	initialSchemaVersion = int64(1)
+	initialSchemaVersion = int64(2)
 	newerSchemaVersion   = int64(999)
 	daysPerWeek          = 7
 	hoursPerDay          = 24
@@ -96,7 +96,9 @@ ORDER BY name`))
 func TestMigrationDownThenUp(t *testing.T) {
 	db, _, _ := openTestStore(t)
 
-	require.NoError(t, goose.DownContext(t.Context(), db.DB, migrationsDirectory))
+	for range initialSchemaVersion {
+		require.NoError(t, goose.DownContext(t.Context(), db.DB, migrationsDirectory))
+	}
 	version, err := SchemaVersion(t.Context(), db)
 	require.NoError(t, err)
 	require.Zero(t, version)
@@ -185,7 +187,7 @@ func TestSchemaNewerThanBinaryRefuses(t *testing.T) {
 	opened, err := Open(t.Context(), dbPath, backupDir)
 	require.Nil(t, opened)
 	require.ErrorContains(t, err, "applied schema version 999")
-	require.ErrorContains(t, err, "embedded version 1")
+	require.ErrorContains(t, err, fmt.Sprintf("embedded version %d", initialSchemaVersion))
 	assertNoBackupArtifacts(t, backupDir)
 }
 
@@ -332,11 +334,11 @@ func TestPreMigrationBackup(t *testing.T) {
 	}{
 		{
 			start: time.Date(2026, time.September, 1, 12, 0, 0, 123_456_789, time.UTC),
-			name:  "dl-tool.db.pre-migration-1-to-2.20260901T120000.123456789Z.bak",
+			name:  "dl-tool.db.pre-migration-2-to-3.20260901T120000.123456789Z.bak",
 		},
 		{
 			start: time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC),
-			name:  "dl-tool.db.pre-migration-1-to-2.20260901T120000.000000000Z.bak",
+			name:  "dl-tool.db.pre-migration-2-to-3.20260901T120000.000000000Z.bak",
 		},
 	}
 

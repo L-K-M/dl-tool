@@ -787,6 +787,21 @@ func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetT
 		}
 	}
 
+	// The engine calls and the row writes join the task-operation lease:
+	// an admission release owes the engine the intent it re-read under
+	// the same lease, so the two can never interleave — the release
+	// either finished before the acquire or waits and then applies this
+	// PATCH's stored values. The wait runs under the operator budget,
+	// never the request alone.
+	waitCtx, cancelWait := context.WithTimeout(ctx, pauseLeaseWait)
+	defer cancelWait()
+
+	releaseLease, err := h.engines.AcquireTaskOp(waitCtx, task.ID, engine.TaskOpWait)
+	if err != nil {
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailTaskOpBusy)
+	}
+	defer releaseLease()
+
 	// The live applications run in the order of the mutator block below,
 	// every one before the first store write: an engine that cannot take
 	// a change fails the request with nothing persisted.
