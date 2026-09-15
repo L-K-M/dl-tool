@@ -482,9 +482,10 @@ func TestErrorFactorySkipsNilDetails(t *testing.T) {
 // TestShutdownStopsBackgroundLoops is the lifecycle regression: a server
 // built against a real store runs the sync hub, the reconciler and the
 // admission pass, and Shutdown must stop every one of them — proven by
-// the silence that follows the store's close, which a surviving loop
-// would fill with poll warnings at its 1 Hz cadence. The second call
-// pins idempotence.
+// the silence that follows the store's close. A surviving reconciler or
+// admission pass breaks that silence with a sweep warning every second;
+// the hub idles through snapshot errors by design, so its stop is joined
+// rather than observed. The second call pins idempotence.
 func TestShutdownStopsBackgroundLoops(t *testing.T) {
 	root := t.TempDir()
 	dataRoot := filepath.Join(root, "data")
