@@ -49,8 +49,9 @@ export async function ensureAdmin(request) {
       data: { setup_token: setupToken, ...ADMIN, locale: "en" },
     });
   // The token file is deleted on the first successful setup; when it is gone a
-  // dummy token still yields 409, which is the success path for repeat calls.
-  let token = "";
+  // non-empty dummy token still yields 409 (an empty one fails validation
+  // first), which is the success path for repeat calls.
+  let token = "already-set-up";
   if (fs.existsSync(SETUP_TOKEN_PATH)) token = await readSetupToken();
   let response = await attempt(token);
   if (response.status() === httpUnauthorized) {
@@ -230,7 +231,7 @@ export async function stubTasks(page, n) {
       PAGE_SIZE_LIMIT;
     const items = ids
       .slice(offset, offset + limit)
-      .map((i) => makeTask(i, appliedTick));
+      .map((id, k) => makeTask(offset + k, appliedTick));
     const nextCursor = offset + limit < n ? String(offset + limit) : null;
     return route.fulfill({
       json: { items, total: n, next_cursor: nextCursor },
