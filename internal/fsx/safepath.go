@@ -7,6 +7,8 @@ package fsx
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -357,41 +359,60 @@ func dedupeName(name string, taken map[string]int) string {
 // Containment is judged only after symlink resolution, so a destination that
 // walks through a link pointing outside the roots is rejected even though
 // its textual form stays inside. Resolution happens once, here: a component
-// swapped for a symlink after this check (TOCTOU) is not detected, so T046
-// must re-anchor containment on an open root descriptor (os.Root / openat)
-// before engines write. The request is never joined onto a root: the
-// caller's path is resolved on its own and then checked, so no request
-// input can build a path by concatenation.
+// swapped for a symlink after this check (TOCTOU) is not detected, so
+// callers that act on the resolved path must re-anchor on the owning
+// resolved root — the pair ResolveDestinationRoot returns — and operate
+// through a confined descriptor (MkdirBeneath, or the openat machinery of
+// doc 12 section 3.3) rather than opening the resolved path itself. The
+// request is never joined onto a root: the caller's path is resolved on its
+// own and then checked, so no request input can build a path by
+// concatenation.
 func ResolveDestination(roots []string, requested string) (string, error) {
+	_, resolved, err := ResolveDestinationRoot(roots, requested)
+
+	return resolved, err
+}
+
+// ResolveDestinationRoot is ResolveDestination plus the resolved configured
+// root that owns the answer. A descriptor opened on the root is a stable
+// anchor: opening the returned resolved path directly would re-run
+// resolution at open time, and a component swapped for a symlink after this
+// call would redirect the operation out of the roots (doc 12 section 3.3's
+// swap window). An empty request returns the first root cleaned but
+// unresolved — ResolveDestination's contract — and the pair stays
+// self-consistent for MkdirBeneath.
+func ResolveDestinationRoot(roots []string, requested string) (root, resolved string, err error) {
 	if len(roots) == 0 {
-		return "", ErrPathRejected
+		return "", "", ErrPathRejected
 	}
 	if requested == "" {
-		return filepath.Clean(roots[0]), nil
+		cleaned := filepath.Clean(roots[0])
+
+		return cleaned, cleaned, nil
 	}
 
 	// Abs cleans as well, so any ".." in the request is folded away before
 	// anything is compared or resolved.
 	abs, err := filepath.Abs(requested)
 	if err != nil {
-		return "", ErrPathRejected
+		return "", "", ErrPathRejected
 	}
-	resolved, err := resolveExisting(abs)
+	resolved, err = resolveExisting(abs)
 	if err != nil {
-		return "", ErrPathRejected
+		return "", "", ErrPathRejected
 	}
 
-	for _, root := range roots {
-		resolvedRoot, err := resolveExisting(filepath.Clean(root))
+	for _, configured := range roots {
+		resolvedRoot, err := resolveExisting(filepath.Clean(configured))
 		if err != nil {
 			continue
 		}
 		if within(resolved, resolvedRoot) {
-			return resolved, nil
+			return resolvedRoot, resolved, nil
 		}
 	}
 
-	return "", ErrPathRejected
+	return "", "", ErrPathRejected
 }
 
 // within reports whether path is root itself or lies beneath it. Both sides
@@ -437,4 +458,168 @@ func resolveExisting(path string) (string, error) {
 	}
 
 	return filepath.Join(resolvedParent, tail), nil
+}
+
+// MkdirBeneath creates leaf inside dir with dir confined beneath root —
+// the write-side twin of verifyBeneath (doc 12 section 3.3). root and dir
+// are ResolveDestinationRoot's pair: root is the resolved configured data
+// root, dir the resolved path the request selected. The parent is opened
+// through the root's descriptor, never through its own path, so a
+// component of dir swapped for a symlink after resolution cannot redirect
+// the create out of the root: the confined resolution answers ELOOP/EXDEV,
+// mapped here to ErrPathRejected. leaf is one sanitised component — the
+// caller's SafeJoin output — so the mkdirat itself has nothing left to
+// resolve. Errors arrive as *os.PathError over the raw errno, so
+// errors.Is(merr, fs.ErrExist) and friends work exactly as they do on
+// os.Mkdir's answer.
+func MkdirBeneath(root, dir, leaf string, perm fs.FileMode) (err error) {
+	// Both paths come back from the resolver cleaned and evaluated, so the
+	// relative form is pure descent — "." for the root itself, never a
+	// leading "..". Anything else means the pair was not produced by
+	// ResolveDestinationRoot and is refused, not trusted. The leaf gets
+	// the same guard: mkdirat has no RESOLVE_BENEATH, so a separator or
+	// ".." in it would escape dirFD unconditionally.
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return ErrPathRejected
+	}
+	if leaf == "" || leaf == "." || leaf == ".." || strings.ContainsRune(leaf, '/') {
+		return ErrPathRejected
+	}
+
+	rootFD, err := unix.Openat(unix.AT_FDCWD, root, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("fsx: open root %s: %w", root, err)
+	}
+	defer func() {
+		if cerr := unix.Close(rootFD); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("fsx: close root %s: %w", root, cerr))
+		}
+	}()
+
+	dirFD, err := openBeneathDir(rootFD, rel)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := unix.Close(dirFD); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("fsx: close mkdir parent: %w", cerr))
+		}
+	}()
+
+	if err := unix.Mkdirat(dirFD, leaf, uint32(perm)); err != nil {
+		return &os.PathError{Op: "mkdir", Path: leaf, Err: err}
+	}
+
+	return nil
+}
+
+// openBeneathDir opens the directory rel beneath rootFD and returns its
+// descriptor, refusing symlinks and resolutions that leave the root — the
+// same guarantee openat2 gives verifyBeneath, applied to a whole relative
+// path at once. rel is "." or a clean relative path produced by
+// filepath.Rel over resolved paths. ELOOP (a symlink or magiclink
+// component) and EXDEV (a resolution above the root) map to
+// ErrPathRejected; kernels without openat2 get the component walk, which
+// enforces the same refusal through O_NOFOLLOW descends.
+func openBeneathDir(rootFD int, rel string) (int, error) {
+	// RESOLVE_BENEATH can answer EAGAIN when a component moved mid-walk
+	// and the kernel cannot prove the resolution stayed confined; the
+	// lookup is retried rather than surfaced — a transient race must not
+	// turn into a 500 — but the refusal of ELOOP and EXDEV stays absolute.
+	var fd int
+	var oerr error
+	for range 10 {
+		fd, oerr = unix.Openat2(rootFD, rel, &unix.OpenHow{
+			Flags:   unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC,
+			Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
+		})
+		if !errors.Is(oerr, unix.EAGAIN) {
+			break
+		}
+	}
+	switch {
+	case oerr == nil:
+		return fd, nil
+	case errors.Is(oerr, unix.ELOOP) || errors.Is(oerr, unix.EXDEV):
+		return -1, ErrPathRejected
+	case errors.Is(oerr, unix.ENOSYS) || errors.Is(oerr, unix.EINVAL):
+		return openBeneathDirWalk(rootFD, rel)
+	default:
+		return -1, &os.PathError{Op: "openat", Path: rel, Err: oerr}
+	}
+}
+
+// openBeneathDirWalk is the ENOSYS fallback of openBeneathDir: it descends
+// rel one component at a time, each open anchored at the verified parent
+// descriptor with O_NOFOLLOW — the same swap window verifyBeneathWalk
+// closes for the read side. The parent of a mkdir must exist the whole way,
+// so unlike the listing's walk every component must be a directory: a
+// missing one reports its raw errno for the caller's 404, a symlink one
+// ErrPathRejected.
+func openBeneathDirWalk(rootFD int, rel string) (dirfd int, err error) {
+	if rel == "" {
+		rel = "."
+	}
+
+	dirfd = rootFD
+	owns := false
+	defer func() {
+		// On the failure path the deepest verified descriptor is released
+		// here; on success the caller owns it. rootFD is never closed —
+		// it belongs to the caller.
+		if err != nil && owns {
+			err = errors.Join(err, unix.Close(dirfd))
+		}
+	}()
+
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" {
+			continue
+		}
+		if part == ".." {
+			// O_NOFOLLOW stops a symlink, not an ascent — a ".." in the
+			// relative form escapes rootFD no matter what it resolves to.
+			return -1, ErrPathRejected
+		}
+		// A symlink answers ENOTDIR, not ELOOP, to a no-follow
+		// O_DIRECTORY open, so the type is settled by fstatat first —
+		// the same pair verifyBeneathWalk uses. The O_NOFOLLOW on the
+		// descend itself catches a swap landing between the two calls.
+		var st unix.Stat_t
+		if serr := unix.Fstatat(dirfd, part, &st, unix.AT_SYMLINK_NOFOLLOW); serr != nil {
+			return -1, &os.PathError{Op: "openat", Path: part, Err: serr}
+		}
+		if st.Mode&unix.S_IFMT == unix.S_IFLNK {
+			return -1, ErrPathRejected
+		}
+		// A "." opens a fresh descriptor on the same directory, which
+		// keeps the contract uniform: the walk always returns a
+		// descriptor the caller owns, never rootFD itself — the caller
+		// closes what it gets, and a shared descriptor would be closed
+		// twice.
+		next, oerr := unix.Openat(dirfd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if oerr != nil {
+			if errors.Is(oerr, unix.ELOOP) {
+				// Swapped for a symlink between the fstatat and the
+				// open; the no-follow flag caught it.
+				return -1, ErrPathRejected
+			}
+
+			return -1, &os.PathError{Op: "openat", Path: part, Err: oerr}
+		}
+		// dirfd moves to next before prev is closed: on a close error the
+		// deferred cleanup owns next, and prev — already released by the
+		// failed close — is never closed twice (verifyBeneathWalk's order).
+		prev := dirfd
+		dirfd = next
+		if owns {
+			if cerr := unix.Close(prev); cerr != nil {
+				return -1, fmt.Errorf("fsx: close walked descriptor: %w", cerr)
+			}
+		}
+		owns = true
+	}
+
+	return dirfd, nil
 }
