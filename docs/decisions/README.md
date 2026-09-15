@@ -30,6 +30,8 @@ Format is MADR-minimal with a mandatory `## Confirmation` section — see
 | 0016 | [Relicense from the Unlicense to Apache-2.0](0016-relicense-to-apache-2.md) | **proposed** |
 | 0017 | [dl-tool assumes exclusive control of its engines](0017-exclusive-control-of-engines.md) | accepted |
 | 0018 | [Pin yt-dlp by version and hash; never self-update at runtime](0018-pin-ytdlp-by-version-and-hash.md) | accepted |
+| 0019 | [One account, no ownership model](0019-single-account-no-ownership.md) | accepted |
+| 0020 | [golang.org/x/text provides NFC and case folding for path safety](0020-x-text-for-nfc-and-case-folding.md) | accepted |
 
 ## Rules
 
@@ -59,3 +61,4 @@ Format is MADR-minimal with a mandatory `## Confirmation` section — see
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version: index of 0001–0018, 0014 recorded as withdrawn and permanently unused. |
+| 2026-09-14 | Added the missing 0019 index row and allocated 0020 for the x/text dependency record. |

@@ -732,6 +732,7 @@ the repository owner decides.
 | [0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication |
 | [0016](decisions/0016-relicense-to-apache-2.md) | Relicense from the Unlicense to Apache-2.0 (proposed) |
 | [0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | Pin yt-dlp by version and hash; never self-update at runtime |
+| [0020](decisions/0020-x-text-for-nfc-and-case-folding.md) | golang.org/x/text provides NFC and case folding for path safety |
 
 ## Open questions
 
@@ -764,3 +765,4 @@ the repository owner decides.
 | 2026-09-02 | Single-account cleanup: dropped the §3.3 `default_destination` subtree jail (containment is the data-root check alone) and restated the §6.8 exemption without roles; §6.4 says operator account rather than admin ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Review pass: the `.dlm` import caps are no longer restated here — §5.3 now points at [`07-search-and-indexers.md`](07-search-and-indexers.md) §4.1, which owned stricter numbers, and keeps only the two rules that are security properties rather than format rules. |
 | 2026-09-14 | Corrected §3.4 row 8's expected output to `____C__x`: §3.2 step 6 replaces each illegal character individually, so `\\?\C:\x` yields two underscores after `C`, exactly as row 7's identical `C:\` substring already shows. |
+| 2026-09-14 | Referenced [ADR-0020](decisions/0020-x-text-for-nfc-and-case-folding.md): §3.2 step 3 and §3.3 rule 6 depend on x/text, which T046 added. |
