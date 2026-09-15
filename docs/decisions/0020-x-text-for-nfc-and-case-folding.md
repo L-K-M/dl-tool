@@ -53,7 +53,7 @@ graph like every other pin and changes only through the same review as any direc
 
 ```bash
 grep -n 'golang.org/x/text' go.mod
-grep -rln 'golang.org/x/text' --include='*.go' internal/
+grep -rln '"golang.org/x/text' --include='*.go' .
 make test PKG=./internal/fsx/...
 ```
 

@@ -374,8 +374,9 @@ checksums only when it is first imported. `go.mod` and `go.sum` are therefore pa
 every task that imports an already-pinned dependency, whether or not that table lists them by name. Such
 a task commits exactly what `go mod tidy` produces when the import appears — new `// indirect` requires,
 new checksums, and the loss of the `// indirect` marker on the dependency that became direct. No version
-may change, and adding or removing a dependency still requires an ADR (hard rule 3). This is the other
-standing exception to hard rule 1, and it licenses no other change to either file.
+may change, and adding or removing a dependency still requires an ADR (hard rule 3); a task that adds or
+removes one under its ADR commits the resulting `go.mod`/`go.sum` changes under this same exception. This
+is the other standing exception to hard rule 1, and it licenses no other change to either file.
 
 ### 7.2 Gate 2 — the plan cannot rot
 
@@ -460,3 +461,4 @@ The `prose` filter strips fenced code blocks, so an example or template cannot t
 | 2026-09-01 | Consistency review: corrected the ADR-0005 and ADR-0007 links to the canonical filenames and removed the resolved open question about ADR slugs. |
 | 2026-09-02 | Review pass: §7.1 now states who regenerates `api/openapi.json` and `web/src/api/schema.d.ts` — they are part of the `Files` table of any task that changes a Huma operation, the one standing exception to hard rule 1. |
 | 2026-09-03 | Recovery fix: §7.1 gains the second standing exception to hard rule 1 — `go.mod`/`go.sum` are part of the `Files` table of any task that first imports an already-pinned dependency. T010 hit the gap after merging. |
+| 2026-09-14 | §7.1's second exception now also covers the `go.mod`/`go.sum` changes of a task that adds or removes a dependency under its ADR — T046 hit the gap after merging. |

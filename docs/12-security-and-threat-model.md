@@ -732,6 +732,7 @@ the repository owner decides.
 | [0013](decisions/0013-mandatory-built-in-authentication.md) | Mandatory built-in authentication |
 | [0016](decisions/0016-relicense-to-apache-2.md) | Relicense from the Unlicense to Apache-2.0 (proposed) |
 | [0018](decisions/0018-pin-ytdlp-by-version-and-hash.md) | Pin yt-dlp by version and hash; never self-update at runtime |
+| [0019](decisions/0019-single-account-no-ownership.md) | One account, no ownership model |
 | [0020](decisions/0020-x-text-for-nfc-and-case-folding.md) | golang.org/x/text provides NFC and case folding for path safety |
 
 ## Open questions
