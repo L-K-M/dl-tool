@@ -535,3 +535,115 @@ test("TestSelectFilesStepPostsSelection", async () => {
     ],
   });
 });
+
+test("TestSelectFilesLaterPageReadOnly", async () => {
+  useTasks.getState().setConnection("live");
+  const magnetOne =
+    "magnet:?xt=urn:btih:aaaabbbbccccdddd000011112222333344445555";
+  const magnetTwo =
+    "magnet:?xt=urn:btih:66667777888899990000aaaabbbbccccddddeeee";
+  let body: Record<string, unknown> | null = null;
+  server.use(
+    http.post("*/api/v1/tasks/inspect", () =>
+      HttpResponse.json({
+        manifests: [
+          {
+            source_uri: magnetOne,
+            kind: "torrent",
+            name: "one",
+            total_size: 2000,
+            file_count: 2,
+            metadata_pending: false,
+            infohash_v1: "aaaabbbbccccdddd000011112222333344445555",
+            infohash_v2: null,
+            files: [
+              { index: 0, path: "one/alpha.iso", size: 1500 },
+              { index: 1, path: "one/notes.txt", size: 500 },
+            ],
+          },
+          {
+            source_uri: magnetTwo,
+            kind: "torrent",
+            name: "two",
+            total_size: 4000,
+            file_count: 2,
+            metadata_pending: false,
+            infohash_v1: "66667777888899990000aaaabbbbccccddddeeee",
+            infohash_v2: null,
+            files: [
+              { index: 0, path: "two/beta.iso", size: 3000 },
+              { index: 1, path: "two/readme.txt", size: 1000 },
+            ],
+          },
+        ],
+        rejected: [],
+      }),
+    ),
+    http.post("*/api/v1/tasks", async ({ request }) => {
+      body = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json(
+        { created: [task("one"), task("two")], rejected: [] },
+        { status: 201 },
+      );
+    }),
+  );
+  mount();
+  await screen.findByRole("dialog");
+  fireEvent.change(urisBox(), {
+    target: { value: `${magnetOne}\n${magnetTwo}` },
+  });
+  fireEvent.click(
+    screen.getByRole("checkbox", {
+      name: "Show dialog to select files for download",
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+  expect(
+    await screen.findByText("Select files to download — one"),
+  ).toBeTruthy();
+
+  // The second torrent is not the select_files target (doc 05 §5.2): its
+  // page previews the defaults instead of offering edits that would be
+  // silently dropped at submission.
+  fireEvent.click(screen.getByRole("button", { name: "Next torrent" }));
+  expect(
+    await screen.findByText("Select files to download — two"),
+  ).toBeTruthy();
+  expect(screen.getByText(/downloads at its defaults/)).toBeTruthy();
+  const betaBox = (await screen.findByRole("checkbox", {
+    name: "Select beta.iso",
+  })) as HTMLInputElement;
+  expect(betaBox.disabled).toBe(true);
+  expect(
+    (screen.getByRole("button", { name: "All" }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+  expect(
+    (screen.getByRole("button", { name: "None" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  expect(
+    (screen.getByRole("button", { name: "Invert" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+
+  // The first torrent's page stays editable and owns the submission.
+  fireEvent.click(screen.getByRole("button", { name: "Previous torrent" }));
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "Select notes.txt" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+  await waitFor(() => expect(body).not.toBeNull());
+  expect(body).toEqual({
+    uris: [magnetOne, magnetTwo],
+    paused: false,
+    sequential: false,
+    create_subfolder: false,
+    tags: [],
+    select_files: [
+      { index: 0, selected: true, priority: "normal" },
+      { index: 1, selected: false, priority: "skip" },
+    ],
+  });
+});

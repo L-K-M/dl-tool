@@ -134,6 +134,13 @@ export function FileSelectionDialog({
 
   const manifest = manifests[Math.min(page, manifests.length - 1)];
   const files = useMemo(() => manifest?.files ?? [], [manifest]);
+  // select_files describes the first multi-file manifest only (doc 05
+  // §5.2), so that page is the one this step edits; every other page
+  // previews the defaults it will download with (doc 09 §5 "applies
+  // defaults to unvisited pages"). An editable page elsewhere would be a
+  // control whose value is silently dropped at submission.
+  const target = manifests.findIndex((m) => (m.files?.length ?? 0) > 1);
+  const editable = page === target;
   const entries = pages.get(page) ?? new Map<number, SelectionEntry>();
   const entryFor = (index: number): SelectionEntry =>
     entries.get(index) ?? { selected: true, priority: "normal" };
@@ -164,15 +171,16 @@ export function FileSelectionDialog({
   });
   const freeBytes = freeQuery.data?.free_bytes ?? null;
 
-  // The shortfall counts the whole submission, not just the visible page:
-  // unvisited manifests download at their defaults (doc 09 §5).
+  // The shortfall counts what the submission will actually download: the
+  // target page's selection plus defaults everywhere else.
   const wantedBytes = manifests.reduce(
     (sum, m, manifestIndex) =>
       sum +
       (m.files ?? []).reduce((inner, file) => {
-        const entry = pages.get(manifestIndex)?.get(file.index) ?? {
-          selected: true,
-        };
+        const entry =
+          manifestIndex === target
+            ? (pages.get(target)?.get(file.index) ?? { selected: true })
+            : { selected: true };
         return inner + (entry.selected ? (file.size ?? 0) : 0);
       }, 0),
     0,
@@ -180,6 +188,7 @@ export function FileSelectionDialog({
   const shortfall = freeBytes !== null && wantedBytes > freeBytes;
 
   const applyChanges = (changes: FileChange[]) => {
+    if (!editable) return;
     setPages((previous) => {
       const next = new Map(previous);
       const state = new Map(next.get(page) ?? []);
@@ -223,10 +232,9 @@ export function FileSelectionDialog({
     selected: boolean;
     priority: string;
   }[] => {
-    const first = manifests.findIndex((m) => (m.files?.length ?? 0) > 1);
-    if (first < 0) return [];
-    const state = pages.get(first) ?? new Map<number, SelectionEntry>();
-    return (manifests[first].files ?? []).map((file) => ({
+    if (target < 0) return [];
+    const state = pages.get(target) ?? new Map<number, SelectionEntry>();
+    return (manifests[target].files ?? []).map((file) => ({
       index: file.index,
       selected: state.get(file.index)?.selected ?? true,
       priority: state.get(file.index)?.priority ?? "normal",
@@ -302,6 +310,7 @@ export function FileSelectionDialog({
             <Button
               variant="outline"
               size="sm"
+              disabled={!editable}
               onClick={() => setFiltered(true)}
             >
               {filteredSuffix
@@ -311,6 +320,7 @@ export function FileSelectionDialog({
             <Button
               variant="outline"
               size="sm"
+              disabled={!editable}
               onClick={() => setFiltered(false)}
             >
               {filteredSuffix
@@ -320,6 +330,7 @@ export function FileSelectionDialog({
             <Button
               variant="outline"
               size="sm"
+              disabled={!editable}
               onClick={() => setFiltered("invert")}
             >
               {filteredSuffix
@@ -334,10 +345,15 @@ export function FileSelectionDialog({
               {t("addTask.select.expandAll")}
             </Button>
           </div>
+          {multi && !editable ? (
+            <p className="text-sm text-muted-foreground">
+              {t("addTask.select.readOnly")}
+            </p>
+          ) : null}
           <FileTree
             key={`${page}-${treeKey}`}
             nodes={nodes}
-            readOnly={!multi}
+            readOnly={!editable}
             filter={filter}
             freeBytes={freeBytes}
             onChange={applyChanges}
