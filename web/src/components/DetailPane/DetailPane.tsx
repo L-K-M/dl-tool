@@ -1171,7 +1171,9 @@ export function DetailPane(): JSX.Element {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   // Selecting the resolved tasks keeps the pane idle through ticks that only
-  // touch rows it does not show.
+  // touch rows it does not show. useShallow compares task references, which
+  // requires applySync to replace (never field-mutate) task objects on every
+  // merge — unlike the tasks map itself, which deltas mutate in place.
   const selected = useTasks(
     useShallow((state) =>
       [...state.selection].flatMap((id) => {

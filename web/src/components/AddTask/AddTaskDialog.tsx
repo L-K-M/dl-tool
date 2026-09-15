@@ -407,9 +407,9 @@ export function AddTaskDialog({
   const fileInput = useRef<HTMLInputElement>(null);
 
   // The duplicate-source set is only consulted while the dialog is open; the
-  // rid key keeps the scan off the per-tick update path when closed while
-  // still tracking the in-place map merges that leave the map ref unchanged.
-  const revision = useTasks((state) => (open ? state.rid : -1));
+  // tasksVersion key keeps the scan off the per-tick update path when closed
+  // while still tracking the in-place merges that leave the map ref unchanged.
+  const revision = useTasks((state) => (open ? state.tasksVersion : -1));
   const known = useMemo(() => {
     void revision;
     const tasks = open ? useTasks.getState().tasks : EMPTY_TASKS;

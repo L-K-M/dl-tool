@@ -819,8 +819,12 @@ export function TaskGrid(props: TaskGridProps) {
   useEffect(
     () =>
       // Delta merges mutate the shared task map, so the pre-update value comes
-      // from changedFrom, not from the previous state object.
-      useTasks.subscribe((next) => {
+      // from changedFrom, not from the previous state object. Its identity
+      // also gates the diff: non-sync updates (selection, stats-only ticks)
+      // keep the last sync's changedIds, and re-diffing them would spuriously
+      // rebuild the 10k-row table model on e.g. every selection click.
+      useTasks.subscribe((next, prev) => {
+        if (next.changedFrom === prev.changedFrom) return;
         const changed = sorting.some(({ id: columnId }) => {
           const field = sourceFields[columnId as Exclude<ColumnId, "select">];
           for (const id of next.changedIds) {

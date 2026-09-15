@@ -335,9 +335,40 @@ test("TestChangedIdsTracksDeltaAndSnapshot", () => {
   );
   expect(state().changedIds).toEqual(new Set(["a", "b"]));
   state().applySync(message({ full_update: true, tasks: { a: task("a") } }));
-  // The snapshot invalidates every previously held id, including "c" which it
-  // drops by absence; "b" was already gone before it arrived.
+  // A full snapshot recomputes changedIds against the pre-snapshot map: "a"
+  // differs, "c" is dropped by absence, and the already-removed "b" is not
+  // re-reported. Consumers must treat full_update as full reconciliation,
+  // since pending delta ids such as "b" are discarded here.
   expect(state().changedIds).toEqual(new Set(["a", "c"]));
+});
+
+test("TestDeltaBumpsTasksVersionAndReplacesChangedFrom", () => {
+  state().hydrate([task("a"), task("b")]);
+  const version0 = state().tasksVersion;
+  state().applySync(message({ tasks: { a: { progress: 0.5 } } }));
+  expect(state().tasksVersion).toBe(version0 + 1);
+  expect([...state().changedFrom.keys()]).toEqual(["a"]);
+  // The next delta hands consumers a fresh changedFrom map — entries never
+  // accumulate across messages, so the map stays bounded by one message.
+  const firstFrom = state().changedFrom;
+  state().applySync(message({ tasks: { b: { progress: 0.7 } } }));
+  expect(state().tasksVersion).toBe(version0 + 2);
+  expect(state().changedFrom).not.toBe(firstFrom);
+  expect([...state().changedFrom.keys()]).toEqual(["b"]);
+});
+
+test("TestStatsOnlyTickKeepsDeltaBookkeepingStable", () => {
+  state().hydrate([task("a")]);
+  state().applySync(message({ tasks: { a: { progress: 0.5 } } }));
+  const before = state();
+  state().applySync(
+    message({ rid: 99, tasks: {}, stats: { ...before.stats, active: 3 } }),
+  );
+  expect(state().stats.active).toBe(3);
+  expect(state().rid).toBe(99);
+  expect(state().tasksVersion).toBe(before.tasksVersion);
+  expect(state().changedIds).toBe(before.changedIds);
+  expect(state().changedFrom).toBe(before.changedFrom);
 });
 
 test("TestConnectionChangesOnlyThroughSetter", () => {

@@ -202,6 +202,21 @@ function optimisticPatch(
   }
 }
 
+/** Optimistic local patches ride the same merge path as server deltas so the
+ *  reducer remains the single writer of the task map; the envelope is
+ *  fabricated in exactly one place. */
+function applyLocalPatches(tasks: Record<string, Partial<Task>>) {
+  const store = useTasks.getState();
+  store.applySync({
+    rid: store.rid,
+    full_update: false,
+    seq_gap: false,
+    tasks,
+    tasks_removed: [],
+    stats: store.stats,
+  });
+}
+
 /** POST /api/v1/tasks/actions with {ids, action}. Optimistic for pause, resume and the queue moves. */
 export function useBulkAction(): (
   action: BulkAction,
@@ -240,17 +255,9 @@ export function useBulkAction(): (
         const task = tasks.get(id);
         if (task) previous.set(id, task);
       }
-      const store = useTasks.getState();
-      store.applySync({
-        rid: store.rid,
-        full_update: false,
-        seq_gap: false,
-        tasks: Object.fromEntries(
-          [...patches].filter(([id]) => previous.has(id)),
-        ),
-        tasks_removed: [],
-        stats: store.stats,
-      });
+      applyLocalPatches(
+        Object.fromEntries([...patches].filter(([id]) => previous.has(id))),
+      );
       return { previous };
     },
     onSuccess: (results) => {
@@ -262,15 +269,7 @@ export function useBulkAction(): (
     },
     onError: (error, _variables, context) => {
       if (context?.previous) {
-        const store = useTasks.getState();
-        store.applySync({
-          rid: store.rid,
-          full_update: false,
-          seq_gap: false,
-          tasks: Object.fromEntries(context.previous),
-          tasks_removed: [],
-          stats: store.stats,
-        });
+        applyLocalPatches(Object.fromEntries(context.previous));
       }
       toast.error(error.message);
     },
@@ -343,9 +342,9 @@ export function RemoveTasksDialog({
   useEffect(() => {
     if (request) setDeleteFiles(request.deleteFiles);
   }, [request]);
-  // Names only matter while the dialog is open; rid tracks the in-place task
-  // merges that leave the map reference unchanged.
-  const revision = useTasks((state) => (request ? state.rid : -1));
+  // Names only matter while the dialog is open; tasksVersion tracks the
+  // in-place task merges that leave the map reference unchanged.
+  const revision = useTasks((state) => (request ? state.tasksVersion : -1));
   const tasks = revision >= 0 ? useTasks.getState().tasks : EMPTY_TASKS;
   const names = (request?.ids ?? []).map((id) => tasks.get(id)?.name ?? id);
   const confirm = async () => {

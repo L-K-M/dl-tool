@@ -29,6 +29,9 @@ export interface TasksState {
    *  budget — so diff subscribers must read the old value here, not from the
    *  previous state. */
   changedFrom: ReadonlyMap<string, Task | undefined>;
+  /** Bumped on every applySync that touches tasks; delta syncs mutate the
+   *  map in place, so derived lists must invalidate off this, not the map. */
+  tasksVersion: number;
   /** Sidebar aggregates maintained incrementally by applySync; per-tick deltas
    *  keep the previous reference when no counted field moved. */
   filterCounts: Record<SidebarFilter, number>;
@@ -105,7 +108,7 @@ const recount = (tasks: ReadonlyMap<string, Task>): CountSnapshot => {
     snapshot.filterCounts.all++;
     for (const bucket of FILTER_BUCKETS[task.state] ?? [])
       snapshot.filterCounts[bucket]++;
-    bumpCount(categoryCounts, task.category, 1);
+    bumpCount(categoryCounts, task.category ?? null, 1);
     if (!task.category) snapshot.uncategorisedCount++;
     let tagged = false;
     for (const tag of new Set(task.tags ?? [])) {
@@ -140,7 +143,7 @@ const adjustCounts = (
   const moveCategory = (task: Task | undefined, delta: number) => {
     if (!task) return;
     categoriesDraft ??= new Map(state.categoryCounts);
-    bumpCount(categoriesDraft, task.category, delta);
+    bumpCount(categoriesDraft, task.category ?? null, delta);
     if (!task.category) uncategorisedCount += delta;
   };
   const moveTags = (task: Task | undefined, delta: number) => {
@@ -192,6 +195,7 @@ export const useTasks = create<TasksState>((set, get) => ({
   connection: "connecting",
   changedIds: new Set(),
   changedFrom: new Map(),
+  tasksVersion: 0,
   filterCounts: emptyFilterCounts(),
   categoryCounts: new Map(),
   tagCounts: new Map(),
@@ -239,6 +243,12 @@ export const useTasks = create<TasksState>((set, get) => ({
         }
         if (pruned.size !== state.selection.size) selection = pruned;
       }
+      // Stats-only keep-alive ticks carry no task changes; returning early
+      // keeps changedIds/changedFrom/tasksVersion reference-stable so diff
+      // subscribers and derived lists do not re-run for nothing.
+      if (!changedIds.size) {
+        return { stats: msg.stats, rid: msg.rid };
+      }
       const counts = replace
         ? recount(tasks)
         : adjustCounts(state, tasks, changedIds, changedFrom);
@@ -249,6 +259,7 @@ export const useTasks = create<TasksState>((set, get) => ({
         rid: msg.rid,
         changedIds,
         changedFrom,
+        tasksVersion: state.tasksVersion + 1,
         ...counts,
       };
     }),
