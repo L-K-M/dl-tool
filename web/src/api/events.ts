@@ -75,6 +75,7 @@ export function createTransport(opts: {
   let needsRecovery = false;
   let connection: Connection = "connecting";
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let probing = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryAt: number | null = null;
   let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -112,15 +113,23 @@ export function createTransport(opts: {
 
   /** EventSource cannot see a 401, so every outage is probed through /sync. */
   async function probe(): Promise<void> {
-    const result = await fetchSync(lastRid);
-    if (result === "unauthenticated") {
-      authLost();
-      return;
-    }
-    // Data through the fallback lifts an amber read, but only the stream
-    // itself can end the outage.
-    if (result === "ok" && connection === "offline") {
-      setConnection(pollTimer !== null ? "polling" : "connecting");
+    // A hung request must not pile up under the 2 s poller and starve the
+    // socket a reconnect needs.
+    if (probing) return;
+    probing = true;
+    try {
+      const result = await fetchSync(lastRid);
+      if (result === "unauthenticated") {
+        authLost();
+        return;
+      }
+      // Data through the fallback lifts an amber read, but only the stream
+      // itself can end the outage.
+      if (result === "ok" && connection === "offline") {
+        setConnection(pollTimer !== null ? "polling" : "connecting");
+      }
+    } finally {
+      probing = false;
     }
   }
 
@@ -131,8 +140,9 @@ export function createTransport(opts: {
       authLost();
       return;
     }
+    // The full snapshot travels through onSync, where its full_update flag
+    // already invalidates the task list; no second invalidation is needed.
     if (result === "ok") {
-      void invalidateTaskList(opts.queryClient);
       toast.success(i18next.t("shell.reconnected"));
     }
   }
@@ -141,6 +151,7 @@ export function createTransport(opts: {
     if (retryTimer !== null) clearTimeout(retryTimer);
     retryTimer = null;
     retryAt = null;
+    useTransportUi.setState({ nextRetryIn: null });
   }
 
   function startPoller(): void {
@@ -260,6 +271,10 @@ export function createTransport(opts: {
     ) {
       needsRecovery = true;
       setConnection("offline");
+      // A silently dead stream (NAT timeout, sleep/wake, hung server) never
+      // fires an error event, so force a fresh connection; if it fails, the
+      // ladder and the polling fallback take over from there.
+      connect();
     }
     if (silent || (downAt !== null && t - downAt >= BANNER_AFTER_MS)) {
       useTransportUi.setState({ banner: true });

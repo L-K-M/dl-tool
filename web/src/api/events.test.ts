@@ -208,6 +208,11 @@ test("TestBackoffLadder", async () => {
     expect(FakeEventSource.instances).toHaveLength(count);
     await tick(1);
     expect(FakeEventSource.instances).toHaveLength(count + 1);
+    // A failed stream must be closed before its replacement opens, or a real
+    // browser would keep it retrying and double-apply every sync event.
+    expect(
+      FakeEventSource.instances.slice(0, count).every((i) => i.closed),
+    ).toBe(true);
   }
   transport.stop();
 });
@@ -237,7 +242,8 @@ test("TestPollingAfterThreeFailures", async () => {
   expect(ridOf(-1)).toBe(7);
   await tick(POLL_INTERVAL_MS);
   expect(getSync.mock.calls).toHaveLength(POLL_AFTER_FAILURES + 2);
-  expect(FakeEventSource.instances.length).toBeGreaterThan(1);
+  // The fourth rung opens a new stream while the poller is active.
+  expect(FakeEventSource.instances.length).toBeGreaterThan(POLL_AFTER_FAILURES);
   transport.stop();
 });
 
@@ -284,6 +290,7 @@ test("TestUnauthenticatedRendersSessionBanner", async () => {
   // Rule 7: no retry ladder runs behind the session banner.
   await tick(120_000);
   expect(FakeEventSource.instances).toHaveLength(1);
+  expect(FakeEventSource.open()).toHaveLength(0);
   expect(useTransportUi.getState().nextRetryIn).toBeNull();
   expect(useTransportUi.getState().banner).toBe(false);
 });
@@ -314,6 +321,20 @@ test("TestSilenceMarksOfflineAndRaisesBanner", async () => {
   transport.stop();
 });
 
+test("TestSilenceForcesAReconnect", async () => {
+  const { transport } = makeTransport();
+  transport.start();
+  expect(FakeEventSource.instances).toHaveLength(1);
+  // A half-open stream never fires an error event, so the silence detector
+  // must close it and open a replacement; if that fails, the ladder runs.
+  await tick(OFFLINE_AFTER_MS);
+  expect(useTasks.getState().connection).toBe("offline");
+  expect(FakeEventSource.instances).toHaveLength(2);
+  expect(FakeEventSource.instances[0].closed).toBe(true);
+  expect(FakeEventSource.instances[1].closed).toBe(false);
+  transport.stop();
+});
+
 test("TestAmberNeverFiresAfterTheBanner", async () => {
   const { transport, connections } = makeTransport();
   transport.start();
@@ -323,6 +344,9 @@ test("TestAmberNeverFiresAfterTheBanner", async () => {
   expect(useTransportUi.getState().banner).toBe(false);
   await tick(1);
   expect(useTransportUi.getState().banner).toBe(true);
+  // The first rung already fired: no retry is pending, so the countdown is
+  // cleared rather than frozen on a stale number.
+  expect(useTransportUi.getState().nextRetryIn).toBeNull();
   // Rule 2's ladder is monotonic: silence past the threshold must not regress
   // an already-bannered outage to amber.
   await tick(OFFLINE_AFTER_MS);
@@ -368,7 +392,7 @@ test("TestTransportOwnsTheStreamAndSyncEndpoint", () => {
   for (const path of walk(srcRoot)) {
     if (allowed.has(path)) continue;
     const text = readFileSync(path, "utf8");
-    expect(text, path).not.toMatch(/new EventSource/);
-    expect(text, path).not.toMatch(/\.GET\(\s*"\/sync"/);
+    expect(text, path).not.toMatch(/\bnew\s+(?:window\.)?EventSource/);
+    expect(text, path).not.toMatch(/\.GET\(\s*["'`]\/sync/);
   }
 });

@@ -193,12 +193,13 @@ cd web && npx vitest run
  ✓ src/api/events.test.ts > TestUnauthenticatedRendersSessionBanner
  ✓ src/api/events.test.ts > TestSingleEventSourcePerSession
  ✓ src/api/events.test.ts > TestSilenceMarksOfflineAndRaisesBanner
+ ✓ src/api/events.test.ts > TestSilenceForcesAReconnect
  ✓ src/api/events.test.ts > TestAmberNeverFiresAfterTheBanner
  ✓ src/api/events.test.ts > TestStructuralSyncInvalidatesTaskList
  ✓ src/api/events.test.ts > TestTransportOwnsTheStreamAndSyncEndpoint
 
  Test Files  13 passed (13)
-      Tests  191 passed (191)
+      Tests  192 passed (192)
 
 TRANSPORT_OK
 ```
@@ -210,6 +211,8 @@ Acceptance coverage beyond the five named tests:
   file outside `api/events.ts` constructs an `EventSource` or calls
   `api.GET("/sync")`.
 - `TestSilenceMarksOfflineAndRaisesBanner` covers the 30 s amber threshold;
+  `TestSilenceForcesAReconnect` proves the silence path closes the dead stream
+  and opens a replacement (a half-open stream never fires `error`);
   `TestAmberNeverFiresAfterTheBanner` covers the monotonic-ladder clause of
   doc 09 §10.8 rule 2.
 - `TestStructuralSyncInvalidatesTaskList` covers the `invalidateTaskList` row:
