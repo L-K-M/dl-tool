@@ -353,14 +353,28 @@ const cellFields: Record<
   completedOn: ["completed_at"],
 };
 
+const EMPTY_FIELDS: readonly (keyof Task)[] = [];
+const EMPTY_VALUES: readonly unknown[] = [];
+
 function TaskCell({ taskId, id }: { taskId: string; id: ColumnId }) {
-  const values = useTasks(
+  const fields = id === "select" ? EMPTY_FIELDS : cellFields[id];
+  const single = fields.length === 1 ? fields[0] : null;
+  // Both subscriptions are unconditional so hooks stay stable; each is cheap
+  // where it does not apply. A single-field cell reads the primitive off the
+  // task (Object.is compare, no allocation); multi-field cells diff a tuple.
+  // Keeping the per-tick selector work allocation-free matters: every store
+  // update re-runs every mounted cell's selector (~30 rows x 14 columns).
+  const singleValue = useTasks((state) =>
+    single === null ? null : (state.tasks.get(taskId)?.[single] ?? null),
+  );
+  const tuple = useTasks(
     useShallow((state) => {
+      if (single !== null || fields.length === 0) return EMPTY_VALUES;
       const task = state.tasks.get(taskId);
-      const fields = id === "select" ? [] : cellFields[id];
       return fields.map((field) => task?.[field]);
     }),
   );
+  const values: readonly unknown[] = single === null ? tuple : [singleValue];
   const { t, i18n } = useTranslation("grid");
   const locale = i18n.language;
   switch (id) {
