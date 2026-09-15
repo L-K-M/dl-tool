@@ -374,9 +374,11 @@ function TaskCell({ taskId, id }: { taskId: string; id: ColumnId }) {
       return fields.map((field) => task?.[field]);
     }),
   );
-  // Render-local for single-field cells (fresh array each render): index into
-  // it below, but never use `values` in hook deps or memo prop comparisons.
-  const values: readonly unknown[] = single === null ? tuple : [singleValue];
+  // Stable identity: changes only when the underlying store value changes.
+  const values: readonly unknown[] = useMemo(
+    () => (single === null ? tuple : [singleValue]),
+    [single, tuple, singleValue],
+  );
   const { t, i18n } = useTranslation("grid");
   const locale = i18n.language;
   switch (id) {
