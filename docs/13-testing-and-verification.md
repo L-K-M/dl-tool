@@ -374,10 +374,11 @@ checksums only when it is first imported. `go.mod` and `go.sum` are therefore pa
 every task that imports an already-pinned dependency — and of every task that adds or removes a
 dependency under an ADR — whether or not that table lists them by name. Such a task commits exactly what
 `go mod tidy` produces when the import appears — new `// indirect` requires, new checksums, and the loss
-of the `// indirect` marker on the dependency that became direct. An already-pinned import changes no
-version. Adding or removing a dependency still requires an ADR (hard rule 3), and the task commits the
-resolution `go mod tidy` produces verbatim, including any version movement the new requirement forces.
-This is the other standing exception to hard rule 1, and it licenses no other change to either file.
+of the `// indirect` marker on the dependency that became direct. That case changes no version. A task
+that adds or removes a dependency still requires an ADR (hard rule 3) and commits the resolution
+`go mod tidy` produces verbatim — a new direct require, new checksums, and any version movement the new
+requirement forces — with no prior marker to lose. This is the other standing exception to hard rule 1,
+and it licenses no other change to either file.
 
 ### 7.2 Gate 2 — the plan cannot rot
 

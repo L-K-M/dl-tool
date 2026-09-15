@@ -61,4 +61,4 @@ Format is MADR-minimal with a mandatory `## Confirmation` section — see
 | Date | Change |
 |---|---|
 | 2026-09-01 | Initial version: index of 0001–0018, 0014 recorded as withdrawn and permanently unused. |
-| 2026-09-14 | Added the missing 0019 index row and allocated 0020 for the x/text dependency record. |
+| 2026-09-14 | Added the missing 0019 index row and recorded 0020 (accepted) for the x/text dependency. |
