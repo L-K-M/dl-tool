@@ -186,7 +186,8 @@ Three more plan repairs are needed in this task file before it can run to green:
 
 1. `## Verification` expects `Test Files  10 passed (10)`, but `web/src` already contains 11 test files;
    adding `AddTaskDialog.test.tsx` makes Vitest report `Test Files  12 passed (12)`. Same staleness as
-   the T044/T045 suite-count fixes — best written drift-proof, e.g. `Test Files  N passed (N)`.
+   the T044/T045 suite-count fixes — best written drift-proof, e.g. require zero failed tests and every
+   test file passing, without hardcoding the file count.
 2. Doc 09 §4 specifies the Category control as "Existing categories plus inline create", and this task's
    out-of-scope note allows "the inline create that posts `POST /categories` (T050)". T050 is still
    `todo`: `/categories` is absent from `api/openapi.json` and `web/src/api/schema.d.ts`, so the typed
