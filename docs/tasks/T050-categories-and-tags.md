@@ -163,4 +163,43 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Stopped before implementation: `internal/api/server.go` is not in the `## Files` table, but it is the
+only composition point where a new operation group can register. `Server.registerOperations` calls each
+handler group's `Register` (`s.auth`, `s.tasks`, `s.settings`, `s.fs`, `s.SSE`), so a `CategoryHandlers`
+built in `categories.go` has no caller: `/categories` and `/tags` would never route, `make gen` would
+produce no paths for them, and no acceptance test could observe them through `server.API`.
+
+This is the same defect T046 recorded and commit `ba88361` repaired by adding the row
+`| internal/api/server.go | edit | ... |`; T065 and T068 carry it natively ("Call
+`NewXHandlers(...).Register(api)` once"). The repair for this task is the same shape, and the file that
+should answer it is this task file:
+
+1. Add `internal/api/server.go` to the `## Files` table: construct `CategoryHandlers` in `NewServer`
+   (the constructor takes `db` and `cfg.DataRoots`, wrapping `db` in `store.NewSettingsStore` exactly
+   like `NewSettingsHandlers` does) and call `s.categories.Register(s.API)` in `registerOperations`,
+   plus a matching `## Steps` entry.
+2. Extend the `## Verification` scope check with the two generated files of
+   `docs/13-testing-and-verification.md` §7.1 (`api/openapi.json`, `web/src/api/schema.d.ts`), the
+   wording T046's repaired file already uses — registering Huma operations necessarily changes both.
+3. Record the `default_destination` decision where it is governed: amend the resolution table's third
+   row to name the settings read, the unset-or-empty outcome (the migration seeds no value; the row's
+   existing "else the first root" fallback covers it), and the out-of-roots outcome
+   (`403 /problems/path-rejected` via `fsx.ResolveDestination`), so the spec — not only this note —
+   answers the implementer.
+
+Three smaller points the repair should settle so the implementation does not re-block or guess:
+
+- The interface contract shows package-level store functions (`ListCategories(ctx, db)`), but the file
+  it extends is `SettingsStore` method territory — T027's Files row says "every later task that adds a
+  settings-table query extends this file" and `ListEngines`/`EnsureEngine`/`TouchEngine`/`EngineByID`
+  are all `(s *SettingsStore)` methods. The implementation would follow the file, not the sketch.
+- `PatchCategoryInput` carries `new_name`/`save_path` as `string` with `omitempty`, which cannot tell an
+  omitted field from an explicit `""`, while doc 05 §8.1 makes an empty name `422`. `*string` fields are
+  required; treating explicit-empty as omitted would contradict §8.1 and needs a spec change first.
+- The resolution table's third row needs a `default_destination` settings read the migration does not
+  seed; step 3 above owns the out-of-roots outcome. The read is a `SettingsStore` method in
+  `settings.go` — T027's Files row makes that file the home of new settings-table queries — rather
+  than another inline query in `tasks.go`; relocating the existing `queryConcurrencySettings` is out
+  of scope. Also note `store.Category`/`store.Tag` would live in
+  `settings.go` (`models.go` is outside the table) and there is no `store.ErrConflict` sentinel yet
+  for the `409` mapping; the implementation would add it there.
