@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -113,18 +114,22 @@ export function buildTree(files: FileInput[]): FileNode[] {
     let selected = 0;
     let size: number | null = 0;
     const priorities = new Set<FilePriority>();
+    // A null child priority means either "no priorities on this engine" or
+    // "mixed descendants" — only the second must force this folder's —.
+    let mixed = false;
     for (const child of node.children) {
       const rolled = finish(child);
       count += rolled.count;
       selected += rolled.selected;
       size = size === null || rolled.size === null ? null : size + rolled.size;
       if (child.priority !== null) priorities.add(child.priority);
+      else if (hasPriorities(child)) mixed = true;
     }
     node.size = size;
     node.selected =
       selected === 0 ? false : selected === count ? true : "mixed";
     // A uniform descendant priority surfaces on the folder; a mixed one shows —.
-    node.priority = priorities.size === 1 ? [...priorities][0] : null;
+    node.priority = !mixed && priorities.size === 1 ? [...priorities][0] : null;
     return { count, selected, size };
   };
   for (const root of roots) finish(root);
@@ -235,9 +240,19 @@ export function FileTree({
   const locale = i18n.language;
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [focusPath, setFocusPath] = useState<string | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
 
   const visible = useMemo(() => filterNodes(nodes, filter), [nodes, filter]);
   const rows = useMemo(() => flatten(visible, collapsed), [visible, collapsed]);
+  // A roving tabindex always keeps exactly one tab stop: the focused row, or
+  // the first row when nothing is focused or the focus was filtered away.
+  const focusRow = rows.some((row) => row.node.path === focusPath)
+    ? focusPath
+    : rows[0]?.node.path;
+  useEffect(() => {
+    if (focusPath !== null)
+      rowRefs.current.get(focusPath)?.focus({ preventScroll: true });
+  }, [focusPath]);
   const all = useMemo(() => nodes.flatMap(leaves), [nodes]);
   const showProgress = all.some((node) => node.progress !== undefined);
 
@@ -278,7 +293,13 @@ export function FileTree({
     });
 
   const onTreeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (rows.length === 0) return;
+    // Nested controls keep their own keys — the priority select opens and
+    // navigates with arrows, and a focused checkbox hears nothing here.
+    if (
+      rows.length === 0 ||
+      (event.target as HTMLElement).closest("input, select, button")
+    )
+      return;
     const index = Math.max(
       0,
       rows.findIndex((row) => row.node.path === focusPath),
@@ -330,10 +351,14 @@ export function FileTree({
         {rows.map(({ node, depth }) => {
           const folder = node.children !== undefined;
           const expanded = folder && !collapsed.has(node.path);
-          const focused = focusPath === node.path;
+          const focused = focusRow === node.path;
           return (
             <div
               key={node.path}
+              ref={(element) => {
+                if (element) rowRefs.current.set(node.path, element);
+                else rowRefs.current.delete(node.path);
+              }}
               role="treeitem"
               aria-level={depth}
               aria-expanded={folder ? expanded : undefined}

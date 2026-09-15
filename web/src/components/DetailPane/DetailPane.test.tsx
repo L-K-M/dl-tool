@@ -382,6 +382,48 @@ test("TestLogTabNewestFirstWithCodeColumn", async () => {
   expect(rows[0].querySelector("td")!.getAttribute("title")).not.toBeNull();
 });
 
+test("TestMixedSubfolderPriorityShowsDash", () => {
+  // A folder whose subfolder disagrees internally must not inherit the
+  // sibling leaf's priority — "—" is the only honest display.
+  const [top] = buildTree([
+    file(0, "top/a/x.iso", { priority: "skip", selected: false }),
+    file(1, "top/a/y.iso", { priority: "high" }),
+    file(2, "top/c.iso", { priority: "high" }),
+  ]);
+  expect(top.children?.[0].priority).toBeNull();
+  expect(top.priority).toBeNull();
+});
+
+test("TestTreeRovingFocusAndControlKeys", () => {
+  render(
+    <FileTree
+      nodes={buildTree([file(0, "ubuntu/a.iso"), file(1, "ubuntu/b.txt")])}
+      onChange={() => undefined}
+    />,
+  );
+  const items = screen.getAllByRole("treeitem");
+  // One tab stop before any interaction, on the first row.
+  expect(items.filter((item) => item.tabIndex === 0)).toEqual([items[0]]);
+  // Arrow keys move DOM focus, not only state.
+  fireEvent.keyDown(screen.getByRole("tree"), { key: "ArrowDown" });
+  const leaf = items.find((item) => item.textContent?.includes("a.iso"))!;
+  expect(document.activeElement).toBe(leaf);
+  fireEvent.keyDown(screen.getByRole("tree"), { key: "ArrowDown" });
+  const second = items.find((item) => item.textContent?.includes("b.txt"))!;
+  expect(document.activeElement).toBe(second);
+  // A focused control keeps its own keys: ArrowDown on the select is left
+  // alone and never moves the tree's focus.
+  const select = screen.getByRole("combobox", { name: "Priority for b.txt" });
+  const leaked = new KeyboardEvent("keydown", {
+    key: "ArrowDown",
+    bubbles: true,
+    cancelable: true,
+  });
+  select.dispatchEvent(leaked);
+  expect(leaked.defaultPrevented).toBe(false);
+  expect(document.activeElement).toBe(second);
+});
+
 test("TestAggregateLineAndCollapsedStates", async () => {
   await mountPane();
   act(() => useTasks.getState().setSelection(["one", "two"]));
@@ -409,7 +451,11 @@ test("TestKeyboardOpensFocusedTask", async () => {
   await screen.findByText("one", { exact: true });
   const grid = screen.getByRole("grid");
   // Focus and selection diverge: "one" stays selected while "two" is focused.
-  fireEvent.click(document.querySelector('[data-task-id="one"]')!);
+  fireEvent.click(
+    within(grid)
+      .getByText("one", { exact: true })
+      .closest('[data-task-id="one"]')!,
+  );
   fireEvent.keyDown(grid, { key: "ArrowDown" });
   await waitFor(() =>
     expect(
@@ -442,11 +488,17 @@ test("TestKeyboardOpensFocusedTask", async () => {
     expect(within(pane()).getByDisplayValue("three")).toBeTruthy(),
   );
   expect([...useTasks.getState().selection]).toEqual(["three"]);
-  // Editable targets never dispatch.
-  const input = document.createElement("input");
-  grid.appendChild(input);
-  for (const key of ["Enter", "F2"]) fireEvent.keyDown(input, { key });
-  input.remove();
+  // Editable targets never dispatch — proven while focus ("three") and the
+  // selection ("one") diverge, so a leaked Enter/F2 would visibly re-open
+  // "three".
+  act(() => useTasks.getState().setSelection(["one"]));
+  for (const tag of ["input", "textarea", "div"]) {
+    const editable = document.createElement(tag);
+    if (tag === "div") editable.contentEditable = "true";
+    grid.appendChild(editable);
+    for (const key of ["Enter", "F2"]) fireEvent.keyDown(editable, { key });
+    editable.remove();
+  }
   await act(async () => {});
-  expect([...useTasks.getState().selection]).toEqual(["three"]);
+  expect([...useTasks.getState().selection]).toEqual(["one"]);
 });

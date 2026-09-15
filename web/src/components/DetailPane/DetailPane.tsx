@@ -10,7 +10,12 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Copy, FolderOpen, Pencil } from "lucide-react";
@@ -59,6 +64,7 @@ const missing = "—";
 const MIN_HEIGHT = 160;
 const SPARKLINE_SAMPLES = 60;
 const EVENTS_PAGE = 200;
+const MAX_EVENT_PAGES = 25;
 const FILTER_DEBOUNCE_MS = 250;
 
 /** The signed-in operator's username for the "Added by" field; App.tsx provides it. */
@@ -138,6 +144,7 @@ function Health({ task }: { task: Task }) {
   const dots = healthDots(task);
   return (
     <span
+      role="img"
       title={t("detail.fields.healthTip", {
         seeders: task.connected_seeders,
         peers: task.total_peers,
@@ -186,8 +193,9 @@ function GeneralPanel({ task }: { task: Task }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(task.name);
   useEffect(() => {
-    if (!renaming) setDraft(task.name);
-  }, [renaming, task.name]);
+    // A failed rename must not leave the rejected draft on screen.
+    if (!renaming || patch.isError) setDraft(task.name);
+  }, [renaming, task.name, patch.isError]);
   const [browse, setBrowse] = useState<"open" | "change" | null>(null);
   const rename = () => {
     const name = draft.trim();
@@ -482,14 +490,16 @@ function TransferPanel({ task }: { task: Task }) {
 const isPseudoTracker = (tracker: Tracker) => tracker.url.startsWith("**");
 
 function TrackersPanel({ task }: { task: Task }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [urls, setUrls] = useState("");
   const query = useQuery({
     // The task's own delta is the refetch trigger — no timer (task T048).
+    // keepPreviousData keeps the table mounted while the new tick loads.
     queryKey: [...trackersKey(task.id), task.updated_at],
+    placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => {
       const { data, error } = await api.GET("/tasks/{id}/trackers", {
         params: { path: { id: task.id } },
@@ -505,38 +515,54 @@ function TrackersPanel({ task }: { task: Task }) {
     toast.error(
       t("shell.actionFailed", { detail: detail ?? t("shell.networkError") }),
     );
-  const addTrackers = async () => {
+  const addMutation = useMutation({
+    mutationFn: async (list: string[]) => {
+      const { error } = await api.POST("/tasks/{id}/trackers", {
+        params: { path: { id: task.id } },
+        body: { urls: list },
+      });
+      if (error)
+        throw new Error(problemDetail(error) ?? t("shell.networkError"));
+    },
+    onSuccess: async () => {
+      setAdding(false);
+      setUrls("");
+      await queryClient.invalidateQueries({
+        queryKey: trackersKey(task.id),
+      });
+    },
+    onError: (error) => fail(error.message),
+  });
+  const removeMutation = useMutation({
+    mutationFn: async (list: string[]) => {
+      const { error } = await api.DELETE("/tasks/{id}/trackers", {
+        params: { path: { id: task.id }, query: { url: list } },
+      });
+      if (error)
+        throw new Error(problemDetail(error) ?? t("shell.networkError"));
+    },
+    onSuccess: async () => {
+      setChecked(new Set());
+      await queryClient.invalidateQueries({
+        queryKey: trackersKey(task.id),
+      });
+    },
+    onError: (error) => fail(error.message),
+  });
+  const addTrackers = () => {
     const list = urls
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line !== "");
     if (list.length === 0) return;
-    const { error } = await api.POST("/tasks/{id}/trackers", {
-      params: { path: { id: task.id } },
-      body: { urls: list },
-    });
-    if (error) {
-      fail(problemDetail(error));
-      return;
-    }
-    setAdding(false);
-    setUrls("");
-    await queryClient.invalidateQueries({ queryKey: trackersKey(task.id) });
+    addMutation.mutate(list);
   };
-  const removeChecked = async () => {
+  const removeChecked = () => {
     const list = [...checked].filter(
       (url) => !trackers.some((tr) => tr.url === url && isPseudoTracker(tr)),
     );
     if (list.length === 0) return;
-    const { error } = await api.DELETE("/tasks/{id}/trackers", {
-      params: { path: { id: task.id }, query: { url: list } },
-    });
-    if (error) {
-      fail(problemDetail(error));
-      return;
-    }
-    setChecked(new Set());
-    await queryClient.invalidateQueries({ queryKey: trackersKey(task.id) });
+    removeMutation.mutate(list);
   };
   const toggle = (url: string) =>
     setChecked((previous) => {
@@ -554,8 +580,8 @@ function TrackersPanel({ task }: { task: Task }) {
         <Button
           variant="ghost"
           size="sm"
-          disabled={checked.size === 0}
-          onClick={() => void removeChecked()}
+          disabled={checked.size === 0 || removeMutation.isPending}
+          onClick={() => removeChecked()}
         >
           {t("detail.trackers.remove")}
         </Button>
@@ -584,7 +610,11 @@ function TrackersPanel({ task }: { task: Task }) {
             className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm"
           />
           <div className="flex gap-1">
-            <Button size="sm" onClick={() => void addTrackers()}>
+            <Button
+              size="sm"
+              disabled={addMutation.isPending}
+              onClick={() => addTrackers()}
+            >
               {t("detail.trackers.addConfirm")}
             </Button>
             <Button
@@ -647,7 +677,7 @@ function TrackersPanel({ task }: { task: Task }) {
                   <td className="text-right tabular-nums">
                     {tracker.update_timer_seconds === null
                       ? missing
-                      : formatEta(tracker.update_timer_seconds)}
+                      : formatEta(tracker.update_timer_seconds, i18n.language)}
                   </td>
                 </tr>
               );
@@ -674,6 +704,7 @@ function PeersPanel({ task }: { task: Task }) {
   const [picked, setPicked] = useState<string | null>(null);
   const query = useQuery({
     queryKey: [...peersKey(task.id), task.updated_at],
+    placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => {
       const { data, error } = await api.GET("/tasks/{id}/peers", {
         params: { path: { id: task.id } },
@@ -736,9 +767,16 @@ function PeersPanel({ task }: { task: Task }) {
             {peers.map((peer: Peer) => (
               <tr
                 key={peer.address}
+                tabIndex={0}
                 aria-selected={picked === peer.address}
                 className={picked === peer.address ? "bg-muted" : undefined}
                 onClick={() => setPicked(peer.address)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setPicked(peer.address);
+                  }
+                }}
               >
                 <td>{peer.country ?? missing}</td>
                 <td className="font-mono">{peer.address}</td>
@@ -803,6 +841,7 @@ function FilesPanel({ task }: { task: Task }) {
   }, [filterInput]);
   const query = useQuery({
     queryKey: [...filesKey(task.id), task.updated_at],
+    placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => {
       const { data, error } = await api.GET("/tasks/{id}/files", {
         params: { path: { id: task.id } },
@@ -914,9 +953,13 @@ function LogPanel({ task }: { task: Task }) {
   const now = useRef(new Date());
   const query = useQuery({
     queryKey: [...eventsKey(task.id), task.updated_at],
+    placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => {
       const items: TaskEvent[] = [];
+      const seen = new Set<string>();
       let cursor: string | undefined;
+      // Cap and dedupe the cursor walk: a server bug echoing a cursor must
+      // not loop forever.
       do {
         const { data, error } = await api.GET("/tasks/{id}/events", {
           params: {
@@ -929,6 +972,10 @@ function LogPanel({ task }: { task: Task }) {
           throw new Error(problemDetail(error) ?? t("shell.networkError"));
         items.push(...(data.items ?? []));
         cursor = data.next_cursor ?? undefined;
+        if (cursor !== undefined) {
+          if (seen.has(cursor) || seen.size >= MAX_EVENT_PAGES) break;
+          seen.add(cursor);
+        }
       } while (cursor);
       return items;
     },
@@ -1016,14 +1063,25 @@ function ResizeHandle({
   onCommit,
 }: {
   height: number;
-  onLive: (height: number) => void;
+  /** null hands the pane back to the persisted preference. */
+  onLive: (height: number | null) => void;
   onCommit: (height: number) => void;
 }) {
   const { t } = useTranslation();
   const drag = useRef<{ y: number; height: number } | null>(null);
+  // Mid-gesture window listeners are tracked so unmount can detach them.
+  const teardownRef = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      teardownRef.current?.();
+    },
+    [],
+  );
   const max = () => Math.floor(window.innerHeight * 0.7);
   const clamp = (value: number) => Math.max(MIN_HEIGHT, Math.min(max(), value));
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    // Keep mouse drags from selecting page text.
+    event.preventDefault();
     drag.current = { y: event.clientY, height };
     // No writes mid-gesture (doc 09 §3.3); pointer-up flushes once.
     useUiPrefs.getState().setDragging(true);
@@ -1031,15 +1089,26 @@ function ResizeHandle({
       if (drag.current)
         onLive(clamp(drag.current.height + drag.current.y - moveEvent.clientY));
     };
-    const up = (upEvent: globalThis.PointerEvent) => {
+    const teardown = (upEvent?: globalThis.PointerEvent) => {
       window.removeEventListener("pointermove", move);
-      if (drag.current)
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      if (drag.current && upEvent)
         onCommit(clamp(drag.current.height + drag.current.y - upEvent.clientY));
       drag.current = null;
+      teardownRef.current = null;
       useUiPrefs.getState().setDragging(false);
     };
+    const up = (upEvent: globalThis.PointerEvent) => teardown(upEvent);
+    const cancel = () => {
+      // A canceled gesture hands the height back to the persisted pref.
+      onLive(null);
+      teardown();
+    };
+    teardownRef.current = () => teardown();
     window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.key === "PageUp" || event.key === "PageDown" ? 64 : 16;
@@ -1072,7 +1141,8 @@ function ResizeHandle({
       tabIndex={0}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
-      className="h-1.5 shrink-0 cursor-row-resize outline-none hover:bg-accent focus-visible:bg-accent"
+      // touch-action: none keeps touch drags from firing pointercancel.
+      className="h-1.5 shrink-0 cursor-row-resize outline-none [touch-action:none] hover:bg-accent focus-visible:bg-accent"
     />
   );
 }
@@ -1136,9 +1206,11 @@ export function DetailPane(): JSX.Element {
       <ResizeHandle
         height={height}
         onLive={setLiveHeight}
-        onCommit={(value) =>
-          useUiPrefs.getState().patch({ detailHeight: value })
-        }
+        onCommit={(value) => {
+          // Clearing live height lets the persisted pref own the pane again.
+          setLiveHeight(null);
+          useUiPrefs.getState().patch({ detailHeight: value });
+        }}
       />
       <Tabs
         value={activeTab}
