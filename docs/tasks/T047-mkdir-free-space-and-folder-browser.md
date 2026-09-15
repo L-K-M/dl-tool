@@ -124,11 +124,11 @@ Behaviour, from doc 09 §4.1:
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestMkdirCreatesWithUmask`, `TestMkdirConflict`, `TestMkdirRejectsSeparatorInName` pass.
-- [ ] `TestFreeSpaceReturnsIntegerBytes` asserts the JSON numbers have no fractional part.
-- [ ] `TestBrowserKeepsListingOnPathRejected` and `TestUnwritableFolderCannotBeSelected` pass.
-- [ ] The dialog issues no request outside `/api/v1/fs/*`.
-- [ ] Both error strings match doc 09 §4.1 word for word.
+- [x] `TestMkdirCreatesWithUmask`, `TestMkdirConflict`, `TestMkdirRejectsSeparatorInName` pass.
+- [x] `TestFreeSpaceReturnsIntegerBytes` asserts the JSON numbers have no fractional part.
+- [x] `TestBrowserKeepsListingOnPathRejected` and `TestUnwritableFolderCannotBeSelected` pass.
+- [x] The dialog issues no request outside `/api/v1/fs/*`.
+- [x] Both error strings match doc 09 §4.1 word for word.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -159,7 +159,81 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test && echo BROWSER_OK` on the final tree — lint clean,
+every Go package `ok`, Vitest 151/151 across 10 files including the five
+`FolderBrowserDialog.test.tsx` tests, and the final line of stdout is
+`BROWSER_OK`:
+
+```text
+$ make lint && make test && echo BROWSER_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./...
+?   	github.com/L-K-M/dl-tool/cmd/dl-tool	[no test files]
+ok  	github.com/L-K-M/dl-tool/internal/api	94.301s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.155s
+ok  	github.com/L-K-M/dl-tool/internal/engine	21.709s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.242s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.876s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	1.042s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.488s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.206s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.137s
+ok  	github.com/L-K-M/dl-tool/internal/store	72.669s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.378s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.082s
+?   	github.com/L-K-M/dl-tool/web/node_modules/flatted/golang/pkg/flatted	[no test files]
+cd web && npx vitest run
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (5 tests) 480ms
+ Test Files  10 passed (10)
+      Tests  151 passed (151)
+BROWSER_OK
+```
+
+The acceptance-named Go tests, run verbosely on the same tree:
+
+```text
+$ go test -race -count=1 -v -run 'TestMkdir|TestFreeSpace' ./internal/api/
+--- PASS: TestMkdirCreatesWithUmask (0.41s)
+--- PASS: TestMkdirConflict (0.35s)
+--- PASS: TestMkdirRejectsSeparatorInName (0.38s)
+--- PASS: TestMkdirOutsideRoots (0.33s)
+--- PASS: TestMkdirMissingParent (0.42s)
+--- PASS: TestMkdirMissingFields (0.35s)
+--- PASS: TestFreeSpaceReturnsIntegerBytes (0.35s)
+--- PASS: TestFreeSpaceOutsideRoots (0.37s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	4.124s
+```
+
+`TestBrowserKeepsListingOnPathRejected` and `TestUnwritableFolderCannotBeSelected`
+run inside `FolderBrowserDialog.test.tsx` (Vitest reports the file, not per-test
+names — the vitest run above is their pass). The msw server listens with
+`onUnhandledRequest: "error"`, so any request outside the four `/api/v1/fs/*`
+handlers would fail the suite — the fifth acceptance criterion's enforcement.
+
+Scope check — exactly the Files table plus the two generated files of
+docs/13 §7.1 (`make gen` after registering the two operations):
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/fs.go
+internal/api/fs_test.go
+web/src/api/schema.d.ts
+web/src/components/FolderBrowser/FolderBrowserDialog.test.tsx
+web/src/components/FolderBrowser/FolderBrowserDialog.tsx
+web/src/locales/en/dialogs.json
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

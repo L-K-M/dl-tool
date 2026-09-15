@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -307,4 +308,159 @@ func TestFSRejectUnknownQuery(t *testing.T) {
 
 	response = env.api.Get("/fs/roots?wat=1", "Authorization: Bearer "+env.bearer)
 	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+}
+
+// mkdir calls POST /fs/mkdir with the test bearer credential.
+func (e *tasksTestEnv) mkdir(t *testing.T, path, name string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Post("/fs/mkdir",
+		map[string]string{"path": path, "name": name},
+		"Authorization: Bearer "+e.bearer)
+}
+
+// TestMkdirCreatesWithUmask creates one directory inside the root and
+// proves the mode is the process umask's answer — 0o777 minus the mask —
+// never a mode mkdir set itself. The umask is process-wide, so it is
+// restored before the next test runs.
+func TestMkdirCreatesWithUmask(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	old := syscall.Umask(0o027)
+	response := env.mkdir(t, env.dataRoot, "fresh")
+	syscall.Umask(old)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+
+	created := filepath.Join(env.dataRoot, "fresh")
+	info, err := os.Stat(created)
+	if err != nil {
+		t.Fatalf("stat %s: %v", created, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("%s is not a directory", created)
+	}
+	if mode := info.Mode().Perm(); mode != 0o750 {
+		t.Errorf("mode = %#o, want %#o (0o777 &^ umask 0o027)", mode, 0o750)
+	}
+
+	var body struct {
+		Path     string `json:"path"`
+		Writable bool   `json:"writable"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Path != created {
+		t.Errorf("path = %q, want %q", body.Path, created)
+	}
+	if !body.Writable {
+		t.Error("writable = false on a directory the process can write")
+	}
+}
+
+// TestMkdirConflict covers both spellings of an existing name: a directory
+// and a regular file.
+func TestMkdirConflict(t *testing.T) {
+	env := newTasksTestEnv(t)
+	if err := os.Mkdir(filepath.Join(env.dataRoot, "taken"), 0o755); err != nil {
+		t.Fatalf("mkdir taken: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(env.dataRoot, "film.iso"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	assertProblem(t, env.mkdir(t, env.dataRoot, "taken"), http.StatusConflict, SlugConflict)
+	assertProblem(t, env.mkdir(t, env.dataRoot, "film.iso"), http.StatusConflict, SlugConflict)
+}
+
+// TestMkdirRejectsSeparatorInName answers 422 for every spelling of a
+// name that is not a single path component.
+func TestMkdirRejectsSeparatorInName(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	for _, name := range []string{"a/b", "..", ".", ""} {
+		response := env.mkdir(t, env.dataRoot, name)
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	}
+	if entries, err := os.ReadDir(env.dataRoot); err != nil || len(entries) != 0 {
+		t.Fatalf("data root changed by a rejected name: entries %v, err %v", entries, err)
+	}
+}
+
+// TestMkdirOutsideRoots answers 403 when the parent resolves outside the
+// configured roots — before the name is even looked at on disk.
+func TestMkdirOutsideRoots(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.mkdir(t, "/etc", "escape")
+	assertProblem(t, response, http.StatusForbidden, SlugPathRejected)
+}
+
+// TestMkdirMissingParent answers 404 for a parent inside a root that does
+// not exist.
+func TestMkdirMissingParent(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.mkdir(t, filepath.Join(env.dataRoot, "gone"), "fresh")
+	assertProblem(t, response, http.StatusNotFound, SlugNotFound)
+}
+
+// TestMkdirMissingFields answers 422 when a required body member is
+// absent.
+func TestMkdirMissingFields(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.api.Post("/fs/mkdir",
+		map[string]string{"path": env.dataRoot},
+		"Authorization: Bearer "+env.bearer)
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+}
+
+// TestFreeSpaceReturnsIntegerBytes proves the statfs answer crosses the
+// API as plain integers: the JSON literals carry no fractional part and
+// no exponent.
+func TestFreeSpaceReturnsIntegerBytes(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.api.Get("/fs/free-space?path="+url.QueryEscape(env.dataRoot),
+		"Authorization: Bearer "+env.bearer)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	decoder := json.NewDecoder(response.Body)
+	decoder.UseNumber()
+	var body struct {
+		Path       string      `json:"path"`
+		FreeBytes  json.Number `json:"free_bytes"`
+		TotalBytes json.Number `json:"total_bytes"`
+	}
+	if err := decoder.Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Path != env.dataRoot {
+		t.Errorf("path = %q, want %q", body.Path, env.dataRoot)
+	}
+	for field, number := range map[string]json.Number{"free_bytes": body.FreeBytes, "total_bytes": body.TotalBytes} {
+		if _, err := number.Int64(); err != nil {
+			t.Errorf("%s = %q is not an integer JSON literal: %v", field, number.String(), err)
+		}
+		value, _ := number.Int64()
+		if value <= 0 {
+			t.Errorf("%s = %d, want positive", field, value)
+		}
+	}
+}
+
+// TestFreeSpaceOutsideRoots applies the same jail as browse: a path
+// outside the configured roots is 403, never a statfs answer for it.
+func TestFreeSpaceOutsideRoots(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.api.Get("/fs/free-space?path="+url.QueryEscape("/etc"),
+		"Authorization: Bearer "+env.bearer)
+	assertProblem(t, response, http.StatusForbidden, SlugPathRejected)
 }
