@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +13,19 @@ import (
 
 	"github.com/L-K-M/dl-tool/internal/store"
 )
+
+// mustJSON renders one value the way a settings row's value_json stores
+// it; marshalling these seeds cannot fail.
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal %v: %v", value, err)
+	}
+
+	return string(encoded)
+}
 
 // getCategories calls GET /categories with the test bearer credential.
 func (e *tasksTestEnv) getCategories(t *testing.T) *httptest.ResponseRecorder {
@@ -253,6 +265,14 @@ func TestCategoryValidation(t *testing.T) {
 	response = env.patchCategory(t, "linux", map[string]any{"new_name": "x/y"})
 	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 
+	// An explicit empty save_path is as invalid as an explicit empty
+	// name — on create (schema) and on patch (handler check).
+	response = env.createCategory(t, map[string]any{"name": "empty", "save_path": ""})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	response = env.patchCategory(t, "linux", map[string]any{"save_path": ""})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
 	categories := decodeCategoryList(t, env.getCategories(t))
 	if len(categories) != 1 || categories[0].Name != "linux" {
 		t.Errorf("categories = %+v, want only the untouched linux row", categories)
@@ -372,8 +392,9 @@ func TestDefaultDestinationResolves(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
 	}
 	body := decodeCreateBody(t, response)
-	if len(body.Created) != 1 || body.Created[0].Destination != resolvedPath(t, env.dataRoot) {
-		t.Fatalf("created = %+v, want the first root %q", body.Created, env.dataRoot)
+	wantFirstRoot := resolvedPath(t, env.dataRoot)
+	if len(body.Created) != 1 || body.Created[0].Destination != wantFirstRoot {
+		t.Fatalf("created = %+v, want the first root %q", body.Created, wantFirstRoot)
 	}
 	if body.Created[0].RequestedDestination != nil {
 		t.Errorf("requested_destination = %q, want null", *body.Created[0].RequestedDestination)
@@ -388,7 +409,7 @@ func TestDefaultDestinationResolves(t *testing.T) {
 	if _, err := env.db.ExecContext(
 		t.Context(),
 		`INSERT INTO settings (id, key, value_json, created_at, updated_at) VALUES (?, 'default_destination', ?, 0, 0)`,
-		store.NewID(store.PrefixSetting), fmt.Sprintf("%q", configured),
+		store.NewID(store.PrefixSetting), mustJSON(t, configured),
 	); err != nil {
 		t.Fatalf("seed default_destination: %v", err)
 	}
@@ -517,4 +538,22 @@ func TestListTagsIncludesZeroCount(t *testing.T) {
 			t.Errorf("tag %q task_count = %d, want 0 — removed tasks never count", tag.Name, tag.TaskCount)
 		}
 	}
+}
+
+// TestCategoriesAndTagsRequireAuth pins the section 8 routes behind the
+// auth middleware: every operation declared credentialRequired, so a
+// bearer-less request is 401 /problems/unauthenticated, never public.
+func TestCategoriesAndTagsRequireAuth(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	for _, path := range []string{"/categories", "/tags"} {
+		assertProblem(t, env.api.Get(path), http.StatusUnauthorized, SlugUnauthenticated)
+	}
+
+	response := env.api.Post("/categories", map[string]any{"name": "x", "save_path": env.dataRoot})
+	assertProblem(t, response, http.StatusUnauthorized, SlugUnauthenticated)
+	response = env.api.Patch("/categories/x", map[string]any{"new_name": "y"})
+	assertProblem(t, response, http.StatusUnauthorized, SlugUnauthenticated)
+	response = env.api.Delete("/categories/x")
+	assertProblem(t, response, http.StatusUnauthorized, SlugUnauthenticated)
 }

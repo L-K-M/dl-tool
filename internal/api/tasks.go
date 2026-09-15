@@ -838,25 +838,24 @@ func (h *TaskHandlers) resolveCategory(ctx context.Context, name string) (*store
 
 // resolveDestination applies the destination resolution table of doc 05
 // section 5.2: an explicit request destination wins; otherwise the
-// category's save_path; otherwise the default_destination settings row
-// read through SettingsStore.DefaultDestination — which the migration
-// seeds no row for, so an unset or empty value leaves the empty string
-// that ResolveDestination answers with the first root. Every candidate
-// goes through the one fsx.ResolveDestination call, so an out-of-roots
-// answer is 403 /problems/path-rejected wherever the value came from.
+// category's save_path — a category whose save_path is empty falls
+// through; otherwise the default_destination settings row read through
+// SettingsStore.DefaultDestination — which the migration seeds no row
+// for, so an unset or empty value leaves the empty string that
+// ResolveDestination answers with the first root. Every candidate goes
+// through the one fsx.ResolveDestination call, so an out-of-roots answer
+// is 403 /problems/path-rejected wherever the value came from.
 func (h *TaskHandlers) resolveDestination(ctx context.Context, requested string, category *store.Category) (string, error) {
 	candidate := requested
+	if candidate == "" && category != nil {
+		candidate = category.SavePath
+	}
 	if candidate == "" {
-		switch {
-		case category != nil:
-			candidate = category.SavePath
-		default:
-			stored, err := h.settings.DefaultDestination(ctx)
-			if err != nil {
-				return "", internalFailure(ctx, "read default destination", err)
-			}
-			candidate = stored
+		stored, err := h.settings.DefaultDestination(ctx)
+		if err != nil {
+			return "", internalFailure(ctx, "read default destination", err)
 		}
+		candidate = stored
 	}
 
 	destination, err := fsx.ResolveDestination(h.roots, candidate)

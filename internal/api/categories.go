@@ -45,14 +45,14 @@ type TagDTO struct {
 type CreateCategoryInput struct {
 	Body struct {
 		Name     string `json:"name"      required:"true" minLength:"1" doc:"Unique category name; never carries a /"`
-		SavePath string `json:"save_path" required:"true" doc:"Default destination of tasks created in this category; must resolve inside a configured data root"`
+		SavePath string `json:"save_path" required:"true" minLength:"1" doc:"Default destination of tasks created in this category; must resolve inside a configured data root"`
 	}
 }
 
 // PatchCategoryInput addresses one category by name. The body fields are
 // pointers: an omitted field is nil and stays untouched, while an
-// explicit "" still answers 422 (doc 05 section 8.1) — string+omitempty
-// cannot tell the two apart.
+// explicit "" on either field still answers 422 (doc 05 section 8.1) —
+// string+omitempty cannot tell the two apart.
 type PatchCategoryInput struct {
 	Name string `path:"name" doc:"The category's current name"`
 	Body struct {
@@ -125,6 +125,9 @@ func (h *CategoryHandlers) Register(hapi huma.API) {
 		Description:   "Creates one global category whose save_path becomes the effective destination of a task created in it with no explicit destination. The save_path is resolved against the configured roots like any destination: outside them is 403 /problems/path-rejected. A duplicate name is 409 /problems/conflict.",
 		Tags:          []string{"categories"},
 		Security:      credentialRequired,
+		// Same strictness as every other operation: a mistyped query key
+		// is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
 	}, h.Create)
 
 	huma.Register(hapi, huma.Operation{
@@ -230,6 +233,9 @@ func (h *CategoryHandlers) Patch(ctx context.Context, in *PatchCategoryInput) (*
 
 	var resolvedSavePath *string
 	if in.Body.SavePath != nil {
+		if *in.Body.SavePath == "" {
+			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "the save_path must be non-empty")
+		}
 		resolved, err := h.resolveSavePath(*in.Body.SavePath)
 		if err != nil {
 			return nil, err
