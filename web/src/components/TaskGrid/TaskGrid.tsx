@@ -97,6 +97,8 @@ export interface TaskGridActions {
   requestRemove?: (ids: string[], deleteFiles: boolean) => void;
   focusFilter?: () => void;
   showShortcuts?: () => void;
+  /** Enter/F2: select the focused task — which need not be selected — and open its pane. */
+  openDetail?: (id: string) => void;
 }
 
 export interface TaskGridProps {
@@ -1030,6 +1032,14 @@ export function TaskGrid(props: TaskGridProps) {
       case "PageDown":
         next += viewportRows;
         break;
+      case "Enter":
+      case "F2":
+        // Doc 09 §3.6: the detail key acts on the focused row, not the
+        // selection. With no owner wired the key stays unconsumed.
+        if (!props.actions?.openDetail || !rovingId) return;
+        props.actions.openDetail(rovingId);
+        event.preventDefault();
+        return;
       case " ": {
         const selected = new Set(state.selection);
         if (!event.shiftKey && selected.has(rovingId))
