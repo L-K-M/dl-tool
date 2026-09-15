@@ -201,7 +201,7 @@ function AppLayout() {
   const { t } = useTranslation();
   const session = useSession();
   const auth = useAuthActions();
-  const { retryNow, nextRetryIn } = useEventStream();
+  const { retryNow } = useEventStream();
   // Doc 09 section 10.8 rule 1: silence past two heartbeats dims the grid.
   const offline = useTasks((s) => s.connection === "offline");
   const [removeRequest, setRemoveRequest] = useState<RemoveRequest | null>(
@@ -253,7 +253,7 @@ function AppLayout() {
           className="relative col-span-2"
         >
           <Toolbar />
-          <ReconnectBanner retryNow={retryNow} nextRetryIn={nextRetryIn} />
+          <ReconnectBanner retryNow={retryNow} />
         </header>
         <aside aria-label={t("regions.sidebar")}>
           <Sidebar />

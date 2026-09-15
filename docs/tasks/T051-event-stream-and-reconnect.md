@@ -194,12 +194,13 @@ cd web && npx vitest run
  ✓ src/api/events.test.ts > TestSingleEventSourcePerSession
  ✓ src/api/events.test.ts > TestSilenceMarksOfflineAndRaisesBanner
  ✓ src/api/events.test.ts > TestSilenceForcesAReconnect
+ ✓ src/api/events.test.ts > TestHungProbeReleasesTheGuard
  ✓ src/api/events.test.ts > TestAmberNeverFiresAfterTheBanner
  ✓ src/api/events.test.ts > TestStructuralSyncInvalidatesTaskList
  ✓ src/api/events.test.ts > TestTransportOwnsTheStreamAndSyncEndpoint
 
  Test Files  13 passed (13)
-      Tests  192 passed (192)
+      Tests  193 passed (193)
 
 TRANSPORT_OK
 ```

@@ -97,9 +97,15 @@ export function createTransport(opts: {
   type FetchResult = "ok" | "unauthenticated" | "failed";
 
   async function fetchSync(rid: number): Promise<FetchResult> {
+    // A response that never arrives must not stall the fallback: two poll
+    // intervals is long enough for a healthy snapshot and short enough to
+    // release the in-flight guard before the next reconnect rung.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), POLL_INTERVAL_MS * 2);
     try {
       const { data, response } = await api.GET("/sync", {
         params: { query: { rid } },
+        signal: controller.signal,
       });
       if (response.status === unauthorized) return "unauthenticated";
       if (!data) return "failed";
@@ -108,6 +114,8 @@ export function createTransport(opts: {
       return "ok";
     } catch {
       return "failed";
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -322,7 +330,6 @@ export function createTransport(opts: {
 /** Mounts the transport for the lifetime of the authenticated shell. */
 export function useEventStream(): {
   retryNow: () => void;
-  nextRetryIn: number | null;
 } {
   const queryClient = useQueryClient();
   const ref = useRef<Transport | null>(null);
@@ -353,6 +360,5 @@ export function useEventStream(): {
     return () => transport?.stop();
   }, []);
   const retryNow = useCallback(() => ref.current?.retryNow(), []);
-  const nextRetryIn = useTransportUi((s) => s.nextRetryIn);
-  return { retryNow, nextRetryIn };
+  return { retryNow };
 }

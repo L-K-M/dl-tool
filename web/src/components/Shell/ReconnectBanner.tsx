@@ -17,15 +17,14 @@ const bannerClass =
  */
 export function ReconnectBanner({
   retryNow,
-  nextRetryIn,
 }: {
   retryNow: () => void;
-  nextRetryIn: number | null;
 }): JSX.Element | null {
   const { t } = useTranslation();
   const connection = useTasks((s) => s.connection);
   const unauthenticated = useTransportUi((s) => s.unauthenticated);
   const banner = useTransportUi((s) => s.banner);
+  const nextRetryIn = useTransportUi((s) => s.nextRetryIn);
 
   if (unauthenticated) {
     return (
@@ -49,7 +48,11 @@ export function ReconnectBanner({
       <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
       <span>{t("shell.banner.lost")}</span>
       {nextRetryIn !== null ? (
-        <span>{t("shell.banner.retryIn", { seconds: nextRetryIn })}</span>
+        // The countdown mutates every second inside an alert region; it must
+        // not be re-announced assertively on each tick.
+        <span aria-hidden="true">
+          {t("shell.banner.retryIn", { seconds: nextRetryIn })}
+        </span>
       ) : null}
       {connection === "polling" ? (
         <span>{t("shell.banner.polling")}</span>

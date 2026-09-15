@@ -74,7 +74,10 @@ type SyncResult = {
 type GetStub = MockInstance<
   (
     path: string,
-    init?: { params?: { query?: { rid?: number } } },
+    init?: {
+      params?: { query?: { rid?: number } };
+      signal?: AbortSignal;
+    },
   ) => Promise<SyncResult>
 >;
 
@@ -133,10 +136,8 @@ async function tick(ms: number): Promise<void> {
 }
 
 function Harness({ banner = false }: { banner?: boolean }) {
-  const { retryNow, nextRetryIn } = useEventStream();
-  return banner
-    ? createElement(ReconnectBanner, { retryNow, nextRetryIn })
-    : null;
+  const { retryNow } = useEventStream();
+  return banner ? createElement(ReconnectBanner, { retryNow }) : null;
 }
 
 function wrap(node: ReactNode) {
@@ -244,6 +245,36 @@ test("TestPollingAfterThreeFailures", async () => {
   expect(getSync.mock.calls).toHaveLength(POLL_AFTER_FAILURES + 2);
   // The fourth rung opens a new stream while the poller is active.
   expect(FakeEventSource.instances.length).toBeGreaterThan(POLL_AFTER_FAILURES);
+  transport.stop();
+});
+
+test("TestHungProbeReleasesTheGuard", async () => {
+  // A /sync request that never responds must not stall the fallback: the
+  // deadline aborts it and a later poll probes again.
+  getSync.mockImplementation(
+    (_path, init) =>
+      new Promise<SyncResult>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("Aborted", "AbortError")),
+        );
+      }),
+  );
+  const { transport } = makeTransport();
+  transport.start();
+  act(() => FakeEventSource.instances[0].emit("error"));
+  await tick(0);
+  expect(getSync).toHaveBeenCalledTimes(1);
+  // Two more failures start the poller while the first probe still hangs.
+  await tick(1000);
+  act(() => FakeEventSource.instances.at(-1)!.emit("error"));
+  await tick(2000);
+  act(() => FakeEventSource.instances.at(-1)!.emit("error"));
+  await tick(0);
+  expect(useTasks.getState().connection).toBe("polling");
+  expect(getSync).toHaveBeenCalledTimes(1);
+  // The deadline aborts the hung probe, freeing the next poll tick.
+  await tick(POLL_INTERVAL_MS * 2);
+  expect(getSync.mock.calls.length).toBeGreaterThan(1);
   transport.stop();
 });
 
