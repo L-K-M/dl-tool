@@ -43,12 +43,12 @@ func conformAPI(t *testing.T, dirSuffix string, mode conformProbeMode) (*setting
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	server, err := NewServer(&config.Config{ConfigDir: root, SessionTTL: time.Hour, DataRoots: []string{root}, Aria2URL: daemon.URL}, db, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	require.NoError(t, err)
-	// Registered after the store's cleanup, so the background loops stop
-	// before the database they poll closes.
-	t.Cleanup(server.Shutdown)
 	adapter, ok := server.Engines.Get(engine.NameAria2)
 	require.True(t, ok)
 	t.Cleanup(func() { require.NoError(t, adapter.Close()) })
+	// Registered after the engine's cleanup, so the background loops stop
+	// before the engine they poll closes, not just before the store.
+	t.Cleanup(server.Shutdown)
 	user := seedUser(t, db)
 	return &settingsTestEnv{api: humatest.Wrap(t, server.API), db: db, server: server, bearer: seedLiveAPIToken(t, db, user.ID)}, rpc
 }

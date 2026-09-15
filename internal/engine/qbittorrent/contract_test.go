@@ -1471,12 +1471,12 @@ func TestConformBootCorrection(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	server, err := api.NewServer(cfg, db, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	require.NoError(t, err)
-	// Registered after the store's cleanup, so the background loops stop
-	// before the database they poll closes.
-	t.Cleanup(server.Shutdown)
 	registered, ok := server.Engines.Get(engine.NameQBittorrent)
 	require.True(t, ok)
 	t.Cleanup(func() { require.NoError(t, registered.Close()) })
+	// Registered after the engine's cleanup, so the background loops stop
+	// before the engine they poll closes, not just before the store.
+	t.Cleanup(server.Shutdown)
 	require.Equal(t, false, preferences()["auto_tmm_enabled"], "boot must force ATM off")
 	assertAutomationOff()
 
