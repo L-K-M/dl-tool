@@ -133,7 +133,7 @@ The application shell, the virtualised grid, the add dialog, the folder browser,
 | [T048](T048-detail-pane-and-file-tree.md) | Build the detail pane, its tabs and the file tree | T024, T032, T034, T035, T042 | done |
 | [T049](T049-add-task-dialog.md) | Build the add-task dialog and the file-selection step | T020, T031, T033, T044, T047, T048, T050 | done |
 | [T050](T050-categories-and-tags.md) | Serve category CRUD, the tag list and category path resolution | T017, T020, T021 | done |
-| [T051](T051-event-stream-and-reconnect.md) | Connect the event stream, the reconnect ladder and the polling fallback | T011, T025, T041, T044 | todo |
+| [T051](T051-event-stream-and-reconnect.md) | Connect the event stream, the reconnect ladder and the polling fallback | T011, T025, T041, T044 | done |
 | [T052](T052-i18n-plumbing-and-lint-rule.md) | Complete the i18n plumbing and the string-literal lint rule | T039, T044, T048, T049 | todo |
 | [T053](T053-settings-screens.md) | Build the settings screen shell, General and Connection | T027, T045, T047, T050, T052 | todo |
 | [T103](T103-progressive-web-app.md) | Ship the web app manifest, maskable icons and the service worker | T039, T040, T043 | todo |

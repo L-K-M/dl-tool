@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T051 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T011, T025, T041, T044 |
 | **Blocks** | T043, T104 |
 | **Parallel-safe** | no — it also edits the shared files `web/src/App.tsx`, `web/src/locales/en/common.json` |
@@ -114,11 +114,11 @@ client keeps no separate stream bookkeeping; it stores the last rid only for the
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestSyncEventReachesReducer`, `TestBackoffLadder` and `TestPollingAfterThreeFailures` pass.
-- [ ] `TestRecoveryRefetchesWithRidZero` passes.
-- [ ] `TestUnauthenticatedRendersSessionBanner` passes and asserts no retry is scheduled.
-- [ ] Exactly one `EventSource` exists per session; a route change does not open a second.
-- [ ] No component other than this module constructs an `EventSource` or calls `GET /sync`.
+- [x] `TestSyncEventReachesReducer`, `TestBackoffLadder` and `TestPollingAfterThreeFailures` pass.
+- [x] `TestRecoveryRefetchesWithRidZero` passes.
+- [x] `TestUnauthenticatedRendersSessionBanner` passes and asserts no retry is scheduled.
+- [x] Exactly one `EventSource` exists per session; a route change does not open a second.
+- [x] No component other than this module constructs an `EventSource` or calls `GET /sync`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -148,7 +148,91 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Installed dependencies with `npm ci --prefix web`. Toolchain on `PATH`:
+`/home/paseo/.local/share/go1.26.8/bin` (go 1.26.8), `/home/paseo/go/bin`
+(golangci-lint) and `/tmp/t039-tools` (docker).
+
+Scope is exactly the Files table:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+web/src/App.tsx
+web/src/api/events.test.ts
+web/src/api/events.ts
+web/src/components/Shell/ReconnectBanner.tsx
+web/src/locales/en/common.json
+```
+
+Verification command run on the final tree, exit 0. Vitest reports
+`Test Files 13 passed (13)`, not the `11` this file predicted — T048 and T049
+landed two more test files after the task text was written. Every named test
+appears and passes:
+
+```text
+$ make lint && make typecheck && make test-web && echo TRANSPORT_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+```
+
+```text
+ ✓ src/api/events.test.ts > TestSyncEventReachesReducer
+ ✓ src/api/events.test.ts > TestBackoffLadder
+ ✓ src/api/events.test.ts > TestPollingAfterThreeFailures
+ ✓ src/api/events.test.ts > TestRecoveryRefetchesWithRidZero
+ ✓ src/api/events.test.ts > TestUnauthenticatedRendersSessionBanner
+ ✓ src/api/events.test.ts > TestSingleEventSourcePerSession
+ ✓ src/api/events.test.ts > TestSilenceMarksOfflineAndRaisesBanner
+ ✓ src/api/events.test.ts > TestSilenceForcesAReconnect
+ ✓ src/api/events.test.ts > TestHungProbeReleasesTheGuard
+ ✓ src/api/events.test.ts > TestAmberNeverFiresAfterTheBanner
+ ✓ src/api/events.test.ts > TestStructuralSyncInvalidatesTaskList
+ ✓ src/api/events.test.ts > TestTransportOwnsTheStreamAndSyncEndpoint
+
+ Test Files  13 passed (13)
+      Tests  193 passed (193)
+
+TRANSPORT_OK
+```
+
+Acceptance coverage beyond the five named tests:
+- `TestSingleEventSourcePerSession` mounts `useEventStream` under `StrictMode`
+  and re-renders: exactly one unclosed `EventSource` exists.
+- `TestTransportOwnsTheStreamAndSyncEndpoint` scans `web/src` and fails if any
+  file outside `api/events.ts` constructs an `EventSource` or calls
+  `api.GET("/sync")`.
+- `TestSilenceMarksOfflineAndRaisesBanner` covers the 30 s amber threshold;
+  `TestSilenceForcesAReconnect` proves the silence path closes the dead stream
+  and opens a replacement (a half-open stream never fires `error`);
+  `TestAmberNeverFiresAfterTheBanner` covers the monotonic-ladder clause of
+  doc 09 §10.8 rule 2.
+- `TestStructuralSyncInvalidatesTaskList` covers the `invalidateTaskList` row:
+  insert, `state` patch and removal invalidate; a pure field patch does not.
+
+Notes for the reviewer:
+- `EventSource` cannot report a `401`, so every stream failure also issues one
+  `GET /sync?rid=<last>` probe through the T014 client: it is the documented
+  `401` detector and doubles as a data refresh while the stream is down.
+- happy-dom has no `EventSource`, so `connect()` treats a synchronous
+  constructor failure like a dropped stream. In the pre-existing suites that
+  render the shell (`App`, `Shell`, `DetailPane`, `TaskGrid` and `main`
+  tests — none editable under this task's Files table) the ladder then probes
+  `GET /api/v1/sync`, which msw logs as unhandled under its `error` strategy.
+  That output is stderr noise only — all 193 tests pass; the probe's rejection
+  is caught inside `fetchSync` and treated as a failed fetch.
+- Mutating controls were already disabled with the `Reconnecting…` tooltip by
+  T044's Toolbar (`connection !== "live" && !== "polling"`); the optimistic
+  mutation rollback with toast is likewise T044's `useBulkAction.onError`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

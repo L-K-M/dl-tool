@@ -84,6 +84,15 @@
     "comingEdit": "Coming with task editing",
     "needsSelection": "Select at least one task",
     "reconnecting": "Reconnecting…",
+    "reconnected": "Reconnected",
+    "banner": {
+      "lost": "Lost connection to the server.",
+      "retryIn": "Reconnecting in {{seconds}}s…",
+      "retryNow": "Retry now",
+      "polling": "Checking for updates every {{seconds}}s instead.",
+      "sessionExpired": "Your session expired.",
+      "signIn": "Sign in"
+    },
     "actionFailed": "Action failed: {{detail}}",
     "actionFailedGeneric": "Action failed",
     "networkError": "Network error",
