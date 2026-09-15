@@ -301,3 +301,13 @@ table while `Server.registerOperations` is the only composition point where a ne
 register — a `CategoryHandlers` built in `categories.go` had no caller, so `/categories` and `/tags`
 would never route and no acceptance test could observe them through `server.API`. The same defect T046
 recorded and pull request #161 repaired.
+
+Second defect, recorded before implementation: `internal/api/tasks_test.go` is absent from the `## Files`
+table while the resolution table this task adds turns the seeded category `save_path` into a live input.
+`TestListTasksFilterAndSort` seeds `categories ('linux', '/data/linux')` and creates a task in that
+category with no destination — correct under the old code, where the column was inert — but the new rule
+resolves `/data/linux` through `fsx.ResolveDestination`, which sits outside the test environment's data
+root, so the create answers `403 /problems/path-rejected` and the test cannot pass. The chosen remedy
+moves the seeded `save_path` inside the environment's data root — an edit the `## Files` table does not
+admit. The repair adds `internal/api/tasks_test.go` to the table with that purpose, the same defect
+class this file's first `## Blocked` record carried.
