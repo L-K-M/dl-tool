@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
 
-import { useTransportUi } from "../../api/events";
+import { POLL_INTERVAL_MS, useTransportUi } from "../../api/events";
 import { useTasks } from "../../store/useTasks";
 import { Button } from "../ui/button";
 
@@ -55,7 +55,9 @@ export function ReconnectBanner({
         </span>
       ) : null}
       {connection === "polling" ? (
-        <span>{t("shell.banner.polling")}</span>
+        <span>
+          {t("shell.banner.polling", { seconds: POLL_INTERVAL_MS / 1000 })}
+        </span>
       ) : null}
       <Button
         variant="outline"
