@@ -229,11 +229,11 @@ duplicate name · `422` for an empty name or a name containing `/`.
     regenerated files.
 
 ## Acceptance criteria
-- [ ] `TestCategoryCrud` and `TestDuplicateCategoryConflicts` pass.
-- [ ] `TestCategorySavePathResolvesDestination` asserts the destination is `/data/linux`.
-- [ ] `TestDeleteCategoryKeepsTasks` asserts the task row survives with `category` null.
-- [ ] `TestListTagsIncludesZeroCount` passes.
-- [ ] `GET /tags` is not paginated and is sorted by name ascending.
+- [x] `TestCategoryCrud` and `TestDuplicateCategoryConflicts` pass.
+- [x] `TestCategorySavePathResolvesDestination` asserts the destination is `/data/linux`.
+- [x] `TestDeleteCategoryKeepsTasks` asserts the task row survives with `category` null.
+- [x] `TestListTagsIncludesZeroCount` passes.
+- [x] `GET /tags` is not paginated and is sorted by name ascending.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -269,7 +269,58 @@ prints, and nothing else. Use `git status`, not
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG="./internal/api/... ./internal/store/..." && echo CATEGORIES_OK` on the final
+tree — gofmt and golangci-lint clean, eslint and prettier clean, both packages `ok` under `-race`, and
+the final line of stdout is `CATEGORIES_OK`:
+
+```text
+$ make lint && make test PKG="./internal/api/... ./internal/store/..." && echo CATEGORIES_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	101.405s
+ok  	github.com/L-K-M/dl-tool/internal/store	73.140s
+CATEGORIES_OK
+```
+
+The five named tests on the same tree, verbose — every one `--- PASS`:
+
+```text
+$ go test -race -count=1 -v -run 'TestCategoryCrud|TestDuplicateCategoryConflicts|TestCategorySavePathResolvesDestination|TestDeleteCategoryKeepsTasks|TestListTagsIncludesZeroCount' ./internal/api/
+--- PASS: TestCategoryCrud (0.38s)
+--- PASS: TestDuplicateCategoryConflicts (0.38s)
+--- PASS: TestCategorySavePathResolvesDestination (0.42s)
+--- PASS: TestDeleteCategoryKeepsTasks (0.37s)
+--- PASS: TestListTagsIncludesZeroCount (0.40s)
+ok  	github.com/L-K-M/dl-tool/internal/api	3.076s
+```
+
+Scope check on the same tree — exactly the Files table paths plus the two generated files of
+docs/13 §7.1, and nothing else:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/categories.go
+internal/api/categories_test.go
+internal/api/server.go
+internal/api/tasks.go
+internal/api/tasks_test.go
+internal/store/settings.go
+web/src/api/schema.d.ts
+```
+
+`GET /tags` answers an array (never paginated) sorted by name ascending; `TestListTagsIncludesZeroCount`
+lists a tag with `task_count: 0`.
 
 ## Blocked
 

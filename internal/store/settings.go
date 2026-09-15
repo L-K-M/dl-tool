@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 )
@@ -22,6 +24,29 @@ const (
 	EngineIDQBittorrent = EngineIDPrefix + "qbittorrent"
 	EngineIDYTDLP       = EngineIDPrefix + "ytdlp"
 )
+
+// ErrConflict is the sentinel a duplicate-name write returns; the API
+// maps it to 409 /problems/conflict. isUniqueViolation already detects
+// the driver's SQLITE_CONSTRAINT_UNIQUE for it.
+var ErrConflict = errors.New("store: conflict")
+
+// Category is one row of the categories table (docs/04-data-model.md
+// section 3.2) with the count of its non-removed tasks attached. The id
+// stays off the wire: the API addresses a category by its unique name.
+type Category struct {
+	ID        string `db:"id"         json:"-"`
+	Name      string `db:"name"       json:"name"`
+	SavePath  string `db:"save_path"  json:"save_path"`
+	TaskCount int    `db:"task_count" json:"task_count"`
+}
+
+// Tag is one row of the tags table with the count of its non-removed
+// tasks attached; the id never leaves the store because the API addresses
+// a tag by its unique name.
+type Tag struct {
+	Name      string `db:"name"       json:"name"`
+	TaskCount int    `db:"task_count" json:"task_count"`
+}
 
 // Engine is one row of the engines table (docs/04-data-model.md section
 // 3.2). secret_enc and username are deliberately absent: this model feeds
@@ -146,4 +171,176 @@ func (s *SettingsStore) EngineByID(ctx context.Context, id string) (Engine, erro
 	}
 
 	return e, nil
+}
+
+// queryListCategories carries the task_count of every category in one
+// statement: the LEFT JOIN counts only the tasks whose state is not
+// 'removed' (removal is a tombstone, not a delete — docs/04-data-model.md
+// section 3.3), so a category whose tasks were all removed reports 0.
+const queryListCategories = `SELECT c.id, c.name, c.save_path, COUNT(t.id) AS task_count
+FROM categories c
+LEFT JOIN tasks t ON t.category_id = c.id AND t.state <> 'removed'
+GROUP BY c.id
+ORDER BY c.name`
+
+// ListCategories returns every categories row, ordered by name, each with
+// the count of its non-removed tasks.
+func (s *SettingsStore) ListCategories(ctx context.Context) ([]Category, error) {
+	var categories []Category
+	if err := s.db.SelectContext(ctx, &categories, queryListCategories); err != nil {
+		return nil, fmt.Errorf("store: list categories: %w", err)
+	}
+
+	return categories, nil
+}
+
+// queryCategoryByName is queryListCategories over one unique name.
+const queryCategoryByName = `SELECT c.id, c.name, c.save_path, COUNT(t.id) AS task_count
+FROM categories c
+LEFT JOIN tasks t ON t.category_id = c.id AND t.state <> 'removed'
+WHERE c.name = ?
+GROUP BY c.id`
+
+// CategoryByName resolves one row by its unique name, carrying the same
+// task_count the list does. ErrNotFound means no category carries it.
+func (s *SettingsStore) CategoryByName(ctx context.Context, name string) (Category, error) {
+	var c Category
+	err := s.db.GetContext(ctx, &c, queryCategoryByName, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Category{}, fmt.Errorf("store: category %s: %w", name, ErrNotFound)
+	}
+	if err != nil {
+		return Category{}, fmt.Errorf("store: category %s: %w", name, err)
+	}
+
+	return c, nil
+}
+
+const queryCreateCategory = `INSERT INTO categories (id, name, save_path, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?)`
+
+// CreateCategory inserts one row; a name already taken is ErrConflict.
+// The caller owns c.ID (a cat_ ULID) and the already-resolved SavePath.
+func (s *SettingsStore) CreateCategory(ctx context.Context, c Category) error {
+	now := time.Now().UnixMilli()
+	if _, err := s.db.ExecContext(ctx, queryCreateCategory, c.ID, c.Name, c.SavePath, now, now); err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("store: create category %s: %w", c.Name, ErrConflict)
+		}
+
+		return fmt.Errorf("store: create category %s: %w", c.Name, err)
+	}
+
+	return nil
+}
+
+// queryUpdateCategory merges the patch inside the UPDATE itself: a NULL
+// argument leaves its column untouched, so two concurrent PATCHes cannot
+// lose each other's field. updated_at still moves on every call.
+const queryUpdateCategory = `UPDATE categories
+SET name = COALESCE(?, name), save_path = COALESCE(?, save_path), updated_at = ?
+WHERE name = ?`
+
+// UpdateCategory writes the addressed row's name and save_path; a nil
+// argument leaves that column untouched. ErrNotFound means name addresses
+// no row; ErrConflict means newName belongs to another row.
+func (s *SettingsStore) UpdateCategory(ctx context.Context, name string, newName, savePath *string) error {
+	result, err := s.db.ExecContext(
+		ctx, queryUpdateCategory, newName, savePath, time.Now().UnixMilli(), name,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("store: update category %s: %w", name, ErrConflict)
+		}
+
+		return fmt.Errorf("store: update category %s: %w", name, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update category %s: read rows affected: %w", name, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: update category %s: %w", name, ErrNotFound)
+	}
+
+	return nil
+}
+
+const queryDeleteCategory = `DELETE FROM categories WHERE name = ?`
+
+// DeleteCategory removes the row. The tasks.category_id and
+// watch_folders.category_id references carry ON DELETE SET NULL
+// (docs/04-data-model.md section 3.3), so its tasks and watch folders
+// become uncategorised and no task row and no file is touched.
+// ErrNotFound means name addresses no row.
+func (s *SettingsStore) DeleteCategory(ctx context.Context, name string) error {
+	result, err := s.db.ExecContext(ctx, queryDeleteCategory, name)
+	if err != nil {
+		return fmt.Errorf("store: delete category %s: %w", name, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete category %s: read rows affected: %w", name, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: delete category %s: %w", name, ErrNotFound)
+	}
+
+	return nil
+}
+
+// queryListTags counts every non-removed task carrying each tag in one
+// statement: the task_tags rows of a removed task survive its tombstone,
+// so the join to tasks — not the link alone — decides the count, and a
+// tag with no tasks at all still lists with 0.
+const queryListTags = `SELECT t.name, COUNT(k.id) AS task_count
+FROM tags t
+LEFT JOIN task_tags tt ON tt.tag_id = t.id
+LEFT JOIN tasks k ON k.id = tt.task_id AND k.state <> 'removed'
+GROUP BY t.id
+ORDER BY t.name`
+
+// ListTags returns every row of tags sorted by name, including tags with
+// no tasks; task_count counts every non-removed task carrying the tag.
+func (s *SettingsStore) ListTags(ctx context.Context) ([]Tag, error) {
+	var tags []Tag
+	if err := s.db.SelectContext(ctx, &tags, queryListTags); err != nil {
+		return nil, fmt.Errorf("store: list tags: %w", err)
+	}
+
+	return tags, nil
+}
+
+// settingDefaultDestination is the settings key of
+// docs/11-config-reference.md section 5 the create path falls back to
+// when a submission carries neither a destination nor a category.
+const settingDefaultDestination = "default_destination"
+
+const queryDefaultDestination = `SELECT value_json FROM settings WHERE key = ?`
+
+// DefaultDestination returns the default_destination settings row's
+// value (docs/11-config-reference.md section 5). The migration seeds no
+// row: an absent row or an empty value returns "" with a nil error, and
+// the caller's first-root fallback applies.
+func (s *SettingsStore) DefaultDestination(ctx context.Context) (string, error) {
+	var valueJSON string
+	err := s.db.GetContext(ctx, &valueJSON, queryDefaultDestination, settingDefaultDestination)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: read settings key %s: %w", settingDefaultDestination, err)
+	}
+
+	var value string
+	if valueJSON == "" {
+		return "", nil
+	}
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return "", fmt.Errorf("store: decode settings key %s: want a JSON string: %w", settingDefaultDestination, err)
+	}
+
+	return value, nil
 }

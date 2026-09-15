@@ -84,6 +84,54 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/categories": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the categories
+     * @description Every category with the count of its non-removed tasks, sorted by name. A category with no tasks still lists.
+     */
+    get: operations["list-categories"];
+    put?: never;
+    /**
+     * Create a category
+     * @description Creates one global category whose save_path becomes the effective destination of a task created in it with no explicit destination. The save_path is resolved against the configured roots like any destination: outside them is 403 /problems/path-rejected. A duplicate name is 409 /problems/conflict.
+     */
+    post: operations["create-category"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/categories/{name}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete a category
+     * @description Removes the category row; its tasks and watch folders become uncategorised through ON DELETE SET NULL. No task is removed and no file is touched.
+     */
+    delete: operations["delete-category"];
+    options?: never;
+    head?: never;
+    /**
+     * Update a category
+     * @description Renames the category or replaces its save_path; omitted fields are untouched. Renaming onto an existing name is 409 /problems/conflict, never a silent merge. No task row and no file is touched: tasks keep their resolved destination, only future creates see the new name or path.
+     */
+    patch: operations["patch-category"];
+    trace?: never;
+  };
   "/engines": {
     parameters: {
       query?: never;
@@ -253,6 +301,26 @@ export interface paths {
     };
     /** Read system information */
     get: operations["get-system-info"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/tags": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the tags
+     * @description Every tag with the count of its non-removed tasks, sorted by name ascending and not paginated. A tag with no tasks still lists with task_count 0.
+     */
+    get: operations["list-tags"];
     put?: never;
     post?: never;
     delete?: never;
@@ -493,6 +561,18 @@ export interface components {
       /** @description The operator account */
       user: components["schemas"]["UserBody"];
     };
+    CategoryDTO: {
+      name: string;
+      save_path: string;
+      /** Format: int64 */
+      task_count: number;
+    };
+    CreateCategoryInputBody: {
+      /** @description Unique category name; never carries a / */
+      name: string;
+      /** @description Default destination of tasks created in this category; must resolve inside a configured data root */
+      save_path: string;
+    };
     CreateTasksBody: {
       /** @description Category name; must already exist */
       category?: string;
@@ -681,8 +761,14 @@ export interface components {
       manifests: components["schemas"]["ManifestDTO"][] | null;
       rejected: components["schemas"]["RejectedURI"][] | null;
     };
+    ListCategoriesOutputBody: {
+      categories: components["schemas"]["CategoryDTO"][] | null;
+    };
     ListEnginesOutputBody: {
       engines: components["schemas"]["EngineDTO"][] | null;
+    };
+    ListTagsOutputBody: {
+      tags: components["schemas"]["TagDTO"][] | null;
     };
     ListTaskEventsOutputBody: {
       /** @description Event rows, newest first */
@@ -766,6 +852,12 @@ export interface components {
       path: string;
       writable: boolean;
     };
+    PatchCategoryInputBody: {
+      /** @description Rename; must be non-empty and carry no / */
+      new_name?: string;
+      /** @description New default destination; must resolve inside a configured data root */
+      save_path?: string;
+    };
     PatchTaskBody: {
       /** @description Category name; must already exist */
       category?: string;
@@ -848,6 +940,11 @@ export interface components {
     SystemInfoOutputBody: {
       /** @description Build version of the dl-tool process */
       version: string;
+    };
+    TagDTO: {
+      name: string;
+      /** Format: int64 */
+      task_count: number;
     };
     TaskDTO: {
       /** Format: date-time */
@@ -1112,6 +1209,134 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AuthEnvelope"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-categories": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListCategoriesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-category": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateCategoryInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CategoryDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-category": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The category's name */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-category": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The category's current name */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PatchCategoryInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CategoryDTO"];
         };
       };
       /** @description Error */
@@ -1419,6 +1644,35 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["SystemInfoOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-tags": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListTagsOutputBody"];
         };
       };
       /** @description Error */
