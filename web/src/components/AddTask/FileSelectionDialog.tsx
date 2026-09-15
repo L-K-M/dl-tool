@@ -179,10 +179,19 @@ export function FileSelectionDialog({
           selected: true,
           priority: "normal",
         };
-        state.set(change.index, {
-          selected: change.selected ?? current.selected,
-          priority: change.priority ?? current.priority,
-        });
+        // Doc 09 §5: the checkbox and the priority are one concept — Skip
+        // unchecks the row, unchecking sets Skip and they never disagree.
+        let entry = current;
+        if (change.priority === "skip" || change.selected === false)
+          entry = { selected: false, priority: "skip" };
+        else if (change.priority !== undefined)
+          entry = { selected: true, priority: change.priority };
+        else if (change.selected === true)
+          entry = {
+            selected: true,
+            priority: current.priority === "skip" ? "normal" : current.priority,
+          };
+        state.set(change.index, entry);
       }
       next.set(page, state);
       return next;

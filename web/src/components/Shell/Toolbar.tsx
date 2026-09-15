@@ -559,14 +559,15 @@ export function Toolbar(): JSX.Element {
         event.preventDefault();
     };
     const onDrop = (event: DragEvent) => {
+      // onDragOver already claimed these drops; declining without
+      // preventDefault would let the browser navigate away to the payload.
+      event.preventDefault();
       if (addOpenRef.current || !event.dataTransfer) return;
       if (dropHasDirectory(event.dataTransfer)) {
-        event.preventDefault();
         toast.error(t("dialogs:addTask.dirDropped"));
         return;
       }
       if (event.dataTransfer.files.length > 0) {
-        event.preventDefault();
         void expandDroppedFiles(event.dataTransfer.files).then((expansion) => {
           expansion.nzb.forEach(() => toast.error(t("dialogs:addTask.nzb")));
           for (const name of expansion.unsupported)
@@ -580,12 +581,12 @@ export function Toolbar(): JSX.Element {
         event.dataTransfer.getData("text/plain") ||
         event.dataTransfer.getData("text/uri-list");
       const uris = droppableLines(text);
-      if (uris.length > 0) {
-        event.preventDefault();
-        openAdd({ uris });
-      }
+      if (uris.length > 0) openAdd({ uris });
     };
     const onPaste = (event: ClipboardEvent) => {
+      // The open dialog owns its own paste targets; re-seeding is a no-op
+      // once open, so intercepting here would silently eat the paste.
+      if (addOpenRef.current) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&

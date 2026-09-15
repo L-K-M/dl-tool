@@ -187,10 +187,10 @@ Expected: exactly the paths in the Files table and nothing else. Use `git status
 
 ## Evidence
 `make lint && make typecheck && make test-web && echo ADD_DIALOG_OK` on the
-final tree — gofmt and golangci-lint clean, eslint and prettier clean,
-`tsc --noEmit` clean, Vitest 179/179 across 12 files including the nine
-`AddTaskDialog.test.tsx` tests, and the final line of stdout is
-`ADD_DIALOG_OK`:
+final tree, re-run after the review round — gofmt and golangci-lint clean,
+eslint and prettier clean, `tsc --noEmit` clean, Vitest 179/179 across 12
+files including the nine `AddTaskDialog.test.tsx` tests, and the final line
+of stdout is `ADD_DIALOG_OK`:
 
 ```text
 $ make lint && make typecheck && make test-web && echo ADD_DIALOG_OK
