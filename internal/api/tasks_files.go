@@ -175,6 +175,21 @@ func (h *TaskHandlers) PatchTaskFiles(ctx context.Context, in *PatchTaskFilesInp
 		return nil, fileSelectionProblem(fieldErrs)
 	}
 
+	// The engine call and the intent rewrite join the task-operation
+	// lease: an admission release applying its re-read snapshot must not
+	// interleave — under the lease the release either finished before the
+	// acquire (its write stands until this PATCH lands) or waits, and its
+	// under-lease re-read then picks up this PATCH's stored intent. The
+	// wait runs under the operator budget, never the request alone.
+	waitCtx, cancelWait := context.WithTimeout(ctx, pauseLeaseWait)
+	defer cancelWait()
+
+	releaseLease, err := h.engines.AcquireTaskOp(waitCtx, task.ID, engine.TaskOpWait)
+	if err != nil {
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailTaskOpBusy)
+	}
+	defer releaseLease()
+
 	// Engine first: a daemon that cannot take the change leaves task_files
 	// untouched. selected stays nil — every entry carries a resolved
 	// priority, and a nil selection leaves the unlisted indices alone.
@@ -197,6 +212,14 @@ func (h *TaskHandlers) PatchTaskFiles(ctx context.Context, in *PatchTaskFilesInp
 		return nil, internalFailure(ctx, "update file selection", err)
 	}
 
+	// The engine accepted the change, so the persisted intent is stale
+	// until it names the selection the engine now holds: a re-submission
+	// after a lost handle must restore this PATCH's outcome, not the
+	// create-time one.
+	if err := h.persistSelectionIntent(ctx, in.ID); err != nil {
+		return nil, err
+	}
+
 	files, err := h.taskFileDTOs(ctx, task, e)
 	if err != nil {
 		return nil, err
@@ -206,6 +229,23 @@ func (h *TaskHandlers) PatchTaskFiles(ctx context.Context, in *PatchTaskFilesInp
 	output.Body.Files = files
 
 	return output, nil
+}
+
+// persistSelectionIntent rewrites the task's select_files document from
+// the store's rows, which mirror the listing the engine just accepted.
+// Admission and the reconciler's re-submission read that column, so the
+// selection they restore is always the operator's latest, never the
+// engine's default.
+func (h *TaskHandlers) persistSelectionIntent(ctx context.Context, taskID string) error {
+	rows, err := h.tasks.ListFiles(ctx, taskID)
+	if err != nil {
+		return internalFailure(ctx, "list task files for selection intent", err)
+	}
+	if err := h.tasks.SetSelectionIntent(ctx, taskID, store.SelectionIntentFromFiles(rows)); err != nil {
+		return internalFailure(ctx, "persist file selection intent", err)
+	}
+
+	return nil
 }
 
 // taskWithEngine loads the task and resolves the engine that holds it:

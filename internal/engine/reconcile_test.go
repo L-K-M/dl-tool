@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,15 +31,20 @@ import (
 // injected fields, and every method the sweep never calls stays a panic so
 // an unexpected call fails the test loudly.
 type fakeEngine struct {
-	name      string
-	infos     []engine.TaskInfo
-	listErr   error
-	addID     string
-	addErr    error
-	removeErr error
-	resumeErr error
-	getInfo   *engine.TaskInfo
-	getErr    error
+	name       string
+	caps       []engine.Capability
+	infos      []engine.TaskInfo
+	listErr    error
+	addID      string
+	addErr     error
+	removeErr  error
+	resumeErr  error
+	getInfo    *engine.TaskInfo
+	getErr     error
+	files      []engine.FileEntry
+	filesErr   error
+	setFileErr error
+	rateErr    error
 	// pauseErr is returned by every Pause: an engine rejecting the pause
 	// of a transfer that already stopped — aria2's answer to pausing a GID
 	// that errored with disk-full before the reconciler saw it.
@@ -56,10 +62,12 @@ type fakeEngine struct {
 	resumeCalls []string
 	getCalls    []string
 	removeCalls []string
+	fileCalls   []setFilesRecord
+	rateCalls   []rateLimitRecord
 }
 
 func (f *fakeEngine) Name() string                      { return f.name }
-func (f *fakeEngine) Capabilities() []engine.Capability { return nil }
+func (f *fakeEngine) Capabilities() []engine.Capability { return f.caps }
 func (f *fakeEngine) Accepts(string) bool               { return false }
 func (f *fakeEngine) Connect(context.Context) error {
 	panic("not called by the reconciler")
@@ -154,17 +162,25 @@ func (f *fakeEngine) Get(_ context.Context, id string) (engine.TaskInfo, error) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.getCalls = append(f.getCalls, id)
-	if f.getInfo == nil && f.getErr == nil {
-		panic("not called by the reconciler")
-	}
 	if f.getErr != nil {
 		return engine.TaskInfo{}, f.getErr
 	}
+	if f.getInfo != nil {
+		return *f.getInfo, nil
+	}
 
-	return *f.getInfo, nil
+	// The admission pass's release inspects the handle before resuming
+	// it: a live stopped transfer is the default answer.
+	return engine.TaskInfo{ID: id, Engine: f.name, State: engine.StatePaused}, nil
 }
-func (f *fakeEngine) Files(context.Context, string) ([]engine.FileEntry, error) {
-	panic("not called by the reconciler")
+func (f *fakeEngine) Files(_ context.Context, id string) ([]engine.FileEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.filesErr != nil {
+		return nil, f.filesErr
+	}
+
+	return append([]engine.FileEntry(nil), f.files...), nil
 }
 func (f *fakeEngine) Remove(_ context.Context, id string) error {
 	f.mu.Lock()
@@ -172,14 +188,20 @@ func (f *fakeEngine) Remove(_ context.Context, id string) error {
 	f.removeCalls = append(f.removeCalls, id)
 	return f.removeErr
 }
-func (f *fakeEngine) SetFiles(context.Context, string, []int, map[int]int) error {
-	panic("not called")
+func (f *fakeEngine) SetFiles(_ context.Context, id string, selected []int, priorities map[int]int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fileCalls = append(f.fileCalls, setFilesRecord{id: id, selected: selected, priorities: priorities})
+	return f.setFileErr
 }
 func (f *fakeEngine) SetLocation(context.Context, string, string) error { panic("not called") }
 func (f *fakeEngine) Rename(context.Context, string, string) error      { panic("not called") }
 func (f *fakeEngine) SetCategory(context.Context, string, string) error { panic("not called") }
-func (f *fakeEngine) SetRateLimits(context.Context, string, *int64, *int64) error {
-	panic("not called")
+func (f *fakeEngine) SetRateLimits(_ context.Context, id string, down, up *int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rateCalls = append(f.rateCalls, rateLimitRecord{id: id, down: down, up: up})
+	return f.rateErr
 }
 func (f *fakeEngine) SetShareLimits(context.Context, string, *float64, *int64) error {
 	panic("not called")
@@ -235,6 +257,35 @@ func (f *fakeTasks) ListNonTerminalByEngine(_ context.Context, engineName string
 	defer f.mu.Unlock()
 	f.listCalls++
 	return f.byEngine[engineName], nil
+}
+
+func (f *fakeTasks) Get(_ context.Context, id string) (store.Task, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, rows := range f.byEngine {
+		for _, row := range rows {
+			if row.ID != id {
+				continue
+			}
+			ref := row.EngineRef
+			if written, ok := f.engineRefs[id]; ok {
+				ref = written
+			}
+			state := row.State
+			for _, tr := range f.transitions {
+				if tr.id == id {
+					state = tr.next
+				}
+			}
+			return store.Task{
+				ID: id, EngineRef: &ref, State: state,
+				SourceURI: row.SourceURI, InfohashV1: row.InfohashV1,
+				Destination: row.Destination, SelectFiles: row.SelectFiles,
+				DLLimit: row.DLLimit, ULLimit: row.ULLimit,
+			}, nil
+		}
+	}
+	return store.Task{}, store.ErrNotFound
 }
 
 func (f *fakeTasks) UpdateProgress(_ context.Context, id string, p store.Progress) error {
@@ -310,6 +361,7 @@ func TestBootWritesKnownHandles(t *testing.T) {
 	tasks := newFakeTasks().withEngine(engine.NameAria2, map[string]store.Reconcilable{
 		"g1": {ID: "tsk_1", EngineRef: "g1", State: "queued", SourceURI: source("https://example.org/one")},
 		"g2": {ID: "tsk_2", EngineRef: "g2", State: "downloading", SourceURI: source("https://example.org/two")},
+		"g3": {ID: "tsk_3", EngineRef: "g3", State: "downloading", SourceURI: source("https://example.org/three")},
 	})
 
 	e := &fakeEngine{
@@ -320,6 +372,7 @@ func TestBootWritesKnownHandles(t *testing.T) {
 				TotalBytes: &total, CompletedBytes: 1024, DownloadRate: rate, ETASeconds: &eta,
 			},
 			{ID: engine.NameAria2 + ":g2", Engine: engine.NameAria2, State: engine.StateDownloading},
+			{ID: engine.NameAria2 + ":g3", Engine: engine.NameAria2, State: engine.StateSeeding},
 		},
 	}
 	r := newSweep(t, e, tasks)
@@ -328,19 +381,22 @@ func TestBootWritesKnownHandles(t *testing.T) {
 		t.Fatalf("Boot: %v", err)
 	}
 
-	// Both known handles got their counters written.
-	if !slices.Equal(tasks.progress, []string{"tsk_1", "tsk_2"}) {
-		t.Errorf("progress writes = %v, want [tsk_1 tsk_2]", tasks.progress)
+	// All three known handles got their counters written.
+	if !slices.Equal(tasks.progress, []string{"tsk_1", "tsk_2", "tsk_3"}) {
+		t.Errorf("progress writes = %v, want [tsk_1 tsk_2 tsk_3]", tasks.progress)
 	}
 
-	// g1 moves queued -> downloading and the move is the reconciler's event;
-	// g2 is unchanged and must produce no event and no delta.
+	// g1 stays queued: a queued row belongs to the admission pass, which
+	// alone finishes its release — the reconciler writes the engine's
+	// counters but never adopts engine state over it. g3 moves
+	// downloading -> seeding, the adoption the reconciler owns; g2 is
+	// unchanged and must produce no event and no delta.
 	if len(tasks.transitions) != 1 {
-		t.Fatalf("transitions = %+v, want exactly the g1 adoption", tasks.transitions)
+		t.Fatalf("transitions = %+v, want exactly the g3 adoption", tasks.transitions)
 	}
 	got := tasks.transitions[0]
-	if got.id != "tsk_1" || got.next != "downloading" || got.code != engine.CodeTaskReconciled {
-		t.Errorf("transition = %+v, want tsk_1 -> downloading with %q", got, engine.CodeTaskReconciled)
+	if got.id != "tsk_3" || got.next != "seeding" || got.code != engine.CodeTaskReconciled {
+		t.Errorf("transition = %+v, want tsk_3 -> seeding with %q", got, engine.CodeTaskReconciled)
 	}
 	if len(tasks.events) != 0 {
 		t.Errorf("events = %+v, want none for unchanged and adopted handles", tasks.events)
@@ -415,6 +471,153 @@ func TestVanishedHandleIsResubmitted(t *testing.T) {
 	}
 	if len(tasks.events) != 1 || tasks.events[0].code != engine.CodeTaskReconciled {
 		t.Errorf("events = %+v, want one %s", tasks.events, engine.CodeTaskReconciled)
+	}
+}
+
+// A re-submitted transfer carries none of the persisted intent, so the
+// sweep re-states it on the fresh handle: the select_files document rides
+// AddRequest.SelectFiles and SetFiles, and the stored dl_limit/ul_limit
+// reach SetRateLimits — the same application the admission pass performs
+// (docs/05-api-contract.md sections 5.2 and 5.5).
+func TestVanishedHandleResubmissionRestoresIntent(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameQBittorrent, map[string]store.Reconcilable{
+		"gone": {
+			ID: "tsk_1", EngineRef: "gone", State: "downloading",
+			InfohashV1:  ptr("0123456789abcdef0123456789abcdef01234567"),
+			Destination: "/data",
+			SelectFiles: ptr(`{"indices":[0,2],"priorities":{"0":1,"1":0,"2":6}}`),
+			DLLimit:     2048, ULLimit: 512,
+		},
+	})
+
+	e := &fakeEngine{
+		name:  engine.NameQBittorrent,
+		caps:  []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority},
+		addID: engine.NameQBittorrent + ":newhash",
+	}
+	r := newSweep(t, e, tasks)
+
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	if len(e.addCalls) != 1 {
+		t.Fatalf("Add calls = %d, want 1", len(e.addCalls))
+	}
+	if !slices.Equal(e.addCalls[0].SelectFiles, []int{0, 2}) {
+		t.Errorf("AddRequest.SelectFiles = %v, want [0 2]", e.addCalls[0].SelectFiles)
+	}
+	if !e.addCalls[0].StartPaused {
+		t.Errorf("AddRequest.StartPaused = false, want true while intent is owed")
+	}
+
+	if len(e.fileCalls) != 1 || e.fileCalls[0].id != e.addID {
+		t.Fatalf("SetFiles calls = %+v, want one on the fresh handle", e.fileCalls)
+	}
+	if !slices.Equal(e.fileCalls[0].selected, []int{0, 2}) {
+		t.Errorf("SetFiles selected = %v, want [0 2]", e.fileCalls[0].selected)
+	}
+	wantPriorities := map[int]int{0: 1, 1: 0, 2: 6}
+	if !maps.Equal(e.fileCalls[0].priorities, wantPriorities) {
+		t.Errorf("SetFiles priorities = %v, want %v", e.fileCalls[0].priorities, wantPriorities)
+	}
+
+	if len(e.rateCalls) != 1 || e.rateCalls[0].id != e.addID {
+		t.Fatalf("SetRateLimits calls = %+v, want one on the fresh handle", e.rateCalls)
+	}
+	if e.rateCalls[0].down == nil || *e.rateCalls[0].down != 2048 || e.rateCalls[0].up == nil || *e.rateCalls[0].up != 512 {
+		t.Errorf("SetRateLimits = %+v, want down 2048 up 512", e.rateCalls[0])
+	}
+
+	// The paused add starts only after the intent landed.
+	if resumes := e.recordedResumes(); len(resumes) != 1 || resumes[0] != e.addID {
+		t.Errorf("Resume calls = %v, want one on the fresh handle", resumes)
+	}
+}
+
+// A torrent re-submission is always a magnet add, so the file listing is
+// empty at re-submit time and the persisted selection is pending by
+// definition. The sweep starts the transfer for its metadata and
+// requeues the row: the admission pass owns the retry through its resume
+// path — without the requeue the selection is silently lost and every
+// file downloads (docs/05-api-contract.md section 5.2).
+func TestVanishedHandleResubmissionRequeuesAPendingSelection(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameQBittorrent, map[string]store.Reconcilable{
+		"gone": {
+			ID: "tsk_1", EngineRef: "gone", State: "downloading",
+			InfohashV1:  ptr("0123456789abcdef0123456789abcdef01234567"),
+			Destination: "/data",
+			SelectFiles: ptr(`{"indices":[0,2],"priorities":{"0":1,"1":0,"2":6}}`),
+		},
+	})
+
+	e := &fakeEngine{
+		name:  engine.NameQBittorrent,
+		caps:  []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority},
+		addID: engine.NameQBittorrent + ":newhash",
+		// The daemon rejects file ids it cannot list yet, and its listing
+		// is still empty: the pending shape of a metadata-less magnet.
+		setFileErr: errors.New("file ids out of range"),
+	}
+	r := newSweep(t, e, tasks)
+
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	if len(e.addCalls) != 1 || !e.addCalls[0].StartPaused {
+		t.Fatalf("Add calls = %+v, want one paused re-add", e.addCalls)
+	}
+	// The transfer runs for its metadata and the row requeues for the
+	// admission pass's retry — never adopted to downloading mid-wait.
+	if resumes := e.recordedResumes(); len(resumes) != 1 || resumes[0] != e.addID {
+		t.Errorf("Resume calls = %v, want one on the fresh handle so metadata can arrive", resumes)
+	}
+	if len(tasks.transitions) != 1 || tasks.transitions[0].next != "queued" ||
+		tasks.transitions[0].code != engine.CodeTaskReconciled {
+		t.Errorf("transitions = %+v, want one requeue to queued", tasks.transitions)
+	}
+	if ref := tasks.engineRefs["tsk_1"]; ref != "newhash" {
+		t.Errorf("engine_ref of tsk_1 = %q, want newhash", ref)
+	}
+}
+
+// A vanished handle whose row an operator action is holding is not
+// re-submitted under it: the resume and requeue inside resubmit would
+// interleave with the action's own engine call and transition. The skip
+// is safe — the row keeps its vanished handle, so the next sweep retries
+// once the action is done.
+func TestResubmitSkipsABusyTask(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameAria2, map[string]store.Reconcilable{
+		"gone": {
+			ID: "tsk_1", EngineRef: "gone", State: "downloading",
+			SourceURI: source("https://example.org/file.iso"), Destination: "/data",
+		},
+	})
+
+	e := &fakeEngine{name: engine.NameAria2, addID: engine.NameAria2 + ":newgid"}
+	reg := engine.NewRegistry()
+	reg.Register(e)
+	r := engine.NewReconciler(reg, tasks, tasks, time.Hour, nil)
+
+	release, err := reg.AcquireTaskOp(t.Context(), "tsk_1", engine.TaskOpTry)
+	if err != nil {
+		t.Fatalf("acquire the task lease: %v", err)
+	}
+	defer release()
+
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	if len(e.addCalls) != 0 {
+		t.Errorf("Add calls = %v, want none under a held lease", e.addCalls)
+	}
+	if len(tasks.transitions) != 0 {
+		t.Errorf("transitions = %+v, want none under a held lease", tasks.transitions)
+	}
+	if _, ok := tasks.engineRefs["tsk_1"]; ok {
+		t.Errorf("engine_ref of tsk_1 was rewritten under a held lease")
 	}
 }
 
@@ -644,14 +847,16 @@ func TestNewServerReconcilesBeforeServing(t *testing.T) {
 	// before the database they poll closes.
 	t.Cleanup(server.Shutdown)
 
-	// NewServer has returned; the boot sweep must already have adopted the
-	// engine's report for the seeded row.
+	// NewServer has returned; the boot sweep must already have written the
+	// engine's counters for the seeded row. The state stays queued: a
+	// queued row belongs to the admission pass — the engine's running
+	// report is never adopted over it.
 	after, err := tasks.Get(t.Context(), task.ID)
 	if err != nil {
 		t.Fatalf("re-read task: %v", err)
 	}
-	if after.State != "downloading" {
-		t.Errorf("task state after NewServer = %q, want downloading (adopted at boot)", after.State)
+	if after.State != "queued" {
+		t.Errorf("task state after NewServer = %q, want queued (admission owns the row)", after.State)
 	}
 	if after.CompletedBytes != 100 || after.DownloadRate != 1234 {
 		t.Errorf("counters after NewServer = %d/%d, want 100/1234", after.CompletedBytes, after.DownloadRate)
@@ -1057,8 +1262,10 @@ func TestDiskFullReportPausesThroughAdmission(t *testing.T) {
 
 // TestDiskFullReportSurvivesRejectedEnginePause pins a stopped aria2
 // errorCode-9 result end to end. Both Pause and unpause reject the stopped
-// GID, but the store-side pause still lands; release confirms the result
-// through Get, re-submits once with resume semantics and adopts the new GID.
+// GID, but the store-side pause still lands; the release's handle check
+// finds the stopped result through Get — before any intent or resume call
+// a wrong-state GID would only fault on — re-submits once with resume
+// semantics and adopts the new GID.
 func TestDiskFullReportSurvivesRejectedEnginePause(t *testing.T) {
 	const replacementRef = "recovereddiskfull"
 	wrongState := errors.New("GID#errdiskfull cannot be unpaused now")
@@ -1104,11 +1311,13 @@ func TestDiskFullReportSurvivesRejectedEnginePause(t *testing.T) {
 		t.Fatalf("released = %v, want exactly %s", released, id)
 	}
 	oldHandle := engine.NameAria2 + ":" + env.ref
-	if resumes := env.engine.recordedResumes(); len(resumes) != 1 || resumes[0] != oldHandle {
-		t.Errorf("resumes = %v, want one attempt on %q", resumes, oldHandle)
-	}
 	if gets := env.engine.recordedGets(); len(gets) != 1 || gets[0] != oldHandle {
-		t.Errorf("gets = %v, want one confirmation of %q", gets, oldHandle)
+		t.Errorf("gets = %v, want one inspection of %q", gets, oldHandle)
+	}
+	// The stopped result is detected by the handle check, so no unpause
+	// is ever attempted on it — that call only ever faults wrong-state.
+	if resumes := env.engine.recordedResumes(); len(resumes) != 0 {
+		t.Errorf("resumes = %v, want none on a stopped result", resumes)
 	}
 	adds := env.engine.recordedAdds()
 	if len(adds) != 1 {

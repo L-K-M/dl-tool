@@ -41,6 +41,7 @@ type TaskWriter interface {
 	// skipping completed, removed and error tasks and tasks with no handle
 	// yet.
 	ListNonTerminalByEngine(ctx context.Context, engineName string) (map[string]store.Reconcilable, error)
+	Get(ctx context.Context, id string) (store.Task, error)
 	UpdateProgress(ctx context.Context, id string, p store.Progress) error
 	SetEngineRef(ctx context.Context, id, engineRef string) error
 	Transition(ctx context.Context, id, next, code, message string) error
@@ -346,6 +347,16 @@ func (r *Reconciler) writeBack(ctx context.Context, task store.Reconcilable, inf
 		return r.routeDiskFull(ctx, task, info)
 	}
 
+	// A queued row is never adopted: it belongs to the admission pass —
+	// either not yet handed to an engine, or mid-release with a live
+	// handle (a file selection waiting on the engine's listing, an
+	// interrupted first start). Adopting the engine's state over it would
+	// snatch the row out of the candidate set mid-release and strand the
+	// intent it still owes the transfer. The pass alone moves it on.
+	if task.State == string(StateQueued) {
+		return nil
+	}
+
 	if task.State == string(info.State) {
 		return nil
 	}
@@ -407,7 +418,50 @@ func (r *Reconciler) routeDiskFull(ctx context.Context, task store.Reconcilable,
 // sweep moves on — the refusal is a per-task outcome, not an engine-wide
 // one, and the other vanished tasks still deserve their writes.
 func (r *Reconciler) resubmit(ctx context.Context, name string, e Engine, task store.Reconcilable) error {
-	req, ok := resubmitRequest(task)
+	// The whole re-submission runs under the task-operation lease: the
+	// resume and requeue below must not interleave with an operator
+	// action, or a pause that lands mid-resubmit is reverted by the
+	// queued transition while its transfer restarts anyway. A busy row
+	// keeps its vanished handle — the next sweep retries.
+	releaseLease, err := r.registry.AcquireTaskOp(ctx, task.ID, TaskOpTry)
+	if err != nil {
+		r.log.Debug("re-submission skipped: a task operation is in progress",
+			"task_id", task.ID, "engine", name)
+		return nil
+	}
+	defer releaseLease()
+
+	// The candidate's row was read before the lease; a completed operator
+	// action may have moved it since — re-judge resubmittability under
+	// the lease so a pause that landed mid-sweep is never reverted.
+	current, err := r.tasks.Get(ctx, task.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("reconcile task %q: %w", task.ID, err)
+	}
+	if !resubmittable(current.State) {
+		return nil
+	}
+	task.State = current.State
+	if current.EngineRef != nil {
+		task.EngineRef = *current.EngineRef
+	}
+	task.SourceURI = current.SourceURI
+	task.InfohashV1 = current.InfohashV1
+	task.Destination = current.Destination
+	task.SelectFiles = current.SelectFiles
+	task.DLLimit = current.DLLimit
+	task.ULLimit = current.ULLimit
+
+	sel, err := decodeSelectionIntent(task.SelectFiles)
+	if err != nil {
+		r.log.Warn("stored file selection is unreadable; re-submitting without it",
+			"task_id", task.ID, "engine", name, "error", err)
+	}
+
+	req, ok := resubmitRequest(task, sel)
 	if !ok {
 		// No stored source and no infohash: nothing to re-submit from. The
 		// task keeps its state and the warning recurs once per sweep, which
@@ -451,6 +505,52 @@ func (r *Reconciler) resubmit(ctx context.Context, name string, e Engine, task s
 		return fmt.Errorf("reconcile task %q: %w", task.ID, err)
 	}
 
+	// The fresh handle carries none of the persisted intent, so the
+	// limits and file selection are re-stated on it. A pending listing is
+	// the norm for a torrent re-submission — the re-add is a magnet, so
+	// the files arrive only once the transfer runs — so the transfer
+	// starts for its metadata and the row requeues: the admission pass
+	// owns the retry through its resume path, and a queued row is never
+	// adopted back out from under it. A refusal leaves the transfer
+	// stopped rather than running files the selection excludes — the
+	// sweep adopts it as paused and the operator decides. Every other
+	// failure is a warning, not a failed re-submission: the transfer
+	// exists and the row is adopted either way — erroring the task would
+	// leave a running engine-side transfer an orphaned foreign under
+	// ADR-0017, the worse of the two outcomes.
+	intentErr := applyPersistedIntent(ctx, e, newID, task.DLLimit, task.ULLimit, sel)
+	switch {
+	case errors.Is(intentErr, errSelectionPending):
+		// Queue first, then run the transfer: a crash between the two
+		// leaves a queued row the admission pass retries, while resuming
+		// first could leave a non-queued row running a transfer the sweep
+		// then adopts out from under the pending selection.
+		if err := r.tasks.Transition(ctx, task.ID, string(StateQueued), CodeTaskReconciled,
+			"re-submitted; file selection waits for the engine's file listing"); err != nil {
+			r.log.Warn("re-submitted with a pending file selection but could not requeue the task for the admission pass",
+				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
+		} else if err := e.Resume(ctx, newID); err != nil {
+			r.log.Warn("re-submitted but could not run the transfer whose file listing is pending",
+				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
+		}
+	case intentErr != nil:
+		r.log.Warn("re-submitted but the persisted limits or file selection were refused; the transfer stays stopped",
+			"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", intentErr)
+	case req.StartPaused:
+		if err := e.Resume(ctx, newID); err != nil {
+			// The intent landed; only the start failed. Requeue so the
+			// admission pass finishes the release instead of leaving the
+			// row to be adopted as paused next sweep.
+			r.log.Warn("re-submitted but could not start the transfer; requeued for the admission pass",
+				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
+			if err := r.tasks.Transition(ctx, task.ID, string(StateQueued), CodeTaskReconciled,
+				"re-submitted; the first start failed and the admission pass retries it"); err != nil {
+				r.log.Warn("re-submitted but could not requeue the task for the admission pass",
+					"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
+			}
+		}
+	}
+
 	// The ref is committed, so the reconciliation itself is durable: a
 	// failure to append its audit event must not fail the sweep or roll
 	// anything back — the handle is adopted either way, and the next sweep
@@ -481,13 +581,23 @@ func (r *Reconciler) failResubmit(ctx context.Context, task store.Reconcilable, 
 // resubmitRequest rebuilds the engine submission from the stored identity:
 // the source URI when dl-tool kept one, the infohash as a magnet otherwise
 // (the qBittorrent path). resumeExtra carries the aria2 --continue option;
-// engines without such an option ignore it.
-func resubmitRequest(task store.Reconcilable) (AddRequest, bool) {
+// engines without such an option ignore it. The persisted selection rides
+// AddRequest.SelectFiles for the engines that honour it at add time —
+// applyPersistedIntent covers the rest after the handle is recorded. Any
+// persisted intent starts the add paused, so no byte moves before the
+// intent lands — the same rule admissionRequest keeps.
+func resubmitRequest(task store.Reconcilable, sel *store.SelectionIntent) (AddRequest, bool) {
+	var selectFiles []int
+	if sel != nil {
+		selectFiles = sel.Indices
+	}
+	startPaused := sel != nil || task.DLLimit > 0 || task.ULLimit > 0
+
 	switch {
 	case task.SourceURI != nil && *task.SourceURI != "":
-		return AddRequest{URIs: []string{*task.SourceURI}, SaveDir: task.Destination, Extra: resumeExtra()}, true
+		return AddRequest{URIs: []string{*task.SourceURI}, SaveDir: task.Destination, SelectFiles: selectFiles, StartPaused: startPaused, Extra: resumeExtra()}, true
 	case task.InfohashV1 != nil && *task.InfohashV1 != "":
-		return AddRequest{URIs: []string{magnetInfohashPrefix + *task.InfohashV1}, SaveDir: task.Destination, Extra: resumeExtra()}, true
+		return AddRequest{URIs: []string{magnetInfohashPrefix + *task.InfohashV1}, SaveDir: task.Destination, SelectFiles: selectFiles, StartPaused: startPaused, Extra: resumeExtra()}, true
 	default:
 		return AddRequest{}, false
 	}

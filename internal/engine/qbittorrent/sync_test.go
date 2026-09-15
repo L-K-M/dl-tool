@@ -735,6 +735,25 @@ func (f *syncTasks) ListNonTerminalByEngine(_ context.Context, engineName string
 	return f.byEngine[engineName], nil
 }
 
+func (f *syncTasks) Get(_ context.Context, id string) (store.Task, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, rows := range f.byEngine {
+		for _, row := range rows {
+			if row.ID == id {
+				ref := row.EngineRef
+				return store.Task{
+					ID: id, EngineRef: &ref, State: row.State,
+					SourceURI: row.SourceURI, InfohashV1: row.InfohashV1,
+					Destination: row.Destination, SelectFiles: row.SelectFiles,
+					DLLimit: row.DLLimit, ULLimit: row.ULLimit,
+				}, nil
+			}
+		}
+	}
+	return store.Task{}, store.ErrNotFound
+}
+
 // listCalls reports how many store listings ran.
 func (f *syncTasks) listCalls() int {
 	f.mu.Lock()
