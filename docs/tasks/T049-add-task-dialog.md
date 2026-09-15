@@ -30,8 +30,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    manifest, `metadata_pending` and `rejected[]`.
 5. [`docs/05-api-contract.md` §5.5 `PATCH /tasks/{id}`](../05-api-contract.md#55-patch-tasksid) —
    `dl_limit`/`ul_limit` are patched onto each created task; the create body has no limit fields.
-6. [`docs/05-api-contract.md` §8.1 Categories](../05-api-contract.md#81-categories) — the combobox reads
-   `GET /categories` and its inline create posts `POST /categories`.
+6. [`docs/05-api-contract.md` §8.1 Categories](../05-api-contract.md#81-categories) and
+   [§8.2 Tags](../05-api-contract.md#82-tags) — the combobox reads `GET /categories`, its inline create
+   posts `POST /categories` and the Tags control seeds from `GET /tags`.
 7. [`docs/09-web-ui-spec.md` §10.6 Toasts and optimistic updates](../09-web-ui-spec.md#106-toasts-and-optimistic-updates)
    — a magnet is never added optimistically.
 
@@ -104,7 +105,9 @@ Submission: JSON `POST /api/v1/tasks` when only URIs are present; the multipart 
 `payload` part plus one `file` part per uploaded `.torrent` otherwise. A `.txt` is read client-side and its
 lines appended to the textarea, so it never leaves the browser as a file part. `dl_limit` and `ul_limit`
 are not create-body fields (doc 05 §5.2); a non-zero limit is patched onto every created task with
-`PATCH /api/v1/tasks/{id}` after the create response (doc 05 §5.5).
+`PATCH /api/v1/tasks/{id}` after the create response (doc 05 §5.5). The chosen `category` and the `tags`
+do travel in the create body itself (doc 05 §5.2: the category must already exist, tags are created on
+demand).
 
 ## Steps
 1. Create `AddTaskDialog.tsx` on shadcn/ui's `dialog` with the exact field order of the doc 09 §4
@@ -133,15 +136,17 @@ are not create-body fields (doc 05 §5.2); a non-zero limit is patched onto ever
 9. Submit through the T014 client; close the dialog immediately and show optimistic `queued` rows for URI
    submissions only, rolling back and naming the offending URI on failure; render `rejected[]` entries as
    one toast each. A non-zero `dl_limit`/`ul_limit` is applied with `PATCH /tasks/{id}` on each created
-   task after the response — the create body has no limit fields (doc 05 §5.5).
+   task after the response — the create body has no limit fields (doc 05 §5.5). A failed PATCH never
+   rolls back a created task: the row stays, the limit stays unset and a toast names the task.
 10. Edit `Toolbar.tsx` so `+ Add` opens the dialog, with the menu items *Add URLs…*, *Add .torrent file…*
     and *Add from clipboard*. In `Shell.test.tsx`, replace `TestToolbarDisabledWithoutSelection`'s
-    disabled-and-`Coming with the add dialog` assertions on `+ Add` with assertions of the wired behaviour.
+    disabled-and-`Coming with the add dialog` assertions on `+ Add` with assertions of the wired
+    behaviour, renaming the test when `+ Add` is no longer part of its disabled checks.
 11. Create `AddTaskDialog.test.tsx`: badge classification for a magnet, a bare 40-hex infohash, a
     32-character base32 infohash and rubbish; a `.txt` drop appends its lines; a `.nzb` drop is refused; the
-    JSON body carries `paused`, `sequential` and `create_subfolder`, and non-zero byte-per-second limits
-    arrive as `PATCH /tasks/{id}` calls on each created task; a `.torrent` upload produces a multipart
-    request with a `payload` part; `Ctrl+Enter` submits and `Enter` does not.
+    JSON body carries `paused`, `sequential`, `create_subfolder`, `category` and `tags`, and non-zero
+    byte-per-second limits arrive as `PATCH /tasks/{id}` calls on each created task; a `.torrent` upload
+    produces a multipart request with a `payload` part; `Ctrl+Enter` submits and `Enter` does not.
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -157,8 +162,8 @@ Run exactly this. Paste the output under "Evidence".
 make lint && make typecheck && make test-web && echo ADD_DIALOG_OK
 ```
 Expected: Vitest reports `Test Files  N passed (N)` where `N` equals the number of pre-existing `web/src`
-test files plus one for `src/components/AddTask/AddTaskDialog.test.tsx` (12 at the time of writing); every
-test named above appears as passing; and the final line of stdout is exactly `ADD_DIALOG_OK`.
+test files plus one for `src/components/AddTask/AddTaskDialog.test.tsx`; every test named above appears
+as passing; and the final line of stdout is exactly `ADD_DIALOG_OK`.
 
 Also confirm scope:
 ```bash
