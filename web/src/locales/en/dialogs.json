@@ -94,7 +94,8 @@
       "pager": "Torrent {{index}} of {{total}}",
       "prev": "Previous torrent",
       "next": "Next torrent",
-      "shortfall": "Not enough free space for the selected files"
+      "shortfall": "Not enough free space for the selected files",
+      "readOnly": "File selection applies to one torrent; this one downloads at its defaults."
     }
   }
 }
