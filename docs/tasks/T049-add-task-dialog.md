@@ -171,4 +171,31 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+This task cannot pass `make test-web` without editing `web/src/components/Shell/Shell.test.tsx`, which is
+not in the `## Files` table ("No other file may be modified").
+
+- `TestToolbarDisabledWithoutSelection` asserts the `+ Add` button is `disabled` and that
+  `getAttribute("title")` is `"Coming with the add dialog"` (`web/src/components/Shell/Shell.test.tsx`,
+  written by T044 commit `d165163` / PR #155 as a placeholder while the dialog did not exist).
+- Step 10 requires `+ Add` to open the dialog — an enabled, working button. A disabled button cannot open
+  anything, so there is no compliant implementation that keeps the assertion. The fix is the same shape
+  as the T044 repair (commit `b939571` / PR #154): add `web/src/components/Shell/Shell.test.tsx` to the
+  `## Files` table so the placeholder assertions can be updated to the wired behaviour.
+
+Three more plan repairs are needed in this task file before it can run to green:
+
+1. `## Verification` expects `Test Files  10 passed (10)`, but `web/src` already contains 11 test files;
+   adding `AddTaskDialog.test.tsx` makes Vitest report `Test Files  12 passed (12)`. Same staleness as
+   the T044/T045 suite-count fixes — best written drift-proof, e.g. `Test Files  N passed (N)`.
+2. Doc 09 §4 specifies the Category control as "Existing categories plus inline create", and this task's
+   out-of-scope note allows "the inline create that posts `POST /categories` (T050)". T050 is still
+   `todo`: `/categories` is absent from `api/openapi.json` and `web/src/api/schema.d.ts`, so the typed
+   client cannot call it and a direct `fetch` is forbidden. Either this task must state that the combobox
+   lists only categories already in use (the Sidebar's source) with inline create deferred to T050, or
+   T049 must take a dependency on T050.
+3. `AddTaskDraft` and step 11 carry `dl_limit`/`ul_limit` and want "byte-per-second limits" in the JSON
+   submission body, but `CreateTasksBody` has `additionalProperties: false` and no limit fields
+   (`internal/api/tasks.go`, `api/openapi.json`) — `POST /tasks` would answer `422`. The documented way to
+   set limits is `PATCH /tasks/{id}` (doc 05 §5.5: "applied immediately, including to a running task").
+   If POST-then-PATCH per created task is the intended path, the task should say the limits are patched
+   on after creation rather than carried in the create body.
