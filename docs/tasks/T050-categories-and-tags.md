@@ -34,6 +34,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/store/settings.go` | edit | Category and tag queries, the `default_destination` read, `ErrConflict`. |
 | `internal/api/tasks.go` | edit | Resolve a missing destination from the category save path. |
 | `internal/api/server.go` | edit | Set a `categories` field via `NewCategoryHandlers(db, cfg.DataRoots)` in `NewServer`; call `s.categories.Register(s.API)` in `registerOperations`. |
+| `internal/api/tasks_test.go` | edit | Move the `TestListTasksFilterAndSort` category seed's `save_path` inside the environment's data root; destination resolution makes the column a live input. |
 
 No other file may be modified, apart from the two generated files of
 [`docs/13-testing-and-verification.md` §7.1](../13-testing-and-verification.md), this task file's
@@ -301,6 +302,14 @@ table while `Server.registerOperations` is the only composition point where a ne
 register — a `CategoryHandlers` built in `categories.go` had no caller, so `/categories` and `/tags`
 would never route and no acceptance test could observe them through `server.API`. The same defect T046
 recorded and pull request #161 repaired.
+
+The second defect below met the same end: the record merged in pull request #171 and this repair
+amended the file as it prescribed.
+
+- `internal/api/tasks_test.go` joined the `## Files` table so the `TestListTasksFilterAndSort` category
+  seed can move its `save_path` inside the test environment's data root — `filepath.Join(env.dataRoot,
+  "linux")` in place of `/data/linux` — keeping a destination-less create inside the resolution table's
+  second row instead of tripping its out-of-roots guard.
 
 Second defect, recorded before implementation: `internal/api/tasks_test.go` is absent from the `## Files`
 table while the resolution table this task adds turns the seeded category `save_path` into a live input.
