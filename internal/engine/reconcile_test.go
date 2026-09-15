@@ -605,20 +605,21 @@ func TestNewServerReconcilesBeforeServing(t *testing.T) {
 			return
 		}
 	}))
-	// The reconciler's Run loop starts inside NewServer under the process
-	// lifetime and has no test-visible stop, so this server and the store
-	// below deliberately outlive the test: closed, the loop would warn once
-	// a second through its construction-time logger for the rest of the
-	// process, while healthy it sweeps silently forever. Only the store
-	// lives on TempDir files — t.TempDir unlinks them at cleanup, and the
-	// open handles keep the inodes usable until exit; the daemon is a
-	// listener and goroutine the process reaps at exit.
+	// The daemon deliberately outlives the test (see the note above): it
+	// is a listener and goroutine the process reaps at exit. The store and
+	// the server's loops do not have to — Shutdown stops them before the
+	// store closes, in cleanup order.
 
 	root := t.TempDir()
 	db, err := store.Open(t.Context(), filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	// One non-terminal task whose handle the fake daemon reports active.
 	tasks := store.NewTaskStore(db)
@@ -631,7 +632,7 @@ func TestNewServerReconcilesBeforeServing(t *testing.T) {
 		t.Fatalf("seed task: %v", err)
 	}
 
-	_, err = api.NewServer(
+	server, err := api.NewServer(
 		&config.Config{ConfigDir: root, Aria2URL: rpc.URL, SessionTTL: time.Hour},
 		db,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -639,6 +640,9 @@ func TestNewServerReconcilesBeforeServing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// Registered after the store's cleanup, so the background loops stop
+	// before the database they poll closes.
+	t.Cleanup(server.Shutdown)
 
 	// NewServer has returned; the boot sweep must already have adopted the
 	// engine's report for the seeded row.

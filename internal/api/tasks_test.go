@@ -109,6 +109,9 @@ func newTasksTestEnvWithRoots(t *testing.T, dataRoot string, roots []string) *ta
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// Registered after the store's cleanup, so it runs first: the
+	// background loops stop before the database they poll closes.
+	t.Cleanup(server.Shutdown)
 
 	env := &tasksTestEnv{
 		api:         humatest.Wrap(t, server.API),
@@ -1465,6 +1468,8 @@ func newLateResolutionEnv(t *testing.T) (*tasksTestEnv, *qbMirrorDaemon) {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	// Same ordering as the shared env: loops stop before the store closes.
+	t.Cleanup(server.Shutdown)
 
 	env := &tasksTestEnv{
 		api:      humatest.Wrap(t, server.API),

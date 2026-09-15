@@ -15,10 +15,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/L-K-M/dl-tool/internal/config"
+	"github.com/L-K-M/dl-tool/internal/store"
 )
 
 // registrySlugs mirrors the slug registry of docs/05-api-contract.md section
@@ -475,4 +477,52 @@ func TestErrorFactorySkipsNilDetails(t *testing.T) {
 	if !strings.Contains(string(body), SlugValidationFailed) {
 		t.Errorf("marshaled problem lacks the validation slug: %s", body)
 	}
+}
+
+// TestShutdownStopsBackgroundLoops is the lifecycle regression: a server
+// built against a real store runs the sync hub, the reconciler and the
+// admission pass, and Shutdown must stop every one of them — proven by
+// the silence that follows the store's close, which a surviving loop
+// would fill with poll warnings at its 1 Hz cadence. The second call
+// pins idempotence.
+func TestShutdownStopsBackgroundLoops(t *testing.T) {
+	root := t.TempDir()
+	dataRoot := filepath.Join(root, "data")
+	if err := os.Mkdir(dataRoot, 0o755); err != nil {
+		t.Fatalf("make data root: %v", err)
+	}
+	db, err := store.Open(
+		t.Context(),
+		filepath.Join(root, "config", "dl-tool.db"),
+		filepath.Join(root, "backups"),
+	)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	logs := &strings.Builder{}
+	server, err := NewServer(
+		&config.Config{ConfigDir: filepath.Join(root, "config"), SessionTTL: time.Hour, DataRoots: []string{dataRoot}},
+		db,
+		slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	server.Shutdown()
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	// Two poll windows pass with the store closed: any loop still alive
+	// would log its failure cadence into the buffer.
+	mark := logs.Len()
+	time.Sleep(2200 * time.Millisecond)
+	if grew := logs.String()[mark:]; grew != "" {
+		t.Errorf("background loop logged after Shutdown: %s", grew)
+	}
+
+	server.Shutdown()
 }

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	stdsync "sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -123,6 +124,13 @@ type Server struct {
 	// cmd/dl-tool, which owns the *obs.Metrics instance whose
 	// dltool_sse_clients gauge the hub's client count connects to.
 	SSE *SSEHandlers
+
+	// bgCancel stops the background loops NewServer starts — the sync
+	// hub, the reconciler and the admission pass — and bg joins them, so
+	// Shutdown leaves no goroutine polling a store the caller is about
+	// to close. A nil-db build starts no loops; Shutdown is then a no-op.
+	bgCancel context.CancelFunc
+	bg       stdsync.WaitGroup
 }
 
 // NewServer builds the router and the Huma API. Every route lives under
@@ -254,23 +262,19 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		}
 	}
 
+	// The server's background lifetime: every loop NewServer starts — the
+	// sync hub below, then the reconciler and the admission pass — runs on
+	// bgCtx and is joined through server.bg. Shutdown cancels it; a failed
+	// construction cancels it too, so an error return never leaks a loop
+	// nobody can stop.
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+
 	// The sync hub fans task deltas to SSE subscribers at 1 Hz and answers
-	// GET /sync from its ring. The loop is process-lifetime: it starts with
-	// the server, idles through snapshot errors (a closed store) and dies
-	// with the process — no request context could own it. With a nil db the
-	// operations still register for the generated document, but nothing
-	// feeds the hub.
+	// GET /sync from its ring. Its loop runs on bgCtx with the other
+	// background loops; with a nil db the operations still register for
+	// the generated document, but nothing feeds the hub.
 	hub := sync.NewHub()
 	sseHandlers := NewSSEHandlers(hub, db)
-	if db != nil {
-		go func() {
-			// Loop returns nil once its context is cancelled; anything else
-			// is a defect worth a log line even though the loop runs detached.
-			if err := hub.Loop(context.Background(), time.Second, sseHandlers.Snapshot); err != nil {
-				log.Error("sync loop stopped", slog.String("err", err.Error()))
-			}
-		}()
-	}
 
 	server := &Server{
 		Router:     root,
@@ -286,6 +290,27 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		categories: NewCategoryHandlers(db, cfg.DataRoots),
 		fs:         NewFSHandlers(cfg.DataRoots),
 		SSE:        sseHandlers,
+		bgCancel:   bgCancel,
+	}
+	// Any construction failure after the first goroutine started still
+	// releases it before the error return.
+	built := false
+	defer func() {
+		if !built {
+			server.Shutdown()
+		}
+	}()
+
+	if db != nil {
+		server.bg.Add(1)
+		go func() {
+			defer server.bg.Done()
+			// Loop returns nil once its context is cancelled; anything else
+			// is a defect worth a log line even though the loop runs detached.
+			if err := hub.Loop(bgCtx, time.Second, sseHandlers.Snapshot); err != nil {
+				log.Error("sync loop stopped", slog.String("err", err.Error()))
+			}
+		}()
 	}
 	// The two credentials of docs/05-api-contract.md section 1.2, so the
 	// generated document tells clients how the API is protected. Individual
@@ -315,9 +340,10 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		base.Handle(reserved, http.HandlerFunc(notFound))
 	}
 
-	// The SPA handler is built before the background loops start, so a
-	// construction failure returns without leaking a loop nobody can stop;
-	// it mounts last regardless, so /api/v1, /healthz and /readyz keep
+	// The SPA handler is built before the remaining background loops
+	// start, and a construction failure anywhere returns through the
+	// deferred Shutdown above — no error path leaks a running loop. The
+	// SPA mounts last regardless, so /api/v1, /healthz and /readyz keep
 	// every route they claim (doc 10 section 7.3 rules 2 and 8).
 	spa, err := SPAHandler(cfg.BasePath)
 	if err != nil {
@@ -330,10 +356,9 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// NewServer has reconciled once before it accepts its first request —
 	// then the 1 Hz poll loop beside the hub's. A failed sweep is a warning,
 	// never a construction error: a boot must not be locked out of its UI
-	// by an engine that is down (doc 17 section 1.6). The loop's context is
-	// the process lifetime, like the hub loop above — no request context
-	// could own it; Run stops with that context and the process exits with
-	// the server. A nil db (the openapi subcommand, router-only tests) has
+	// by an engine that is down (doc 17 section 1.6). The loop runs on the
+	// server's owned bgCtx, like the hub loop above — Shutdown stops and
+	// joins it. A nil db (the openapi subcommand, router-only tests) has
 	// no tasks to reconcile and skips both.
 	if db != nil {
 		// The admission controller runs beside the reconciler's loop
@@ -359,16 +384,22 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 				slog.String("err", err.Error()))
 		}
 		cancelBoot()
+		server.bg.Add(1)
 		go func() {
-			if err := reconciler.Run(context.Background()); err != nil {
+			defer server.bg.Done()
+			// A cancelled context is Shutdown, not an outage — only a
+			// failure on a live context earns the error line.
+			if err := reconciler.Run(bgCtx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("reconciler stopped", slog.String("err", err.Error()))
 			}
 		}()
 
 		// Admission starts only after the boot sweep above has completed
 		// synchronously, so it never races the boot reconciliation.
+		server.bg.Add(1)
 		go func() {
-			if err := admitter.Run(context.Background(), admissionPolicyLoader(db, cfg.DataRoots)); err != nil {
+			defer server.bg.Done()
+			if err := admitter.Run(bgCtx, admissionPolicyLoader(db, cfg.DataRoots)); err != nil && !errors.Is(err, context.Canceled) {
 				// Admission halting means queued tasks never start while the
 				// API keeps serving; say so in the one line an operator sees.
 				log.Error("admission loop stopped; queued tasks will no longer be admitted", slog.String("err", err.Error()))
@@ -382,7 +413,19 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 	// request to /anything stays a 404.
 	base.Handle("/*", spa)
 
+	built = true
+
 	return server, nil
+}
+
+// Shutdown cancels the background loops NewServer started — the sync
+// hub, the reconciler and the admission pass — and blocks until each
+// has returned, so no goroutine outlives the store the caller is about
+// to close. It is idempotent and a no-op on a server built with a nil
+// db, which starts no loops.
+func (s *Server) Shutdown() {
+	s.bgCancel()
+	s.bg.Wait()
 }
 
 // Spec renders the OpenAPI 3.1 document the `openapi` subcommand prints. The
