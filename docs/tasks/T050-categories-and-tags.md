@@ -307,7 +307,7 @@ table while the resolution table this task adds turns the seeded category `save_
 `TestListTasksFilterAndSort` seeds `categories ('linux', '/data/linux')` and creates a task in that
 category with no destination — correct under the old code, where the column was inert — but the new rule
 resolves `/data/linux` through `fsx.ResolveDestination`, which sits outside the test environment's data
-root, so the create answers `403 /problems/path-rejected` and the test cannot pass. The fixture's seed
-must move inside the environment's data root (or the seeded create must carry an explicit destination) —
-an edit the `## Files` table does not admit. The repair adds `internal/api/tasks_test.go` to the table
-with that purpose, the same defect class this file's first `## Blocked` record carried.
+root, so the create answers `403 /problems/path-rejected` and the test cannot pass. The chosen remedy
+moves the seeded `save_path` inside the environment's data root — an edit the `## Files` table does not
+admit. The repair adds `internal/api/tasks_test.go` to the table with that purpose, the same defect
+class this file's first `## Blocked` record carried.
