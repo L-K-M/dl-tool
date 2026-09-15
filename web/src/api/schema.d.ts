@@ -164,6 +164,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/fs/free-space": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Report free and total bytes for a path
+     * @description The statfs answer for the filesystem holding the path, in plain integer bytes — never KB, never a float. The path is resolved against the configured roots the same way browse resolves it; outside them is 403 /problems/path-rejected. A path that does not exist yet reports the filesystem of its nearest existing ancestor, so the browser can quote space for a destination still to be created.
+     */
+    get: operations["free-space-fs"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/fs/mkdir": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Create one directory inside a data root
+     * @description Creates name inside the resolved path with the process umask — mkdir sets no mode of its own. The path must resolve inside the configured roots (403 /problems/path-rejected); a name containing a separator or .. is 422 /problems/validation-failed and an existing name is 409 /problems/conflict.
+     */
+    post: operations["mkdir-fs"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/fs/roots": {
     parameters: {
       query?: never;
@@ -621,6 +661,13 @@ export interface components {
       priority?: "skip" | "normal" | "high" | "maximum";
       selected?: boolean;
     };
+    FreeSpaceOutputBody: {
+      /** Format: int64 */
+      free_bytes: number;
+      path: string;
+      /** Format: int64 */
+      total_bytes: number;
+    };
     HeartbeatEvent: Record<string, never>;
     InspectTasksBody: {
       /** @description A base64-encoded .torrent file, 10 MiB decoded maximum */
@@ -708,6 +755,16 @@ export interface components {
       path: string;
       /** Format: int64 */
       size: number | null;
+    };
+    MkdirInputBody: {
+      /** @description Single new path component — never a path itself */
+      name: string;
+      /** @description Directory to create in; resolved with its symlinks and must land inside a configured root */
+      path: string;
+    };
+    MkdirOutputBody: {
+      path: string;
+      writable: boolean;
     };
     PatchTaskBody: {
       /** @description Category name; must already exist */
@@ -1207,6 +1264,71 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Listing"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "free-space-fs": {
+    parameters: {
+      query: {
+        /** @description Absolute path to report on; resolved with its symlinks and must land inside a configured root */
+        path: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FreeSpaceOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "mkdir-fs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MkdirInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MkdirOutputBody"];
         };
       };
       /** @description Error */
