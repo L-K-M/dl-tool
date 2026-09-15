@@ -257,9 +257,6 @@ test("TestToolbarDisabledWithoutSelection", () => {
     expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.getAttribute("title")).toBe("Select at least one task");
   }
-  const add = screen.getByRole("button", { name: "Add" });
-  expect((add as HTMLButtonElement).disabled).toBe(true);
-  expect(add.getAttribute("title")).toBe("Coming with the add dialog");
   const columns = screen.getByRole("button", { name: "Columns" });
   expect((columns as HTMLButtonElement).disabled).toBe(true);
   const clear = screen.getByRole("button", { name: "Clear completed" });
@@ -272,6 +269,32 @@ test("TestToolbarDisabledWithoutSelection", () => {
   expect(
     screen.getByRole("button", { name: "Pause" }).getAttribute("title"),
   ).toBe("Reconnecting…");
+});
+
+test("TestAddOpensCreateDialog", async () => {
+  useTasks.getState().setConnection("live");
+  server.use(
+    http.get("*/api/v1/categories", () =>
+      HttpResponse.json({ categories: [] }),
+    ),
+    http.get("*/api/v1/tags", () => HttpResponse.json({ tags: [] })),
+    http.get("*/api/v1/fs/roots", () =>
+      HttpResponse.json({
+        roots: [{ path: "/data", free_bytes: 1024, total_bytes: 2048 }],
+      }),
+    ),
+  );
+  mountToolbar();
+  const add = screen.getByRole("button", { name: "Add" });
+  expect((add as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(add);
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog.textContent).toContain("Create Download Task");
+  expect(dialog.textContent).toContain(
+    "Show dialog to select files for download",
+  );
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
 test("TestPausePostsActionsPayload", async () => {

@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T049 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T020, T031, T033, T044, T047, T048, T050 |
 | **Blocks** | T052, T104 |
 | **Parallel-safe** | no — extends T044's `Toolbar.tsx` and `Shell.test.tsx` |
@@ -150,11 +150,11 @@ demand).
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestClassifyLineBadges`, `TestIsDroppableTextPredicate` and `TestTxtDropAppendsLines` pass.
-- [ ] `TestJsonSubmissionBody` and `TestMultipartSubmissionForTorrent` pass.
-- [ ] `TestFiftyLineSoftWarning` asserts the counter text and that no line is dropped.
-- [ ] The three verbatim labels appear character for character as doc 09 §4 gives them.
-- [ ] Limits are entered and sent in bytes per second; no field is labelled KB/s.
+- [x] `TestClassifyLineBadges`, `TestIsDroppableTextPredicate` and `TestTxtDropAppendsLines` pass.
+- [x] `TestJsonSubmissionBody` and `TestMultipartSubmissionForTorrent` pass.
+- [x] `TestFiftyLineSoftWarning` asserts the counter text and that no line is dropped.
+- [x] The three verbatim labels appear character for character as doc 09 §4 gives them.
+- [x] Limits are entered and sent in bytes per second; no field is labelled KB/s.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -186,7 +186,65 @@ Expected: exactly the paths in the Files table and nothing else. Use `git status
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make typecheck && make test-web && echo ADD_DIALOG_OK` on the
+final tree — gofmt and golangci-lint clean, eslint and prettier clean,
+`tsc --noEmit` clean, Vitest 179/179 across 12 files including the nine
+`AddTaskDialog.test.tsx` tests, and the final line of stdout is
+`ADD_DIALOG_OK`:
+
+```text
+$ make lint && make typecheck && make test-web && echo ADD_DIALOG_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+ ✓ src/api/client.test.ts (12 tests)
+ ✓ src/lib/format.test.ts (6 tests)
+ ✓ src/store/useUiPrefs.test.ts (8 tests)
+ ✓ src/store/useTasks.test.ts (12 tests)
+ ✓ src/main.test.ts (1 test)
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests)
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests)
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (9 tests)
+ ✓ src/lib/theme.test.ts (9 tests)
+ ✓ src/components/Shell/Shell.test.tsx (12 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (33 tests)
+ ✓ src/App.test.tsx (55 tests)
+ Test Files  12 passed (12)
+      Tests  179 passed (179)
+ADD_DIALOG_OK
+```
+
+Scope check on the same tree — exactly the Files table paths and nothing else:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+web/src/components/AddTask/AddTaskDialog.test.tsx
+web/src/components/AddTask/AddTaskDialog.tsx
+web/src/components/AddTask/FileSelectionDialog.tsx
+web/src/components/Shell/Shell.test.tsx
+web/src/components/Shell/Toolbar.tsx
+web/src/locales/en/dialogs.json
+```
+
+`TestJsonSubmissionBody` captures the create body — `paused`, `sequential`,
+`create_subfolder`, `category` and `tags` travel in the JSON — and both
+`PATCH /tasks/{id}` calls carrying `{dl_limit:1024, ul_limit:2048}`.
+`TestMultipartSubmissionForTorrent` asserts a `multipart/form-data` request
+whose `payload` part is the JSON and whose `file` part is the dropped
+`.torrent`. `TestCtrlEnterSubmits` counts POSTs: Enter submits nothing,
+Ctrl+Enter submits once. `make ci` also passes on the final tree: `go vet`
+clean, both `docker compose config -q` runs clean and `doclint` reports
+`✅ 2440 OK 🚫 0 Errors`.
 
 ## Blocked
 Resolved by the plan repair: `web/src/components/Shell/Shell.test.tsx` is now in the `## Files` table with

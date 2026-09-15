@@ -31,6 +31,15 @@ import {
 } from "lucide-react";
 import { api } from "../../api/client";
 import {
+  AddTaskDialog,
+  clipboardHandled,
+  dropHasDirectory,
+  droppableLines,
+  expandDroppedFiles,
+  isDroppableText,
+  markClipboardHandled,
+} from "../AddTask/AddTaskDialog";
+import {
   applyTheme,
   readStoredTheme,
   resolveTheme,
@@ -483,9 +492,23 @@ const separator = (
 // themselves).
 const iconLabelClass = "max-[1100px]:hidden";
 
+interface AddSeed {
+  uris?: string[];
+  files?: File[];
+}
+
 export function Toolbar(): JSX.Element {
   const { t } = useTranslation();
   const actions = useShellActions();
+  const [addOpen, setAddOpen] = useState(false);
+  const [addSeed, setAddSeed] = useState<AddSeed>({});
+  const addOpenRef = useRef(false);
+  addOpenRef.current = addOpen;
+  const filePick = useRef<HTMLInputElement>(null);
+  const openAdd = useCallback((seed: AddSeed = {}) => {
+    setAddSeed(seed);
+    setAddOpen(true);
+  }, []);
   const bulkAction = useBulkAction();
   const selection = useTasks((state) => state.selection);
   const connection = useTasks((state) => state.connection);
@@ -523,19 +546,174 @@ export function Toolbar(): JSX.Element {
     // lib/theme owns the class; the prefs document only records the choice.
     useUiPrefs.getState().patch({ theme: next });
   };
+
+  // Doc 09 section 4 behaviours 2 and 3: drops and pastes anywhere on the
+  // main window open the add dialog pre-filled, and a magnet on the
+  // clipboard at window focus raises a non-modal toast — never a modal.
+  useEffect(() => {
+    const onDragOver = (event: DragEvent) => {
+      if (
+        event.dataTransfer?.types.includes("Files") ||
+        event.dataTransfer?.types.includes("text/plain")
+      )
+        event.preventDefault();
+    };
+    const onDrop = (event: DragEvent) => {
+      if (addOpenRef.current || !event.dataTransfer) return;
+      if (dropHasDirectory(event.dataTransfer)) {
+        event.preventDefault();
+        toast.error(t("dialogs:addTask.dirDropped"));
+        return;
+      }
+      if (event.dataTransfer.files.length > 0) {
+        event.preventDefault();
+        void expandDroppedFiles(event.dataTransfer.files).then((expansion) => {
+          expansion.nzb.forEach(() => toast.error(t("dialogs:addTask.nzb")));
+          for (const name of expansion.unsupported)
+            toast.error(t("dialogs:addTask.unsupportedFile", { name }));
+          if (expansion.uris.length > 0 || expansion.files.length > 0)
+            openAdd({ uris: expansion.uris, files: expansion.files });
+        });
+        return;
+      }
+      const text =
+        event.dataTransfer.getData("text/plain") ||
+        event.dataTransfer.getData("text/uri-list");
+      const uris = droppableLines(text);
+      if (uris.length > 0) {
+        event.preventDefault();
+        openAdd({ uris });
+      }
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest("input, textarea, [contenteditable]")
+      )
+        return;
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      const uris = droppableLines(text);
+      if (uris.length === 0) return;
+      event.preventDefault();
+      openAdd({ uris });
+    };
+    const onFocus = () => {
+      void (async () => {
+        try {
+          if (typeof navigator.clipboard?.readText !== "function") return;
+          const text = (await navigator.clipboard.readText()).trim();
+          if (text === "" || !isDroppableText(text) || clipboardHandled(text))
+            return;
+          markClipboardHandled(text);
+          toast(t("dialogs:addTask.clipboardToast"), {
+            action: {
+              label: t("dialogs:addTask.clipboardAdd"),
+              onClick: () => openAdd({ uris: [text] }),
+            },
+            cancel: {
+              label: t("dialogs:addTask.clipboardDismiss"),
+              onClick: () => undefined,
+            },
+          });
+        } catch {
+          // readText rejects without clipboard permission; detection is optional.
+        }
+      })();
+    };
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    window.addEventListener("paste", onPaste);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [openAdd, t]);
+
   return (
     <div className="flex h-full min-w-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
-      <Button
-        variant="default"
-        size="sm"
-        disabled
-        aria-disabled="true"
-        aria-label={t("shell.add")}
-        title={t("shell.comingAdd")}
-      >
-        <Plus aria-hidden="true" />{" "}
-        <span className={iconLabelClass}>{t("shell.add")}</span>
-      </Button>
+      <span className="flex items-center">
+        <Button
+          variant="default"
+          size="sm"
+          aria-label={t("shell.add")}
+          onClick={() => openAdd()}
+          className="rounded-r-none"
+        >
+          <Plus aria-hidden="true" />{" "}
+          <span className={iconLabelClass}>{t("shell.add")}</span>
+        </Button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <Button
+              variant="default"
+              size="sm"
+              aria-label={t("dialogs:addTask.addOptions")}
+              className="rounded-l-none border-l border-primary-foreground/20 px-1.5"
+            >
+              <ChevronDown aria-hidden="true" />
+            </Button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content className={menuContentClass} align="start">
+              <DropdownMenu.Item
+                className={menuItemClass}
+                onSelect={() => openAdd()}
+              >
+                {t("dialogs:addTask.menuUrls")}
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={menuItemClass}
+                onSelect={() => filePick.current?.click()}
+              >
+                {t("dialogs:addTask.menuTorrent")}
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={menuItemClass}
+                onSelect={() =>
+                  void (async () => {
+                    try {
+                      if (typeof navigator.clipboard?.readText !== "function")
+                        return;
+                      const text = await navigator.clipboard.readText();
+                      openAdd({ uris: droppableLines(text) });
+                    } catch {
+                      openAdd();
+                    }
+                  })()
+                }
+              >
+                {t("dialogs:addTask.menuClipboard")}
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </span>
+      <input
+        ref={filePick}
+        type="file"
+        multiple
+        hidden
+        accept=".torrent,.metalink,.meta4,.txt"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={(event) => {
+          const picked = event.target.files;
+          if (picked && picked.length > 0)
+            void expandDroppedFiles(picked).then((expansion) => {
+              expansion.nzb.forEach(() =>
+                toast.error(t("dialogs:addTask.nzb")),
+              );
+              for (const name of expansion.unsupported)
+                toast.error(t("dialogs:addTask.unsupportedFile", { name }));
+              openAdd({ uris: expansion.uris, files: expansion.files });
+            });
+          event.target.value = "";
+        }}
+      />
       {separator}
       <Button
         variant="ghost"
@@ -739,6 +917,12 @@ export function Toolbar(): JSX.Element {
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
+      <AddTaskDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        initialUris={addSeed.uris}
+        initialFiles={addSeed.files}
+      />
     </div>
   );
 }
