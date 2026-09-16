@@ -32,8 +32,9 @@ const FILTER_LABEL_KEYS = {
   error: "shell.sidebar.error",
 } as const;
 
-// Doc 09 section 2.4: a zero-count DOWNLOAD node dims, it never hides.
-const zeroCountOpacity = 0.45;
+// Doc 09 section 2.4: a zero-count DOWNLOAD node dims, it never hides. The dim
+// is a colour, not an opacity — opacity flattening cannot reach the WCAG AA
+// 4.5:1 contrast floor that doc 09 section 10.4 requires.
 
 function Count({ value }: { value: number }) {
   const { i18n } = useTranslation();
@@ -62,8 +63,7 @@ function Node({
     <NavLink
       to={to}
       end={end}
-      className="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted aria-[current=page]:bg-accent aria-[current=page]:font-medium aria-[current=page]:text-accent-foreground"
-      style={{ opacity: dimmed ? zeroCountOpacity : undefined }}
+      className={`flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted aria-[current=page]:bg-accent aria-[current=page]:font-medium aria-[current=page]:text-accent-foreground${dimmed ? " text-muted-foreground" : ""}`}
     >
       <span className="truncate">{label}</span>
       {count !== undefined && <Count value={count} />}

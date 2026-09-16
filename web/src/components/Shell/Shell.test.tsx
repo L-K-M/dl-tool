@@ -235,9 +235,11 @@ test("TestSidebarCountsComeFromStore", () => {
 test("TestZeroCountNodeStaysVisible", () => {
   useTasks.getState().hydrate([task("a", { state: "downloading" })]);
   wrap(<Sidebar />);
-  expect(link("Stopped").style.opacity).toBe("0.45");
-  expect(link("Error").style.opacity).toBe("0.45");
-  expect(link("Downloading").style.opacity).toBe("");
+  // Doc 09 section 2.4: dimmed, never hidden — and via a colour, not opacity,
+  // so the label stays above the section 10.4 contrast floor.
+  expect(link("Stopped").className).toContain("text-muted-foreground");
+  expect(link("Error").className).toContain("text-muted-foreground");
+  expect(link("Downloading").className).not.toContain("text-muted-foreground");
 });
 
 test("TestActiveNodeHasAriaCurrent", () => {
