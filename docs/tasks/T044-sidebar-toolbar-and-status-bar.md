@@ -92,7 +92,7 @@ Sidebar markup, per group:
 
 - Counts come from `selectFilterCounts`, `selectCategoryCounts` and `selectTagCounts` (T041), which read
   the SSE-fed store. Never issue one request per node.
-- A zero-count `DOWNLOAD` node stays in place at 45 % opacity; it is never hidden.
+- A zero-count `DOWNLOAD` node stays in place, dimmed as doc 09 §2.4 specifies; it is never hidden.
 - Status-bar segment 1 is `role="status" aria-live="polite"`; segment 2 uses tabular numerals.
 - Free space comes from `GET /api/v1/fs/free-space?path=` for the selected task's destination, and falls
   back to the default destination. Until T047 serves that endpoint the segment renders `—`.

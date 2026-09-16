@@ -235,7 +235,8 @@ Logs
 ```
 
 - Counts come from the SSE `sync` payload, never from a separate request per node.
-- Do **not** auto-hide zero-count nodes under `DOWNLOAD`; dim them to 45 % opacity instead. Category and tag
+- Do **not** auto-hide zero-count nodes under `DOWNLOAD`; dim them instead, via a muted foreground colour —
+  opacity dimming flattens the label below the §10.4 WCAG AA contrast floor at any setting. Category and tag
   nodes may hide at zero, controlled by a Settings toggle that is off by default.
 - Each group is a `<nav>` with an `<h2 class="sr-only">` label; nodes are `<a>`; the active node carries
   `aria-current="page"`.
@@ -454,9 +455,11 @@ hidden, not disabled, for non-BitTorrent tasks.
 
 A full-width track with a filled portion. Downloading = `--accent`; seeding = `--ok`; paused = `--fg-muted`
 with a static stripe; error = `--error`; checking, extracting and moving = animated indeterminate stripes.
-The percentage sits inside the bar, centred, with `mix-blend-mode: difference` so it reads over both halves.
-Attributes: `role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="78"
-aria-valuetext="78% — 4.1 GB of 5.2 GB"`.
+The percentage sits inside the bar, centred, rendered twice: `--fg` over the track and `--accent-fg` clipped
+inside the fill — a blend-mode shortcut cannot hold the §10.4 contrast floor on both halves at once.
+Attributes: `role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="78"
+aria-valuetext="78% — 4.1 GB of 5.2 GB"` — a `role="progressbar"` element needs an accessible name as well as
+the value text.
 
 ### 3.9 Virtualisation
 
@@ -1055,7 +1058,7 @@ The justification record for every choice above. Both tables are evidence, not d
 | Columns in the trackers and content tables cannot be hidden, resized or reordered | **Every** grid — tasks, files, trackers, peers, search results, RSS items — uses the same column-management component with show/hide, resize, reorder and persistence (§3.3, §3.4) |
 | Tracker status is not available as a sortable column (#22121) | The Trackers tab has a sortable Status column (§6) |
 | "cluttered, dated design isn't just an aesthetic issue — it affects usability" | One design system: semantic tokens, an 8 px spacing scale, one font stack, `lucide-react` icons only (§10.1) |
-| Auto-hiding zero-count status filters makes the sidebar shift | Zero-count Download filters stay in place, dimmed to 45 %; auto-hide is opt-in and applies only to categories and tags (§2.4) |
+| Auto-hiding zero-count status filters makes the sidebar shift | Zero-count Download filters stay in place, dimmed (§2.4); auto-hide is opt-in and applies only to categories and tags |
 | The add-link dialog is a bare textarea with no destination, no category and no free-space readout | The Download-Station-style dialog in §4: destination, `Select`, free space, category, tags and per-task limits on one screen, with file selection behind one checkbox |
 
 ---
