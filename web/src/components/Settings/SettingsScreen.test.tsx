@@ -355,5 +355,18 @@ test("TestScreenMakesNoSettingsApiCalls", async () => {
   useSettingsDirty.setState({ report: null });
   mount("/settings/connection");
   await screen.findByText("aria2", { selector: "span.font-medium" });
-  await waitFor(() => expect(settingsApiCalls).toEqual([]));
+  // Arm deferred work after the second section mounts, then wait for the
+  // store's debounced flush — the same no-sleep pattern as
+  // TestGeneralWritesPrefs — so a late settings call is still recorded.
+  useUiPrefs.getState().patch({ sidebarCollapsed: true });
+  await waitFor(() =>
+    expect(
+      (
+        JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as {
+          sidebarCollapsed?: boolean;
+        }
+      ).sidebarCollapsed,
+    ).toBe(true),
+  );
+  expect(settingsApiCalls).toEqual([]);
 });
