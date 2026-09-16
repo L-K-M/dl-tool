@@ -69,6 +69,6 @@ test("TestMissingKeyThrowsInTests", () => {
   const i18n = initI18n({ throwOnMissing: true });
   expect(() => i18n.t("common:no.such.key")).toThrow(/missing i18n key/);
 
-  initI18n();
+  initI18n({ throwOnMissing: false });
   expect(i18n.t("common:no.such.key")).toBe("no.such.key");
 });
