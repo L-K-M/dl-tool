@@ -278,7 +278,8 @@ test("TestEngineTestRequestErrorToastsFriendlyDetail", async () => {
   const toastError = vi.spyOn(toast, "error");
   server.use(
     http.post("*/api/v1/engines/eng_qbittorrent/test", () =>
-      HttpResponse.json({}, { status: 502 }),
+      // detail present but empty: only ||, not ??, falls through.
+      HttpResponse.json({ detail: "" }, { status: 502 }),
     ),
   );
   mount("/settings/connection");
