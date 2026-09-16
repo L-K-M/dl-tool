@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router-dom";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
+import { cn } from "@/lib/utils";
 import {
   selectCategoryCounts,
   selectFilterCounts,
@@ -63,7 +64,10 @@ function Node({
     <NavLink
       to={to}
       end={end}
-      className={`flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted aria-[current=page]:bg-accent aria-[current=page]:font-medium aria-[current=page]:text-accent-foreground ${dimmed ? "text-muted-foreground" : ""}`}
+      className={cn(
+        "flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted aria-[current=page]:bg-accent aria-[current=page]:font-medium aria-[current=page]:text-accent-foreground",
+        dimmed && "text-muted-foreground",
+      )}
     >
       <span className="truncate">{label}</span>
       {count !== undefined && <Count value={count} />}
