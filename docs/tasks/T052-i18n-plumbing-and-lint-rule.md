@@ -152,20 +152,21 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Blocked
 
-Step 5 cannot run as written: the specified rule — the two `no-restricted-syntax` selectors scoped to
-`src/**/*.tsx` — reports three real violations in files the `## Files` table does not admit:
+Step 5 cannot run as written: the specified rule — the two `no-restricted-syntax` selectors scoped
+to `src/**/*.tsx` — reports three real violations in files the `## Files` table does not admit:
 
-- `web/src/components/ui/dialog.tsx:78` — `<span className="sr-only">Close</span>` on the dialog close
-  button
-- `web/src/components/ui/dialog.tsx:117` — `<Button variant="outline">Close</Button>` in `DialogFooter`
-- `web/src/components/ui/sheet.tsx:77` — `<span className="sr-only">Close</span>` on the sheet close
-  button
+- `web/src/components/ui/dialog.tsx:78` — `<span className="sr-only">Close</span>` on the dialog
+  close button
+- `web/src/components/ui/dialog.tsx:117` — `<Button variant="outline">Close</Button>` in
+  `DialogFooter`
+- `web/src/components/ui/sheet.tsx:77` — `<span className="sr-only">Close</span>` on the sheet
+  close button
 
 All three are literal `Close` strings inside the T039 shadcn copy-ins. They are user-visible through
 assistive technology, so carving `components/ui/` out of the rule's file scope would satisfy the
 letter of the acceptance criterion while leaving the Goal ("every user-visible string in `web/src/`
-reaches the screen through `t()`") unmet — a weakening, not a fix. Moving each string through `t()`
-needs the two copy-in files plus a `close` key in a catalogue; `common.json`'s existing
+reaches the screen through `t()`") unmet — a weakening, not a fix. Moving each string through
+`t()` needs the two copy-in files plus a `close` key in a catalogue; `common.json`'s existing
 `shell.shortcuts.close` names the cheat-sheet's own close control, so the clean remedy adds a
 dedicated nested key such as `actions.close`, matching the catalogue's feature-namespaced style.
 Only `en` catalogues exist — v1 ships `en` only (doc 09 §10.2 and this task's out-of-scope), so
@@ -180,8 +181,8 @@ Chosen remedy for the plan-repair PR: add `web/src/components/ui/dialog.tsx`,
 `web/src/components/ui/sheet.tsx` and `web/src/locales/en/common.json` to the `## Files` table (the
 catalogue row covers the new `close` key and any sibling keys the repair wants), matching the
 record-then-repair workflow of T046 (#160/#161), T049 (#167/#168) and T050 (#169/#170, #171/#172).
-The scope check emits paths sorted, so the repaired table — and its "in that order" expectation —
-should list them as `web/eslint.config.js`, `web/src/components/ui/dialog.tsx`,
+The scope check emits paths sorted, so the repaired table — and its "in that order"
+expectation — should list them as `web/eslint.config.js`, `web/src/components/ui/dialog.tsx`,
 `web/src/components/ui/sheet.tsx`, `web/src/i18n.test.ts`, `web/src/i18n.ts`,
 `web/src/lib/format.ts`, `web/src/locales/en/common.json`, `web/src/locales/en/errors.json` (the
 current five rows are not in that order either — a second mismatch the same repair can settle).
