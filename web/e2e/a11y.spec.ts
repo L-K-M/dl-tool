@@ -7,13 +7,7 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
-import {
-  BASE_URL,
-  STATE_DIR,
-  ensureAdmin,
-  loginAsAdmin,
-  stubTasks,
-} from "./fixtures";
+import { BASE_URL, STATE_DIR, loginAsAdmin, stubTasks } from "./fixtures";
 
 /** Screens that exist at M3. The Search and RSS screens are appended by the milestones that add
  *  them, so doc 13 section 6.2's five-screen list is complete once M4 and M5 land. */
@@ -33,7 +27,7 @@ const AXE_TAGS = [
   "wcag22aa",
 ] as const;
 const httpUnauthorized = 401;
-const ADMIN_WAIT_MS = 60_000;
+const ADMIN_WAIT_MS = 240_000;
 const ADMIN_POLL_MS = 500;
 const BANNER_WAIT_MS = 20_000;
 const MAX_MOUNTED_ROWS = 200;
@@ -50,10 +44,12 @@ declare global {
 
 /**
  * The first-run account belongs to setup.spec.ts: spec files run on parallel
- * workers, so an ensureAdmin here could win the race and break its /setup
- * redirect assertion. Poll /auth/me instead until it reports something other
- * than setup-required, and mint the account through ensureAdmin only when
- * nothing did inside the window (single-file runs). Duplicated in
+ * workers, and it can be scheduled late on a CI runner, so no other file may
+ * ever call ensureAdmin — creating the account before its first test asserts
+ * the /setup wizard breaks that spec. Poll /auth/me until it reports
+ * something other than setup-required; a run without setup.spec.ts has no
+ * admin at all, in which case fail with a clear message rather than minting
+ * one. Duplicated in
  * keyboard.spec.ts; the e2e specs cannot share a helper module without
  * widening this task's Files table.
  */
@@ -70,8 +66,10 @@ async function waitForAdmin(request: APIRequestContext): Promise<void> {
   const deadline = Date.now() + ADMIN_WAIT_MS;
   while (!(await adminExists(request))) {
     if (Date.now() >= deadline) {
-      await ensureAdmin(request);
-      return;
+      throw new Error(
+        "the first-run admin never appeared; setup.spec.ts owns account " +
+          "creation, so run the full make e2e suite",
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, ADMIN_POLL_MS));
   }
@@ -180,7 +178,7 @@ async function runAxe(page: Page, label: string): Promise<void> {
 
 for (const screen of SCREENS) {
   test(`axe scan: ${screen.name}`, async ({ page, request }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(300_000);
     switch (screen.name) {
       case "setup":
         await stubSession(page, "setup-required");
@@ -232,7 +230,7 @@ for (const screen of SCREENS) {
 }
 
 test("axe scan: add-task dialog", async ({ page, request }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await stubTasks(page, STUB_ROWS);
   await signIn(page, request);
   await page.getByRole("button", { name: "Add", exact: true }).click();
@@ -243,7 +241,7 @@ test("axe scan: add-task dialog", async ({ page, request }) => {
 });
 
 test("axe scan: folder browser dialog", async ({ page, request }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await stubTasks(page, STUB_ROWS);
   await signIn(page, request);
   await page.getByRole("button", { name: "Add", exact: true }).click();
@@ -260,7 +258,7 @@ test("axe scan: folder browser dialog", async ({ page, request }) => {
 });
 
 test("aria-rowcount is the total row count", async ({ page, request }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await stubTasks(page, 10_000);
   await signIn(page, request);
   const grid = page.getByRole("grid");
@@ -274,7 +272,7 @@ test("aria-rowcount is the total row count", async ({ page, request }) => {
 });
 
 test("live regions announce status changes", async ({ page, request }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await stubTasks(page, STUB_ROWS);
   await signIn(page, request);
 
@@ -299,7 +297,7 @@ test("the settings dirty bar announces its count", async ({
   page,
   request,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await signIn(page, request);
   await page.goto("/settings/general");
   await expect(page.getByRole("heading", { name: "General" })).toBeVisible();

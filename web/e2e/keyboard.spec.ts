@@ -6,7 +6,7 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
-import { ADMIN, BASE_URL, STATE_DIR, ensureAdmin, stubTasks } from "./fixtures";
+import { ADMIN, BASE_URL, STATE_DIR, stubTasks } from "./fixtures";
 
 /**
  * The doc 09 section 3.6 table, in order. Every row is exercised with
@@ -41,16 +41,18 @@ export const SHORTCUTS = [
 
 const ROWS = 60;
 const httpUnauthorized = 401;
-const ADMIN_WAIT_MS = 60_000;
+const ADMIN_WAIT_MS = 240_000;
 const ADMIN_POLL_MS = 500;
 const MAX_TAB_STOPS = 64;
 
 /**
  * The first-run account belongs to setup.spec.ts: spec files run on parallel
- * workers, so an ensureAdmin here could win the race and break its /setup
- * redirect assertion. Poll /auth/me instead until it reports something other
- * than setup-required, and mint the account through ensureAdmin only when
- * nothing did inside the window (single-file runs). Duplicated in
+ * workers, and it can be scheduled late on a CI runner, so no other file may
+ * ever call ensureAdmin — creating the account before its first test asserts
+ * the /setup wizard breaks that spec. Poll /auth/me until it reports
+ * something other than setup-required; a run without setup.spec.ts has no
+ * admin at all, in which case fail with a clear message rather than minting
+ * one. Duplicated in
  * a11y.spec.ts; the e2e specs cannot share a helper module without widening
  * this task's Files table.
  */
@@ -67,8 +69,10 @@ async function waitForAdmin(request: APIRequestContext): Promise<void> {
   const deadline = Date.now() + ADMIN_WAIT_MS;
   while (!(await adminExists(request))) {
     if (Date.now() >= deadline) {
-      await ensureAdmin(request);
-      return;
+      throw new Error(
+        "the first-run admin never appeared; setup.spec.ts owns account " +
+          "creation, so run the full make e2e suite",
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, ADMIN_POLL_MS));
   }
@@ -178,7 +182,7 @@ const selectedRows = (page: Page) =>
  * is exactly one tab stop: the next Tab leaves it entirely.
  */
 test("Tab moves through the grid exactly once", async ({ page, request }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await stubTasks(page, ROWS);
   await signIn(page, request);
 
@@ -202,7 +206,7 @@ test("every documented shortcut works with keyboard input only", async ({
   page,
   request,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   const fixture = await stubTasks(page, ROWS);
   await signIn(page, request);
 
@@ -356,7 +360,7 @@ test("typing in the filter box does not fire a shortcut", async ({
   page,
   request,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   const fixture = await stubTasks(page, ROWS);
   await signIn(page, request);
 
