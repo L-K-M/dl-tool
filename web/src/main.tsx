@@ -18,8 +18,12 @@ if (host)
 // Meet the install criterion and cache static assets; nothing works offline.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    void navigator.serviceWorker.register(new URL("sw.js", document.baseURI), {
-      scope: new URL("./", document.baseURI).pathname,
-    });
+    void navigator.serviceWorker
+      .register(new URL("sw.js", document.baseURI), {
+        scope: new URL("./", document.baseURI).pathname,
+      })
+      .catch(() => {
+        // Best effort; the app works without the worker.
+      });
   });
 }

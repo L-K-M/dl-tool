@@ -1,5 +1,8 @@
 // The only two jobs are the install criterion and caching static assets.
 const CACHE = "dl-tool-assets-v1";
+// registration.scope is an absolute URL ending in "/", so this resolves to
+// the Vite output directory under the installed base path.
+const ASSETS_PATH = new URL("assets/", self.registration.scope).pathname;
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -21,7 +24,7 @@ self.addEventListener("fetch", (e) => {
   const isAsset =
     e.request.method === "GET" &&
     url.origin === self.location.origin &&
-    url.pathname.includes("/assets/");
+    url.pathname.startsWith(ASSETS_PATH);
   // API, SSE and index.html always go to the network.
   if (!isAsset) return;
   e.respondWith(
@@ -29,7 +32,7 @@ self.addEventListener("fetch", (e) => {
       const hit = await c.match(e.request);
       if (hit) return hit;
       const res = await fetch(e.request);
-      if (res.ok) c.put(e.request, res.clone());
+      if (res.ok) await c.put(e.request, res.clone());
       return res;
     }),
   );

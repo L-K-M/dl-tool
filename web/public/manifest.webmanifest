@@ -2,6 +2,7 @@
   "name": "dl-tool",
   "short_name": "dl-tool",
   "description": "Self-hosted download manager. Requires a connection; nothing works offline.",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

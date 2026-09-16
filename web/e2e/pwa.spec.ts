@@ -4,10 +4,11 @@ import { BASE_URL } from "./fixtures";
 const httpOk = 200;
 const httpUnauthorized = 401;
 
-// This spec never creates the admin account: it sorts ahead of
-// setup.spec.ts, whose first test asserts the first-run redirect. Every page
-// of the SPA serves the same index.html, so the manifest link, theme meta
-// and service-worker registration are all reachable while signed out.
+// This spec never creates the admin account: the files run concurrently on
+// separate workers, so an ensureAdmin here could race setup.spec.ts's
+// first-run redirect assertion. Every page of the SPA serves the same
+// index.html, so the manifest link, theme meta and service-worker
+// registration are all reachable while signed out.
 async function loadApp(page: import("@playwright/test").Page) {
   await page.goto("/");
 }
@@ -118,6 +119,9 @@ test("api requests bypass the cache", async ({ page }) => {
 
   const result = await page.evaluate(async () => {
     const api = await fetch(new URL("api/v1/tasks", document.baseURI));
+    // An API path that merely contains an assets-looking segment must not be
+    // intercepted either.
+    await fetch(new URL("api/v1/assets/probe", document.baseURI));
     const asset =
       document.querySelector<HTMLScriptElement>('script[type="module"]')?.src ??
       null;
