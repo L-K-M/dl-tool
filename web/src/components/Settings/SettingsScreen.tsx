@@ -1,4 +1,4 @@
-import { useEffect, type JSX } from "react";
+import { useLayoutEffect, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { create } from "zustand";
@@ -85,11 +85,11 @@ export function SettingsScreen(): JSX.Element {
 
   // Any report present when the section mounts or changes is stale — its
   // save/revert closures belong to a previous form instance (including a
-  // save that resolved after navigation). The mounted form republishes from
-  // its own effect afterwards, so clear unconditionally at both transitions.
-  // The render-time guard below keeps even one committed frame from showing
-  // a report owned by another section.
-  useEffect(() => {
+  // save that resolved after navigation). A layout effect clears before any
+  // child's passive publish (passive effects run child-first), and the
+  // render-time guard below keeps even one committed frame from showing a
+  // report owned by another section.
+  useLayoutEffect(() => {
     useSettingsDirty.setState({ report: null });
     return () => useSettingsDirty.setState({ report: null });
   }, [section]);
