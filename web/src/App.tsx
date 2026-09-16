@@ -46,6 +46,7 @@ import {
   type RemoveRequest,
   type ShellActions,
 } from "./components/Shell/Toolbar";
+import { SettingsScreen } from "./components/Settings/SettingsScreen";
 import { Sidebar } from "./components/Shell/Sidebar";
 import { ReconnectBanner } from "./components/Shell/ReconnectBanner";
 import { StatusBar } from "./components/Shell/StatusBar";
@@ -375,9 +376,10 @@ export default function App() {
                   element={<Placeholder screen="rss-rules" />}
                 />
                 <Route
-                  path="/settings/:section"
-                  element={<Placeholder screen="settings" />}
+                  path="/settings"
+                  element={<Navigate to="/settings/general" replace />}
                 />
+                <Route path="/settings/:section" element={<SettingsScreen />} />
                 <Route path="/logs" element={<Placeholder screen="logs" />} />
                 <Route path="*" element={<Placeholder screen="tasks" />} />
               </Route>

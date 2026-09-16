@@ -111,12 +111,12 @@ string. A failed probe is a `200` with `ok:false` and must not raise an error to
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestUnknownSectionRedirects` and `TestGeneralWritesPrefs` pass.
-- [ ] `TestDirtyBarAppearsAndAnnounces` passes with the `aria-live` count text.
-- [ ] `TestEngineTestFailureRendersError` passes and asserts no error toast.
-- [ ] `TestConformanceWarningRendersFromLastError` passes.
-- [ ] Every section in `SECTIONS` is reachable and none renders a non-functional form.
-- [ ] No control in this screen calls `GET /settings` or `PATCH /settings`.
+- [x] `TestUnknownSectionRedirects` and `TestGeneralWritesPrefs` pass.
+- [x] `TestDirtyBarAppearsAndAnnounces` passes with the `aria-live` count text.
+- [x] `TestEngineTestFailureRendersError` passes and asserts no error toast.
+- [x] `TestConformanceWarningRendersFromLastError` passes.
+- [x] Every section in `SECTIONS` is reachable and none renders a non-functional form.
+- [x] No control in this screen calls `GET /settings` or `PATCH /settings`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -153,7 +153,75 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test-web && echo SETTINGS_OK` on the task branch (the MSW
+`onUnhandledRequest` and React `flushSync` stderr lines are pre-existing test noise; only the per-file
+results and the summary are reproduced):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ ✓ src/api/client.test.ts (12 tests)
+ ✓ src/i18n.test.ts (4 tests)
+ ✓ src/lib/format.test.ts (6 tests)
+ ✓ src/store/useUiPrefs.test.ts (8 tests)
+ ✓ src/store/useTasks.test.ts (17 tests)
+ ✓ src/api/events.test.ts (12 tests)
+ ✓ src/main.test.ts (1 test)
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests)
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests)
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests)
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (12 tests)
+ ✓ src/lib/theme.test.ts (9 tests)
+ ✓ src/components/Shell/Shell.test.tsx (12 tests)
+ ✓ src/App.test.tsx (55 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (33 tests)
+
+ Test Files  15 passed (15)
+      Tests  215 passed (215)
+
+SETTINGS_OK
+```
+
+`src/components/Settings/SettingsScreen.test.tsx` contains `TestUnknownSectionRedirects`,
+`TestUsersAliasRendersAccountNote`, `TestGeneralWritesPrefs`, `TestDirtyBarAppearsAndAnnounces`,
+`TestRevertRestoresBaseline`, `TestConnectionRendersEngines`, `TestEngineTestFailureRendersError`,
+`TestEngineTestRequestErrorToastsFriendlyDetail`, `TestEngineRowsSurviveFailedPostTestRefetch`,
+`TestConformanceWarningRendersFromLastError`, `TestUnimplementedSectionsRenderNoteNotForm` and
+`TestScreenMakesNoSettingsApiCalls`, all passing. The verification text above expects
+`Test Files  13 passed (13)`; the pre-task baseline is 14 files (T052's Evidence recorded the drift)
+and this task's `SettingsScreen.test.tsx` makes 15 — every file passes, so the criterion's intent holds.
+
+Scope check on the working tree before the task commit:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+web/src/App.tsx
+web/src/components/Settings/ConnectionSection.tsx
+web/src/components/Settings/GeneralSection.tsx
+web/src/components/Settings/SettingsScreen.test.tsx
+web/src/components/Settings/SettingsScreen.tsx
+web/src/locales/en/settings.json
+```
+
+Exactly the `## Files` table, in the sorted order the check emits, and nothing else.
+
+`make ci` on the same tree: `lint`, `vet`, `typecheck`, `test` (Go `ok` for every package under
+`internal/`; Vitest `Test Files  15 passed (15)`, `Tests  215 passed (215)`),
+`compose-check` (`docker compose config -q` clean for `compose.yaml` and `compose.dev.yaml`) and
+`doclint` (`2467 Total, 575 Unique, 2440 OK, 0 Errors`) all pass.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
