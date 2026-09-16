@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T123 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T005 |
 | **Blocks** | T054, T122 |
 | **Parallel-safe** | yes — creates `internal/secure/ssrf.go` and its test, nothing else |
@@ -148,13 +148,13 @@ func RedactURL(raw string) string
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `Check` denies `127.0.0.1:80`, `[::ffff:169.254.169.254]:443` and `93.184.216.34:8080`, and allows `93.184.216.34:443`.
-- [ ] With `allowPrivate` true, `10.1.2.3` is allowed and `169.254.169.254` is still denied.
-- [ ] `CheckRedirect` denies a sixth hop and denies a `file:` target on hop one.
-- [ ] `TestClientBlocksRedirectToMetadata` fails with `errors.Is(err, secure.ErrSSRFBlocked)`.
-- [ ] `ReadCapped` rejects a declared 9 MiB `Content-Length` and a body that exceeds `limit` despite a small declared length.
-- [ ] `RedactURL("https://u:p@x.example/a?apikey=k")` returns `https://x.example/a`.
-- [ ] `grep -rn "Control:" internal/secure/ssrf.go` returns nothing: only `ControlContext` is set.
+- [x] `Check` denies `127.0.0.1:80`, `[::ffff:169.254.169.254]:443` and `93.184.216.34:8080`, and allows `93.184.216.34:443`.
+- [x] With `allowPrivate` true, `10.1.2.3` is allowed and `169.254.169.254` is still denied.
+- [x] `CheckRedirect` denies a sixth hop and denies a `file:` target on hop one.
+- [x] `TestClientBlocksRedirectToMetadata` fails with `errors.Is(err, secure.ErrSSRFBlocked)`.
+- [x] `ReadCapped` rejects a declared 9 MiB `Content-Length` and a body that exceeds `limit` despite a small declared length.
+- [x] `RedactURL("https://u:p@x.example/a?apikey=k")` returns `https://x.example/a`.
+- [x] `grep -rn "Control:" internal/secure/ssrf.go` returns nothing: only `ControlContext` is set.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -186,7 +186,57 @@ files are untracked, and `git diff --name-only` never lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/secure/... && echo SSRF_GUARD_OK` on the final tree:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/secure/...
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.207s
+SSRF_GUARD_OK
+```
+
+`go test -race -count=1 -v ./internal/secure/` on the same tree, trimmed to the tests named in
+steps 9 to 11 — all pass, none skipped:
+
+```text
+--- PASS: TestCheckBlocksLoopback (0.00s)
+--- PASS: TestCheckBlocksLinkLocalMapped (0.00s)
+--- PASS: TestCheckBlocksNonStandardPort (0.00s)
+--- PASS: TestCheckAllowsPublicAddress (0.00s)
+--- PASS: TestAllowPrivateLiftsRFC1918 (0.00s)
+--- PASS: TestAllowPrivateKeepsLinkLocalDenied (0.00s)
+--- PASS: TestCheckRedirectCapsAtFiveHops (0.00s)
+--- PASS: TestCheckRedirectRejectsFileScheme (0.00s)
+--- PASS: TestClientBlocksRedirectToMetadata (0.00s)
+--- PASS: TestReadCappedRejectsDeclaredLength (0.00s)
+--- PASS: TestReadCappedRejectsLyingLength (0.13s)
+--- PASS: TestRedactURLDropsUserinfoAndQuery (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.200s
+```
+
+`grep -rn "Control:" internal/secure/ssrf.go` prints nothing (exit 1): only `ControlContext` is
+set. Note the doc sketch's `ControlContext: g.Check` does not compile as written — the dialer
+hook takes a `syscall.RawConn` fourth argument — so `NewClient` wires `Check` through a
+closure that drops it, keeping `Check`'s contract signature for direct calls.
+
+Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```text
+internal/secure/ssrf.go
+internal/secure/ssrf_test.go
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

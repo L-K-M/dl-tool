@@ -159,7 +159,7 @@ The Torznab client, `dlsearch/v1` engines, `.dlm` import and the search screen. 
 | [T105](T105-static-linux-distributions-engine.md) | Ship the curated static `linux-distributions` engine | T056, T057, T058, T062 | todo |
 | [T116](T116-indexers-settings-section.md) | Build the Indexers settings section | T053, T055, T058 | todo |
 | [T122](T122-apply-ssrf-guard-to-user-uris.md) | Apply the SSRF guard to user-submitted URIs | T020, T031, T123 | todo |
-| [T123](T123-ssrf-guarded-http-client.md) | Build the SSRF-guarded outbound HTTP client | T005 | todo |
+| [T123](T123-ssrf-guarded-http-client.md) | Build the SSRF-guarded outbound HTTP client | T005 | done |
 
 ## M5 — RSS
 
@@ -364,7 +364,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T105 | Ship the curated static `linux-distributions` engine | T056, T057, T058, T062 | no | todo | [T105](T105-static-linux-distributions-engine.md) |
 | T116 | Build the Indexers settings section | T053, T055, T058 | no | todo | [T116](T116-indexers-settings-section.md) |
 | T122 | Apply the SSRF guard to user-submitted URIs | T020, T031, T123 | no | todo | [T122](T122-apply-ssrf-guard-to-user-uris.md) |
-| T123 | Build the SSRF-guarded outbound HTTP client | T005 | yes | todo | [T123](T123-ssrf-guarded-http-client.md) |
+| T123 | Build the SSRF-guarded outbound HTTP client | T005 | yes | done | [T123](T123-ssrf-guarded-http-client.md) |
 
 ### M5
 
