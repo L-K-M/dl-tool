@@ -52,9 +52,10 @@ test("a second setup attempt is rejected", async ({ request }) => {
 
 // Nearest-rank p95 over ten ticks is the maximum, so one environmental spike
 // (GC, CPU steal on a shared runner) fails the run even when the grid is well
-// inside budget. Scope a single retry to this test — Playwright only retries
-// tests whose own budget is unspent, so the serial pair above never re-runs —
-// while a genuinely slow implementation still fails on the retry.
+// inside budget. Scope a single retry to this test: retries configured on
+// this describe apply only to it, so the serial pair above never re-runs,
+// while a genuinely slow implementation still fails when the retry exceeds
+// the budget.
 test.describe("grid performance", () => {
   test.describe.configure({ retries: 1 });
 
@@ -62,7 +63,7 @@ test.describe("grid performance", () => {
     page,
     context,
     request,
-  }) => {
+  }, testInfo) => {
     test.setTimeout(180_000);
     await ensureAdmin(request);
     const fixture = await stubTasks(page, ROW_COUNT);
@@ -133,7 +134,10 @@ test.describe("grid performance", () => {
       if (chunk.eof) break;
     }
     await cdp.send("IO.close", { handle: stream });
-    fs.writeFileSync(path.join(STATE_DIR, "cdp-trace.json"), trace);
+    fs.writeFileSync(
+      path.join(STATE_DIR, `cdp-trace-attempt-${testInfo.retry}.json`),
+      trace,
+    );
 
     const deltas = samples
       .slice(1)
