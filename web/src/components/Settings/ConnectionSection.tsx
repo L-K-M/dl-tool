@@ -60,6 +60,8 @@ export function ConnectionSection(): JSX.Element {
       );
     } finally {
       setPending((current) => ({ ...current, [id]: false }));
+      // A probe can change connected/version/last_seen_at; refresh the row.
+      void engines.refetch();
     }
   };
 
