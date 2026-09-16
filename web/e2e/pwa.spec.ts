@@ -118,21 +118,28 @@ test("api requests bypass the cache", async ({ page }) => {
 
   const result = await page.evaluate(async () => {
     const api = await fetch(new URL("api/v1/tasks", document.baseURI));
-    const asset = document.querySelector<HTMLScriptElement>(
-      'script[type="module"]',
-    )?.src;
+    const asset =
+      document.querySelector<HTMLScriptElement>('script[type="module"]')?.src ??
+      null;
     if (asset) await fetch(asset);
-    const keys = (
-      await caches.open("dl-tool-assets-v1").then((c) => c.keys())
-    ).map((r) => r.url);
-    return { apiStatus: api.status, asset, keys };
+    return { apiStatus: api.status, asset };
   });
 
   // Signed out, the real server answers 401 — a response only the network
   // path can produce.
   expect(result.apiStatus).toBe(httpUnauthorized);
-  expect(result.keys.filter((url) => url.includes("/api/"))).toEqual([]);
-  // Positive control: the same worker did cache a content-hashed asset.
   expect(result.asset).not.toBeNull();
-  expect(result.keys).toContain(result.asset);
+
+  // The worker's cache.put is fire-and-forget inside respondWith, so poll
+  // for the asset entry instead of racing it. The 401 API response above
+  // must never appear.
+  const readKeys = () =>
+    page.evaluate(() =>
+      caches
+        .open("dl-tool-assets-v1")
+        .then((c) => c.keys())
+        .then((keys) => keys.map((r) => r.url)),
+    );
+  await expect.poll(readKeys).toContain(result.asset);
+  expect((await readKeys()).filter((url) => url.includes("/api/"))).toEqual([]);
 });
