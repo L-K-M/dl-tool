@@ -1,8 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../../api/client";
-import { safeNext, useAuthActions } from "../../App";
+import { useAuthActions } from "../../App";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -11,8 +10,6 @@ const tooManyRequests = 429;
 
 export function LoginScreen() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
-  const [params] = useSearchParams();
   const { authenticate } = useAuthActions();
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
@@ -31,8 +28,13 @@ export function LoginScreen() {
         },
       });
       if (data) {
+        // No imperative navigate here: BrowserRouter routes location updates
+        // through startTransition while the session notification is deferred,
+        // so a transition render can read the stale committed session and
+        // bounce the route back to /login?next=. The AuthRoute gate owns the
+        // redirect (it honors next); it only navigates after the authenticated
+        // session has committed.
         authenticate(data);
-        void navigate(safeNext(params.get("next")), { replace: true });
         return;
       }
       if (response.status === tooManyRequests) {

@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "../../api/client";
 import { useAuthActions } from "../../App";
@@ -15,7 +14,6 @@ const tooManyRequests = 429;
 
 export function SetupScreen() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const { authenticate, setupComplete } = useAuthActions();
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -40,8 +38,9 @@ export function SetupScreen() {
         },
       });
       if (data) {
+        // The AuthRoute gate owns the redirect; see LoginScreen for why the
+        // submit handler must not navigate ahead of the committed session.
         authenticate(data);
-        void navigate("/", { replace: true });
         return;
       }
       if (
@@ -51,7 +50,6 @@ export function SetupScreen() {
         // Another browser may finish setup while this form is open.
         setupComplete();
         toast.info(t("auth.setupComplete"));
-        void navigate("/login", { replace: true });
         return;
       }
       setMessage(
