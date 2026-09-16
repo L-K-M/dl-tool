@@ -69,22 +69,26 @@ export function ConnectionSection(): JSX.Element {
     }
   };
 
-  if (engines.isError)
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {t("connection.loadError")}{" "}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void engines.refetch()}
-        >
-          {ct("actions.retry")}
-        </Button>
-      </p>
-    );
+  const loadError = (
+    <p role="alert" className="text-sm text-destructive">
+      {t("connection.loadError")}{" "}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void engines.refetch()}
+      >
+        {ct("actions.retry")}
+      </Button>
+    </p>
+  );
+
+  // A failed background refetch keeps the previous data; only an error with
+  // nothing cached replaces the whole section.
+  if (engines.isError && engines.data === undefined) return loadError;
 
   return (
     <div className="flex flex-col gap-4">
+      {engines.isError && loadError}
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border text-start text-muted-foreground">
