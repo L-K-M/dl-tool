@@ -162,11 +162,14 @@ Step 5 cannot run as written: the specified rule — the two `no-restricted-synt
   button
 
 All three are literal `Close` strings inside the T039 shadcn copy-ins. They are user-visible through
-assistive technology, so scoping the rule around `components/ui/` would satisfy the letter of the
-acceptance criterion while leaving the Goal ("every user-visible string in `web/src/` reaches the
-screen through `t()`") unmet — a weakening, not a fix. Moving each string through `t()` needs the two
-copy-in files plus a `close` key in a catalogue; `common.json`'s existing `shell.shortcuts.close`
-names the cheat-sheet's own close control, so the clean remedy adds a dedicated `close` key.
+assistive technology, so carving `components/ui/` out of the rule's file scope would satisfy the
+letter of the acceptance criterion while leaving the Goal ("every user-visible string in `web/src/`
+reaches the screen through `t()`") unmet — a weakening, not a fix. Moving each string through `t()`
+needs the two copy-in files plus a `close` key in a catalogue; `common.json`'s existing
+`shell.shortcuts.close` names the cheat-sheet's own close control, so the clean remedy adds a
+dedicated nested key such as `actions.close`, matching the catalogue's feature-namespaced style.
+Only `en` catalogues exist — v1 ships `en` only (doc 09 §10.2 and this task's out-of-scope), so
+`web/src/locales/en/common.json` is the whole catalogue side of the repair.
 
 Verified on this branch with the rule applied exactly as specified:
 `cd web && npx eslint "src/**/*.tsx"` → `✖ 3 problems (3 errors, 0 warnings)`, all
@@ -177,6 +180,11 @@ Chosen remedy for the plan-repair PR: add `web/src/components/ui/dialog.tsx`,
 `web/src/components/ui/sheet.tsx` and `web/src/locales/en/common.json` to the `## Files` table (the
 catalogue row covers the new `close` key and any sibling keys the repair wants), matching the
 record-then-repair workflow of T046 (#160/#161), T049 (#167/#168) and T050 (#169/#170, #171/#172).
+The scope check emits paths sorted, so the repaired table — and its "in that order" expectation —
+should list them as `web/eslint.config.js`, `web/src/components/ui/dialog.tsx`,
+`web/src/components/ui/sheet.tsx`, `web/src/i18n.test.ts`, `web/src/i18n.ts`, `web/src/lib/format.ts`,
+`web/src/locales/en/common.json`, `web/src/locales/en/errors.json` (the current five rows are not in
+that order either — a second mismatch the same repair can settle).
 
 Second, smaller defect for the same repair: `## Verification` expects `Test Files  12 passed (12)`,
 but the tree already carries 13 Vitest files and this task's own `web/src/i18n.test.ts` makes 14.
