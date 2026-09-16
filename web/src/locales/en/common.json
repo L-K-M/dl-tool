@@ -48,7 +48,8 @@
     "tryFewerFilters": "Try fewer filters",
     "retry": "Retry",
     "addFeed": "Add feed",
-    "createRule": "Create rule"
+    "createRule": "Create rule",
+    "close": "Close"
   },
   "shell": {
     "add": "Add",
