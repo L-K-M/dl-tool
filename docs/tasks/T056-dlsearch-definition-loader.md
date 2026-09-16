@@ -39,6 +39,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/search/definition.go` | create | `Definition`, `LoadDefinition`, `DefinitionError` and the closed sets. |
 | `internal/search/definition_test.go` | create | Valid, invalid and limit cases over the fixtures. |
 | `internal/search/testdata/` | modify | Add `def_valid_rss.yaml`, `def_unknown_key.yaml`, `def_bad_placeholder.yaml`, `def_bad_op.yaml`, `def_static.yaml` and a 600 KiB `def_oversize.yaml`. |
+| `go.mod` | modify | First direct import of the pinned `go.yaml.in/yaml/v3 v3.0.5`; `go mod tidy` drops its `// indirect` comment, nothing else. |
 
 No other file may be modified.
 
@@ -241,7 +242,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 
-`make lint && make test PKG=./internal/search/... && echo DEFINITION_OK` on the task branch:
+`make lint && make test PKG=./internal/search/... && echo DEFINITION_OK` on the final tree:
 
 ```text
 test -z "$(gofmt -l cmd internal)"
@@ -256,28 +257,30 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/...
-ok  	github.com/L-K-M/dl-tool/internal/search	1.466s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.531s
 DEFINITION_OK
 ```
 
 `go test -race -count=1 -v ./internal/search/` on the same tree, trimmed to the top-level results —
 every test named in step 11 passes, plus `TestLoadValidStaticDefinition`, `TestRequestDefaults`,
-`TestStaticRequiresEntriesAndRefreshNote` and the 58-row `TestDefinitionRules` table:
+`TestStaticRequiresEntriesAndRefreshNote`, `TestValidDefinitionVariants` and the 72-row
+`TestDefinitionRules` table:
 
 ```text
 --- PASS: TestLoadValidRSSDefinition (0.00s)
 --- PASS: TestLoadValidStaticDefinition (0.00s)
 --- PASS: TestRequestDefaults (0.00s)
 --- PASS: TestUnknownKeyNamesTheKey (0.00s)
---- PASS: TestOversizeRejectedBeforeParse (0.08s)
+--- PASS: TestOversizeRejectedBeforeParse (0.00s)
 --- PASS: TestLanguageTagRejected (0.00s)
 --- PASS: TestUnknownPlaceholderRejected (0.00s)
 --- PASS: TestUnknownTransformOpRejected (0.00s)
 --- PASS: TestPatternOverCapRejected (0.01s)
---- PASS: TestStaticRequiresEntriesAndRefreshNote (0.00s)
---- PASS: TestDefinitionRules (0.36s)
+--- PASS: TestStaticRequiresEntriesAndRefreshNote (0.02s)
+--- PASS: TestDefinitionRules (0.44s)
+--- PASS: TestValidDefinitionVariants (0.05s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/search	1.441s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.567s
 ```
 
 Scope check on the working tree before the task commit:
@@ -295,9 +298,9 @@ internal/search/testdata/def_valid_rss.yaml
 internal/search/definition_test.go
 ```
 
-Exactly the `## Files` table plus `go.mod`, which is implicitly in scope: the task first imports the
-already-pinned `go.yaml.in/yaml/v3 v3.0.5`, and the diff is exactly what `go mod tidy` produces (the
-`// indirect` comment dropped, nothing else). `go.sum` is unchanged — the hashes were already present.
+Exactly the `## Files` table — `go.mod` is listed there now (the first direct import of the pinned
+`go.yaml.in/yaml/v3 v3.0.5` makes `go mod tidy` drop its `// indirect` comment; nothing else changed,
+and `go.sum` is untouched because the hashes were already present).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

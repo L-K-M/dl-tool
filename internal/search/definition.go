@@ -62,7 +62,7 @@ type Setting struct {
 
 type Request struct {
 	BaseURL            string            `yaml:"base_url"`
-	Path               string            `yaml:"path"`
+	Path               string            `yaml:"path"`   // appended to base_url; a literal path, not a template (doc 07 section 3.1)
 	Method             string            `yaml:"method"` // GET only in v1
 	Query              map[string]string `yaml:"query"`
 	Headers            map[string]string `yaml:"headers"`               // Authorization and Cookie are rejected
@@ -376,10 +376,21 @@ func validateDefinition(d *Definition, root *yaml.Node) error {
 		if s.Name == "" {
 			return cx.fail(path+".name", "is required")
 		}
+		// The name must be referenceable as a single .Config.<name> member, so
+		// whitespace, dots and template delimiters are unusable in it.
+		if strings.ContainsAny(s.Name, ".{} \t\r\n") {
+			return cx.fail(path+".name", "%q is not a usable .Config member name", s.Name)
+		}
+		if cx.settings[s.Name] {
+			return cx.fail(path+".name", "duplicate setting name %q", s.Name)
+		}
+		cx.settings[s.Name] = true
 		if !settingTypes[s.Type] {
 			return cx.fail(path+".type", "must be one of info, text, password, checkbox, select, got %q", s.Type)
 		}
-		cx.settings[s.Name] = true
+		if s.Type == "select" && len(s.Options) == 0 {
+			return cx.fail(path+".options", "is required when type is select")
+		}
 	}
 	if d.Response != nil {
 		cx.fields = make(map[string]bool, len(d.Response.Fields))
@@ -516,6 +527,9 @@ func (cx *checkCtx) checkRequest(r *Request) error {
 		if strings.EqualFold(name, "authorization") || strings.EqualFold(name, "cookie") {
 			return cx.fail("request.headers."+name, "the %s header is not allowed in a definition", name)
 		}
+		if strings.ContainsAny(r.Headers[name], "\r\n\x00") {
+			return cx.fail("request.headers."+name, "must not contain control characters")
+		}
 	}
 	for _, key := range sortedKeys(r.Query) {
 		if err := cx.checkTemplate(r.Query[key], "request.query."+key); err != nil {
@@ -608,6 +622,9 @@ func validDatetimeFormat(f string) bool {
 // RE2 within MaxPatternBytes.
 func (cx *checkCtx) checkTransforms(transforms map[string][]TransformOp) error {
 	for _, field := range sortedKeys(transforms) {
+		if !cx.fields[field] {
+			return cx.fail("response.transforms."+field, "targets a field not declared in response.fields")
+		}
 		for i, op := range transforms[field] {
 			path := fmt.Sprintf("response.transforms.%s.%d", field, i)
 			if !transformOpSet[op.Op] {
@@ -696,7 +713,7 @@ func (cx *checkCtx) checkEntries(d *Definition) error {
 				return err
 			}
 		}
-		if e.Magnet != "" && !strings.HasPrefix(e.Magnet, "magnet:") {
+		if e.Magnet != "" && !strings.HasPrefix(strings.ToLower(e.Magnet), "magnet:") {
 			return cx.fail(path+".magnet", "must use the magnet: scheme")
 		}
 		if e.Infohash != "" && !infohashRe.MatchString(e.Infohash) {
@@ -711,8 +728,14 @@ func (cx *checkCtx) checkURL(raw, path string, schemes ...string) error {
 	if err != nil {
 		return cx.fail(path, "is not a valid URL: %v", err)
 	}
+	if u.User != nil {
+		return cx.fail(path, "must not embed credentials (userinfo) in a URL; secrets belong in a password setting")
+	}
 	for _, s := range schemes {
-		if u.Scheme == s && u.Host != "" {
+		if u.Scheme == s {
+			if u.Host == "" {
+				return cx.fail(path, "has scheme %q but no host", u.Scheme)
+			}
 			return nil
 		}
 	}
@@ -735,12 +758,9 @@ func (cx *checkCtx) checkTemplate(tpl, path string) error {
 	for {
 		i := strings.Index(rest, "{{")
 		if i < 0 {
-			if strings.Contains(rest, "}}") {
-				return cx.fail(path, "unmatched \"}}\"")
-			}
 			break
 		}
-		end := strings.Index(rest[i+2:], "}}")
+		end := actionEnd(rest[i+2:])
 		if end < 0 {
 			return cx.fail(path, "unclosed \"{{\"")
 		}
@@ -796,6 +816,9 @@ func (cx *checkCtx) checkTemplate(tpl, path string) error {
 			if len(tokens) != 2 || tokens[1] != ".Categories" {
 				return cx.fail(path, "{{ range }} may only walk .Categories")
 			}
+			if inRange {
+				return cx.fail(path, "{{ range }} may not nest inside another {{ range }}")
+			}
 			stack = append(stack, templateBlock{kind: "range"})
 		default:
 			if err := cx.checkExpr(tokens, path, inRange); err != nil {
@@ -809,21 +832,59 @@ func (cx *checkCtx) checkTemplate(tpl, path string) error {
 	return nil
 }
 
+// actionEnd returns the offset of the "}}" that closes the action starting at
+// s, skipping over double-quoted literals and their backslash escapes so a
+// literal containing "}}" cannot terminate the action early. -1 when the action
+// never closes — including an unterminated literal, which can never close one.
+func actionEnd(s string) int {
+	for i := 0; i+1 < len(s); i++ {
+		switch s[i] {
+		case '"':
+			for i++; i < len(s) && s[i] != '"'; i++ {
+				if s[i] == '\\' {
+					i++
+				}
+			}
+			if i >= len(s) {
+				return -1
+			}
+		case '}':
+			if s[i+1] == '}' {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
 // lexTemplate splits one action body into tokens, keeping double-quoted literals
-// whole. Leading/trailing "-" trim markers are stripped first.
+// whole. "-" trim markers are stripped only where text/template accepts them:
+// adjacent to the delimiter and separated from the expression by whitespace, so
+// `{{- x -}}` is trimmed but `{{ x-}}` or `{{ x - }}` surface as bad tokens.
 func lexTemplate(action string) ([]string, error) {
-	s := strings.TrimSpace(action)
-	s = strings.TrimSpace(strings.TrimPrefix(s, "-"))
-	s = strings.TrimSpace(strings.TrimSuffix(s, "-"))
+	s := action
+	if len(s) > 0 && s[0] == '-' && (len(s) == 1 || s[1] == ' ' || s[1] == '\t') {
+		s = s[1:]
+	}
+	if n := len(s); n > 0 && s[n-1] == '-' && (n == 1 || s[n-2] == ' ' || s[n-2] == '\t') {
+		s = s[:n-1]
+	}
+	s = strings.TrimSpace(s)
 	var tokens []string
 	for s != "" {
 		if s[0] == '"' {
-			k := strings.IndexByte(s[1:], '"')
-			if k < 0 {
+			k := 1
+			for k < len(s) && s[k] != '"' {
+				if s[k] == '\\' {
+					k++
+				}
+				k++
+			}
+			if k >= len(s) {
 				return nil, errors.New("unterminated string literal")
 			}
-			tokens = append(tokens, s[:k+2])
-			s = strings.TrimLeft(s[k+2:], " \t")
+			tokens = append(tokens, s[:k+1])
+			s = strings.TrimLeft(s[k+1:], " \t")
 			continue
 		}
 		k := strings.IndexAny(s, " \t")
@@ -907,9 +968,9 @@ func (cx *checkCtx) fail(path, format string, args ...any) *DefinitionError {
 }
 
 // lineOf resolves a dotted path like "response.fields.title.type" to the line of
-// the matching key in the decoded document, or 0 when the path does not resolve
-// (the error is about an absent or generated node). Numeric segments index into
-// sequences.
+// the matching key in the decoded document. When a segment does not resolve it
+// returns the line of the closest enclosing node; 0 only when the document is
+// empty. Numeric segments index into sequences.
 func lineOf(root *yaml.Node, path string) int {
 	if root == nil || len(root.Content) == 0 {
 		return 0
