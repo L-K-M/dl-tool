@@ -158,7 +158,10 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 
-Verified 2026-09-16 on branch `task/T103-progressive-web-app` at `4ec930c`.
+Verified 2026-09-16 on branch `task/T103-progressive-web-app` at `905af4b`
+(the post-review head; the review round anchored the asset predicate to the
+worker scope, made `cache.put` awaited, caught registration rejection and
+added the manifest `id` member).
 `npx playwright install --with-deps chromium` needs root and fails in this
 environment, so `make e2e` ran with the cached Chromium per the environment
 note T043 recorded: `LD_LIBRARY_PATH` covering
@@ -169,7 +172,6 @@ and `$HOME/opt/mesa-root/usr/lib/x86_64-linux-gnu`, and `PATH` including
 ```text
 $ make e2e && echo PWA_OK
 cd web && npx playwright test
-[WebServer] [plugin builtin:vite-reporter]
 [WebServer] (!) Some chunks are larger than 500 kB after minification. Consider:
 [WebServer] - Using dynamic import() to code-split the application
 [WebServer] - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
@@ -177,27 +179,28 @@ cd web && npx playwright test
 
 Running 7 tests using 2 workers
 
-  ✓  1 [chromium] › e2e/pwa.spec.ts:29:1 › manifest is installable (379ms)
-  ✓  2 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin (735ms)
-  ✓  3 [chromium] › e2e/pwa.spec.ts:59:1 › icons are maskable (344ms)
-  ✓  4 [chromium] › e2e/setup.spec.ts:41:1 › a second setup attempt is rejected (19ms)
-  ✓  5 [chromium] › e2e/pwa.spec.ts:95:1 › service worker registers (353ms)
-  ✓  7 [chromium] › e2e/pwa.spec.ts:113:1 › api requests bypass the cache (416ms)
+  ✓  2 [chromium] › e2e/pwa.spec.ts:30:1 › manifest is installable (366ms)
+  ✓  1 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin (736ms)
+  ✓  4 [chromium] › e2e/setup.spec.ts:41:1 › a second setup attempt is rejected (17ms)
+  ✓  3 [chromium] › e2e/pwa.spec.ts:60:1 › icons are maskable (377ms)
+  ✓  6 [chromium] › e2e/pwa.spec.ts:96:1 › service worker registers (278ms)
+  ✓  7 [chromium] › e2e/pwa.spec.ts:114:1 › api requests bypass the cache (428ms)
 grid perf: 30 changed rows per tick, 10 measured ticks
-grid perf deltas (ms): 6.102, 6.266, 5.729, 5.445, 6.544, 6.224, 7.301, 6.229, 6.512, 6.167
-grid perf p95: 7.301 ms (budget 8 ms)
-  ✓  6 [chromium] › e2e/setup.spec.ts:53:1 › the grid stays inside the scripting budget (18.3s)
+grid perf deltas (ms): 5.316, 6.035, 4.498, 6.142, 6.788, 6.497, 6.810, 6.514, 6.004, 6.079
+grid perf p95: 6.810 ms (budget 8 ms)
+  ✓  5 [chromium] › e2e/setup.spec.ts:53:1 › the grid stays inside the scripting budget (18.2s)
 
-  7 passed (31.8s)
+  7 passed (33.7s)
 PWA_OK
 ```
 
-`pwa.spec.ts` never creates the admin account (it sorts ahead of
-`setup.spec.ts`, whose first test asserts the first-run redirect); all four
-assertions run signed-out against the anonymously served SPA. The API-bypass
-test waits for `navigator.serviceWorker.controller` so the fetch really
-passes through the worker's handler, and polls the asset cache entry because
-the worker's `cache.put` inside `respondWith` is fire-and-forget.
+`pwa.spec.ts` never creates the admin account (the spec files run
+concurrently on separate workers, so creating one could race
+`setup.spec.ts`'s first-run redirect assertion); all four assertions run
+signed-out against the anonymously served SPA. The API-bypass test waits for
+`navigator.serviceWorker.controller` so the fetch really passes through the
+worker's handler, and also proves an `/api/v1/assets/…` path is not
+intercepted.
 
 Scope check. The task's Files-table files are committed, so `git status` is
 clean apart from `internal/api/dist/index.html` — a side effect of the
