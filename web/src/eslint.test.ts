@@ -2,9 +2,13 @@ import { ESLint } from "eslint";
 import { expect, test } from "vitest";
 
 // The no-restricted-syntax selectors live in eslint.config.js; lint virtual
-// fixtures through the real config so the rules stay honest.
+// fixtures through the real config so the rules stay honest. One instance is
+// shared across calls — an ESLint object is reusable, and constructing one
+// per fixture would pay the flat-config load each time.
+const eslint = new ESLint({ cwd: process.cwd() });
+
 const lint = async (code: string) => {
-  const [result] = await new ESLint({ cwd: process.cwd() }).lintText(code, {
+  const [result] = await eslint.lintText(code, {
     filePath: "src/__fixture__.tsx",
   });
   return result.messages;
