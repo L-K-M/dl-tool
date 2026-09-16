@@ -311,7 +311,11 @@ export function TaskProgress({ taskId }: { taskId: string }) {
       {/* Track copy: --fg on --progress-track. */}
       <span
         aria-hidden="true"
-        style={{ position: "relative", color: "var(--fg)" }}
+        style={{
+          position: "relative",
+          color: "var(--fg)",
+          userSelect: "none",
+        }}
       >
         {progress ? percent : missing}
       </span>
@@ -332,10 +336,13 @@ export function TaskProgress({ taskId }: { taskId: string }) {
           overflow: "hidden",
         }}
       >
-        {/* Fill copy: --accent-fg on the fill, sized back up to the full bar so
-            it overlays the track copy exactly. Two copies replace the old
-            mix-blend-mode trick, which no colour could keep above the WCAG AA
-            contrast floor on both halves at once. */}
+        {/* Fill copy: sized back up to the full bar so it overlays the track
+            copy exactly. Two copies replace the old mix-blend-mode trick,
+            which no colour could keep above the WCAG AA contrast floor on
+            both halves at once. --accent-fg is safe on every statusTokens
+            fill because each one is dark in the light theme and light in the
+            dark theme — if a fill ever breaks that invariant it needs a
+            paired foreground token instead. */}
         <span
           style={{
             position: "absolute",
@@ -344,6 +351,7 @@ export function TaskProgress({ taskId }: { taskId: string }) {
             left: 0,
             width: indeterminate || !progress ? "100%" : `${100 / progress}%`,
             color: "var(--accent-fg)",
+            userSelect: "none",
           }}
         >
           {progress ? percent : missing}
