@@ -32,8 +32,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | Path | Action | Purpose |
 |---|---|---|
 | `web/eslint.config.js` | edit | The bare-literal rule over `web/src/**/*.tsx`. |
-| `web/src/components/ui/dialog.tsx` | edit | Route both `Close` literals through `t()`. |
-| `web/src/components/ui/sheet.tsx` | edit | Route the `Close` literal through `t()`. |
+| `web/src/components/ui/dialog.tsx` | edit | Route both `Close` literals through `t('actions.close')` from `common`. |
+| `web/src/components/ui/sheet.tsx` | edit | Route the `Close` literal through `t('actions.close')` from `common`. |
 | `web/src/i18n.test.ts` | create | Catalogue completeness and plural resolution. |
 | `web/src/i18n.ts` | edit | Register all seven namespaces, plural handling and the missing-key handler. |
 | `web/src/lib/format.ts` | edit | Bind the default locale of every formatter to the active i18next language. |
@@ -163,7 +163,8 @@ The defect recorded below met the same end as T046, T049 and T050: the record me
   literals through `t()` instead of scoping the copy-ins out of the rule. The table now lists every
   row in the sorted order the scope check emits.
 - `## Verification` now expects `Test Files  14 passed (14)`: the tree carries 13 Vitest files and
-  this task's `i18n.test.ts` makes 14.
+  this task's `i18n.test.ts` makes 14 (`find web/src -name '*.test.*' | wc -l` prints 13 on the
+  pre-task tree; update both numbers together if the baseline moves).
 
 The original record follows for the history.
 
