@@ -224,11 +224,15 @@ type fakeTasks struct {
 	transitions []transitionRecord
 	engineRefs  map[string]string
 	events      []eventRecord
+	marks       []string
 
 	// failProgress names tasks whose UpdateProgress fails, to exercise the
 	// per-task isolation of a sweep.
 	failProgress map[string]error
 
+	// failMarks makes every MarkAdmissionPending call fail, to exercise a
+	// resubmission whose ownership mark cannot land.
+	failMarks bool
 	// failSetEngineRef makes the first N SetEngineRef calls fail, to
 	// exercise the compensating removal of a transfer whose handle could
 	// not be recorded.
@@ -307,6 +311,19 @@ func (f *fakeTasks) SetEngineRef(_ context.Context, id, engineRef string) error 
 	}
 	f.engineRefs[id] = engineRef
 	return nil
+}
+
+// MarkAdmissionPending records the pass's ownership marks a resubmit
+// lands: the order relative to the transitions list is the contract — a
+// mark may only follow the queued move it extends.
+func (f *fakeTasks) MarkAdmissionPending(_ context.Context, id string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failMarks {
+		return false, errors.New("store: write failed")
+	}
+	f.marks = append(f.marks, id)
+	return true, nil
 }
 
 func (f *fakeTasks) Transition(_ context.Context, id, next, code, message string) error {
@@ -577,8 +594,49 @@ func TestVanishedHandleResubmissionRequeuesAPendingSelection(t *testing.T) {
 		tasks.transitions[0].code != engine.CodeTaskReconciled {
 		t.Errorf("transitions = %+v, want one requeue to queued", tasks.transitions)
 	}
+	// The requeue alone does not own the row for the pass: the mark must
+	// land between the queued move and the resume, or the next pass would
+	// gate the row while its transfer runs.
+	if len(tasks.marks) != 1 || tasks.marks[0] != "tsk_1" {
+		t.Errorf("admission marks = %v, want one on tsk_1 between the requeue and the resume", tasks.marks)
+	}
 	if ref := tasks.engineRefs["tsk_1"]; ref != "newhash" {
 		t.Errorf("engine_ref of tsk_1 = %q, want newhash", ref)
+	}
+}
+
+// A re-submission whose ownership mark cannot land must not run the
+// transfer: a live transfer under an unmarked queued row is gated by the
+// next pass instead of retried, so the sweep leaves it stopped for the
+// admission pass to retry the whole resubmission next tick.
+func TestResubmitWithoutTheMarkKeepsTheTransferStopped(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameQBittorrent, map[string]store.Reconcilable{
+		"gone": {
+			ID: "tsk_1", EngineRef: "gone", State: "downloading",
+			InfohashV1:  ptr("0123456789abcdef0123456789abcdef01234567"),
+			Destination: "/data",
+			SelectFiles: ptr(`{"indices":[0,2],"priorities":{"0":1,"1":0,"2":6}}`),
+		},
+	})
+	tasks.failMarks = true
+
+	e := &fakeEngine{
+		name:       engine.NameQBittorrent,
+		caps:       []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority},
+		addID:      engine.NameQBittorrent + ":newhash",
+		setFileErr: errors.New("file ids out of range"),
+	}
+	r := newSweep(t, e, tasks)
+
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	if resumes := e.recordedResumes(); len(resumes) != 0 {
+		t.Errorf("Resume calls = %v, want none: the transfer stays stopped until the mark can land", resumes)
+	}
+	if len(tasks.transitions) != 1 || tasks.transitions[0].next != "queued" {
+		t.Errorf("transitions = %+v, want the requeue to queued", tasks.transitions)
 	}
 }
 

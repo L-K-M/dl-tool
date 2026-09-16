@@ -2799,10 +2799,10 @@ func TestPassRefusesInexpressibleSelection(t *testing.T) {
 	}
 }
 
-// A queued task already holding an engine handle is mid-release: its
-// slot was spent on the pass that recorded the handle, and the counted
-// set already includes it — re-gating it against the limits would stamp
-// a hold over a running transfer.
+// A queued task carrying the admission pass's ownership mark is
+// mid-release: its slot was spent on the pass that recorded the handle,
+// and the counted set already includes it — re-gating it against the
+// limits would stamp a hold over a running transfer.
 func TestPassMidReleaseBypassesTheHoldGates(t *testing.T) {
 	env := newAdmitEnv(t)
 
@@ -2810,10 +2810,17 @@ func TestPassMidReleaseBypassesTheHoldGates(t *testing.T) {
 	id := env.seedTask(t, engine.NameAria2, "mid-release", func(task *store.Task) {
 		task.EngineRef = &ref
 	})
+	marked, err := env.tasks.MarkAdmissionPending(t.Context(), id)
+	if err != nil || !marked {
+		t.Fatalf("mark the mid-release row: marked=%v err=%v", marked, err)
+	}
 
-	// The one slot is spent — by this very task, which the counted set
-	// includes as a queued row holding a handle. A gate that re-judged it
-	// would stamp concurrency_limit over its own running transfer.
+	// One fresh candidate behind it. The marked row already spends the
+	// pass's only slot in the counted snapshot, so the fresh candidate is
+	// held — while the marked row itself is released, exempt: re-gating
+	// it would stamp concurrency_limit over its own running transfer.
+	held := env.seedTask(t, engine.NameAria2, "fresh", nil)
+
 	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 1}))
 	if err != nil {
 		t.Fatalf("pass: %v", err)
@@ -2826,6 +2833,76 @@ func TestPassMidReleaseBypassesTheHoldGates(t *testing.T) {
 	}
 	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
 		t.Errorf("state = %q, want downloading", state)
+	}
+
+	// The mark counted: the fresh candidate found no slot and was held.
+	if state := env.taskState(t, held); state != string(engine.StateQueued) {
+		t.Errorf("fresh candidate state = %q, want queued — the marked row spends the slot", state)
+	}
+	if code := env.taskErrorCode(t, held); code != engine.ErrorCodeConcurrencyLimit {
+		t.Errorf("fresh candidate error_code = %q, want %q", code, engine.ErrorCodeConcurrencyLimit)
+	}
+	if adds := env.aria2.recordedAdds(); len(adds) != 0 {
+		t.Errorf("aria2 adds = %v, want none: the held candidate was never handed over", adds)
+	}
+
+	// The release cleared the mark with the state move.
+	var pending int
+	if err := env.db.GetContext(t.Context(), &pending, `SELECT admission_pending FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read admission_pending of %s: %v", id, err)
+	}
+	if pending != 0 {
+		t.Errorf("admission_pending = %d, want 0 after the release transition", pending)
+	}
+}
+
+// The finding this suite repairs: an ordinary resume requeues a task that
+// still holds its stopped engine handle — queued with engine_ref but no
+// admission_pending mark. The handle alone must not exempt it from the
+// gates: under a full limit the row stays queued and re-stamps
+// concurrency_limit, and no engine call runs on its stopped transfer.
+func TestPassReGatesAResumedTaskAgainstTheLimit(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	// The one slot is spent by a genuinely running task.
+	env.seedTask(t, engine.NameAria2, "running", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.EngineRef = ptr("running-gid")
+	})
+
+	ref := "requeued-handle"
+	id := env.seedTask(t, engine.NameAria2, "requeued", func(task *store.Task) {
+		task.EngineRef = &ref
+	})
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 1}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none — the resumed task must pass the limit like a fresh one", released)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateQueued) {
+		t.Errorf("state = %q, want queued", state)
+	}
+	if code := env.taskErrorCode(t, id); code != engine.ErrorCodeConcurrencyLimit {
+		t.Errorf("error_code = %q, want %q", code, engine.ErrorCodeConcurrencyLimit)
+	}
+	if ops := env.aria2.recordedOps(); len(ops) != 0 {
+		t.Errorf("aria2 ops = %v, want none: a held row's stopped transfer is never touched", ops)
+	}
+
+	// The hold is the limit's, not a dead end: with headroom the same row
+	// resumes through the stored handle.
+	released, err = env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 2}))
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want %s once a slot frees", released, id)
+	}
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 1 || resumes[0] != engine.NameAria2+":"+ref {
+		t.Errorf("aria2 resumes = %v, want the stored handle resumed", resumes)
 	}
 }
 
@@ -2854,5 +2931,76 @@ func TestPassRefusedSelectionRemovesNewTransfer(t *testing.T) {
 	}
 	if removes := env.qbt.recordedRemoves(); len(removes) != 1 {
 		t.Errorf("removes = %v, want the refused transfer removed", removes)
+	}
+}
+
+// failRequeueStore fails exactly the parked row's paused -> queued
+// requeue — the write requeuePendingSelection owns before the pass may
+// run the transfer for its metadata.
+type failRequeueStore struct {
+	engine.AdmissionStore
+	id string
+}
+
+func (s *failRequeueStore) Transition(ctx context.Context, id, next, code, message string) error {
+	if id == s.id && next == string(engine.StateQueued) {
+		return errors.New("injected: requeue failed")
+	}
+
+	return s.AdmissionStore.Transition(ctx, id, next, code, message)
+}
+
+// A parked task whose pending selection requeue fails must not resume:
+// the row stays paused, and a paused row whose transfer runs is exactly
+// what the reconciler adopts — engine first, then the row follows the
+// metadata fetch to downloading with the selection never applied. The
+// next pass retries the claim, the requeue and the selection whole.
+func TestPassFailedSelectionRequeueKeepsTheParkedRow(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.qbt.caps = []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority}
+	// The stored handle's listing is still empty — a parked magnet whose
+	// metadata never arrived — and the daemon cannot take file ids yet.
+	env.qbt.files = nil
+	env.qbt.setFileErr = errors.New("file ids out of range")
+
+	ref := "parked-magnet"
+	id := env.seedTask(t, engine.NameQBittorrent, "parked-magnet", func(task *store.Task) {
+		task.State = string(engine.StatePaused)
+		task.ErrorCode = ptr(engine.ErrorCodeDiskFull)
+		task.ErrorMessage = ptr(engine.ErrorCodeDiskFull)
+		task.EngineRef = &ref
+		task.SelectFiles = ptr(`{"indices":[0],"priorities":{"0":1}}`)
+	})
+
+	admit := engine.NewAdmitter(env.registry, &failRequeueStore{AdmissionStore: env.tasks, id: id}, time.Second, nil)
+
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none while the selection is pending", released)
+	}
+
+	// The failed requeue parks the row where it was: paused, still
+	// stamped, and the engine never told to run the transfer. Resuming it
+	// anyway would let the sweep adopt the metadata fetch's downloading
+	// report before the selection can be retried.
+	if state := env.taskState(t, id); state != string(engine.StatePaused) {
+		t.Errorf("state = %q, want paused: the failed requeue leaves the row parked", state)
+	}
+	if code := env.taskErrorCode(t, id); code != engine.ErrorCodeDiskFull {
+		t.Errorf("error_code = %q, want the disk-full stamp kept", code)
+	}
+	if resumes := env.qbt.recordedResumes(); len(resumes) != 0 {
+		t.Errorf("resumes = %v, want none: no metadata fetch over an unadoptable row", resumes)
+	}
+	var pending int
+	if err := env.db.GetContext(t.Context(), &pending,
+		`SELECT admission_pending FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read admission_pending of %s: %v", id, err)
+	}
+	if pending != 0 {
+		t.Errorf("admission_pending = %d, want 0: the failed requeue left no mark", pending)
 	}
 }

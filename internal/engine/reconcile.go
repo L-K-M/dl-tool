@@ -44,6 +44,10 @@ type TaskWriter interface {
 	Get(ctx context.Context, id string) (store.Task, error)
 	UpdateProgress(ctx context.Context, id string, p store.Progress) error
 	SetEngineRef(ctx context.Context, id, engineRef string) error
+	// MarkAdmissionPending records the admission pass's ownership of a
+	// queued row whose engine transfer a re-submission is about to start
+	// — the mark that keeps the next pass from gating a live transfer.
+	MarkAdmissionPending(ctx context.Context, id string) (bool, error)
 	Transition(ctx context.Context, id, next, code, message string) error
 	AppendEvent(ctx context.Context, taskID, level, code, message string, detail any) error
 }
@@ -521,13 +525,18 @@ func (r *Reconciler) resubmit(ctx context.Context, name string, e Engine, task s
 	intentErr := applyPersistedIntent(ctx, e, newID, task.DLLimit, task.ULLimit, sel)
 	switch {
 	case errors.Is(intentErr, errSelectionPending):
-		// Queue first, then run the transfer: a crash between the two
-		// leaves a queued row the admission pass retries, while resuming
-		// first could leave a non-queued row running a transfer the sweep
-		// then adopts out from under the pending selection.
+		// Queue, mark, then run the transfer: a crash between the first
+		// two leaves a queued row the admission pass gates and retries,
+		// while resuming before the mark could leave a live transfer
+		// under an unmarked queued row — one the next pass would hold
+		// instead of retry. The mark is the pass's ownership, and without
+		// it the resume must not run.
 		if err := r.tasks.Transition(ctx, task.ID, string(StateQueued), CodeTaskReconciled,
 			"re-submitted; file selection waits for the engine's file listing"); err != nil {
 			r.log.Warn("re-submitted with a pending file selection but could not requeue the task for the admission pass",
+				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
+		} else if marked, err := r.tasks.MarkAdmissionPending(ctx, task.ID); err != nil || !marked {
+			r.log.Warn("re-submitted with a pending file selection but could not mark the pass's ownership; the transfer stays stopped for the admission pass",
 				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
 		} else if err := e.Resume(ctx, newID); err != nil {
 			r.log.Warn("re-submitted but could not run the transfer whose file listing is pending",

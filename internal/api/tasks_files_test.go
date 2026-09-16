@@ -6,11 +6,13 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -755,5 +757,120 @@ func TestPatchTaskFilesRewritesPersistedIntent(t *testing.T) {
 	wantPriorities := map[int]int{0: 1, 1: 0, 2: 1}
 	if !maps.Equal(sel.Priorities, wantPriorities) {
 		t.Errorf("intent priorities = %v, want %v", sel.Priorities, wantPriorities)
+	}
+}
+
+// TestPatchTaskFilesReloadsUnderTheLease pins the repair of the
+// stale-snapshot lease window on the file-selection patch: the admission
+// check, the listing and the SetFiles handle all derive from the row
+// re-read under the task-operation lease, not from the snapshot the
+// engine was resolved on. While the test holds the lease, the admission
+// release's committed result — the recorded handle and the downloading
+// row — lands in the store, so the parked patch's reload is guaranteed
+// to see it however the goroutine schedules: the selection reaches the
+// fresh handle instead of answering not-admitted over a live transfer.
+func TestPatchTaskFilesReloadsUnderTheLease(t *testing.T) {
+	// A bare store, registry and handler set — no server, so the
+	// admission loop cannot race the seeded row (the pauseEnv's shape).
+	root := t.TempDir()
+	db, err := store.Open(
+		t.Context(),
+		filepath.Join(root, "dl-tool.db"),
+		filepath.Join(root, "backups"),
+	)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	qbittorrent := newFilesEngine(engine.NameQBittorrent, acceptsBitTorrent,
+		[]engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority})
+	registry := engine.NewRegistry()
+	registry.Register(qbittorrent)
+	tasks := store.NewTaskStore(db)
+	handlers := NewTaskHandlers(db, registry, nil)
+
+	// The pre-admission shape a PATCH reads before its lease wait:
+	// queued, no handle — the stale snapshot's EngineRef is nil and the
+	// not-admitted answer would come from it.
+	created, err := tasks.Create(t.Context(), store.Task{
+		Engine:      engine.NameQBittorrent,
+		SourceKind:  "torrent",
+		Name:        "files-lease-fixture",
+		State:       "queued",
+		Destination: root,
+	})
+	if err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	id := created.ID
+
+	hold, err := registry.AcquireTaskOp(t.Context(), id, engine.TaskOpWait)
+	if err != nil {
+		t.Fatalf("acquire the task's lease: %v", err)
+	}
+
+	deselect := false
+	in := &PatchTaskFilesInput{ID: id}
+	in.Body.Files = []FileSelection{{Index: 2, Selected: &deselect}}
+
+	type patchOutcome struct {
+		out *ListTaskFilesOutput
+		err error
+	}
+	done := make(chan patchOutcome, 1)
+	go func() {
+		out, err := handlers.patchTaskFilesUnderLease(t.Context(), in, qbittorrent)
+		done <- patchOutcome{out: out, err: err}
+	}()
+
+	// What the release wrote mid-wait, before the lease hands over.
+	if err := tasks.SetEngineRef(t.Context(), id, qbtHash); err != nil {
+		t.Fatalf("record the release's handle: %v", err)
+	}
+	if err := tasks.Transition(t.Context(), id, string(engine.StateDownloading),
+		store.CodeTaskResumed, "released by the admission pass"); err != nil {
+		t.Fatalf("land the release's transition: %v", err)
+	}
+	hold()
+
+	var outcome patchOutcome
+	select {
+	case outcome = <-done:
+	case <-time.After(pauseLeaseWait + 5*time.Second):
+		t.Fatal("the patch never returned after the lease released")
+	}
+	if outcome.err != nil {
+		t.Fatalf("patch under the lease: %v", outcome.err)
+	}
+
+	// The decisive call: the selection reached the handle the release
+	// recorded. A pre-lease snapshot carries no handle and would have
+	// answered not-admitted over a live transfer.
+	calls := qbittorrent.recordedSetCalls()
+	if len(calls) != 1 {
+		t.Fatalf("SetFiles calls = %+v, want exactly one", calls)
+	}
+	if calls[0].id != engine.NameQBittorrent+":"+qbtHash {
+		t.Errorf("SetFiles id = %q, want the namespaced handle", calls[0].id)
+	}
+	if want := map[int]int{2: 0}; !reflect.DeepEqual(calls[0].priorities, want) {
+		t.Errorf("SetFiles priorities = %v, want %v", calls[0].priorities, want)
+	}
+
+	var row store.TaskFile
+	if err := db.GetContext(t.Context(), &row,
+		`SELECT selected, priority FROM task_files WHERE task_id = ? AND file_index = 2`, id); err != nil {
+		t.Fatalf("read stored file 2 of %s: %v", id, err)
+	}
+	if row.Selected != 0 {
+		t.Errorf("stored selected of file 2 = %d, want 0", row.Selected)
+	}
+	if files := outcome.out.Body.Files; len(files) != 3 || files[2].Selected {
+		t.Errorf("response files = %+v, want the refreshed listing with file 2 deselected", files)
 	}
 }

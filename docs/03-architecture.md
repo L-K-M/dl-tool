@@ -320,8 +320,10 @@ sequenceDiagram
   `disk_full`.
 - A task held back by a limit stays `queued`; it is never rejected at creation time for concurrency alone.
 
-<!-- INFERRED: the counted set is "released to an engine and not yet completed, error, paused or removed";
-     the brief fixes only that seeding is excluded. -->
+<!-- INFERRED: the counted set is "released to an engine and not yet completed, error, paused or removed",
+     plus `queued` rows the admission pass still owns mid-release (`tasks.admission_pending` — a pending
+     file selection or a release whose final write did not land over a running transfer); a queued row
+     merely holding an engine handle does not count. The brief fixes only that seeding is excluded. -->
 
 ---
 

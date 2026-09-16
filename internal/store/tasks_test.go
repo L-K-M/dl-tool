@@ -1112,3 +1112,78 @@ func TestClearPausedHoldCode(t *testing.T) {
 		require.ErrorIs(t, err, ErrNotFound)
 	})
 }
+
+// TestMarkAdmissionPending pins the ownership mark's three answers,
+// mirroring the claim's contract beside it: a queued row takes the mark
+// (and a repeat is idempotent), a present non-queued row declines without
+// a write, and a missing id is ErrNotFound. The mark clears with every
+// state transition — ownership exists only while the row is queued.
+func TestMarkAdmissionPending(t *testing.T) {
+	t.Run("marks a queued row and repeats idempotently", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		task := createTaskInState(t, tasks, "queued")
+
+		marked, err := tasks.MarkAdmissionPending(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.True(t, marked, "a queued row takes the mark")
+
+		var pending int
+		require.NoError(t, db.GetContext(t.Context(), &pending,
+			`SELECT admission_pending FROM tasks WHERE id = ?`, task.ID))
+		require.Equal(t, 1, pending)
+
+		// A 1 Hz retry's repeat mark neither errors nor churns the row:
+		// the guarded write declines, the read answers the standing mark.
+		before, err := tasks.Get(t.Context(), task.ID)
+		require.NoError(t, err)
+		marked, err = tasks.MarkAdmissionPending(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.True(t, marked, "an already-marked queued row answers true")
+		after, err := tasks.Get(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.Equal(t, before.UpdatedAt, after.UpdatedAt, "a repeat mark writes nothing")
+	})
+
+	t.Run("declines a row that is not queued", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		task := createTaskInState(t, tasks, "downloading")
+
+		marked, err := tasks.MarkAdmissionPending(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.False(t, marked, "only a queued row is the pass's to mark")
+
+		var pending int
+		require.NoError(t, db.GetContext(t.Context(), &pending,
+			`SELECT admission_pending FROM tasks WHERE id = ?`, task.ID))
+		require.Equal(t, 0, pending, "a declined mark writes nothing")
+	})
+
+	t.Run("clears with the next state transition", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		task := createTaskInState(t, tasks, "queued")
+		marked, err := tasks.MarkAdmissionPending(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.True(t, marked)
+
+		require.NoError(t, tasks.Transition(t.Context(), task.ID, "downloading", "test.transition", "test"))
+
+		var pending int
+		require.NoError(t, db.GetContext(t.Context(), &pending,
+			`SELECT admission_pending FROM tasks WHERE id = ?`, task.ID))
+		require.Equal(t, 0, pending, "the release's transition clears the mark")
+	})
+
+	t.Run("reports a missing id as not found", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		_, err := tasks.MarkAdmissionPending(t.Context(), "tsk_missing")
+		require.ErrorIs(t, err, ErrNotFound)
+	})
+}

@@ -127,6 +127,13 @@ type AdmissionStore interface {
 	// missing id is the store's not-found error; a declined write is an
 	// overtaken candidate, never an engine rejection.
 	ClaimParkedDiskFull(ctx context.Context, id string) (bool, error)
+	// MarkAdmissionPending records the pass's ownership of a queued row
+	// mid-release — the mark the counted set and the hold gates consult
+	// where a stored engine handle used to be enough. true means the row
+	// is queued under the pass's ownership, an earlier mark included;
+	// false a present row that is not queued; a missing id is the store's
+	// not-found error.
+	MarkAdmissionPending(ctx context.Context, id string) (bool, error)
 	SetEngineRef(ctx context.Context, id, engineRef string) error
 }
 
@@ -262,10 +269,10 @@ func (a *Admitter) Pass(ctx context.Context, p Policy) ([]string, error) {
 		// (outcomeReleased) or parked mid-flight with the transfer running
 		// (outcomeSpent): spend each in memory so the later candidates of
 		// this same pass see both gone. A queued candidate that arrived
-		// already holding an engine handle was counted in this pass's
-		// snapshot — spending it again would charge one transfer two
-		// slots.
-		if cand.State != string(StateQueued) || cand.EngineRef == nil {
+		// already carrying the pass's ownership mark was counted in this
+		// pass's snapshot — spending it again would charge one transfer
+		// two slots.
+		if cand.State != string(StateQueued) || cand.AdmissionPending == 0 {
 			counts.Total++
 			counts.ByEngine[cand.Engine]++
 			gate.commit(cand)
@@ -374,7 +381,7 @@ func (a *Admitter) processCandidate(ctx context.Context, cand store.Candidate, p
 
 			return outcomeHeld, nil
 		}
-	} else if cand.EngineRef == nil {
+	} else if cand.AdmissionPending == 0 {
 		if held, message := p.Limits.Blocked(counts, cand.Engine); held {
 			// The stamp is the only write a held task gets: the state
 			// stays queued and the guarded SetErrorCode keeps a re-stamp
@@ -389,10 +396,18 @@ func (a *Admitter) processCandidate(ctx context.Context, cand store.Candidate, p
 			return outcomeHeld, nil
 		}
 	}
-	// A queued candidate already holding an engine handle is mid-release —
-	// a pending file selection or an interrupted first start — and its slot
-	// and bytes are already spent: re-gating it could stamp a hold over a
-	// running transfer, so it goes straight to the release's resume path.
+	// A queued candidate still carrying the pass's ownership mark is
+	// mid-release — a pending file selection retrying through the resume
+	// path or a release whose last write did not land over a running
+	// transfer — and its slot and bytes are already spent and counted:
+	// re-gating it could stamp a hold over a running transfer, so it goes
+	// straight to the release's resume path. A queued row merely holding
+	// an engine handle is not exempt: an ordinary resume requeues a task
+	// whose transfer is stopped, and it must pass both gates like a fresh
+	// candidate. The mark cannot drift from the row under the lease — a
+	// still-queued row's admission_pending changes only under this same
+	// task-operation lease or beside a state move that the revalidation
+	// above already rejected.
 
 	// A parked candidate is claimed immediately before its first engine
 	// call: one guarded no-op write over the exact paused+disk_full pair
@@ -1003,14 +1018,23 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 				// run and keep the pass's ownership: a queued row is never
 				// adopted by the reconciler, so a parked candidate is
 				// requeued first and the next pass retries through this
-				// same path until the listing exists.
-				a.requeuePendingSelection(ctx, cand)
-				a.resumeForMetadata(ctx, e, handle, cand)
+				// same path until the listing exists. A failed requeue
+				// leaves the row parked — resuming it anyway would let
+				// the sweep adopt the running transfer before the next
+				// pass can retry the selection.
+				if a.requeuePendingSelection(ctx, cand) {
+					a.resumeForMetadata(ctx, e, handle, cand)
+				}
 				return intentErr
 			case intentErr != nil:
 				return intentErr
 			case resumeErr == nil:
 				if err := a.markReleased(ctx, cand.ID); err != nil {
+					// The transfer is running while the row may still
+					// read queued: record the pass's ownership so the
+					// next pass counts it and finishes the release write
+					// instead of gating a live transfer.
+					a.markAdmissionPending(ctx, cand.ID)
 					return storeWriteError{cause: err}
 				}
 				return nil
@@ -1083,32 +1107,60 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 	}
 
 	if err := a.markReleased(ctx, cand.ID); err != nil {
+		// The fresh transfer is running while the row may still read
+		// queued: same durable ownership as the resume path above — the
+		// next pass counts it and retries the release write.
+		a.markAdmissionPending(ctx, cand.ID)
 		return storeWriteError{cause: err}
 	}
 
 	return nil
 }
 
-// requeuePendingSelection returns a parked candidate whose file listing
-// is still pending to queued: the release keeps an engine handle it owes
-// a selection to, and queued is the one state the reconciler never
-// adopts engine state over — left paused, the sweep would adopt the
-// metadata fetch's downloading report and the selection would never be
-// retried. Queued candidates skip the write. The bool says whether the
-// caller may run the transfer: a parked row whose requeue failed must
-// not move, because running it would let the sweep adopt the row before
-// the next pass can retry.
+// requeuePendingSelection lands the pass's durable ownership of a
+// candidate whose file listing is still pending: a parked row first moves
+// to queued — the one state the reconciler never adopts engine state
+// over, so left paused the sweep would adopt the metadata fetch's
+// downloading report and the selection would never be retried — and every
+// row then takes the admission_pending mark that counts it and exempts it
+// from the hold gates. The bool says whether the caller may run the
+// transfer: a row whose requeue or mark failed must not move, because
+// running it would either let the sweep adopt a still-parked row or leave
+// a live transfer under a queued row the pass no longer owns — one the
+// next pass would gate instead of retry.
 func (a *Admitter) requeuePendingSelection(ctx context.Context, cand store.Candidate) bool {
-	if cand.State != string(StatePaused) {
-		return true
+	if cand.State == string(StatePaused) {
+		if err := a.tasks.Transition(ctx, cand.ID, string(StateQueued), store.CodeTaskResumed,
+			"file selection waits for the engine's file listing; requeued for retry"); err != nil {
+			a.log.Warn("could not requeue the parked task whose file listing is pending",
+				"task_id", cand.ID, "engine", cand.Engine, "error", err)
+			return false
+		}
 	}
-	if err := a.tasks.Transition(ctx, cand.ID, string(StateQueued), store.CodeTaskResumed,
-		"file selection waits for the engine's file listing; requeued for retry"); err != nil {
-		a.log.Warn("could not requeue the parked task whose file listing is pending",
+	marked, err := a.tasks.MarkAdmissionPending(ctx, cand.ID)
+	if err != nil {
+		a.log.Warn("could not mark the pass's ownership of the queued task whose file listing is pending",
 			"task_id", cand.ID, "engine", cand.Engine, "error", err)
 		return false
 	}
+	if !marked {
+		a.log.Warn("the task left queued before the admission-pending mark landed",
+			"task_id", cand.ID, "engine", cand.Engine)
+		return false
+	}
 	return true
+}
+
+// markAdmissionPending best-effort records the pass's ownership of a
+// queued row whose transfer is already running — the retry token the next
+// pass needs when a release write fails ambiguously. A failure is a
+// warning: the next pass re-derives the shape from the row and gates it
+// like any unmarked candidate.
+func (a *Admitter) markAdmissionPending(ctx context.Context, id string) {
+	if _, err := a.tasks.MarkAdmissionPending(ctx, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+		a.log.Warn("could not record the pass's ownership of a queued row mid-release",
+			"task_id", id, "error", err)
+	}
 }
 
 // resumeForMetadata starts a transfer whose file selection is waiting on

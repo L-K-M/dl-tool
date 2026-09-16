@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	initialSchemaVersion = int64(2)
+	initialSchemaVersion = int64(3)
 	newerSchemaVersion   = int64(999)
 	daysPerWeek          = 7
 	hoursPerDay          = 24
@@ -334,11 +334,11 @@ func TestPreMigrationBackup(t *testing.T) {
 	}{
 		{
 			start: time.Date(2026, time.September, 1, 12, 0, 0, 123_456_789, time.UTC),
-			name:  "dl-tool.db.pre-migration-2-to-3.20260901T120000.123456789Z.bak",
+			name:  "dl-tool.db.pre-migration-3-to-4.20260901T120000.123456789Z.bak",
 		},
 		{
 			start: time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC),
-			name:  "dl-tool.db.pre-migration-2-to-3.20260901T120000.000000000Z.bak",
+			name:  "dl-tool.db.pre-migration-3-to-4.20260901T120000.000000000Z.bak",
 		},
 	}
 

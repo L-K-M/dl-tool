@@ -146,6 +146,15 @@ type actionEngine struct {
 	recheckErr error
 	resumeErr  error
 	getErr     error
+	addErr     error
+	// addID is the handle Add mints; empty answers ErrNotSupported, the
+	// stand-in's default for an engine that takes no submissions.
+	addID string
+	// addGate, like resumeGate, holds every Add call until the test
+	// closes it: the sync point for an admission pass that keeps the
+	// task's lease while its Add is in flight — before SetEngineRef, so
+	// the row still reads engine_ref NULL for whoever loads it meanwhile.
+	addGate chan struct{}
 	// one configurable failure per T036 mutator
 	categoryErr   error
 	tagsErr       error
@@ -195,8 +204,21 @@ func (e *actionEngine) Connect(context.Context) error          { return nil }
 func (e *actionEngine) Close() error                           { return nil }
 func (e *actionEngine) Health(context.Context) (string, error) { return "stub", nil }
 
-func (e *actionEngine) Add(context.Context, engine.AddRequest) (string, error) {
-	return "", engine.ErrNotSupported
+func (e *actionEngine) Add(_ context.Context, req engine.AddRequest) (string, error) {
+	if e.addID == "" && e.addErr == nil && e.addGate == nil {
+		// Unconfigured for submissions: the unchanged ErrNotSupported
+		// answer, silent in the call log as before.
+		return "", engine.ErrNotSupported
+	}
+	e.record("Add " + strings.Join(req.URIs, ","))
+	if e.addGate != nil {
+		<-e.addGate
+	}
+	if e.addErr != nil {
+		return "", e.addErr
+	}
+
+	return e.addID, nil
 }
 func (e *actionEngine) List(context.Context) ([]engine.TaskInfo, error) { return nil, nil }
 func (e *actionEngine) Get(_ context.Context, id string) (engine.TaskInfo, error) {
@@ -2148,5 +2170,83 @@ func TestStaleQueuedReleaseAbortsUnderTheLease(t *testing.T) {
 	}
 	if codes := env.taskEventCodes(t, id); !slices.Equal(codes, []string{eventTaskPaused}) {
 		t.Errorf("event codes = %v, want only the operator's [%s]", codes, eventTaskPaused)
+	}
+}
+
+// TestPatchTaskReloadsUnderTheLease pins the repair of the stale-snapshot
+// lease window on the rate-limit patch: every state-dependent decision is
+// made on the row re-read under the task-operation lease, not on the
+// snapshot the patch was built from. While the test holds the lease, the
+// admission release's committed result — the recorded handle and the
+// downloading row — lands in the store, so the parked patch's reload is
+// guaranteed to see it however the goroutine schedules: the limit reaches
+// the engine on the fresh handle instead of being persisted while the
+// running transfer kept the old one.
+func TestPatchTaskReloadsUnderTheLease(t *testing.T) {
+	env := newPauseEnv(t)
+
+	// The pre-admission shape a PATCH reads before its lease wait:
+	// queued, no handle — applyLiveRateLimits on that snapshot skips the
+	// engine call entirely.
+	id := env.seedPauseTask(t, func(task *store.Task) {
+		task.State = "queued"
+		task.EngineRef = nil
+	})
+
+	hold, err := env.registry.AcquireTaskOp(t.Context(), id, engine.TaskOpWait)
+	if err != nil {
+		t.Fatalf("acquire the task's lease: %v", err)
+	}
+
+	limit := testDLLimit
+	type patchOutcome struct {
+		out *GetTaskOutput
+		err error
+	}
+	done := make(chan patchOutcome, 1)
+	go func() {
+		out, err := env.handlers.patchTaskUnderLease(t.Context(), id,
+			PatchTaskBody{DLLimit: &limit}, store.TaskPatch{DLLimit: &limit}, "")
+		done <- patchOutcome{out: out, err: err}
+	}()
+
+	// What the release wrote mid-wait, before the lease hands over.
+	if err := env.tasks.SetEngineRef(t.Context(), id, aria2GID); err != nil {
+		t.Fatalf("record the release's handle: %v", err)
+	}
+	if err := env.tasks.Transition(t.Context(), id, string(engine.StateDownloading),
+		store.CodeTaskResumed, "released by the admission pass"); err != nil {
+		t.Fatalf("land the release's transition: %v", err)
+	}
+	hold()
+
+	var outcome patchOutcome
+	select {
+	case outcome = <-done:
+	case <-time.After(pauseLeaseWait + 5*time.Second):
+		t.Fatal("the patch never returned after the lease released")
+	}
+	if outcome.err != nil {
+		t.Fatalf("patch under the lease: %v", outcome.err)
+	}
+	if outcome.out.Body.DLLimit != testDLLimit {
+		t.Errorf("dl_limit = %d, want %d", outcome.out.Body.DLLimit, testDLLimit)
+	}
+
+	// The decisive call: the limit reached the handle the release
+	// recorded. A pre-lease snapshot carries no handle and would have
+	// persisted the limit while the running transfer kept the old one.
+	want := fmt.Sprintf("SetRateLimits aria2:%s %d nil", aria2GID, testDLLimit)
+	if calls := env.aria2.recorded(); !slices.Equal(calls, []string{want}) {
+		t.Errorf("aria2 calls = %v, want exactly [%s]", calls, want)
+	}
+
+	var stored int64
+	if err := env.db.GetContext(t.Context(), &stored,
+		`SELECT dl_limit FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read dl_limit: %v", err)
+	}
+	if stored != testDLLimit {
+		t.Errorf("stored dl_limit = %d, want %d", stored, testDLLimit)
 	}
 }

@@ -770,13 +770,55 @@ func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetT
 	// The destination resolves against the data roots before anything
 	// else touches it: a path outside every root is the 403 of doc 05
 	// section 5.5, and the resolved value is what both the engine call
-	// and the row write carry.
+	// and the row write carry. The legality gate is not here — it judges
+	// state and a handle, both of which the lease wait below can change,
+	// so it runs on the reloaded row.
 	destination := ""
 	if in.Body.Destination != nil {
 		destination, err = fsx.ResolveDestination(h.roots, *in.Body.Destination)
 		if err != nil {
 			return nil, destinationRejected(*in.Body.Destination)
 		}
+	}
+
+	return h.patchTaskUnderLease(ctx, task.ID, in.Body, patch, destination)
+}
+
+// patchTaskUnderLease is the state-dependent half of PATCH /tasks/{id}:
+// it joins the task-operation lease, then re-reads the row, because the
+// snapshot the patch was built from predates the wait — an admission
+// release that ran meanwhile may have created the transfer and recorded
+// the handle, so the moving-entry gate and every engine call below judge
+// the reloaded row, never the stale one. The wait runs under the
+// operator budget, never the request alone: an admission release owes
+// the engine the intent it re-read under the same lease, so the two can
+// never interleave — the release either finished before the acquire or
+// waits and then applies this PATCH's stored values.
+func (h *TaskHandlers) patchTaskUnderLease(
+	ctx context.Context,
+	id string,
+	body PatchTaskBody,
+	patch store.TaskPatch,
+	destination string,
+) (*GetTaskOutput, error) {
+	waitCtx, cancelWait := context.WithTimeout(ctx, pauseLeaseWait)
+	defer cancelWait()
+
+	releaseLease, err := h.engines.AcquireTaskOp(waitCtx, id, engine.TaskOpWait)
+	if err != nil {
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailTaskOpBusy)
+	}
+	defer releaseLease()
+
+	task, err := h.tasks.Get(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, Problem(SlugNotFound, http.StatusNotFound, detailTaskNotFound)
+	}
+	if err != nil {
+		return nil, internalFailure(ctx, "reread task under the task-operation lease", err)
+	}
+
+	if body.Destination != nil {
 		// An admitted task whose state cannot enter moving would otherwise
 		// have the engine relocate its data and only then fail the
 		// transition; the legality is decided here, before the first
@@ -787,35 +829,20 @@ func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetT
 		}
 	}
 
-	// The engine calls and the row writes join the task-operation lease:
-	// an admission release owes the engine the intent it re-read under
-	// the same lease, so the two can never interleave — the release
-	// either finished before the acquire or waits and then applies this
-	// PATCH's stored values. The wait runs under the operator budget,
-	// never the request alone.
-	waitCtx, cancelWait := context.WithTimeout(ctx, pauseLeaseWait)
-	defer cancelWait()
-
-	releaseLease, err := h.engines.AcquireTaskOp(waitCtx, task.ID, engine.TaskOpWait)
-	if err != nil {
-		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailTaskOpBusy)
-	}
-	defer releaseLease()
-
 	// The live applications run in the order of the mutator block below,
 	// every one before the first store write: an engine that cannot take
 	// a change fails the request with nothing persisted.
-	if err := h.applyPatchMutators(ctx, task, in.Body, destination); err != nil {
+	if err := h.applyPatchMutators(ctx, task, body, destination); err != nil {
 		return nil, err
 	}
-	if err := h.applyLiveRateLimits(ctx, task, in.Body.DLLimit, in.Body.ULLimit); err != nil {
+	if err := h.applyLiveRateLimits(ctx, task, body.DLLimit, body.ULLimit); err != nil {
 		return nil, err
 	}
 
 	// A tags-only patch carries no column; the tag rewrite below is the
 	// whole change, and Update answers an empty patch with an error.
 	if !patch.Empty() {
-		if err := h.tasks.Update(ctx, in.ID, patch); err != nil {
+		if err := h.tasks.Update(ctx, id, patch); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return nil, Problem(SlugNotFound, http.StatusNotFound, detailTaskNotFound)
 			}
@@ -824,19 +851,19 @@ func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetT
 		}
 	}
 
-	if in.Body.Tags != nil {
-		if err := h.replaceTaskTags(ctx, in.ID, in.Body.Tags); err != nil {
+	if body.Tags != nil {
+		if err := h.replaceTaskTags(ctx, id, body.Tags); err != nil {
 			return nil, internalFailure(ctx, "replace task tags", err)
 		}
 	}
 
-	if in.Body.Destination != nil {
-		if err := h.applyDestination(ctx, in.ID, destination, task.EngineRef != nil); err != nil {
+	if body.Destination != nil {
+		if err := h.applyDestination(ctx, id, destination, task.EngineRef != nil); err != nil {
 			return nil, err
 		}
 	}
 
-	updated, err := h.tasks.Get(ctx, in.ID)
+	updated, err := h.tasks.Get(ctx, id)
 	if err != nil {
 		return nil, internalFailure(ctx, "reread patched task", err)
 	}
@@ -849,7 +876,7 @@ func (h *TaskHandlers) PatchTask(ctx context.Context, in *PatchTaskInput) (*GetT
 	// store.Task does not carry the four limit columns yet — their read
 	// path arrives with the tasks that own them — so the patch response
 	// reads them from the row the patch produced.
-	limits, err := h.taskLimits(ctx, in.ID)
+	limits, err := h.taskLimits(ctx, id)
 	if err != nil {
 		return nil, err
 	}
