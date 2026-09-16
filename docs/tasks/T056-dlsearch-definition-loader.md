@@ -257,13 +257,13 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/...
-ok  	github.com/L-K-M/dl-tool/internal/search	1.531s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.607s
 DEFINITION_OK
 ```
 
 `go test -race -count=1 -v ./internal/search/` on the same tree, trimmed to the top-level results —
 every test named in step 11 passes, plus `TestLoadValidStaticDefinition`, `TestRequestDefaults`,
-`TestStaticRequiresEntriesAndRefreshNote`, `TestValidDefinitionVariants` and the 72-row
+`TestStaticRequiresEntriesAndRefreshNote`, `TestValidDefinitionVariants` and the 77-row
 `TestDefinitionRules` table:
 
 ```text
@@ -276,11 +276,11 @@ every test named in step 11 passes, plus `TestLoadValidStaticDefinition`, `TestR
 --- PASS: TestUnknownPlaceholderRejected (0.00s)
 --- PASS: TestUnknownTransformOpRejected (0.00s)
 --- PASS: TestPatternOverCapRejected (0.01s)
---- PASS: TestStaticRequiresEntriesAndRefreshNote (0.02s)
---- PASS: TestDefinitionRules (0.44s)
---- PASS: TestValidDefinitionVariants (0.05s)
+--- PASS: TestStaticRequiresEntriesAndRefreshNote (0.01s)
+--- PASS: TestDefinitionRules (0.43s)
+--- PASS: TestValidDefinitionVariants (0.08s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/search	1.567s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.582s
 ```
 
 Scope check on the working tree before the task commit:

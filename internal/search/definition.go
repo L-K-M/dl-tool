@@ -294,15 +294,16 @@ func (b *nodeBudget) walk(n *yaml.Node, depth int) error {
 }
 
 var (
-	defIDRe      = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,63}$`)
-	infohashRe   = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
-	strptimePfx  = "strptime:"
-	defKinds     = map[string]bool{"torznab": true, "rss": true, "json": true, "html": true, "static": true}
-	defLegalTier = map[string]bool{"legitimate": true, "user-supplied": true}
-	defCapModes  = map[string]bool{"search": true, "tv-search": true, "movie-search": true, "music-search": true, "book-search": true}
-	settingTypes = map[string]bool{"info": true, "text": true, "password": true, "checkbox": true, "select": true}
-	fieldTypes   = map[string]bool{"string": true, "int": true, "float": true, "bytes": true, "datetime": true}
-	queryFields  = map[string]bool{
+	defIDRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,63}$`)
+	infohashRe    = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+	settingNameRe = regexp.MustCompile(`^[\pL_][\pL\pN_]*$`)
+	strptimePfx   = "strptime:"
+	defKinds      = map[string]bool{"torznab": true, "rss": true, "json": true, "html": true, "static": true}
+	defLegalTier  = map[string]bool{"legitimate": true, "user-supplied": true}
+	defCapModes   = map[string]bool{"search": true, "tv-search": true, "movie-search": true, "music-search": true, "book-search": true}
+	settingTypes  = map[string]bool{"info": true, "text": true, "password": true, "checkbox": true, "select": true}
+	fieldTypes    = map[string]bool{"string": true, "int": true, "float": true, "bytes": true, "datetime": true}
+	queryFields   = map[string]bool{
 		"Q": true, "Season": true, "Ep": true, "Year": true, "Genre": true,
 		"IMDBID": true, "IMDBIDShort": true, "TMDBID": true, "TVDBID": true, "TVMazeID": true,
 		"Artist": true, "Album": true, "Label": true, "Track": true,
@@ -377,8 +378,8 @@ func validateDefinition(d *Definition, root *yaml.Node) error {
 			return cx.fail(path+".name", "is required")
 		}
 		// The name must be referenceable as a single .Config.<name> member, so
-		// whitespace, dots and template delimiters are unusable in it.
-		if strings.ContainsAny(s.Name, ".{} \t\r\n") {
+		// it has to be an identifier text/template accepts after a dot.
+		if !settingNameRe.MatchString(s.Name) {
 			return cx.fail(path+".name", "%q is not a usable .Config member name", s.Name)
 		}
 		if cx.settings[s.Name] {
@@ -527,7 +528,7 @@ func (cx *checkCtx) checkRequest(r *Request) error {
 		if strings.EqualFold(name, "authorization") || strings.EqualFold(name, "cookie") {
 			return cx.fail("request.headers."+name, "the %s header is not allowed in a definition", name)
 		}
-		if strings.ContainsAny(r.Headers[name], "\r\n\x00") {
+		if strings.ContainsAny(name, " \t\r\n\x00") || strings.ContainsAny(r.Headers[name], "\r\n\x00") {
 			return cx.fail("request.headers."+name, "must not contain control characters")
 		}
 	}
@@ -833,12 +834,19 @@ func (cx *checkCtx) checkTemplate(tpl, path string) error {
 }
 
 // actionEnd returns the offset of the "}}" that closes the action starting at
-// s, skipping over double-quoted literals and their backslash escapes so a
-// literal containing "}}" cannot terminate the action early. -1 when the action
-// never closes — including an unterminated literal, which can never close one.
+// s, skipping over double-quoted literals and their backslash escapes and
+// backquoted raw literals so a literal containing "}}" cannot terminate the
+// action early. -1 when the action never closes — including an unterminated
+// literal, which can never close one.
 func actionEnd(s string) int {
 	for i := 0; i+1 < len(s); i++ {
 		switch s[i] {
+		case '`':
+			for i++; i < len(s) && s[i] != '`'; i++ {
+			}
+			if i >= len(s) {
+				return -1
+			}
 		case '"':
 			for i++; i < len(s) && s[i] != '"'; i++ {
 				if s[i] == '\\' {
@@ -857,8 +865,9 @@ func actionEnd(s string) int {
 	return -1
 }
 
-// lexTemplate splits one action body into tokens, keeping double-quoted literals
-// whole. "-" trim markers are stripped only where text/template accepts them:
+// lexTemplate splits one action body into tokens, keeping double-quoted and
+// backquoted literals whole. "-" trim markers are stripped only where
+// text/template accepts them:
 // adjacent to the delimiter and separated from the expression by whitespace, so
 // `{{- x -}}` is trimmed but `{{ x-}}` or `{{ x - }}` surface as bad tokens.
 func lexTemplate(action string) ([]string, error) {
@@ -872,6 +881,15 @@ func lexTemplate(action string) ([]string, error) {
 	s = strings.TrimSpace(s)
 	var tokens []string
 	for s != "" {
+		if s[0] == '`' {
+			k := strings.IndexByte(s[1:], '`')
+			if k < 0 {
+				return nil, errors.New("unterminated raw string literal")
+			}
+			tokens = append(tokens, s[:k+2])
+			s = strings.TrimLeft(s[k+2:], " \t")
+			continue
+		}
 		if s[0] == '"' {
 			k := 1
 			for k < len(s) && s[k] != '"' {
@@ -906,6 +924,8 @@ func (cx *checkCtx) checkExpr(tokens []string, path string, inRange bool) error 
 		switch {
 		case strings.HasPrefix(tok, "\"") && strings.HasSuffix(tok, "\"") && len(tok) >= 2:
 			// quoted literal
+		case strings.HasPrefix(tok, "`") && strings.HasSuffix(tok, "`") && len(tok) >= 2:
+			// raw string literal
 		case tok == "true" || tok == "false":
 		case templateFuncs[tok]:
 		case tok == ".":

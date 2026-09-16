@@ -112,10 +112,12 @@ func mutate(base, old, new string) string {
 }
 
 // docWithQueryTemplate returns baseJSON with the q query template replaced by tpl.
+// Single quotes are doubled because the scalar sits inside a single-quoted YAML
+// string.
 func docWithQueryTemplate(tpl string) string {
 	return mutate(baseJSON,
 		`q: '{{ if .Config.safe }}safe:({{ .Keywords }}){{ else }}{{ .Keywords }}{{ end }}'`,
-		"q: '"+tpl+"'")
+		"q: '"+strings.ReplaceAll(tpl, "'", "''")+"'")
 }
 
 func TestLoadValidRSSDefinition(t *testing.T) {
@@ -259,6 +261,8 @@ func TestDefinitionRules(t *testing.T) {
 		{"bad setting type", mutate(baseJSON, "type: checkbox", "type: toggler"), `"toggler"`},
 		{"duplicate setting name", mutate(baseJSON, "    label: Safe only", "    label: Safe only\n  - name: safe\n    type: text"), "duplicate"},
 		{"unusable setting name", mutate(baseJSON, "name: safe", "name: sa.fe"), ".Config member name"},
+		{"hyphenated setting name", mutate(baseJSON, "name: safe", "name: api-key"), ".Config member name"},
+		{"digit-first setting name", mutate(baseJSON, "name: safe", "name: 2fa"), ".Config member name"},
 		{"select without options", mutate(baseJSON, "type: checkbox", "type: select"), "type is select"},
 		{"base_url scheme", mutate(baseJSON, "base_url: https://example.org/", "base_url: file:///etc/"), "scheme must be http or https"},
 		{"base_url credentials", mutate(baseJSON, "base_url: https://example.org/", "base_url: https://user:pass@example.org/"), "credentials"},
@@ -269,12 +273,15 @@ func TestDefinitionRules(t *testing.T) {
 		{"authorization header", mutate(baseJSON, "X-Token", "Authorization"), "Authorization"},
 		{"cookie header lowercase", mutate(baseJSON, "X-Token", "cookie"), "header is not allowed"},
 		{"header control characters", mutate(baseJSON, `X-Token: "t-{{ .Config.safe }}"`, `X-Token: "a\r\nb"`), "control characters"},
+		{"header name control characters", mutate(baseJSON, `X-Token: "t-{{ .Config.safe }}"`, `"X`+`\n`+`Token": "t"`), "control characters"},
+		{"header name with space", mutate(baseJSON, `X-Token: "t-{{ .Config.safe }}"`, `X Token: "t"`), "control characters"},
 		{"if without else", mutate(baseJSON, "){{ else }}{{ .Keywords }}{{ end }}", "){{ .Keywords }}{{ end }}"), "mandatory {{ else }}"},
 		{"else outside if", mutate(baseJSON, "qf: '{{ .Query.Title }} {{ .Today.Year }}'", "qf: '{{ else }}'"), "outside an {{ if }}"},
 		{"end without block", mutate(baseJSON, "qf: '{{ .Query.Title }} {{ .Today.Year }}'", "qf: '{{ end }}'"), "without a block"},
 		{"unclosed action", mutate(baseJSON, "qf: '{{ .Query.Title }} {{ .Today.Year }}'", "qf: '{{ .Keywords'"), `unclosed "{{"`},
 		{"unclosed block", mutate(baseJSON, "){{ else }}{{ .Keywords }}{{ end }}", "){{ else }}{{ .Keywords }}"), "unclosed {{ if }} block"},
 		{"unterminated literal", docWithQueryTemplate(`{{ "unterminated`), `unclosed "{{"`},
+		{"unterminated raw literal", docWithQueryTemplate("{{ `unterminated"), `unclosed "{{"`},
 		{"unknown function", mutate(baseJSON, "{{ else }}{{ .Keywords }}", "{{ else }}{{ eval .Keywords }}"), `token "eval"`},
 		{"dot outside range", mutate(baseJSON, "qf: '{{ .Query.Title }} {{ .Today.Year }}'", "qf: '{{ . }}'"), "only valid inside"},
 		{"range over non-categories", mutate(baseJSON, "{{ range .Categories }}", "{{ range .Keywords }}"), "may only walk"},
@@ -327,10 +334,11 @@ func TestDefinitionRules(t *testing.T) {
 }
 
 // TestValidDefinitionVariants covers documents that must still load: escaped
-// quotes and "}}" inside string literals, both trim-marker spellings, a stray
-// "}}" in literal text, a negative split index (doc 07 section 3.4 counts from
-// the end), a template-expanded prepend arg, an uppercase MAGNET scheme and a
-// single-category definition with no category field.
+// quotes and "}}" inside string literals, backquoted raw literals, both
+// trim-marker spellings, a stray "}}" in literal text, a negative split index
+// (doc 07 section 3.4 counts from the end), a template-expanded prepend arg, an
+// uppercase MAGNET scheme and a single-category definition with no category
+// field.
 func TestValidDefinitionVariants(t *testing.T) {
 	magnetEntry := mutate(baseStatic,
 		`    download: "https://example.org/example.iso.torrent"`,
@@ -347,7 +355,10 @@ func TestValidDefinitionVariants(t *testing.T) {
 
 	templates := []string{
 		`{{ "say \"hi\"" }}`,
+		`{{ "it's" }}`,
 		`{{ "}}" }}`,
+		"{{ `a}}b` }}",
+		"{{ if eq .Keywords `a}}b` }}x{{ else }}y{{ end }}",
 		`{{- .Keywords -}}`,
 		`{{ .Keywords -}}`,
 		`{{- .Keywords }}`,
