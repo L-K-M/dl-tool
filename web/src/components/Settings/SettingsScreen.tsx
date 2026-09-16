@@ -74,7 +74,6 @@ export const useSettingsDirty = create<{ report: DirtyReport | null }>(() => ({
 export function SettingsScreen(): JSX.Element {
   const { t } = useTranslation("settings");
   const params = useParams();
-  const report = useSettingsDirty((state) => state.report);
   // Doc 09 §2.1 still routes the account section as `users`; ADR-0019 dropped
   // the multi-user model and the section became "Account & Auth". Keep the
   // documented path reachable as a render alias rather than redirecting.
@@ -82,13 +81,19 @@ export function SettingsScreen(): JSX.Element {
   const section: Section = (
     requested === "users" ? "account" : requested
   ) as Section;
+  // The selector is authoritative: a report owned by another section never
+  // renders, regardless of which effect flavor a form publishes from.
+  const report = useSettingsDirty((state) =>
+    state.report?.section === section ? state.report : null,
+  );
 
   // Any report present when the section mounts or changes is stale — its
   // save/revert closures belong to a previous form instance (including a
-  // save that resolved after navigation). A layout effect clears before any
-  // child's passive publish (passive effects run child-first), and the
-  // render-time guard below keeps even one committed frame from showing a
-  // report owned by another section.
+  // save that resolved after navigation). This is a layout effect so the
+  // clear runs before a child's passive publish (passive effects run
+  // child-first; section forms MUST publish from useEffect, never
+  // useLayoutEffect). Display correctness does not hinge on that ordering —
+  // the selector above already filters by owning section.
   useLayoutEffect(() => {
     useSettingsDirty.setState({ report: null });
     return () => useSettingsDirty.setState({ report: null });
@@ -145,11 +150,9 @@ export function SettingsScreen(): JSX.Element {
         </div>
         {/* Always mounted so the count change announces; visually hidden while clean. */}
         <p aria-live="polite" className="sr-only">
-          {report === null || report.section !== section
-            ? ""
-            : t("dirty.unsaved", { count: report.count })}
+          {report === null ? "" : t("dirty.unsaved", { count: report.count })}
         </p>
-        {report !== null && report.section === section && (
+        {report !== null && (
           <div className="sticky bottom-0 z-10 flex items-center gap-2 border-t border-border bg-background px-6 py-2">
             <p className="me-auto text-sm">
               {t("dirty.unsaved", { count: report.count })}
