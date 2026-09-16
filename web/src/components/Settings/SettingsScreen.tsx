@@ -92,8 +92,9 @@ export function SettingsScreen(): JSX.Element {
   // save that resolved after navigation). This is a layout effect so the
   // clear runs before a child's passive publish (passive effects run
   // child-first; section forms MUST publish from useEffect, never
-  // useLayoutEffect). Display correctness does not hinge on that ordering —
-  // the selector above already filters by owning section.
+  // useLayoutEffect). The selector only filters cross-section reports; a
+  // fresh same-section report published from useLayoutEffect would still be
+  // cleared here, so this ordering remains load-bearing for display.
   useLayoutEffect(() => {
     useSettingsDirty.setState({ report: null });
     return () => useSettingsDirty.setState({ report: null });
