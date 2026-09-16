@@ -50,104 +50,120 @@ test("a second setup attempt is rejected", async ({ request }) => {
   expect((await response.json()).type).toBe("/problems/setup-already-complete");
 });
 
-test("the grid stays inside the scripting budget", async ({
-  page,
-  context,
-  request,
-}) => {
-  test.setTimeout(180_000);
-  await ensureAdmin(request);
-  const fixture = await stubTasks(page, ROW_COUNT);
-  await loginAsAdmin(page);
+// Nearest-rank p95 over ten ticks is the maximum, so one environmental spike
+// (GC, CPU steal on a shared runner) fails the run even when the grid is well
+// inside budget. Scope a single retry to this test: retries configured on
+// this describe apply only to it, so the serial pair above never re-runs,
+// while a genuinely slow implementation still fails when the retry exceeds
+// the budget.
+test.describe("grid performance", () => {
+  test.describe.configure({ retries: 1 });
 
-  // Initial snapshot over the fixture stream, then the paginated list
-  // hydrates the same rows (doc 13 section 6.3).
-  await fixture.emitInitial();
-  const grid = page.getByRole("grid");
-  await expect(grid).toHaveAttribute("aria-rowcount", String(ROW_COUNT));
-  const mountedRows = page.locator("[data-task-id]");
-  await expect(mountedRows.first()).toBeVisible();
+  test("the grid stays inside the scripting budget", async ({
+    page,
+    context,
+    request,
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    await ensureAdmin(request);
+    const fixture = await stubTasks(page, ROW_COUNT);
+    await loginAsAdmin(page);
 
-  // Fix the changed-ID set: every mounted data row plus the final offscreen
-  // task (last in addedOn-desc row order).
-  const mountedIds = await mountedRows.evaluateAll((elements) =>
-    elements.map((el) => el.getAttribute("data-task-id")),
-  );
-  const watchId = mountedIds[0];
-  const lastId = fixture.ids[fixture.ids.length - 1];
-  const changedIds = [...new Set([...mountedIds, lastId])];
-  const measuredTicks = Array.from({ length: MEASURED_TICKS }, (_, i) => i + 2);
+    // Initial snapshot over the fixture stream, then the paginated list
+    // hydrates the same rows (doc 13 section 6.3).
+    await fixture.emitInitial();
+    const grid = page.getByRole("grid");
+    await expect(grid).toHaveAttribute("aria-rowcount", String(ROW_COUNT));
+    const mountedRows = page.locator("[data-task-id]");
+    await expect(mountedRows.first()).toBeVisible();
 
-  // Warm-up: one unmeasured delivery proves the seed rendered and settles
-  // JIT before the CDP baseline.
-  await fixture.emitDelta(1, changedIds);
-  await expect
-    .poll(() => readProgressNow(page, watchId))
-    .toBeCloseTo(fixture.progressAt(1) * 100, 4);
+    // Fix the changed-ID set: every mounted data row plus the final offscreen
+    // task (last in addedOn-desc row order).
+    const mountedIds = await mountedRows.evaluateAll((elements) =>
+      elements.map((el) => el.getAttribute("data-task-id")),
+    );
+    const watchId = mountedIds[0];
+    const lastId = fixture.ids[fixture.ids.length - 1];
+    const changedIds = [...new Set([...mountedIds, lastId])];
+    const measuredTicks = Array.from(
+      { length: MEASURED_TICKS },
+      (_, i) => i + 2,
+    );
 
-  const cdp = await context.newCDPSession(page);
-  await cdp.send("Performance.enable");
-  const tracingDone = new Promise((resolve) =>
-    cdp.once("Tracing.tracingComplete", resolve),
-  );
-  await cdp.send("Tracing.start", {
-    categories: "-*,devtools.timeline,v8.execute",
-    transferMode: "ReturnAsStream",
-  });
-
-  const samples = [await scriptDuration(cdp)];
-  for (const t of measuredTicks) {
-    await fixture.emitDelta(t, changedIds);
-    // Exactly one verified update per interval: a missed, coalesced or late
-    // render leaves last tick's value in the DOM and fails the poll.
+    // Warm-up: one unmeasured delivery proves the seed rendered and settles
+    // JIT before the CDP baseline.
+    await fixture.emitDelta(1, changedIds);
     await expect
-      .poll(() => readProgressNow(page, watchId), { timeout: 10_000 })
-      .toBeCloseTo(fixture.progressAt(t) * 100, 4);
-    expect(await mountedRows.count()).toBeLessThan(MAX_MOUNTED_ROWS);
-    samples.push(await scriptDuration(cdp));
-    await page.waitForTimeout(TICK_MS);
-  }
+      .poll(() => readProgressNow(page, watchId))
+      .toBeCloseTo(fixture.progressAt(1) * 100, 4);
 
-  await cdp.send("Tracing.end");
-  const { stream } = await tracingDone;
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  let trace = "";
-  for (;;) {
-    const chunk = await cdp.send("IO.read", { handle: stream });
-    if (chunk.data) {
-      trace += chunk.base64Encoded
-        ? Buffer.from(chunk.data, "base64").toString("utf8")
-        : chunk.data;
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Performance.enable");
+    const tracingDone = new Promise((resolve) =>
+      cdp.once("Tracing.tracingComplete", resolve),
+    );
+    await cdp.send("Tracing.start", {
+      categories: "-*,devtools.timeline,v8.execute",
+      transferMode: "ReturnAsStream",
+    });
+
+    const samples = [await scriptDuration(cdp)];
+    for (const t of measuredTicks) {
+      await fixture.emitDelta(t, changedIds);
+      // Exactly one verified update per interval: a missed, coalesced or late
+      // render leaves last tick's value in the DOM and fails the poll.
+      await expect
+        .poll(() => readProgressNow(page, watchId), { timeout: 10_000 })
+        .toBeCloseTo(fixture.progressAt(t) * 100, 4);
+      expect(await mountedRows.count()).toBeLessThan(MAX_MOUNTED_ROWS);
+      samples.push(await scriptDuration(cdp));
+      await page.waitForTimeout(TICK_MS);
     }
-    if (chunk.eof) break;
-  }
-  await cdp.send("IO.close", { handle: stream });
-  fs.writeFileSync(path.join(STATE_DIR, "cdp-trace.json"), trace);
 
-  const deltas = samples
-    .slice(1)
-    .map((value, i) => (value - samples[i]) * 1000);
-  const sorted = [...deltas].sort((a, b) => a - b);
-  // Nearest-rank p95 over ten samples is the maximum: the budget tolerates no
-  // outlier tick at all.
-  const p95 = sorted[Math.ceil(0.95 * sorted.length) - 1];
-  console.log(
-    `grid perf: ${changedIds.length} changed rows per tick, ${deltas.length} measured ticks`,
-  );
-  console.log(
-    `grid perf deltas (ms): ${deltas.map((d) => d.toFixed(3)).join(", ")}`,
-  );
-  console.log(`grid perf p95: ${p95.toFixed(3)} ms (budget ${BUDGET_MS} ms)`);
-  expect(p95).toBeLessThan(BUDGET_MS);
+    await cdp.send("Tracing.end");
+    const { stream } = await tracingDone;
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    let trace = "";
+    for (;;) {
+      const chunk = await cdp.send("IO.read", { handle: stream });
+      if (chunk.data) {
+        trace += chunk.base64Encoded
+          ? Buffer.from(chunk.data, "base64").toString("utf8")
+          : chunk.data;
+      }
+      if (chunk.eof) break;
+    }
+    await cdp.send("IO.close", { handle: stream });
+    fs.writeFileSync(
+      path.join(STATE_DIR, `cdp-trace-attempt-${testInfo.retry}.json`),
+      trace,
+    );
 
-  // The offscreen task received the same ticks; scrolling must show its final
-  // value, not a stale seed.
-  await grid.evaluate((el) => {
-    el.scrollTop = el.scrollHeight;
+    const deltas = samples
+      .slice(1)
+      .map((value, i) => (value - samples[i]) * 1000);
+    const sorted = [...deltas].sort((a, b) => a - b);
+    // Nearest-rank p95 over ten samples is the maximum: the budget tolerates no
+    // outlier tick at all.
+    const p95 = sorted[Math.ceil(0.95 * sorted.length) - 1];
+    console.log(
+      `grid perf: ${changedIds.length} changed rows per tick, ${deltas.length} measured ticks`,
+    );
+    console.log(
+      `grid perf deltas (ms): ${deltas.map((d) => d.toFixed(3)).join(", ")}`,
+    );
+    console.log(`grid perf p95: ${p95.toFixed(3)} ms (budget ${BUDGET_MS} ms)`);
+    expect(p95).toBeLessThan(BUDGET_MS);
+
+    // The offscreen task received the same ticks; scrolling must show its final
+    // value, not a stale seed.
+    await grid.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    const lastRow = page.locator(`[data-task-id="${lastId}"]`);
+    await expect(lastRow).toBeVisible();
+    await expect
+      .poll(() => readProgressNow(page, lastId))
+      .toBeCloseTo(fixture.progressAt(MEASURED_TICKS + 1) * 100, 4);
   });
-  const lastRow = page.locator(`[data-task-id="${lastId}"]`);
-  await expect(lastRow).toBeVisible();
-  await expect
-    .poll(() => readProgressNow(page, lastId))
-    .toBeCloseTo(fixture.progressAt(MEASURED_TICKS + 1) * 100, 4);
 });

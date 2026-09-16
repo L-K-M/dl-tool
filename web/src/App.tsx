@@ -177,7 +177,9 @@ function AuthRoute({ screen }: { screen: "setup" | "login" }) {
   const session = useSession();
   const [params] = useSearchParams();
   if (session.status === "loading") return <Loading />;
-  // Both the gate and submit handler honor next, so a cache update cannot race the redirect.
+  // The gate owns the post-auth redirect and honors next; it fires only after
+  // the authenticated session has committed, so the redirect cannot race a
+  // pending session-cache update.
   if (session.status === "authenticated")
     return (
       <Navigate
