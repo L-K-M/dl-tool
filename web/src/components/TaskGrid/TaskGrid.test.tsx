@@ -730,6 +730,28 @@ test("TestLiveCellsAndSortInvalidation", async () => {
   expect(screen.getByText("four")).toBeTruthy();
 });
 
+test("TestNameFilterTracksLiveRenames", async () => {
+  tasks = [
+    task("alpha-one", { name: "alpha one" }),
+    task("beta-two", { name: "beta two" }),
+  ];
+  reportedTotal = tasks.length;
+  await mount();
+  act(() => useShellUi.setState({ debouncedFilter: "alpha" }));
+  await waitFor(() => expect(order()).toEqual(["alpha-one"]));
+  // A rename that leaves the filter must drop the row even though name is
+  // not among the sort keys.
+  act(() =>
+    useTasks.getState().hydrate([task("alpha-one", { name: "gamma one" })]),
+  );
+  await waitFor(() => expect(order()).toEqual([]));
+  // And a rename into the filter mounts the row.
+  act(() =>
+    useTasks.getState().hydrate([task("beta-two", { name: "alpha two" })]),
+  );
+  await waitFor(() => expect(order()).toEqual(["beta-two"]));
+});
+
 test("TestSecondarySortTracksLiveChanges", async () => {
   await mount();
   fireEvent.click(screen.getByRole("columnheader", { name: "Status" }));

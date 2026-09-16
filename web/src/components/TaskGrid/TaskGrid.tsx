@@ -853,9 +853,14 @@ export function TaskGrid(props: TaskGridProps) {
   const header = useRef<HTMLDivElement>(null);
   const nodes = useRef(new Map<string, HTMLDivElement>());
   const pendingFocus = useRef(false);
+  const nameFilter = useDebouncedNameFilter();
   // Live cells subscribe individually. Only sort-key changes rebuild the table
   // model, and the changed-id set keeps each check proportional to the delta.
   const idSet = useMemo(() => new Set(ids), [ids]);
+  // An active name filter turns name into a membership field: a live rename
+  // can move a row in or out of the filtered set even when no sort key reads
+  // it, so the delta check must watch it then.
+  const filteringByName = nameFilter.trim() !== "";
   useEffect(
     () =>
       // Delta merges mutate the shared task map, so the pre-update value comes
@@ -865,8 +870,7 @@ export function TaskGrid(props: TaskGridProps) {
       // rebuild the 10k-row table model on e.g. every selection click.
       useTasks.subscribe((next, prev) => {
         if (next.changedFrom === prev.changedFrom) return;
-        const changed = sorting.some(({ id: columnId }) => {
-          const field = sourceFields[columnId as Exclude<ColumnId, "select">];
+        const moved = (field: keyof Task) => {
           for (const id of next.changedIds) {
             if (!idSet.has(id)) continue;
             if (
@@ -875,12 +879,16 @@ export function TaskGrid(props: TaskGridProps) {
               return true;
           }
           return false;
-        });
+        };
+        const changed =
+          sorting.some(({ id: columnId }) =>
+            moved(sourceFields[columnId as Exclude<ColumnId, "select">]),
+          ) ||
+          (filteringByName && moved("name"));
         if (changed) setSortRevision((revision) => revision + 1);
       }),
-    [idSet, sorting],
+    [idSet, sorting, filteringByName],
   );
-  const nameFilter = useDebouncedNameFilter();
   const data = useMemo(() => {
     void sortRevision;
     const needle = nameFilter.trim().toLowerCase();
