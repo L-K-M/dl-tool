@@ -1,0 +1,24 @@
+dlsearch: 1
+id: bad-op
+name: Bad Op
+description: "A valid rss definition whose transform names an op outside the closed set."
+homepage: https://example.org/
+version: "1.0.0"
+legal_tier: legitimate
+kind: rss
+caps:
+  modes: {search: [q]}
+  categories: {release: 4020}
+request:
+  base_url: https://example.org/
+  path: feed/
+response:
+  rows: "rss > channel > item"
+  fields:
+    title:    {path: "title"}
+    download: {path: "enclosure", attr: "url"}
+    size:     {path: "enclosure", attr: "length", type: bytes}
+    category: {const: "release"}
+  transforms:
+    title:
+      - {op: uppercase}
