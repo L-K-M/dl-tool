@@ -1,0 +1,22 @@
+dlsearch: 1
+id: unknown-key
+name: Unknown Key
+description: "A valid rss definition carrying one key the schema does not know."
+homepage: https://example.org/
+version: "1.0.0"
+legal_tier: legitimate
+kind: rss
+bogus_key: true
+caps:
+  modes: {search: [q]}
+  categories: {release: 4020}
+request:
+  base_url: https://example.org/
+  path: feed/
+response:
+  rows: "rss > channel > item"
+  fields:
+    title:    {path: "title"}
+    download: {path: "enclosure", attr: "url"}
+    size:     {path: "enclosure", attr: "length", type: bytes}
+    category: {const: "release"}
