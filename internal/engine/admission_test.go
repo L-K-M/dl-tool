@@ -3024,6 +3024,50 @@ func TestPassStopsAnUnownedRunningTransfer(t *testing.T) {
 	if code := env.taskErrorCode(t, id); code != engine.ErrorCodeConcurrencyLimit {
 		t.Errorf("error_code = %q, want %q on the stopped row", code, engine.ErrorCodeConcurrencyLimit)
 	}
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 1 {
+		t.Errorf("resumes = %v, want the single first-pass resume: the held row must not be touched", resumes)
+	}
+	if pauses := env.aria2.recordedPauses(); len(pauses) != 1 {
+		t.Errorf("pauses = %v, want only the first-pass stop", pauses)
+	}
+}
+
+// The fresh-add shape of the doubly-failed release: no stored handle, so
+// the pass mints one, both the transition and the ownership mark fail,
+// and the just-started transfer must be stopped on its minted handle —
+// the row keeps its queued, unmarked shape for the next pass's gate.
+func TestPassStopsAnUnownedFreshTransfer(t *testing.T) {
+	env := newAdmitEnv(t)
+	id := env.seedTask(t, engine.NameAria2, "fresh-unowned", func(task *store.Task) {})
+
+	admit := engine.NewAdmitter(env.registry, &failReleaseStore{AdmissionStore: env.tasks, id: id}, time.Second, nil)
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil || len(released) != 0 {
+		t.Fatalf("pass: released=%v err=%v, want none while the release write cannot land", released, err)
+	}
+
+	adds := env.aria2.recordedAdds()
+	if len(adds) != 1 {
+		t.Fatalf("adds = %v, want the one fresh submission", adds)
+	}
+	wantHandle := engine.NameAria2 + ":gid001"
+	if pauses := env.aria2.recordedPauses(); len(pauses) != 1 || pauses[0] != wantHandle {
+		t.Errorf("pauses = %v, want the freshly minted transfer stopped on %q", pauses, wantHandle)
+	}
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 0 {
+		t.Errorf("resumes = %v, want none — the fresh transfer never re-ran", resumes)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateQueued) {
+		t.Errorf("state = %q, want queued", state)
+	}
+	var pending int
+	if err := env.db.GetContext(t.Context(), &pending,
+		`SELECT admission_pending FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read admission_pending of %s: %v", id, err)
+	}
+	if pending != 0 {
+		t.Errorf("admission_pending = %d, want 0: the failed mark wrote nothing", pending)
+	}
 }
 
 // The same doubly-failed release over a row that already carries the

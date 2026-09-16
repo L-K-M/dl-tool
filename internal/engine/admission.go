@@ -1042,7 +1042,13 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 					// previously marked row already owns its retry and
 					// keeps running; a still-paused one is the sweep's to
 					// adopt, since a running transfer under paused is
-					// adopted, never re-gated.
+					// adopted, never re-gated. The guard reads the
+					// pass-start snapshot: if the transition failed
+					// ambiguously (it landed) and the mark then errored,
+					// this pauses a landed row's transfer — recoverable,
+					// because the sweep adopts a stopped engine report
+					// over an active row; the alternative reopens the
+					// running-under-hold wedge, so the stop stands.
 					if _, markErr := a.markAdmissionPending(ctx, cand.ID); markErr != nil &&
 						cand.State == string(StateQueued) && cand.AdmissionPending == 0 {
 						a.stopUnownedTransfer(ctx, e, cand, handle)
@@ -1175,8 +1181,9 @@ func (a *Admitter) requeuePendingSelection(ctx context.Context, cand store.Candi
 // failed the release write may be dead (the same discipline
 // removeStrandedTransfer keeps). The answers: true — the pass owns the
 // row and the transfer keeps running for the retry; false without error —
-// the row left queued, which under the lease means the ambiguous release
-// write landed after all, and nothing is owed; error — nothing durable
+// the row is no longer queued to gate: either the ambiguous release
+// write landed after all, or the row is gone outright and the sweep
+// owns whatever transfer remains engine-side; error — nothing durable
 // owns the running transfer, and the caller must stop it before the next
 // pass's gate is safe over it.
 func (a *Admitter) markAdmissionPending(ctx context.Context, id string) (bool, error) {

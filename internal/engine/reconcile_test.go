@@ -358,13 +358,13 @@ func (f *fakeTasks) SetEngineRef(_ context.Context, id, engineRef string) error 
 func (f *fakeTasks) MarkAdmissionPending(_ context.Context, id string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.journal.record("store:mark:" + id)
 	if f.failMarks {
 		return false, errors.New("store: write failed")
 	}
 	if f.declineMarks {
 		return false, nil
 	}
+	f.journal.record("store:mark:" + id)
 	f.marks = append(f.marks, id)
 	return true, nil
 }
