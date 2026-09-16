@@ -217,6 +217,11 @@ func (e *actionEngine) Add(_ context.Context, req engine.AddRequest) (string, er
 	if e.addErr != nil {
 		return "", e.addErr
 	}
+	if e.addID == "" {
+		// A gate without a minted handle is a misconfigured fixture; an
+		// empty-string success would persist engine_ref '' far from it.
+		return "", engine.ErrNotSupported
+	}
 
 	return e.addID, nil
 }
@@ -1402,6 +1407,34 @@ func TestPatchDestination(t *testing.T) {
 		env.qbittorrent.assertNoCalls(t)
 		if state := env.taskState(t, id); state != string(engine.StateDownloading) {
 			t.Errorf("state = %q, want the unchanged downloading", state)
+		}
+		var stored string
+		if err := env.db.GetContext(t.Context(), &stored,
+			`SELECT destination FROM tasks WHERE id = ?`, id); err != nil {
+			t.Fatalf("read destination: %v", err)
+		}
+		if stored != "/data" {
+			t.Errorf("destination = %q, want the untouched /data", stored)
+		}
+	})
+
+	// The resumed-then-requeued shape — queued while still holding its
+	// stopped engine handle — owns engine-side data, so the gate judges
+	// the handle: queued has no moving edge and the relocation is refused
+	// with the same 422, never half-applied store-side.
+	t.Run("a queued row holding a stopped handle is refused", func(t *testing.T) {
+		env := newActionsTestEnv(t)
+		id := env.seedBitTorrentTask(t, func(task *store.Task) {
+			task.State = "queued"
+		})
+
+		response := env.patchTask(t, id,
+			map[string]any{"destination": filepath.Join(env.dataRoot, "linux")})
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+		env.qbittorrent.assertNoCalls(t)
+		if state := env.taskState(t, id); state != "queued" {
+			t.Errorf("state = %q, want the unchanged queued", state)
 		}
 		var stored string
 		if err := env.db.GetContext(t.Context(), &stored,

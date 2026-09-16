@@ -293,7 +293,10 @@ CREATE TABLE tasks (
                                                 -- admission pass still owns it; counted active and exempt
                                                 -- from the hold gates. Cleared by every state transition;
                                                 -- engine_ref alone does not imply it — a resumed task
-                                                -- requeues still holding its stopped handle
+                                                -- requeues still holding its stopped handle. A crash that
+                                                -- orphans the mark is self-healing: the next pass selects
+                                                -- the queued row, exempts it, and finishes the release —
+                                                -- the mark is the retry token, never a skip flag
   select_files TEXT,                      -- JSON selection intent: {indices, priorities};
                                            -- written at create (5.2), rewritten by PATCH files (5.8)
   unzip_progress INTEGER,               -- 0-100, only while state = 'extracting'

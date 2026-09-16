@@ -2934,6 +2934,159 @@ func TestPassRefusedSelectionRemovesNewTransfer(t *testing.T) {
 	}
 }
 
+// failReleaseStore fails the release's final transition and the
+// ownership mark behind it for one task — the doubly-failed write that
+// would otherwise leave a transfer running with nothing durable owning
+// it.
+type failReleaseStore struct {
+	engine.AdmissionStore
+	id string
+}
+
+func (s *failReleaseStore) Transition(ctx context.Context, id, next, code, message string) error {
+	if id == s.id && next == string(engine.StateDownloading) {
+		return errors.New("injected: release transition failed")
+	}
+
+	return s.AdmissionStore.Transition(ctx, id, next, code, message)
+}
+
+func (s *failReleaseStore) MarkAdmissionPending(ctx context.Context, id string) (bool, error) {
+	if id == s.id {
+		return false, errors.New("injected: mark failed")
+	}
+
+	return s.AdmissionStore.MarkAdmissionPending(ctx, id)
+}
+
+// When the release's transition fails ambiguously and even the ownership
+// mark behind it cannot land, an unmarked queued row keeps nothing
+// durable owning the transfer the pass just ran — so the pass stops it:
+// a stopped transfer is what the next pass's hold gate may safely
+// throttle, while a running one would carry a hold stamp and keep
+// moving, wedged until an operator intervened.
+func TestPassStopsAnUnownedRunningTransfer(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	// The ordinary requeued-resume shape: queued, holding its stopped
+	// handle, unmarked — it passed the gates like a fresh candidate.
+	ref := "unowned-gid"
+	id := env.seedTask(t, engine.NameAria2, "unowned", func(task *store.Task) {
+		task.EngineRef = &ref
+	})
+
+	admit := engine.NewAdmitter(env.registry, &failReleaseStore{AdmissionStore: env.tasks, id: id}, time.Second, nil)
+
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none while the release write cannot land", released)
+	}
+
+	// The transfer ran and was then stopped again: nothing durable owns
+	// it, so leaving it live would re-open the gate-over-running-transfer
+	// hole. The row keeps its queued shape and never took the mark.
+	wantHandle := engine.NameAria2 + ":" + ref
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 1 || resumes[0] != wantHandle {
+		t.Errorf("resumes = %v, want the stored handle run for the release", resumes)
+	}
+	if pauses := env.aria2.recordedPauses(); len(pauses) != 1 || pauses[0] != wantHandle {
+		t.Errorf("pauses = %v, want the unowned running transfer stopped", pauses)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateQueued) {
+		t.Errorf("state = %q, want queued", state)
+	}
+	var pending int
+	if err := env.db.GetContext(t.Context(), &pending,
+		`SELECT admission_pending FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read admission_pending of %s: %v", id, err)
+	}
+	if pending != 0 {
+		t.Errorf("admission_pending = %d, want 0: the failed mark wrote nothing", pending)
+	}
+
+	// The proof the stop was the safe answer: with the slot spent, the
+	// next pass holds the row through the ordinary gate — no engine call
+	// touches the stopped transfer, and nothing over-admits.
+	env.seedTask(t, engine.NameAria2, "running", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.EngineRef = ptr("other-gid")
+	})
+	released, err = env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 1}))
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none under a full limit", released)
+	}
+	if code := env.taskErrorCode(t, id); code != engine.ErrorCodeConcurrencyLimit {
+		t.Errorf("error_code = %q, want %q on the stopped row", code, engine.ErrorCodeConcurrencyLimit)
+	}
+}
+
+// The same doubly-failed release over a row that already carries the
+// mark stops nothing: the standing mark survived the failed transition,
+// so the pass still owns the retry and the transfer keeps running —
+// the next pass re-enters through the resume path and lands the write.
+func TestPassKeepsAMarkedRetryRunning(t *testing.T) {
+	env := newAdmitEnv(t)
+
+	ref := "marked-retry-gid"
+	id := env.seedTask(t, engine.NameAria2, "marked-retry", func(task *store.Task) {
+		task.EngineRef = &ref
+	})
+	marked, err := env.tasks.MarkAdmissionPending(t.Context(), id)
+	if err != nil || !marked {
+		t.Fatalf("mark the mid-release row: marked=%v err=%v", marked, err)
+	}
+
+	admit := engine.NewAdmitter(env.registry, &failReleaseStore{AdmissionStore: env.tasks, id: id}, time.Second, nil)
+
+	released, err := admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 5}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none while the release write cannot land", released)
+	}
+
+	// The transfer ran and was left running: the standing mark means the
+	// next pass owns the retry, so stopping it would only delay the
+	// retry's resume.
+	wantHandle := engine.NameAria2 + ":" + ref
+	if resumes := env.aria2.recordedResumes(); len(resumes) != 1 || resumes[0] != wantHandle {
+		t.Errorf("resumes = %v, want the stored handle run for the release", resumes)
+	}
+	if pauses := env.aria2.recordedPauses(); len(pauses) != 0 {
+		t.Errorf("pauses = %v, want none — the standing mark still owns the row", pauses)
+	}
+
+	// The retry completes the release: the mark exempts it from the full
+	// gate, the idempotent resume is a no-op over the running transfer,
+	// and the transition this time lands — clearing the mark with it.
+	env.seedTask(t, engine.NameAria2, "running", func(task *store.Task) {
+		task.State = string(engine.StateDownloading)
+		task.EngineRef = ptr("other-gid")
+	})
+	released, err = env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 1}))
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want [%s]: the marked row owns its retry past the full gate", released, id)
+	}
+	var pending int
+	if err := env.db.GetContext(t.Context(), &pending,
+		`SELECT admission_pending FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read admission_pending of %s: %v", id, err)
+	}
+	if pending != 0 {
+		t.Errorf("admission_pending = %d, want 0 once the release lands", pending)
+	}
+}
+
 // failRequeueStore fails exactly the parked row's paused -> queued
 // requeue — the write requeuePendingSelection owns before the pass may
 // run the transfer for its metadata.
@@ -3002,5 +3155,59 @@ func TestPassFailedSelectionRequeueKeepsTheParkedRow(t *testing.T) {
 	}
 	if pending != 0 {
 		t.Errorf("admission_pending = %d, want 0: the failed requeue left no mark", pending)
+	}
+}
+
+// The shape a crash between the ownership mark and the resume leaves —
+// queued, marked, handle stored, selection still pending and a transfer
+// that never ran — is the pass's own retry token, not a stranded row:
+// the next pass re-enters through the resume path, re-marks idempotently,
+// applies the selection once the listing exists and finishes the release.
+// This is also the recovery half of the reconciler's queue-mark-resume
+// resubmit order.
+func TestPassCompletesAMarkedQueuedPendingSelectionRow(t *testing.T) {
+	env := newAdmitEnv(t)
+	env.qbt.caps = []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority}
+	// The metadata arrived while the process was down: the listing is
+	// populated, so the pending selection can land this pass.
+	env.qbt.files = []engine.FileEntry{{Index: 0}, {Index: 1}, {Index: 2}}
+
+	ref := "crashed-after-mark"
+	id := env.seedTask(t, engine.NameQBittorrent, "crashed-after-mark", func(task *store.Task) {
+		task.EngineRef = &ref
+		task.SelectFiles = ptr(`{"indices":[0,2],"priorities":{"0":1,"1":0,"2":6}}`)
+	})
+	marked, err := env.tasks.MarkAdmissionPending(t.Context(), id)
+	if err != nil || !marked {
+		t.Fatalf("mark the crashed row: marked=%v err=%v", marked, err)
+	}
+
+	released, err := env.admit.Pass(t.Context(), unlimitedFloor(engine.Limits{MaxActiveTotal: 1}))
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if len(released) != 1 || released[0] != id {
+		t.Fatalf("released = %v, want [%s]: the marked row must complete its pending selection", released, id)
+	}
+
+	// The selection landed on the stored handle and the transfer ran for
+	// real — the whole point of keeping the row queued and owned.
+	wantHandle := engine.NameQBittorrent + ":" + ref
+	if calls := env.qbt.recordedFileCalls(); len(calls) != 1 || calls[0].id != wantHandle {
+		t.Errorf("SetFiles calls = %+v, want one on the stored handle", calls)
+	}
+	if resumes := env.qbt.recordedResumes(); len(resumes) != 1 || resumes[0] != wantHandle {
+		t.Errorf("resumes = %v, want the stored handle run", resumes)
+	}
+	if state := env.taskState(t, id); state != string(engine.StateDownloading) {
+		t.Errorf("state = %q, want downloading", state)
+	}
+	var pending int
+	if err := env.db.GetContext(t.Context(), &pending,
+		`SELECT admission_pending FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read admission_pending of %s: %v", id, err)
+	}
+	if pending != 0 {
+		t.Errorf("admission_pending = %d, want 0 once the release lands", pending)
 	}
 }

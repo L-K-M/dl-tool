@@ -822,8 +822,12 @@ func (h *TaskHandlers) patchTaskUnderLease(
 		// An admitted task whose state cannot enter moving would otherwise
 		// have the engine relocate its data and only then fail the
 		// transition; the legality is decided here, before the first
-		// engine call, so the refusal touches nothing. Unadmitted tasks
-		// own no data yet and enter no state.
+		// engine call, so the refusal touches nothing. A queued row can
+		// hold a stopped engine handle — an ordinary resume requeues with
+		// it — so the gate judges the handle, not the state alone: the
+		// transfer's data cannot be relocated through a path that never
+		// enters moving, and the refusal keeps the stored destination and
+		// the engine's dir from diverging silently.
 		if task.EngineRef != nil && !slices.Contains(movingEntryStates, task.State) {
 			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailIllegalState)
 		}

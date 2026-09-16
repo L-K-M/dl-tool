@@ -132,7 +132,9 @@ type AdmissionStore interface {
 	// where a stored engine handle used to be enough. true means the row
 	// is queued under the pass's ownership, an earlier mark included;
 	// false a present row that is not queued; a missing id is the store's
-	// not-found error.
+	// not-found error. The mark is transient: every store transition that
+	// moves the row out of queued clears it, so no mark survives to
+	// exempt a later requeue.
 	MarkAdmissionPending(ctx context.Context, id string) (bool, error)
 	SetEngineRef(ctx context.Context, id, engineRef string) error
 }
@@ -1033,8 +1035,18 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 					// The transfer is running while the row may still
 					// read queued: record the pass's ownership so the
 					// next pass counts it and finishes the release write
-					// instead of gating a live transfer.
-					a.markAdmissionPending(ctx, cand.ID)
+					// instead of gating a live transfer. If even that
+					// record fails, an unmarked queued row keeps nothing
+					// durable owning the live transfer — stop it, so the
+					// next pass's gate is safe over a stopped one. A
+					// previously marked row already owns its retry and
+					// keeps running; a still-paused one is the sweep's to
+					// adopt, since a running transfer under paused is
+					// adopted, never re-gated.
+					if _, markErr := a.markAdmissionPending(ctx, cand.ID); markErr != nil &&
+						cand.State == string(StateQueued) && cand.AdmissionPending == 0 {
+						a.stopUnownedTransfer(ctx, e, cand, handle)
+					}
 					return storeWriteError{cause: err}
 				}
 				return nil
@@ -1109,8 +1121,13 @@ func (a *Admitter) release(ctx context.Context, cand store.Candidate) error {
 	if err := a.markReleased(ctx, cand.ID); err != nil {
 		// The fresh transfer is running while the row may still read
 		// queued: same durable ownership as the resume path above — the
-		// next pass counts it and retries the release write.
-		a.markAdmissionPending(ctx, cand.ID)
+		// next pass counts it and retries the release write — and the
+		// same stop when even that record fails over an unowned running
+		// transfer.
+		if _, markErr := a.markAdmissionPending(ctx, cand.ID); markErr != nil &&
+			cand.State == string(StateQueued) && cand.AdmissionPending == 0 {
+			a.stopUnownedTransfer(ctx, e, cand, newID)
+		}
 		return storeWriteError{cause: err}
 	}
 
@@ -1153,13 +1170,46 @@ func (a *Admitter) requeuePendingSelection(ctx context.Context, cand store.Candi
 
 // markAdmissionPending best-effort records the pass's ownership of a
 // queued row whose transfer is already running — the retry token the next
-// pass needs when a release write fails ambiguously. A failure is a
-// warning: the next pass re-derives the shape from the row and gates it
-// like any unmarked candidate.
-func (a *Admitter) markAdmissionPending(ctx context.Context, id string) {
-	if _, err := a.tasks.MarkAdmissionPending(ctx, id); err != nil && !errors.Is(err, store.ErrNotFound) {
-		a.log.Warn("could not record the pass's ownership of a queued row mid-release",
+// pass needs when a release write fails ambiguously. The write runs on a
+// detached context with its own budget, because the context that just
+// failed the release write may be dead (the same discipline
+// removeStrandedTransfer keeps). The answers: true — the pass owns the
+// row and the transfer keeps running for the retry; false without error —
+// the row left queued, which under the lease means the ambiguous release
+// write landed after all, and nothing is owed; error — nothing durable
+// owns the running transfer, and the caller must stop it before the next
+// pass's gate is safe over it.
+func (a *Admitter) markAdmissionPending(ctx context.Context, id string) (bool, error) {
+	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), compensateRemoveBudget)
+	defer cancel()
+
+	marked, err := a.tasks.MarkAdmissionPending(markCtx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	case err != nil:
+		a.log.Error("could not record the pass's ownership of a queued row mid-release",
 			"task_id", id, "error", err)
+		return false, err
+	}
+
+	return marked, nil
+}
+
+// stopUnownedTransfer pauses the transfer a release left running when the
+// ownership mark behind it could not land: a stopped transfer is safe for
+// the next pass to gate — it re-enters through the resume path when
+// capacity frees — while a running one under an unmarked queued row would
+// be stamped held yet keep moving, wedged until an operator intervenes.
+// Best-effort on a detached context; a failed stop changes nothing but
+// the log.
+func (a *Admitter) stopUnownedTransfer(ctx context.Context, e Engine, cand store.Candidate, handle string) {
+	pauseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), compensateRemoveBudget)
+	defer cancel()
+
+	if err := e.Pause(pauseCtx, handle); err != nil && !errors.Is(err, ErrNotFound) {
+		a.log.Warn("could not stop the running transfer whose ownership mark failed; the next pass may gate it mid-run",
+			"task_id", cand.ID, "engine", cand.Engine, "error", err)
 	}
 }
 

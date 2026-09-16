@@ -1186,4 +1186,39 @@ func TestMarkAdmissionPending(t *testing.T) {
 		_, err := tasks.MarkAdmissionPending(t.Context(), "tsk_missing")
 		require.ErrorIs(t, err, ErrNotFound)
 	})
+
+	// The counted-set predicate is the mark's whole purpose: a flagged
+	// queued row spends a slot and reserves its remaining bytes; a queued
+	// row merely holding an engine handle — the resumed-then-requeued
+	// shape — does neither. Both assertions go through the store methods
+	// the pass calls, not the queries' text.
+	t.Run("the counted set follows the mark, not the stored handle", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		flagged := createTaskInState(t, tasks, "queued")
+		marked, err := tasks.MarkAdmissionPending(t.Context(), flagged.ID)
+		require.NoError(t, err)
+		require.True(t, marked)
+
+		handleOnly := createTaskInState(t, tasks, "queued")
+		_, err = db.ExecContext(t.Context(),
+			`UPDATE tasks SET engine_ref = 'stopped-gid' WHERE id = ?`, handleOnly.ID)
+		require.NoError(t, err)
+
+		counts, err := tasks.CountActive(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, 1, counts.Total, "only the marked queued row counts")
+		require.Equal(t, 1, counts.ByEngine["aria2"])
+
+		for _, id := range []string{flagged.ID, handleOnly.ID} {
+			_, err = db.ExecContext(t.Context(),
+				`UPDATE tasks SET total_bytes = 1000 WHERE id = ?`, id)
+			require.NoError(t, err)
+		}
+		remaining, err := tasks.SumRemainingByDestination(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, int64(1000), remaining["/data"],
+			"only the marked row's bytes are reserved against the destination")
+	})
 }

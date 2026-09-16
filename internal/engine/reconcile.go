@@ -536,8 +536,11 @@ func (r *Reconciler) resubmit(ctx context.Context, name string, e Engine, task s
 			r.log.Warn("re-submitted with a pending file selection but could not requeue the task for the admission pass",
 				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
 		} else if marked, err := r.tasks.MarkAdmissionPending(ctx, task.ID); err != nil || !marked {
+			// marked distinguishes the answers: a store failure (err) and
+			// a declined write (row left queued, marked=false) look the
+			// same here but mean different things to an operator.
 			r.log.Warn("re-submitted with a pending file selection but could not mark the pass's ownership; the transfer stays stopped for the admission pass",
-				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
+				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "marked", marked, "error", err)
 		} else if err := e.Resume(ctx, newID); err != nil {
 			r.log.Warn("re-submitted but could not run the transfer whose file listing is pending",
 				"task_id", task.ID, "engine", name, "engine_ref", bareHandle(name, newID), "error", err)
