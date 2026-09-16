@@ -163,7 +163,7 @@ The defect recorded below met the same end as T046, T049 and T050: the record me
   literals through `t()` instead of scoping the copy-ins out of the rule. The table now lists every
   row in the sorted order the scope check emits.
 - `## Verification` now expects `Test Files  14 passed (14)`: the tree carries 13 Vitest files and
-  this task's `i18n.test.ts` makes 14 (`find web/src -name '*.test.*' | wc -l` prints 13 on the
+  this task's `i18n.test.ts` makes 14 (`find web/src -type f \( -name '*.test.ts' -o -name '*.test.tsx' \) | wc -l` prints 13 on the
   pre-task tree; update both numbers together if the baseline moves).
 
 The original record follows for the history.
