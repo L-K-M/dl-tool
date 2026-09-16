@@ -25,7 +25,7 @@ let throwOnMissing = false;
 export function initI18n(opts?: { throwOnMissing?: boolean }): typeof i18next {
   // Only an explicit option rewrites the flag, so a bare initI18n() in a
   // lazily-imported module cannot disable strict mode an entry point set.
-  if (opts) throwOnMissing = opts.throwOnMissing ?? false;
+  if (opts?.throwOnMissing !== undefined) throwOnMissing = opts.throwOnMissing;
   if (i18next.isInitialized) return i18next;
 
   // Bundled resources initialize synchronously, without a network backend.

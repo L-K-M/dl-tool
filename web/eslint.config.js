@@ -23,7 +23,7 @@ export default tseslint.config(
         },
         {
           selector:
-            "JSXAttribute[name.name=/^(title|placeholder|aria-label|alt)$/] > JSXExpressionContainer > Literal",
+            "JSXAttribute[name.name=/^(title|placeholder|aria-label|alt)$/] > JSXExpressionContainer > :matches(Literal, TemplateLiteral[expressions.length=0])",
           message: "User-visible attributes must go through t().",
         },
       ],
