@@ -1,3 +1,5 @@
+import { activeLocale } from "@/i18n";
+
 const missing = "—";
 const infinite = "∞";
 const byteDivisor = 1024;
@@ -91,16 +93,25 @@ function formatMagnitude(
   }).format(value);
 }
 
-export function formatBytes(bytes: number | null, locale?: string): string {
+export function formatBytes(
+  bytes: number | null,
+  locale: string = activeLocale(),
+): string {
   if (bytes === null) return missing;
   return formatMagnitude(bytes, "bytes", locale);
 }
 
-export function formatRate(bytesPerSecond: number, locale?: string): string {
+export function formatRate(
+  bytesPerSecond: number,
+  locale: string = activeLocale(),
+): string {
   return formatMagnitude(bytesPerSecond, "rate", locale);
 }
 
-export function formatEta(seconds: number | null, locale?: string): string {
+export function formatEta(
+  seconds: number | null,
+  locale: string = activeLocale(),
+): string {
   if (seconds === null) return infinite;
 
   // Split elapsed units, leaving number rendering and labels to Intl.
@@ -123,11 +134,17 @@ export function formatEta(seconds: number | null, locale?: string): string {
   return parts.join(" ");
 }
 
-export function formatInteger(value: number, locale?: string): string {
+export function formatInteger(
+  value: number,
+  locale: string = activeLocale(),
+): string {
   return numberFormat(locale, {}).format(value);
 }
 
-export function formatRatio(ratio: number, locale?: string): string {
+export function formatRatio(
+  ratio: number,
+  locale: string = activeLocale(),
+): string {
   if (ratio > maxRatio) return infinite;
   return numberFormat(locale, {
     minimumFractionDigits: 2,
@@ -135,7 +152,10 @@ export function formatRatio(ratio: number, locale?: string): string {
   }).format(ratio);
 }
 
-export function formatPercent(progress: number, locale?: string): string {
+export function formatPercent(
+  progress: number,
+  locale: string = activeLocale(),
+): string {
   return numberFormat(locale, {
     style: "percent",
     maximumFractionDigits: 1,
@@ -145,7 +165,7 @@ export function formatPercent(progress: number, locale?: string): string {
 export function formatWhen(
   rfc3339: string,
   now = new Date(),
-  locale?: string,
+  locale: string = activeLocale(),
 ): string {
   const date = new Date(rfc3339);
   const seconds = (date.getTime() - now.getTime()) / millisecondsPerSecond;
@@ -159,7 +179,10 @@ export function formatWhen(
   return relativeTimeFormat(locale).format(Math.round(seconds / divisor), unit);
 }
 
-export function formatAbsolute(rfc3339: string, locale?: string): string {
+export function formatAbsolute(
+  rfc3339: string,
+  locale: string = activeLocale(),
+): string {
   return dateTimeFormat(locale, {
     dateStyle: "full",
     timeStyle: "long",

@@ -1,0 +1,39 @@
+{
+  "problem": {
+    "setup-required": "Set up the first account before signing in.",
+    "unauthenticated": "Sign in to continue.",
+    "forbidden": "You do not have permission to do that.",
+    "config-locked": "That setting is locked by the environment and cannot be changed here.",
+    "csrf-token-missing": "The request is missing its security token. Reload the page and try again.",
+    "path-rejected": "That folder is outside the allowed download roots.",
+    "ssrf-blocked": "That address is not allowed.",
+    "not-found": "That item no longer exists.",
+    "conflict": "That name is already in use.",
+    "concurrency-limit": "Too many tasks are active. Wait for one to finish or raise the limit.",
+    "setup-already-complete": "Setup is already complete. Sign in.",
+    "payload-too-large": "That upload is too large.",
+    "unsupported-media-type": "That upload format is not supported.",
+    "validation-failed": "Some fields are invalid. Check the highlighted values.",
+    "unsupported-scheme": "That kind of link is not supported.",
+    "rate-limited": "Too many attempts. Wait a moment and try again.",
+    "internal": "Something went wrong on the server.",
+    "engine-unavailable": "The download engine is not reachable right now.",
+    "not-ready": "dl-tool is still starting up. Try again in a moment."
+  },
+  "event": {
+    "task.created_one": "{{count}} task created",
+    "task.created_other": "{{count}} tasks created",
+    "task.completed": "Download complete.",
+    "task.moved": "Task moved to a new destination.",
+    "task.paused": "Task paused.",
+    "task.rechecking": "Rechecking downloaded data.",
+    "task.reconciled": "Task state reconciled with the engine.",
+    "task.removed": "Task removed.",
+    "task.resumed": "Task resumed.",
+    "engine.accepted": "The engine accepted the transfer.",
+    "engine.failed": "The engine reported a failure.",
+    "engine.rejected": "The engine rejected the transfer.",
+    "engine.unavailable": "The engine is not reachable.",
+    "postprocess.extract.failed": "Extracting the download failed."
+  }
+}

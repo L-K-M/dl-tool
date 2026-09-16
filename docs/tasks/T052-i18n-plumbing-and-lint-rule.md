@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T052 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T039, T044, T048, T049 |
 | **Blocks** | T053, T072 |
 | **Parallel-safe** | no — extends T039's `i18n.ts` and `format.ts` |
@@ -114,12 +114,12 @@ rules: {
 7. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestM3CataloguesExist`, `TestNoEmptyCatalogueValues` and `TestPluralKeysResolve` pass.
-- [ ] `TestMissingKeyThrowsInTests` passes.
-- [ ] `make lint` reports zero `no-restricted-syntax` violations across `web/src/**/*.tsx`.
-- [ ] No locale other than `en` exists, no namespace file is empty, and no catalogue exists for a name
+- [x] `TestM3CataloguesExist`, `TestNoEmptyCatalogueValues` and `TestPluralKeysResolve` pass.
+- [x] `TestMissingKeyThrowsInTests` passes.
+- [x] `make lint` reports zero `no-restricted-syntax` violations across `web/src/**/*.tsx`.
+- [x] No locale other than `en` exists, no namespace file is empty, and no catalogue exists for a name
       outside `NAMESPACES`.
-- [ ] Every formatter still returns the doc 09 renderings with the locale forced to `en`.
+- [x] Every formatter still returns the doc 09 renderings with the locale forced to `en`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -151,7 +151,64 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test-web && echo I18N_OK` on the task branch (the MSW
+`onUnhandledRequest` and React `flushSync` stderr lines are pre-existing test noise; only the per-file
+results and the summary are reproduced):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ ✓ src/i18n.test.ts (4 tests) 40ms
+ ✓ src/lib/format.test.ts (6 tests) 62ms
+ ✓ src/api/client.test.ts (12 tests)
+ ✓ src/api/events.test.ts (12 tests)
+ ✓ src/store/useUiPrefs.test.ts (8 tests)
+ ✓ src/store/useTasks.test.ts (17 tests)
+ ✓ src/main.test.ts (1 test)
+ ✓ src/App.test.tsx
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx
+ ✓ src/components/DetailPane/DetailPane.test.tsx
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx
+ ✓ src/components/Shell/Shell.test.tsx
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (33 tests)
+ ✓ src/lib/theme.test.ts (9 tests)
+
+ Test Files  14 passed (14)
+      Tests  203 passed (203)
+
+I18N_OK
+```
+
+`src/i18n.test.ts` contains `TestM3CataloguesExist`, `TestNoEmptyCatalogueValues`,
+`TestPluralKeysResolve` and `TestMissingKeyThrowsInTests`, all passing. The work was committed before
+the scope check ran, so the equivalent listing against `origin/main` is:
+
+```text
+$ git diff --name-only origin/main...HEAD -- . ':(exclude)docs' | sort
+web/eslint.config.js
+web/src/components/ui/dialog.tsx
+web/src/components/ui/sheet.tsx
+web/src/i18n.test.ts
+web/src/i18n.ts
+web/src/lib/format.ts
+web/src/locales/en/common.json
+web/src/locales/en/errors.json
+```
+
+Exactly the repaired `## Files` table, in the sorted order the scope check emits, and nothing else.
 
 ## Blocked
 
