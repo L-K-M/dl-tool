@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T123 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T005 |
 | **Blocks** | T054, T122 |
 | **Parallel-safe** | yes — creates `internal/secure/ssrf.go` and its test, nothing else |
@@ -55,10 +55,12 @@ var ErrBodyTooLarge = errors.New("secure: response body over cap")
 const MetadataFetchCap int64 = 8 << 20
 
 // BlockedError names the rule that fired so a support request ends in one round trip.
-// Reason is one of "network", "port", "scheme", "address", "resolve" or "redirect_cap".
+// Reason is one of "network", "port", "scheme", "address", "resolve", "redirect_cap" or
+// "guard" — the last means the Guard itself was never built by NewGuard, a wiring bug,
+// so it is kept distinct from the policy-denial reasons rather than masquerading as one.
 type BlockedError struct {
 	Reason string
-	IP     netip.Addr // zero when Reason is not "address"
+	IP     netip.Addr // zero unless Reason is "address" or "guard"
 	Prefix string     // the matched prefix, "" when Reason is not "address"
 	Hop    int        // 0 for the original request
 	URL    string     // already passed through RedactURL
@@ -128,9 +130,11 @@ func RedactURL(raw string) string
 6. Write `CheckRedirect`: `len(via) >= 5` returns a `*BlockedError` with reason `redirect_cap`; a
    `req.URL.Scheme` other than `http` or `https` returns reason `scheme` — a `301` to
    `file:///etc/passwd` must not pass. Set `Hop` to `len(via)`.
-7. Write `NewClient` with `&net.Dialer{Timeout: 10 * time.Second, ControlContext: g.Check}` and
-   `&http.Transport{DialContext: d.DialContext, ForceAttemptHTTP2: true}`, `Timeout: 120 * time.Second`.
-   Never set `Dialer.Control`: it is ignored whenever `ControlContext` is set.
+7. Write `NewClient` with `&net.Dialer{Timeout: 10 * time.Second, ControlContext: func(ctx context.Context, network, address string, _ syscall.RawConn) error { return g.Check(ctx, network, address) }}`
+   — the dialer hook carries a `syscall.RawConn` fourth argument, so `Check` is wired through a
+   closure — and `&http.Transport{DialContext: d.DialContext, ForceAttemptHTTP2: true}`,
+   `Timeout: 120 * time.Second`. Never set `Dialer.Control`: it is ignored whenever
+   `ControlContext` is set.
 8. Write `ReadCapped` and `RedactURL`. `RedactURL` clears `u.User` and `u.RawQuery` before `u.String()`,
    so a tracker passkey never reaches a log line or a problem detail.
 9. Create `internal/secure/ssrf_test.go` with the pure cases, all asserting
@@ -148,13 +152,13 @@ func RedactURL(raw string) string
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `Check` denies `127.0.0.1:80`, `[::ffff:169.254.169.254]:443` and `93.184.216.34:8080`, and allows `93.184.216.34:443`.
-- [ ] With `allowPrivate` true, `10.1.2.3` is allowed and `169.254.169.254` is still denied.
-- [ ] `CheckRedirect` denies a sixth hop and denies a `file:` target on hop one.
-- [ ] `TestClientBlocksRedirectToMetadata` fails with `errors.Is(err, secure.ErrSSRFBlocked)`.
-- [ ] `ReadCapped` rejects a declared 9 MiB `Content-Length` and a body that exceeds `limit` despite a small declared length.
-- [ ] `RedactURL("https://u:p@x.example/a?apikey=k")` returns `https://x.example/a`.
-- [ ] `grep -rn "Control:" internal/secure/ssrf.go` returns nothing: only `ControlContext` is set.
+- [x] `Check` denies `127.0.0.1:80`, `[::ffff:169.254.169.254]:443` and `93.184.216.34:8080`, and allows `93.184.216.34:443`.
+- [x] With `allowPrivate` true, `10.1.2.3` is allowed and `169.254.169.254` is still denied.
+- [x] `CheckRedirect` denies a sixth hop and denies a `file:` target on hop one.
+- [x] `TestClientBlocksRedirectToMetadata` fails with `errors.Is(err, secure.ErrSSRFBlocked)`.
+- [x] `ReadCapped` rejects a declared 9 MiB `Content-Length` and a body that exceeds `limit` despite a small declared length.
+- [x] `RedactURL("https://u:p@x.example/a?apikey=k")` returns `https://x.example/a`.
+- [x] `grep -rn "Control:" internal/secure/ssrf.go` returns nothing: only `ControlContext` is set.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -186,7 +190,67 @@ files are untracked, and `git diff --name-only` never lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/secure/... && echo SSRF_GUARD_OK` on the final tree:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/secure/...
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.534s
+SSRF_GUARD_OK
+```
+
+`go test -race -count=1 -v ./internal/secure/` on the same tree — the SSRF tests (every test
+named in steps 9 to 11, plus the review-added cases) all pass:
+
+```text
+--- PASS: TestCheckBlocksLoopback (0.00s)
+--- PASS: TestCheckBlocksLinkLocalMapped (0.00s)
+--- PASS: TestCheckBlocksNonStandardPort (0.00s)
+--- PASS: TestCheckAllowsPublicAddress (0.00s)
+--- PASS: TestCheckBlocksIPv6Loopback (0.00s)
+--- PASS: TestCheckBlocksUnspecified (0.00s)
+--- PASS: TestZeroValueGuardFailsClosed (0.00s)
+--- PASS: TestAllowPrivateLiftsRFC1918 (0.00s)
+--- PASS: TestAllowPrivateKeepsLinkLocalDenied (0.00s)
+--- PASS: TestAllowPrivateLiftsIPv6Loopback (0.00s)
+--- PASS: TestCheckRedirectCapsAtFiveHops (0.00s)
+--- PASS: TestCheckRedirectRejectsFileScheme (0.00s)
+--- PASS: TestClientBlocksRedirectToMetadata (0.00s)
+--- PASS: TestReadCappedRejectsDeclaredLength (0.00s)
+--- PASS: TestReadCappedRejectsLyingLength (0.14s)
+--- PASS: TestReadCappedRejectsUnknownLengthOverCap (0.13s)
+--- PASS: TestReadCappedAllowsBodyAtCap (0.11s)
+--- PASS: TestRedactURLDropsUserinfoAndQuery (0.00s)
+--- PASS: TestRedactErrorStripsQueryFromURLError (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.448s
+```
+
+`go test -race -count=1 -v ./internal/secure/ | grep -c -- '--- SKIP'` prints `0`: none skipped.
+
+`grep -rn "Control:" internal/secure/ssrf.go` prints nothing (exit 1): only `ControlContext` is
+set. The dialer hook carries a `syscall.RawConn` fourth argument, so `NewClient` wires `Check`
+through a closure (step 7 shows the exact form), keeping `Check`'s contract signature for
+direct calls. The identical sketch in `docs/12-security-and-threat-model.md` §2.2 remains
+stale — that file is outside this task's Files table.
+
+Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```text
+internal/secure/ssrf.go
+internal/secure/ssrf_test.go
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
