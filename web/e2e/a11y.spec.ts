@@ -80,6 +80,7 @@ async function stubSession(
     await page.route("**/api/v1/fs/free-space*", (route) =>
       route.fulfill({
         json: {
+          path: FS_ROOT.path,
           free_bytes: FS_ROOT.free_bytes,
           total_bytes: FS_ROOT.total_bytes,
         },
