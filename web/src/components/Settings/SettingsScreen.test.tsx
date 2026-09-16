@@ -316,10 +316,11 @@ test("TestEngineRowsSurviveFailedPostTestRefetch", async () => {
   fireEvent.click(within(row).getByRole("button", { name: "Test" }));
   await within(row).findByText("passed");
   await screen.findByRole("alert");
-  expect(
-    screen.getByText("aria2", { selector: "span.font-medium" }),
-  ).toBeTruthy();
-  expect(within(row).getByText("passed")).toBeTruthy();
+  // Re-query after the failure: the captured row could be a detached node.
+  const liveRow = screen
+    .getByText("aria2", { selector: "span.font-medium" })
+    .closest("tr")!;
+  expect(within(liveRow).getByText("passed")).toBeTruthy();
 });
 
 test("TestConformanceWarningRendersFromLastError", async () => {

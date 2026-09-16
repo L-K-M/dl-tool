@@ -94,6 +94,12 @@ export function SettingsScreen(): JSX.Element {
       stale.section !== section
     )
       useSettingsDirty.setState({ report: null });
+    // Leaving the screen (or the section) retires this section's report; a
+    // remount must never resurrect closures of the unmounted form.
+    return () => {
+      if (useSettingsDirty.getState().report?.section === section)
+        useSettingsDirty.setState({ report: null });
+    };
   }, [section]);
 
   if (!KNOWN_SECTIONS.has(section))
