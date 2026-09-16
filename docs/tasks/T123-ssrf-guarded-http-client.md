@@ -60,7 +60,7 @@ const MetadataFetchCap int64 = 8 << 20
 // so it is kept distinct from the policy-denial reasons rather than masquerading as one.
 type BlockedError struct {
 	Reason string
-	IP     netip.Addr // zero when Reason is not "address"
+	IP     netip.Addr // zero unless Reason is "address" or "guard"
 	Prefix string     // the matched prefix, "" when Reason is not "address"
 	Hop    int        // 0 for the original request
 	URL    string     // already passed through RedactURL
@@ -206,7 +206,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/secure/...
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.406s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.534s
 SSRF_GUARD_OK
 ```
 

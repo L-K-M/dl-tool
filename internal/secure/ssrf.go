@@ -35,7 +35,7 @@ const redirectHopCap = 5
 // so it is kept distinct from the policy-denial reasons rather than masquerading as one.
 type BlockedError struct {
 	Reason string
-	IP     netip.Addr // zero when Reason is not "address"
+	IP     netip.Addr // zero unless Reason is "address" or "guard"
 	Prefix string     // the matched prefix, "" when Reason is not "address"
 	Hop    int        // 0 for the original request
 	URL    string     // already passed through RedactURL

@@ -90,21 +90,29 @@ func TestCheckBlocksUnspecified(t *testing.T) {
 // nil logger.
 func TestZeroValueGuardFailsClosed(t *testing.T) {
 	var g Guard
-	for _, ip := range []string{"8.8.8.8", "2606:4700::6810:84e5"} {
-		if err := g.AllowAddr(netip.MustParseAddr(ip)); !errors.Is(err, ErrSSRFBlocked) {
-			t.Errorf("zero-value Guard.AllowAddr(%s) = %v, want ErrSSRFBlocked", ip, err)
+
+	assertBlockedAsGuard := func(err error, what string) {
+		t.Helper()
+		if !errors.Is(err, ErrSSRFBlocked) {
+			t.Errorf("zero-value Guard.%s = %v, want ErrSSRFBlocked", what, err)
+			return
+		}
+		var blocked *BlockedError
+		if !errors.As(err, &blocked) || blocked.Reason != "guard" {
+			t.Errorf("zero-value Guard.%s = %v, want *BlockedError with reason %q", what, err, "guard")
 		}
 	}
-	if err := g.Check(context.Background(), "tcp4", "8.8.8.8:443"); !errors.Is(err, ErrSSRFBlocked) {
-		t.Errorf("zero-value Guard.Check(8.8.8.8:443) = %v, want ErrSSRFBlocked", err)
+
+	for _, ip := range []string{"8.8.8.8", "2606:4700::6810:84e5"} {
+		assertBlockedAsGuard(g.AllowAddr(netip.MustParseAddr(ip)), "AllowAddr("+ip+")")
 	}
+	assertBlockedAsGuard(g.Check(context.Background(), "tcp4", "8.8.8.8:443"), "Check(8.8.8.8:443)")
+
 	req, err := http.NewRequest(http.MethodGet, "http://8.8.8.8/", nil)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	if err := g.CheckRedirect(req, nil); !errors.Is(err, ErrSSRFBlocked) {
-		t.Errorf("zero-value Guard.CheckRedirect = %v, want ErrSSRFBlocked", err)
-	}
+	assertBlockedAsGuard(g.CheckRedirect(req, nil), "CheckRedirect")
 }
 
 func TestAllowPrivateLiftsRFC1918(t *testing.T) {
