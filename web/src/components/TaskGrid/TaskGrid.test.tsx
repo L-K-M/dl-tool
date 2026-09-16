@@ -699,9 +699,9 @@ test("TestMissingCellsAndErrorDetails", async () => {
   const cells = within(row("empty")).getAllByRole("gridcell");
   for (const index of [1, 3, 6, 7, 9, 10, 11, 12, 14])
     expect(cells[index].textContent).toBe("—");
-  // The progress bar paints its label twice — once per tone layer — so the
-  // cell carries two copies of the placeholder.
-  expect(within(cells[4]).getByRole("progressbar").textContent).toBe("——");
+  // The progress bar paints its label once — the two tones come from a
+  // gradient clipped to the glyphs, not a second copy.
+  expect(within(cells[4]).getByRole("progressbar").textContent).toBe("—");
   expect(cells[8].textContent).toBe("∞");
   expect(cells[5].textContent).toContain("Error: disk_full");
   expect(within(cells[5]).getByTitle("Not enough space")).toBeTruthy();

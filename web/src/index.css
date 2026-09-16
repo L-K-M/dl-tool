@@ -105,6 +105,18 @@
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
+/* The grid's progress label is a gradient clipped to the glyphs, so its only
+   paint is a background image — stripped when printing without "print
+   backgrounds". Fall back to a plain --fg label there. */
+@media print {
+  .progress-label {
+    color: var(--fg) !important;
+    -webkit-text-fill-color: currentColor !important;
+    background-image: none !important;
+    background-clip: initial !important;
+    -webkit-background-clip: initial !important;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
