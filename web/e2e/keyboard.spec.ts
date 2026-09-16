@@ -1,12 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type Page,
-} from "@playwright/test";
-import { ADMIN, BASE_URL, STATE_DIR, stubTasks } from "./fixtures";
+import { expect, test, type Page } from "@playwright/test";
+import { stubTasks } from "./fixtures";
 
 /**
  * The doc 09 section 3.6 table, in order. Every row is exercised with
@@ -40,108 +34,41 @@ export const SHORTCUTS = [
 ] as const;
 
 const ROWS = 60;
-const httpUnauthorized = 401;
-const ADMIN_WAIT_MS = 240_000;
-const ADMIN_POLL_MS = 500;
 const MAX_TAB_STOPS = 64;
 
 /**
- * The first-run account belongs to setup.spec.ts: spec files run on parallel
- * workers, and it can be scheduled late on a CI runner, so no other file may
- * ever call ensureAdmin — creating the account before its first test asserts
- * the /setup wizard breaks that spec. Poll /auth/me until it reports
- * something other than setup-required; a run without setup.spec.ts has no
- * admin at all, in which case fail with a clear message rather than minting
- * one. Duplicated in
+ * The grid screens render from the /auth/me answer; stub it as authenticated
+ * so no test here ever touches the login path — the login throttle admits
+ * only a handful of attempts per source-IP window and every worker counts as
+ * the same source. No spec may mint the first-run account either:
+ * setup.spec.ts owns it and can be scheduled late on a parallel CI runner, so
+ * an early /auth/setup would break its wizard assertion. Duplicated in
  * a11y.spec.ts; the e2e specs cannot share a helper module without widening
  * this task's Files table.
  */
-async function adminExists(request: APIRequestContext): Promise<boolean> {
-  const response = await request.get(`${BASE_URL}/api/v1/auth/me`);
-  if (response.status() !== httpUnauthorized) return true;
-  const body = (await response.json().catch(() => null)) as {
-    type?: string;
-  } | null;
-  return body?.type !== "/problems/setup-required";
+async function stubSession(page: Page): Promise<void> {
+  await page.route("**/api/v1/auth/me", (route) =>
+    route.fulfill({
+      json: {
+        csrf_token: "e2e-csrf-token",
+        user: {
+          id: "usr_e2e",
+          username: "e2e-admin",
+          enabled: true,
+          locale: "en",
+          last_login_at: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      },
+    }),
+  );
 }
 
-async function waitForAdmin(request: APIRequestContext): Promise<void> {
-  const deadline = Date.now() + ADMIN_WAIT_MS;
-  while (!(await adminExists(request))) {
-    if (Date.now() >= deadline) {
-      throw new Error(
-        "the first-run admin never appeared; setup.spec.ts owns account " +
-          "creation, so run the full make e2e suite",
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, ADMIN_POLL_MS));
-  }
-}
-
-/** Signs in through the form with the keyboard: fill, then Enter to submit. */
-async function signInWithKeyboard(page: Page): Promise<void> {
-  await page.goto("/login");
-  await page.getByLabel("Username").fill(ADMIN.username);
-  await page.getByLabel("Password", { exact: true }).fill(ADMIN.password);
-  await page.getByLabel("Password", { exact: true }).press("Enter");
+/** Navigates to the tasks screen under the stubbed session. */
+async function openAuthenticated(page: Page): Promise<void> {
+  await stubSession(page);
+  await page.goto("/");
   await expect(page.getByRole("grid")).toBeVisible();
-}
-
-const SESSION_COOKIE = "dltool_session";
-const SESSION_PATH = path.join(STATE_DIR, "e2e-session.json");
-
-/**
- * The login throttle admits only a handful of attempts per source-IP window
- * and every worker counts as the same source, so the suite cannot afford one
- * login per test. The first test to sign in — on whichever worker — stores
- * the session cookie here; later tests inject it and skip the login
- * round-trip. STATE_DIR is wiped on every run, so a stale file cannot leak
- * across runs. Duplicated in a11y.spec.ts; the e2e specs cannot share a
- * helper module without widening this task's Files table.
- */
-async function readSharedSession(): Promise<{
-  name: string;
-  value: string;
-} | null> {
-  try {
-    const raw = JSON.parse(
-      await fs.promises.readFile(SESSION_PATH, "utf8"),
-    ) as { name?: string; value?: string };
-    return raw.name === SESSION_COOKIE && typeof raw.value === "string"
-      ? { name: raw.name, value: raw.value }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-async function shareSession(page: Page): Promise<void> {
-  const cookie = (await page.context().cookies(BASE_URL)).find(
-    (c) => c.name === SESSION_COOKIE,
-  );
-  if (cookie === undefined) return;
-  await fs.promises.writeFile(
-    SESSION_PATH,
-    JSON.stringify({ name: cookie.name, value: cookie.value }),
-  );
-}
-
-/** Signs in once per run, then reuses the shared session cookie. */
-async function signIn(page: Page, request: APIRequestContext): Promise<void> {
-  const shared = await readSharedSession();
-  if (shared !== null) {
-    await page.context().addCookies([{ ...shared, url: BASE_URL }]);
-    await page.goto("/");
-    try {
-      await expect(page.getByRole("grid")).toBeVisible({ timeout: 15_000 });
-      return;
-    } catch {
-      // The shared session was rejected; fall through to a real login.
-    }
-  }
-  await waitForAdmin(request);
-  await signInWithKeyboard(page);
-  await shareSession(page);
 }
 
 function focusedTaskId(page: Page): Promise<string | null> {
@@ -181,10 +108,9 @@ const selectedRows = (page: Page) =>
  * Assert FIRST that Tab from the toolbar reaches the grid, then that the grid
  * is exactly one tab stop: the next Tab leaves it entirely.
  */
-test("Tab moves through the grid exactly once", async ({ page, request }) => {
-  test.setTimeout(300_000);
+test("Tab moves through the grid exactly once", async ({ page }) => {
   await stubTasks(page, ROWS);
-  await signIn(page, request);
+  await openAuthenticated(page);
 
   // The last toolbar control is the user menu; Tab forward until focus lands
   // inside the grid.
@@ -204,11 +130,9 @@ test("Tab moves through the grid exactly once", async ({ page, request }) => {
 
 test("every documented shortcut works with keyboard input only", async ({
   page,
-  request,
 }) => {
-  test.setTimeout(300_000);
   const fixture = await stubTasks(page, ROWS);
-  await signIn(page, request);
+  await openAuthenticated(page);
 
   const grid = page.getByRole("grid");
   const detail = page.getByRole("region", { name: "Task details" });
@@ -356,13 +280,9 @@ test("every documented shortcut works with keyboard input only", async ({
   }
 });
 
-test("typing in the filter box does not fire a shortcut", async ({
-  page,
-  request,
-}) => {
-  test.setTimeout(300_000);
+test("typing in the filter box does not fire a shortcut", async ({ page }) => {
   const fixture = await stubTasks(page, ROWS);
-  await signIn(page, request);
+  await openAuthenticated(page);
 
   // Select a row so the guard is observable: Escape would clear it and Delete
   // would open the remove dialog if the keydown handler did not bail out.
