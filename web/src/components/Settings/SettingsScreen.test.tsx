@@ -27,7 +27,13 @@ import {
   useUiPrefs,
   type UiPrefsState,
 } from "../../store/useUiPrefs";
-import { SECTIONS, SettingsScreen, useSettingsDirty } from "./SettingsScreen";
+import {
+  ARRIVAL,
+  IMPLEMENTED,
+  SECTIONS,
+  SettingsScreen,
+  useSettingsDirty,
+} from "./SettingsScreen";
 
 const engines = [
   {
@@ -268,6 +274,23 @@ test("TestEngineTestFailureRendersError", async () => {
   expect(toastError).not.toHaveBeenCalled();
 });
 
+test("TestEngineTestRequestErrorToastsFriendlyDetail", async () => {
+  const toastError = vi.spyOn(toast, "error");
+  server.use(
+    http.post("*/api/v1/engines/eng_qbittorrent/test", () =>
+      HttpResponse.json({}, { status: 502 }),
+    ),
+  );
+  mount("/settings/connection");
+  const name = await screen.findByText("qBittorrent");
+  const row = name.closest("tr")!;
+  fireEvent.click(within(row).getByRole("button", { name: "Test" }));
+  await waitFor(() => expect(toastError).toHaveBeenCalled());
+  const message = String(toastError.mock.calls[0]![0]);
+  expect(message).toContain("Network error");
+  expect(message).not.toContain("shell.networkError");
+});
+
 test("TestConformanceWarningRendersFromLastError", async () => {
   mount("/settings/connection");
   const name = await screen.findByText("qBittorrent");
@@ -276,16 +299,13 @@ test("TestConformanceWarningRendersFromLastError", async () => {
 });
 
 test("TestUnimplementedSectionsRenderNoteNotForm", async () => {
-  const pending: [string, string][] = [
-    ["bandwidth", "M6"],
-    ["indexers", "M4"],
-    ["advanced", "M7"],
-  ];
-  for (const [section, milestone] of pending) {
+  for (const section of SECTIONS.filter((s) => !IMPLEMENTED.includes(s))) {
     cleanup();
     useSettingsDirty.setState({ report: null });
     mount(`/settings/${section}`);
-    await screen.findByText(`This section arrives with ${milestone}.`);
+    await screen.findByText(
+      `This section arrives with ${ARRIVAL[section as keyof typeof ARRIVAL]}.`,
+    );
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Test" })).toBeNull();
   }

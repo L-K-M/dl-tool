@@ -42,7 +42,10 @@ const KNOWN_SECTIONS: ReadonlySet<string> = new Set(SECTIONS);
  *  M4, advanced in M7, the rest in M6 (docs/tasks/00-task-index.md). The record
  *  is exhaustive: adding a section without an entry is a type error, not a
  *  silently wrong milestone. */
-const ARRIVAL: Record<Exclude<Section, keyof typeof SECTION_FORMS>, string> = {
+export const ARRIVAL: Record<
+  Exclude<Section, keyof typeof SECTION_FORMS>,
+  string
+> = {
   indexers: "M4",
   bandwidth: "M6",
   bittorrent: "M6",

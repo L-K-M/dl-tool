@@ -50,9 +50,9 @@ export function ConnectionSection(): JSX.Element {
         toast.error(
           t("connection.testRequestFailed", {
             detail:
-              error?.detail ??
-              error?.title ??
-              error?.type ??
+              error?.detail ||
+              error?.title ||
+              error?.type ||
               ct("shell.networkError"),
           }),
         );
