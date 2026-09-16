@@ -176,6 +176,13 @@ test("TestGeneralWritesPrefs", async () => {
       "completed",
     );
   });
+  // And they survive the store's debounced writer (500 ms), which re-reads the
+  // document and merges declared members over it rather than replacing it.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const afterFlush: unknown = JSON.parse(localStorage.getItem(PREFS_KEY)!);
+  expect((afterFlush as { startupFilter?: string }).startupFilter).toBe(
+    "completed",
+  );
 });
 
 test("TestDirtyBarAppearsAndAnnounces", async () => {
@@ -249,7 +256,7 @@ test("TestEngineTestFailureRendersError", async () => {
   const row = name.closest("tr")!;
   fireEvent.click(within(row).getByRole("button", { name: "Test" }));
   await within(row).findByText("dial tcp: connection refused");
-  expect(within(row).getByText("false")).toBeTruthy();
+  expect(within(row).getByText("failed")).toBeTruthy();
   expect(toastError).not.toHaveBeenCalled();
 });
 

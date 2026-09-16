@@ -154,7 +154,7 @@ export function GeneralSection(): JSX.Element {
       if (prev.report?.count === dirtyCount) return prev;
       return { report: { count: dirtyCount, save, revert } };
     });
-  });
+  }, [dirtyCount, save, revert]);
   useEffect(() => () => useSettingsDirty.setState({ report: null }), []);
 
   return (
@@ -220,11 +220,11 @@ export function GeneralSection(): JSX.Element {
         </select>
       </div>
       <div className="flex items-center justify-between gap-4">
-        <Label id="general-remember-destination-label">
+        <Label htmlFor="general-remember-destination">
           {t("general.rememberLastDestination")}
         </Label>
         <Checkbox
-          aria-labelledby="general-remember-destination-label"
+          id="general-remember-destination"
           checked={rememberLastDestination}
           onCheckedChange={(checked) =>
             apply({ rememberLastDestination: checked === true })
@@ -232,11 +232,11 @@ export function GeneralSection(): JSX.Element {
         />
       </div>
       <div className="flex items-center justify-between gap-4">
-        <Label id="general-confirm-delete-label">
+        <Label htmlFor="general-confirm-delete">
           {t("general.confirmOnDelete")}
         </Label>
         <Checkbox
-          aria-labelledby="general-confirm-delete-label"
+          id="general-confirm-delete"
           checked={confirmOnDelete}
           onCheckedChange={(checked) =>
             apply({ confirmOnDelete: checked === true })

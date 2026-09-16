@@ -1,6 +1,6 @@
-import { type JSX } from "react";
+import { useEffect, type JSX } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate, NavLink, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
 import { create } from "zustand";
 import { initI18n } from "../../i18n";
 import settingsStrings from "../../locales/en/settings.json";
@@ -24,15 +24,25 @@ export const SECTIONS = [
 ] as const;
 export type Section = (typeof SECTIONS)[number];
 
+/** The form each implemented section renders. SECTION_FORMS is the single
+ *  source of truth: IMPLEMENTED derives from its keys, and ARRIVAL must cover
+ *  every section that has no form. */
+const SECTION_FORMS = {
+  general: GeneralSection,
+  connection: ConnectionSection,
+} satisfies Partial<Record<Section, () => JSX.Element>>;
+
 /** Sections whose endpoints exist at M3. Every other section renders the one-line note
  *  "This section arrives with <milestone>." and is never a broken form. */
-export const IMPLEMENTED: Section[] = ["general", "connection"];
+export const IMPLEMENTED: Section[] = Object.keys(SECTION_FORMS) as Section[];
 
 const KNOWN_SECTIONS: ReadonlySet<string> = new Set(SECTIONS);
 
 /** The milestone that ships each section's backing endpoints; indexers land in
- *  M4, advanced in M7, the rest in M6 (docs/tasks/00-task-index.md). */
-const ARRIVAL: Partial<Record<Section, string>> = {
+ *  M4, advanced in M7, the rest in M6 (docs/tasks/00-task-index.md). The record
+ *  is exhaustive: adding a section without an entry is a type error, not a
+ *  silently wrong milestone. */
+const ARRIVAL: Record<Exclude<Section, keyof typeof SECTION_FORMS>, string> = {
   indexers: "M4",
   bandwidth: "M6",
   bittorrent: "M6",
@@ -67,8 +77,20 @@ export function SettingsScreen(): JSX.Element {
   const section: Section = (
     requested === "users" ? "account" : requested
   ) as Section;
+
+  // Placeholder sections never publish a report; drop any stale one so the
+  // Save / Revert bar cannot outlive the form that created it.
+  useEffect(() => {
+    if (KNOWN_SECTIONS.has(section) && !IMPLEMENTED.includes(section))
+      useSettingsDirty.setState({ report: null });
+  }, [section]);
+
   if (!KNOWN_SECTIONS.has(section))
     return <Navigate to="/settings/general" replace />;
+
+  const Form = (SECTION_FORMS as Partial<Record<Section, () => JSX.Element>>)[
+    section
+  ];
 
   return (
     <div className="flex h-full min-h-0">
@@ -77,16 +99,24 @@ export function SettingsScreen(): JSX.Element {
         className="w-48 shrink-0 overflow-y-auto border-e border-border px-2 py-3"
       >
         <ul className="flex flex-col gap-0.5">
-          {SECTIONS.map((name) => (
-            <li key={name}>
-              <NavLink
-                to={`/settings/${name}`}
-                className="block rounded px-2 py-1.5 text-sm hover:bg-muted aria-[current=page]:bg-accent aria-[current=page]:font-medium aria-[current=page]:text-accent-foreground"
-              >
-                {t(`nav.${name}`)}
-              </NavLink>
-            </li>
-          ))}
+          {SECTIONS.map((name) => {
+            const current = name === section;
+            return (
+              <li key={name}>
+                <Link
+                  to={`/settings/${name}`}
+                  aria-current={current ? "page" : undefined}
+                  className={`block rounded px-2 py-1.5 text-sm ${
+                    current
+                      ? "bg-accent font-medium text-accent-foreground"
+                      : "hover:bg-muted"
+                  }`}
+                >
+                  {t(`nav.${name}`)}
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       </nav>
       <div className="relative min-w-0 flex-1 overflow-y-auto">
@@ -94,13 +124,13 @@ export function SettingsScreen(): JSX.Element {
           {t(`nav.${section}`)}
         </h1>
         <div className="px-6 py-4">
-          {section === "general" ? (
-            <GeneralSection />
-          ) : section === "connection" ? (
-            <ConnectionSection />
+          {Form !== undefined ? (
+            <Form />
           ) : (
             <p className="text-sm text-muted-foreground">
-              {t("arrives", { milestone: ARRIVAL[section] ?? "M7" })}
+              {t("arrives", {
+                milestone: ARRIVAL[section as keyof typeof ARRIVAL],
+              })}
             </p>
           )}
         </div>

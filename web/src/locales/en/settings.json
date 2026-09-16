@@ -50,8 +50,13 @@
     "exclusiveNote": "dl-tool assumes exclusive control of its engines and ignores transfers it did not create.",
     "adrLink": "ADR-0017",
     "loadError": "Could not load the engine list.",
+    "loading": "Loading engines…",
+    "empty": "No engines configured.",
+    "endpointFor": "{{name}} endpoint",
     "testRequestFailed": "Engine test request failed: {{detail}}",
     "resultOk": "ok",
+    "resultPassed": "passed",
+    "resultFailed": "failed",
     "resultVersion": "version",
     "resultElapsed": "elapsed_ms",
     "resultError": "error"

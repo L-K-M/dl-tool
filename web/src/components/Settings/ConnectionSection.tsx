@@ -82,136 +82,159 @@ export function ConnectionSection(): JSX.Element {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border text-start text-muted-foreground">
-            <th className="px-2 py-1.5 text-start font-medium">
+            <th scope="col" className="px-2 py-1.5 text-start font-medium">
               {t("connection.name")}
             </th>
-            <th className="px-2 py-1.5 text-start font-medium">
+            <th scope="col" className="px-2 py-1.5 text-start font-medium">
               {t("connection.kind")}
             </th>
-            <th className="px-2 py-1.5 text-start font-medium">
+            <th scope="col" className="px-2 py-1.5 text-start font-medium">
               {t("connection.endpoint")}
             </th>
-            <th className="px-2 py-1.5 text-start font-medium">
+            <th scope="col" className="px-2 py-1.5 text-start font-medium">
               {t("connection.status")}
             </th>
-            <th className="px-2 py-1.5 text-start font-medium">
+            <th scope="col" className="px-2 py-1.5 text-start font-medium">
               {t("connection.version")}
             </th>
-            <th className="px-2 py-1.5 text-start font-medium">
+            <th scope="col" className="px-2 py-1.5 text-start font-medium">
               {t("connection.capabilities")}
             </th>
-            <th className="px-2 py-1.5 text-start font-medium">
+            <th scope="col" className="px-2 py-1.5 text-start font-medium">
               {t("connection.lastSeen")}
             </th>
-            <th className="px-2 py-1.5 text-start font-medium">
+            <th scope="col" className="px-2 py-1.5 text-start font-medium">
               {t("connection.test")}
             </th>
           </tr>
         </thead>
         <tbody>
-          {(engines.data ?? []).map((engine) => {
-            const result = results[engine.id];
-            return (
-              <tr key={engine.id} className="border-b border-border align-top">
-                <td className="px-2 py-2">
-                  <span className="font-medium">{engine.name}</span>
-                  {engine.last_error !== null && (
-                    <p
-                      className="mt-1 text-xs"
-                      style={{ color: "var(--warn)" }}
-                    >
-                      {engine.last_error}
-                    </p>
-                  )}
-                  {result !== undefined && (
-                    <dl className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                      <div className="flex gap-1">
-                        <dt>{t("connection.resultOk")}</dt>
-                        <dd>{String(result.ok)}</dd>
-                      </div>
-                      <div className="flex gap-1">
-                        <dt>{t("connection.resultVersion")}</dt>
-                        <dd>{result.version ?? "—"}</dd>
-                      </div>
-                      <div className="flex gap-1">
-                        <dt>{t("connection.resultElapsed")}</dt>
-                        <dd>{result.elapsed_ms}</dd>
-                      </div>
-                      {result.error !== null && (
+          {engines.isLoading ? (
+            <tr>
+              <td colSpan={8} className="px-2 py-2 text-muted-foreground">
+                {t("connection.loading")}
+              </td>
+            </tr>
+          ) : (engines.data ?? []).length === 0 ? (
+            <tr>
+              <td colSpan={8} className="px-2 py-2 text-muted-foreground">
+                {t("connection.empty")}
+              </td>
+            </tr>
+          ) : (
+            (engines.data ?? []).map((engine) => {
+              const result = results[engine.id];
+              return (
+                <tr
+                  key={engine.id}
+                  className="border-b border-border align-top"
+                >
+                  <td className="px-2 py-2">
+                    <span className="font-medium">{engine.name}</span>
+                    {engine.last_error !== null && (
+                      <p
+                        className="mt-1 text-xs"
+                        style={{ color: "var(--warn)" }}
+                      >
+                        {engine.last_error}
+                      </p>
+                    )}
+                    {result !== undefined && (
+                      <dl className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                         <div className="flex gap-1">
-                          <dt>{t("connection.resultError")}</dt>
-                          <dd>{result.error}</dd>
+                          <dt>{t("connection.resultOk")}</dt>
+                          <dd>
+                            {result.ok
+                              ? t("connection.resultPassed")
+                              : t("connection.resultFailed")}
+                          </dd>
                         </div>
-                      )}
-                    </dl>
-                  )}
-                </td>
-                <td className="px-2 py-2">{engine.kind}</td>
-                <td className="px-2 py-2">
-                  {engine.url === null ? (
-                    "—"
-                  ) : (
-                    <Input
-                      value={engine.url}
-                      disabled
-                      readOnly
-                      aria-label={t("connection.endpoint")}
-                      title={t("connection.envEndpoint")}
-                      className="h-7 w-56 text-xs"
-                    />
-                  )}
-                </td>
-                <td className="px-2 py-2">
-                  <span
-                    className="inline-flex items-center gap-1.5"
-                    title={
-                      engine.connected
-                        ? t("connection.connected")
-                        : t("connection.disconnected")
-                    }
-                  >
+                        <div className="flex gap-1">
+                          <dt>{t("connection.resultVersion")}</dt>
+                          <dd>{result.version ?? "—"}</dd>
+                        </div>
+                        <div className="flex gap-1">
+                          <dt>{t("connection.resultElapsed")}</dt>
+                          <dd>{result.elapsed_ms}</dd>
+                        </div>
+                        {result.error !== null && (
+                          <div className="flex gap-1">
+                            <dt>{t("connection.resultError")}</dt>
+                            <dd>{result.error}</dd>
+                          </div>
+                        )}
+                      </dl>
+                    )}
+                  </td>
+                  <td className="px-2 py-2">{engine.kind}</td>
+                  <td className="px-2 py-2">
+                    {engine.url === null ? (
+                      "—"
+                    ) : (
+                      <Input
+                        value={engine.url}
+                        disabled
+                        readOnly
+                        aria-label={t("connection.endpointFor", {
+                          name: engine.name,
+                        })}
+                        title={t("connection.envEndpoint")}
+                        className="h-7 w-56 text-xs"
+                      />
+                    )}
+                  </td>
+                  <td className="px-2 py-2">
                     <span
-                      aria-hidden="true"
-                      className="inline-block size-2 rounded-full"
-                      style={{
-                        background: engine.connected
-                          ? "var(--ok)"
-                          : "var(--error)",
-                      }}
-                    />
-                    {engine.connected
-                      ? t("connection.connected")
-                      : t("connection.disconnected")}
-                  </span>
-                </td>
-                <td className="px-2 py-2">{engine.version ?? "—"}</td>
-                <td className="px-2 py-2">
-                  {(engine.capabilities ?? []).join(", ") || "—"}
-                </td>
-                <td className="px-2 py-2">
-                  {engine.last_seen_at === null ? (
-                    "—"
-                  ) : (
-                    <span title={formatAbsolute(engine.last_seen_at)}>
-                      {formatWhen(engine.last_seen_at)}
+                      className="inline-flex items-center gap-1.5"
+                      title={
+                        engine.connected
+                          ? t("connection.connected")
+                          : t("connection.disconnected")
+                      }
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="inline-block size-2 rounded-full"
+                        style={{
+                          background: engine.connected
+                            ? "var(--ok)"
+                            : "var(--error)",
+                        }}
+                      />
+                      {engine.connected
+                        ? t("connection.connected")
+                        : t("connection.disconnected")}
                     </span>
-                  )}
-                </td>
-                <td className="px-2 py-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={pending[engine.id] === true}
-                    onClick={() => void testEngine(engine.id)}
-                  >
-                    {pending[engine.id] === true
-                      ? t("connection.testing")
-                      : t("connection.test")}
-                  </Button>
-                </td>
-              </tr>
-            );
-          })}
+                  </td>
+                  <td className="px-2 py-2">{engine.version ?? "—"}</td>
+                  <td className="px-2 py-2">
+                    {(engine.capabilities ?? []).join(", ") || "—"}
+                  </td>
+                  <td className="px-2 py-2">
+                    {engine.last_seen_at === null ? (
+                      "—"
+                    ) : (
+                      <span title={formatAbsolute(engine.last_seen_at)}>
+                        {formatWhen(engine.last_seen_at)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={pending[engine.id] === true}
+                      onClick={() => void testEngine(engine.id)}
+                    >
+                      {pending[engine.id] === true
+                        ? t("connection.testing")
+                        : t("connection.test")}
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })
+          )}
         </tbody>
       </table>
       <p className="text-xs text-muted-foreground">
