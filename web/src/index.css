@@ -111,8 +111,10 @@
 @media print {
   .progress-label {
     color: var(--fg) !important;
+    -webkit-text-fill-color: currentColor !important;
     background-image: none !important;
     background-clip: initial !important;
+    -webkit-background-clip: initial !important;
   }
 }
 @media (prefers-reduced-motion: reduce) {
