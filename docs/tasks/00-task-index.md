@@ -137,7 +137,7 @@ The application shell, the virtualised grid, the add dialog, the folder browser,
 | [T052](T052-i18n-plumbing-and-lint-rule.md) | Complete the i18n plumbing and the string-literal lint rule | T039, T044, T048, T049 | done |
 | [T053](T053-settings-screens.md) | Build the settings screen shell, General and Connection | T027, T045, T047, T050, T052 | done |
 | [T103](T103-progressive-web-app.md) | Ship the web app manifest, maskable icons and the service worker | T039, T040, T043 | done |
-| [T104](T104-accessibility-harness.md) | Add the accessibility harness: axe-core, the keyboard map and aria-rowcount | T042, T043, T044, T045, T048, T049, T051, T053 | todo |
+| [T104](T104-accessibility-harness.md) | Add the accessibility harness: axe-core, the keyboard map and aria-rowcount | T042, T043, T044, T045, T048, T049, T051, T053 | done |
 
 ## M4 — Search
 
@@ -344,7 +344,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T052 | Complete the i18n plumbing and the string-literal lint rule | T039, T044, T048, T049 | no | done | [T052](T052-i18n-plumbing-and-lint-rule.md) |
 | T053 | Build the settings screen shell, General and Connection | T027, T045, T047, T050, T052 | yes | done | [T053](T053-settings-screens.md) |
 | T103 | Ship the web app manifest, maskable icons and the service worker | T039, T040, T043 | yes | done | [T103](T103-progressive-web-app.md) |
-| T104 | Add the accessibility harness: axe-core, the keyboard map and aria-rowcount | T042, T043, T044, T045, T048, T049, T051, T053 | yes | todo | [T104](T104-accessibility-harness.md) |
+| T104 | Add the accessibility harness: axe-core, the keyboard map and aria-rowcount | T042, T043, T044, T045, T048, T049, T051, T053 | yes | done | [T104](T104-accessibility-harness.md) |
 
 ### M4
 
