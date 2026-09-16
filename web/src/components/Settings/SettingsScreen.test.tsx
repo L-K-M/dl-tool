@@ -176,9 +176,17 @@ test("TestGeneralWritesPrefs", async () => {
       "completed",
     );
   });
-  // And they survive the store's debounced writer (500 ms), which re-reads the
-  // document and merges declared members over it rather than replacing it.
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  // The unknown member must also survive the store's debounced writer, which
+  // re-reads the document and merges declared members over it. Patching a
+  // declared member arms another write; once its result is visible in the
+  // stored document, a flush has provably run — no fixed sleep.
+  useUiPrefs.getState().patch({ sidebarCollapsed: true });
+  await waitFor(() => {
+    const flushed: unknown = JSON.parse(localStorage.getItem(PREFS_KEY)!);
+    expect((flushed as { sidebarCollapsed?: boolean }).sidebarCollapsed).toBe(
+      true,
+    );
+  });
   const afterFlush: unknown = JSON.parse(localStorage.getItem(PREFS_KEY)!);
   expect((afterFlush as { startupFilter?: string }).startupFilter).toBe(
     "completed",
