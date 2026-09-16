@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T103 |
 | **Milestone** | M3 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T039, T040, T043 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `web/index.html`, `web/src/main.tsx` |
@@ -122,11 +122,11 @@ self.addEventListener('fetch', (e) => {
 8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `manifest is installable`, `icons are maskable` and `service worker registers` pass in Chromium.
-- [ ] `api requests bypass the cache` passes.
-- [ ] Every URL in the manifest and in `index.html` is relative, so the app installs under a sub-path.
-- [ ] No offline page, no cached API response, and no background sync exists.
-- [ ] The install description states that a connection is required.
+- [x] `manifest is installable`, `icons are maskable` and `service worker registers` pass in Chromium.
+- [x] `api requests bypass the cache` passes.
+- [x] Every URL in the manifest and in `index.html` is relative, so the app installs under a sub-path.
+- [x] No offline page, no cached API response, and no background sync exists.
+- [x] The install description states that a connection is required.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -157,7 +157,69 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Verified 2026-09-16 on branch `task/T103-progressive-web-app` at `4ec930c`.
+`npx playwright install --with-deps chromium` needs root and fails in this
+environment, so `make e2e` ran with the cached Chromium per the environment
+note T043 recorded: `LD_LIBRARY_PATH` covering
+`$HOME/.local/share/goodebics-validation/browser/{lib,usr/lib}/x86_64-linux-gnu`
+and `$HOME/opt/mesa-root/usr/lib/x86_64-linux-gnu`, and `PATH` including
+`$HOME/.local/go/bin` and `/tmp/dltool-recovery-tools/docker`.
+
+```text
+$ make e2e && echo PWA_OK
+cd web && npx playwright test
+[WebServer] [plugin builtin:vite-reporter]
+[WebServer] (!) Some chunks are larger than 500 kB after minification. Consider:
+[WebServer] - Using dynamic import() to code-split the application
+[WebServer] - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+[WebServer] - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+
+Running 7 tests using 2 workers
+
+  ✓  1 [chromium] › e2e/pwa.spec.ts:29:1 › manifest is installable (379ms)
+  ✓  2 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin (735ms)
+  ✓  3 [chromium] › e2e/pwa.spec.ts:59:1 › icons are maskable (344ms)
+  ✓  4 [chromium] › e2e/setup.spec.ts:41:1 › a second setup attempt is rejected (19ms)
+  ✓  5 [chromium] › e2e/pwa.spec.ts:95:1 › service worker registers (353ms)
+  ✓  7 [chromium] › e2e/pwa.spec.ts:113:1 › api requests bypass the cache (416ms)
+grid perf: 30 changed rows per tick, 10 measured ticks
+grid perf deltas (ms): 6.102, 6.266, 5.729, 5.445, 6.544, 6.224, 7.301, 6.229, 6.512, 6.167
+grid perf p95: 7.301 ms (budget 8 ms)
+  ✓  6 [chromium] › e2e/setup.spec.ts:53:1 › the grid stays inside the scripting budget (18.3s)
+
+  7 passed (31.8s)
+PWA_OK
+```
+
+`pwa.spec.ts` never creates the admin account (it sorts ahead of
+`setup.spec.ts`, whose first test asserts the first-run redirect); all four
+assertions run signed-out against the anonymously served SPA. The API-bypass
+test waits for `navigator.serviceWorker.controller` so the fetch really
+passes through the worker's handler, and polls the asset cache entry because
+the worker's `cache.put` inside `respondWith` is fire-and-forget.
+
+Scope check. The task's Files-table files are committed, so `git status` is
+clean apart from `internal/api/dist/index.html` — a side effect of the
+`e2e:server` build copy, restored with `git checkout` before this run's diff
+was taken:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+$ git diff --name-only origin/main...HEAD | sort
+web/e2e/pwa.spec.ts
+web/index.html
+web/public/icons/icon-192.png
+web/public/icons/icon-512.png
+web/public/manifest.webmanifest
+web/public/sw.js
+web/src/main.tsx
+```
+
+Both PNGs were verified against their IHDR headers: `icon-192.png` is
+192×192 and `icon-512.png` is 512×512. The glyph sits inside the maskable
+safe zone: the accent disc radius is 0.38·S < 0.40·S, so no platform mask
+clips it.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
