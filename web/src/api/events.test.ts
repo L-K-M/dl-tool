@@ -406,6 +406,150 @@ test("TestStructuralSyncInvalidatesTaskList", () => {
   expect(inv).toHaveBeenCalledTimes(2); // state change
   act(() => stream.emit("sync", delta({ rid: 4, tasks_removed: ["a"] })));
   expect(inv).toHaveBeenCalledTimes(3); // removal
+  act(() => stream.emit("sync", delta({ rid: 5, tasks: { b: { id: "b" } } })));
+  expect(inv).toHaveBeenCalledTimes(4); // insert
+  // Category and tag are server-side list filters too: a patch to either
+  // rewrites a filtered grid's membership, so the list refetches.
+  act(() =>
+    stream.emit("sync", delta({ rid: 6, tasks: { b: { category: "iso" } } })),
+  );
+  expect(inv).toHaveBeenCalledTimes(5);
+  act(() =>
+    stream.emit("sync", delta({ rid: 7, tasks: { b: { tags: ["x"] } } })),
+  );
+  expect(inv).toHaveBeenCalledTimes(6);
+  act(() =>
+    stream.emit("sync", delta({ rid: 8, tasks: { b: { progress: 0.9 } } })),
+  );
+  expect(inv).toHaveBeenCalledTimes(6); // a pure field patch does not refetch
+});
+
+test("TestStopDropsInFlightResponses", async () => {
+  let release: ((result: SyncResult) => void) | undefined;
+  let signal: AbortSignal | undefined;
+  getSync.mockImplementation(
+    (_path, init) =>
+      new Promise<SyncResult>((resolvePromise) => {
+        signal = init?.signal;
+        release = resolvePromise;
+      }),
+  );
+  const { transport, syncs, unauth } = makeTransport();
+  transport.start();
+  act(() => FakeEventSource.instances[0].emit("error"));
+  await tick(0);
+  expect(getSync).toHaveBeenCalledTimes(1);
+  transport.stop();
+  // stop() aborts the request, and the late answer must not reach the store
+  // or the banners even though its rid looks fresh.
+  expect(signal?.aborted).toBe(true);
+  release?.(ok(delta({ rid: 5, tasks: { late: { id: "late" } } })));
+  await tick(0);
+  expect(syncs).toHaveLength(0);
+  expect(useTasks.getState().tasks.has("late")).toBe(false);
+  expect(unauth).not.toHaveBeenCalled();
+});
+
+test("TestLateResponsesCannotRegressTheStore", async () => {
+  const releases: ((result: SyncResult) => void)[] = [];
+  getSync.mockImplementation(
+    () =>
+      new Promise<SyncResult>((resolvePromise) =>
+        releases.push(resolvePromise),
+      ),
+  );
+  const { transport, syncs } = makeTransport();
+  transport.start();
+  const first = FakeEventSource.instances[0];
+  act(() => first.emit("sync", delta({ rid: 5 })));
+  act(() => first.emit("error"));
+  await tick(0);
+  expect(ridOf(0)).toBe(5); // the outage probe, still in flight
+  await tick(1000); // the first rung opens a fresh stream and a new epoch
+  const second = FakeEventSource.instances[1];
+  act(() => second.emit("sync", delta({ rid: 10 })));
+  await tick(0);
+  expect(ridOf(1)).toBe(0); // the recovery refetch, also still in flight
+  // Generated before rid 10 went out: the slower snapshot must lose.
+  releases[1](
+    ok(delta({ rid: 9, full_update: true, tasks: { old: { id: "old" } } })),
+  );
+  // Issued under the pre-reconnect epoch: even a newer rid must not land.
+  releases[0](ok(delta({ rid: 11, tasks: { stale: { id: "stale" } } })));
+  await tick(0);
+  expect(syncs.map((msg) => msg.rid)).toEqual([5, 10]);
+  expect(useTasks.getState().tasks.has("old")).toBe(false);
+  expect(useTasks.getState().tasks.has("stale")).toBe(false);
+  expect(useTasks.getState().connection).toBe("live");
+  transport.stop();
+});
+
+test("TestRestartedServerRebaselinesOnANewEpoch", async () => {
+  getSync.mockResolvedValue(failed());
+  const { transport, syncs } = makeTransport();
+  transport.start();
+  const first = FakeEventSource.instances[0];
+  act(() => first.emit("sync", delta({ rid: 100, tasks: { a: { id: "a" } } })));
+  act(() => first.emit("error"));
+  await tick(1000); // the first rung opens a fresh connection and epoch
+  const second = FakeEventSource.instances[1];
+  // The restarted process cannot honour Last-Event-ID: it opens with a full
+  // snapshot at the bottom of its restarted rid sequence (doc 05 §6.1).
+  act(() =>
+    second.emit(
+      "sync",
+      delta({
+        rid: 2,
+        full_update: true,
+        seq_gap: true,
+        tasks: { b: { id: "b" } },
+      }),
+    ),
+  );
+  expect(syncs.map((msg) => msg.rid)).toEqual([100, 2]);
+  expect(useTasks.getState().tasks.has("b")).toBe(true);
+  expect(useTasks.getState().tasks.has("a")).toBe(false);
+  act(() => second.emit("sync", delta({ rid: 3, tasks: { c: { id: "c" } } })));
+  expect(useTasks.getState().tasks.has("c")).toBe(true);
+  // A replayed pre-restart delta must not apply over the new baseline.
+  act(() =>
+    second.emit("sync", delta({ rid: 2, tasks: { ghost: { id: "ghost" } } })),
+  );
+  expect(useTasks.getState().tasks.has("ghost")).toBe(false);
+  transport.stop();
+});
+
+test("TestPollingFallbackDetectsARestart", async () => {
+  const { transport, syncs } = makeTransport();
+  transport.start();
+  act(() => FakeEventSource.instances[0].emit("sync", delta({ rid: 100 })));
+  for (const retry of [0, 1000, 2000]) {
+    await tick(retry);
+    act(() => FakeEventSource.instances.at(-1)!.emit("error"));
+  }
+  await tick(0);
+  expect(useTasks.getState().connection).toBe("polling");
+  // The server restarted between polls: it cannot honour rid=100 and answers
+  // a full snapshot at the bottom of its restarted sequence. A response rid
+  // at or below the requested rid proves the restart — a live process never
+  // rewinds its counter.
+  getSync.mockResolvedValueOnce(
+    ok(
+      delta({
+        rid: 1,
+        full_update: true,
+        seq_gap: true,
+        tasks: { fresh: { id: "fresh" } },
+      }),
+    ),
+  );
+  await tick(POLL_INTERVAL_MS);
+  expect(syncs.map((msg) => msg.rid)).toEqual([100, 1]);
+  expect(useTasks.getState().tasks.has("fresh")).toBe(true);
+  // The next poll continues from the new baseline.
+  await tick(POLL_INTERVAL_MS);
+  expect(ridOf(-1)).toBe(1);
+  transport.stop();
 });
 
 test("TestTransportOwnsTheStreamAndSyncEndpoint", () => {

@@ -13,10 +13,15 @@ initI18n().addResourceBundle("en", "settings", settingsStrings);
 
 export type DoubleClickAction = "start-stop" | "open-detail" | "none";
 
-/** The four members doc 09 §9's General row adds to the preference document.
+/** The members doc 09 §9's General row adds to the preference document.
  *  They are unknown members (doc 05 §11.4): the store's typed surface does not
  *  declare them, so reads cast to this shape — the same access pattern
- *  AddTaskDialog already uses for `rememberLastDestination`. */
+ *  AddTaskDialog already uses for `rememberLastDestination`. Persistence here
+ *  landed ahead of the consumers: `startupFilter`, `confirmOnDelete` and the
+ *  double-click actions stay write-only until the surfaces that own them —
+ *  startup routing, the remove flow and the grid row — read them. When that
+ *  wiring lands, `confirmOnDelete` may only skip the plain remove dialog; a
+ *  delete-with-files request stays confirmed. */
 interface GeneralExtraPrefs {
   startupFilter?: SidebarFilter;
   rememberLastDestination?: boolean;

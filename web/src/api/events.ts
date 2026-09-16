@@ -79,6 +79,13 @@ export function createTransport(opts: {
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryAt: number | null = null;
   let tickTimer: ReturnType<typeof setInterval> | null = null;
+  // Deliveries are ordered inside a connection epoch: connect() and stop()
+  // each open a new one, so a response issued under a superseded or torn-down
+  // connection can never reach the reducer or the banners.
+  let epoch = 0;
+  /** Whether the current epoch has applied a sync message yet. */
+  let epochBaselined = false;
+  const inflight = new Set<AbortController>();
 
   function setConnection(next: Connection): void {
     if (connection === next) return;
@@ -86,10 +93,19 @@ export function createTransport(opts: {
     opts.onConnection(next);
   }
 
-  function deliver(msg: SyncMessage): void {
-    // A delta older than the last applied rid would regress fields — stream
-    // deltas from a reopened connection can arrive after the rid=0 snapshot.
-    if (!msg.full_update && !msg.seq_gap && msg.rid <= lastRid) return;
+  function deliver(msg: SyncMessage, requestRid?: number): void {
+    const restart = msg.full_update || msg.seq_gap;
+    // A poll answered with a rid at or below the rid it asked about can only
+    // come from a restarted process — a live server never rewinds its counter
+    // (doc 05 section 6.1). The stream carries no request rid; a restarted
+    // server reaches it as a new connection, whose first message may instead
+    // re-baseline the epoch through the epochBaselined clause.
+    const rebooted =
+      restart && requestRid !== undefined && msg.rid <= requestRid;
+    // Within an epoch every payload orders by rid, snapshots included: a
+    // slower full response must not overwrite newer stream state.
+    if (msg.rid <= lastRid && !rebooted && (epochBaselined || !restart)) return;
+    epochBaselined = true;
     lastRid = msg.rid;
     opts.onSync(msg);
   }
@@ -97,25 +113,32 @@ export function createTransport(opts: {
   type FetchResult = "ok" | "unauthenticated" | "failed";
 
   async function fetchSync(rid: number): Promise<FetchResult> {
+    const requestEpoch = epoch;
     // A response that never arrives must not stall the fallback: two poll
     // intervals is long enough for a healthy snapshot and short enough to
     // release the in-flight guard before the next reconnect rung.
     const controller = new AbortController();
+    inflight.add(controller);
     const timer = setTimeout(() => controller.abort(), POLL_INTERVAL_MS * 2);
     try {
       const { data, response } = await api.GET("/sync", {
         params: { query: { rid } },
         signal: controller.signal,
       });
+      // The request was issued under a dead epoch — the transport stopped or
+      // a newer connection opened since — so its payload and its 401 belong
+      // to nobody.
+      if (!started || requestEpoch !== epoch) return "failed";
       if (response.status === unauthorized) return "unauthenticated";
       if (!data) return "failed";
       lastActivity = Date.now();
-      deliver(data);
+      deliver(data, rid);
       return "ok";
     } catch {
       return "failed";
     } finally {
       clearTimeout(timer);
+      inflight.delete(controller);
     }
   }
 
@@ -199,11 +222,20 @@ export function createTransport(opts: {
     useTransportUi.setState({ nextRetryIn: Math.ceil(delay / TICK_MS) });
   }
 
+  /** A stop or an auth loss retires every in-flight request and the epoch
+   *  that issued it, so a late response can never touch the store. */
+  function retireEpoch(): void {
+    epoch += 1;
+    for (const controller of inflight) controller.abort();
+  }
+
   function connect(): void {
     if (!started || unauthenticated) return;
     clearRetry();
     source?.close();
     source = null;
+    epoch += 1;
+    epochBaselined = false;
     let stream: EventSource;
     try {
       stream = new EventSource(eventsUrl(), { withCredentials: true });
@@ -215,6 +247,8 @@ export function createTransport(opts: {
     }
     source = stream;
     stream.addEventListener("sync", (event) => {
+      // An event from a replaced or closed source belongs to a dead epoch.
+      if (source !== stream) return;
       try {
         deliver(JSON.parse((event as MessageEvent).data) as SyncMessage);
       } catch {
@@ -224,7 +258,9 @@ export function createTransport(opts: {
     });
     // Doc 05 section 6.1: hb is the client-observable keep-alive. The comment
     // line that precedes it is invisible to EventSource, so it cannot count.
-    stream.addEventListener("hb", () => alive());
+    stream.addEventListener("hb", () => {
+      if (source === stream) alive();
+    });
     stream.addEventListener("error", () => {
       if (source === stream) streamError();
     });
@@ -251,6 +287,7 @@ export function createTransport(opts: {
     unauthenticated = true;
     source?.close();
     source = null;
+    retireEpoch();
     stopPoller();
     clearRetry();
     if (tickTimer !== null) {
@@ -311,6 +348,7 @@ export function createTransport(opts: {
     },
     stop() {
       started = false;
+      retireEpoch();
       source?.close();
       source = null;
       stopPoller();
@@ -339,17 +377,23 @@ export function useEventStream(): {
     onUnauthenticated: () => useTransportUi.setState({ unauthenticated: true }),
     onSync: (msg) => {
       const known = useTasks.getState().tasks;
-      // State changes, inserts and removals rewrite the grid's server-side
-      // row set, so the list query refetches (doc 09 section 10.8's sync row);
+      // State, category and tag are the server's list filters: inserts,
+      // removals and patches to any of them rewrite a filtered grid's row
+      // set, so the list query refetches (doc 09 section 10.8's sync row);
       // pure field patches are the reducer's business alone.
       const structural =
         msg.full_update ||
         msg.seq_gap ||
         (msg.tasks_removed?.length ?? 0) > 0 ||
-        Object.entries(msg.tasks).some(
-          ([id, patch]) =>
-            !known.has(id) || (patch as Partial<Task>).state !== undefined,
-        );
+        Object.entries(msg.tasks).some(([id, patch]) => {
+          const fields = patch as Partial<Task>;
+          return (
+            !known.has(id) ||
+            fields.state !== undefined ||
+            fields.category !== undefined ||
+            fields.tags !== undefined
+          );
+        });
       useTasks.getState().applySync(msg);
       if (structural) void invalidateTaskList(queryClient);
     },
