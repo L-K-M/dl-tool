@@ -292,6 +292,36 @@ test("TestEngineTestRequestErrorToastsFriendlyDetail", async () => {
   expect(message).not.toContain("shell.networkError");
 });
 
+test("TestEngineRowsSurviveFailedPostTestRefetch", async () => {
+  server.use(
+    http.post("*/api/v1/engines/eng_aria2/test", () =>
+      HttpResponse.json({
+        ok: true,
+        version: "1.37.0",
+        elapsed_ms: 3,
+        error: null,
+      }),
+    ),
+  );
+  mount("/settings/connection");
+  const aria2 = await screen.findByText("aria2", {
+    selector: "span.font-medium",
+  });
+  const row = aria2.closest("tr")!;
+  // The probe's follow-up refetch fails; the cached rows and the fresh
+  // result must stay rendered behind an inline retry notice.
+  server.use(
+    http.get("*/api/v1/engines", () => HttpResponse.json({}, { status: 500 })),
+  );
+  fireEvent.click(within(row).getByRole("button", { name: "Test" }));
+  await within(row).findByText("passed");
+  await screen.findByRole("alert");
+  expect(
+    screen.getByText("aria2", { selector: "span.font-medium" }),
+  ).toBeTruthy();
+  expect(within(row).getByText("passed")).toBeTruthy();
+});
+
 test("TestConformanceWarningRendersFromLastError", async () => {
   mount("/settings/connection");
   const name = await screen.findByText("qBittorrent");
