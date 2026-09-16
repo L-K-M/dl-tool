@@ -1112,3 +1112,113 @@ func TestClearPausedHoldCode(t *testing.T) {
 		require.ErrorIs(t, err, ErrNotFound)
 	})
 }
+
+// TestMarkAdmissionPending pins the ownership mark's three answers,
+// mirroring the claim's contract beside it: a queued row takes the mark
+// (and a repeat is idempotent), a present non-queued row declines without
+// a write, and a missing id is ErrNotFound. The mark clears with every
+// state transition — ownership exists only while the row is queued.
+func TestMarkAdmissionPending(t *testing.T) {
+	t.Run("marks a queued row and repeats idempotently", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		task := createTaskInState(t, tasks, "queued")
+
+		marked, err := tasks.MarkAdmissionPending(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.True(t, marked, "a queued row takes the mark")
+
+		var pending int
+		require.NoError(t, db.GetContext(t.Context(), &pending,
+			`SELECT admission_pending FROM tasks WHERE id = ?`, task.ID))
+		require.Equal(t, 1, pending)
+
+		// A 1 Hz retry's repeat mark neither errors nor churns the row:
+		// the guarded write declines, the read answers the standing mark.
+		before, err := tasks.Get(t.Context(), task.ID)
+		require.NoError(t, err)
+		marked, err = tasks.MarkAdmissionPending(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.True(t, marked, "an already-marked queued row answers true")
+		after, err := tasks.Get(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.Equal(t, before.UpdatedAt, after.UpdatedAt, "a repeat mark writes nothing")
+	})
+
+	t.Run("declines a row that is not queued", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		task := createTaskInState(t, tasks, "downloading")
+
+		marked, err := tasks.MarkAdmissionPending(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.False(t, marked, "only a queued row is the pass's to mark")
+
+		var pending int
+		require.NoError(t, db.GetContext(t.Context(), &pending,
+			`SELECT admission_pending FROM tasks WHERE id = ?`, task.ID))
+		require.Equal(t, 0, pending, "a declined mark writes nothing")
+	})
+
+	t.Run("clears with the next state transition", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		task := createTaskInState(t, tasks, "queued")
+		marked, err := tasks.MarkAdmissionPending(t.Context(), task.ID)
+		require.NoError(t, err)
+		require.True(t, marked)
+
+		require.NoError(t, tasks.Transition(t.Context(), task.ID, "downloading", "test.transition", "test"))
+
+		var pending int
+		require.NoError(t, db.GetContext(t.Context(), &pending,
+			`SELECT admission_pending FROM tasks WHERE id = ?`, task.ID))
+		require.Equal(t, 0, pending, "the release's transition clears the mark")
+	})
+
+	t.Run("reports a missing id as not found", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		_, err := tasks.MarkAdmissionPending(t.Context(), "tsk_missing")
+		require.ErrorIs(t, err, ErrNotFound)
+	})
+
+	// The counted-set predicate is the mark's whole purpose: a flagged
+	// queued row spends a slot and reserves its remaining bytes; a queued
+	// row merely holding an engine handle — the resumed-then-requeued
+	// shape — does neither. Both assertions go through the store methods
+	// the pass calls, not the queries' text.
+	t.Run("the counted set follows the mark, not the stored handle", func(t *testing.T) {
+		db, _, _ := openTestStore(t)
+		tasks := NewTaskStore(db)
+
+		flagged := createTaskInState(t, tasks, "queued")
+		marked, err := tasks.MarkAdmissionPending(t.Context(), flagged.ID)
+		require.NoError(t, err)
+		require.True(t, marked)
+
+		handleOnly := createTaskInState(t, tasks, "queued")
+		_, err = db.ExecContext(t.Context(),
+			`UPDATE tasks SET engine_ref = 'stopped-gid' WHERE id = ?`, handleOnly.ID)
+		require.NoError(t, err)
+
+		counts, err := tasks.CountActive(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, 1, counts.Total, "only the marked queued row counts")
+		require.Equal(t, 1, counts.ByEngine["aria2"])
+
+		for _, id := range []string{flagged.ID, handleOnly.ID} {
+			_, err = db.ExecContext(t.Context(),
+				`UPDATE tasks SET total_bytes = 1000 WHERE id = ?`, id)
+			require.NoError(t, err)
+		}
+		remaining, err := tasks.SumRemainingByDestination(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, int64(1000), remaining["/data"],
+			"only the marked row's bytes are reserved against the destination")
+	})
+}

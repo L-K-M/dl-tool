@@ -783,6 +783,7 @@ func (f *syncTasks) addRow(engineName, hash, taskID string, state engine.TaskSta
 
 func (f *syncTasks) UpdateProgress(context.Context, string, store.Progress) error { return nil }
 func (f *syncTasks) SetEngineRef(context.Context, string, string) error           { return nil }
+func (f *syncTasks) MarkAdmissionPending(context.Context, string) (bool, error)   { return true, nil }
 func (f *syncTasks) Transition(context.Context, string, string, string, string) error {
 	return nil
 }

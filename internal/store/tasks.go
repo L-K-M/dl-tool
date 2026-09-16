@@ -148,9 +148,12 @@ WHERE id = ? AND (engine_ref IS NULL OR engine_ref <> ?)`
 
 	// The state guard makes the update a compare-and-swap: a concurrent
 	// transition that committed after the read above turns this into a
-	// no-op instead of a lost update.
+	// no-op instead of a lost update. admission_pending clears with every
+	// state move: it marks the admission pass's ownership of a queued row
+	// mid-release (docs/04-data-model.md section 3.3), and a row that left
+	// queued — released, paused, errored — is owned no longer.
 	queryTransitionTask = `UPDATE tasks
-SET state = ?, updated_at = ?
+SET state = ?, admission_pending = 0, updated_at = ?
 WHERE id = ? AND state = ?`
 
 	// The tombstone of docs/05-api-contract.md 5.6 step 6: state plus the
@@ -163,7 +166,7 @@ WHERE id = ? AND state = ?`
 	// queue action, and the admission pass reads order, never density.
 	queryMarkTaskRemoved = `UPDATE tasks
 SET state = 'removed', engine_ref = NULL, download_rate = 0, upload_rate = 0,
-    eta_seconds = NULL, queue_position = NULL, updated_at = ?
+    eta_seconds = NULL, queue_position = NULL, admission_pending = 0, updated_at = ?
 WHERE id = ? AND state = ?`
 
 	queryListTaskFiles = `SELECT id, task_id, file_index, path, size_bytes, completed_bytes, selected, priority, created_at, updated_at
@@ -241,15 +244,17 @@ WHERE id = ?`
 	// (docs/04-data-model.md section 4.7). seeding is excluded in SQL
 	// rather than in Go: the exclusion is a fact of the counted set, not a
 	// caller's choice, and every reader — the admission pass, a resume
-	// action — must see the same set. A queued row holding an engine
-	// handle counts too: it is mid-release — a file selection waiting on
-	// the engine's file listing or an interrupted first start — and the
-	// transfer it owns is already running or already committed, so the
-	// slot is spent whether or not the row has reached downloading.
+	// action — must see the same set. A queued row the admission pass
+	// still owns mid-release — admission_pending — counts too: the
+	// transfer it holds is already running for its file listing, so the
+	// slot is spent whether or not the row has reached downloading. A
+	// queued row merely holding an engine handle does not count: an
+	// ordinary resume requeues a task whose engine-side transfer is
+	// stopped, and the handle alone does not spend a slot.
 	queryCountActive = `SELECT engine, COUNT(*) AS active
 FROM tasks
 WHERE state IN ('downloading', 'checking', 'extracting', 'moving')
-   OR (state = 'queued' AND engine_ref IS NOT NULL)
+   OR (state = 'queued' AND admission_pending <> 0)
 GROUP BY engine`
 
 	// process_order is creation date (FR-095): oldest added_at first, the
@@ -262,7 +267,7 @@ GROUP BY engine`
 	// reach the Go constant, so the two are pinned together by
 	// TestOperatorPausedTaskIsNotACandidate.
 	querySelectQueuedCandidates = `SELECT id, engine, engine_ref, source_uri, infohash_v1, destination,
- select_files, dl_limit, ul_limit,
+ select_files, dl_limit, ul_limit, admission_pending,
  state, total_bytes, COALESCE(completed_bytes, 0) AS completed_bytes
 FROM tasks
 WHERE state = 'queued' OR (state = 'paused' AND error_code = 'disk_full')
@@ -283,7 +288,7 @@ ORDER BY added_at ASC, id ASC`
 	querySumRemainingByDestination = `SELECT destination, SUM(MAX(COALESCE(total_bytes, 0) - COALESCE(completed_bytes, 0), 0)) AS remaining
 FROM tasks
 WHERE state IN ('downloading', 'checking', 'extracting', 'moving')
-   OR (state = 'queued' AND engine_ref IS NOT NULL)
+   OR (state = 'queued' AND admission_pending <> 0)
 GROUP BY destination`
 
 	// The release cleanup's guard: a hold-code clear may never wipe a
@@ -329,7 +334,7 @@ WHERE id = ? AND state = 'paused' AND error_code IN ('disk_full', 'concurrency_l
 	// not be dragged back — universal rules would otherwise let almost any
 	// state move to paused.
 	queryPauseTaskWithCode = `UPDATE tasks
-SET state = 'paused', error_code = ?, error_message = ?, updated_at = ?
+SET state = 'paused', error_code = ?, error_message = ?, admission_pending = 0, updated_at = ?
 WHERE id = ? AND state IN (?)`
 
 	// The guarded error-code write: a row already carrying exactly this
@@ -359,6 +364,21 @@ WHERE id = ? AND state = ? AND (error_code IS NOT ? OR error_message IS NOT ?)`
 SET error_code = error_code
 WHERE id = ? AND state = 'paused' AND error_code = 'disk_full'
 RETURNING id`
+
+	// The admission pass's persisted ownership mark of a queued row
+	// mid-release: admission_pending is the counted set's and the hold
+	// gates' token — engine_ref alone cannot carry it, because an
+	// ordinary resume requeues a task still holding its stopped engine
+	// handle. The guards make the write idempotent and narrow: only a
+	// still-queued, not-yet-marked row is written, so a 1 Hz retry does
+	// not churn updated_at, and RETURNING answers the match directly —
+	// the same shape queryClaimParkedDiskFull keeps.
+	queryMarkAdmissionPending = `UPDATE tasks
+SET admission_pending = 1, updated_at = ?
+WHERE id = ? AND state = 'queued' AND admission_pending = 0
+RETURNING id`
+
+	queryTaskAdmissionPending = `SELECT state, admission_pending FROM tasks WHERE id = ?`
 )
 
 // TaskStore persists tasks rows and enforces the task state machine.
@@ -549,6 +569,12 @@ type Candidate struct {
 	SelectFiles *string `db:"select_files"`
 	DLLimit     int64   `db:"dl_limit"`
 	ULLimit     int64   `db:"ul_limit"`
+	// AdmissionPending is the pass's persisted ownership mark of a queued
+	// row mid-release: the queued candidate that skips the hold gates and
+	// counts toward the active totals. A stored handle alone no longer
+	// means that — an ordinary resume requeues a task whose transfer is
+	// stopped, and it must pass the gates again.
+	AdmissionPending int `db:"admission_pending"`
 	// State is queued for a waiting candidate and paused for one the
 	// disk-space guard parked (FR-048); the pass releases both, resuming
 	// the paused one's partial data instead of restarting it.
@@ -976,6 +1002,66 @@ func (s *TaskStore) ClaimParkedDiskFull(ctx context.Context, id string) (bool, e
 
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("store: claim parked disk-full task %q: commit: %w", id, err)
+	}
+
+	return true, nil
+}
+
+// MarkAdmissionPending records the admission pass's ownership of a queued
+// row whose engine transfer the pass still owes work to mid-release — a
+// pending file selection the next tick retries, or a release whose final
+// transition did not land over a running transfer. While marked, the row
+// counts toward the concurrency totals and skips the hold gates, because
+// the transfer it holds is already running; engine_ref alone cannot carry
+// that meaning, because an ordinary resume requeues a task still holding
+// its stopped handle. The flag clears with every state transition, so it
+// marks ownership only while the row is queued. true reports the row is
+// queued under the pass's ownership — the write landing now or an earlier
+// mark already standing; false a present row that is not queued; a
+// missing id is ErrNotFound, distinguished from a decline by a read in
+// the same transaction, the same discipline ClaimParkedDiskFull keeps.
+func (s *TaskStore) MarkAdmissionPending(ctx context.Context, id string) (bool, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("store: mark admission pending of task %q: %w", id, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of admission-pending mark failed", "task_id", id, "error", err)
+		}
+	}()
+
+	var marked string
+	err = tx.GetContext(ctx, &marked, queryMarkAdmissionPending, time.Now().UnixMilli(), id)
+	switch {
+	case err == nil:
+		// The guarded write matched and committed below: the row is queued
+		// and now carries the mark.
+	case errors.Is(err, sql.ErrNoRows):
+		// The guard matched no row. A queued row already carrying the mark
+		// is the idempotent true; a present row in any other state is the
+		// decline; only a missing id is an error.
+		var current struct {
+			State            string `db:"state"`
+			AdmissionPending int    `db:"admission_pending"`
+		}
+		readErr := tx.GetContext(ctx, &current, queryTaskAdmissionPending, id)
+		if errors.Is(readErr, sql.ErrNoRows) {
+			return false, fmt.Errorf("store: mark admission pending of task %q: %w", id, ErrNotFound)
+		}
+		if readErr != nil {
+			return false, fmt.Errorf("store: mark admission pending of task %q: read state: %w", id, readErr)
+		}
+
+		return current.State == "queued" && current.AdmissionPending != 0, nil
+	default:
+		return false, fmt.Errorf("store: mark admission pending of task %q: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("store: mark admission pending of task %q: commit: %w", id, err)
 	}
 
 	return true, nil

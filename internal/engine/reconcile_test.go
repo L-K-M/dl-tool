@@ -26,6 +26,30 @@ import (
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
+// opJournal is one ordered log the engine and store fakes can share: the
+// ordering contracts of the resubmit path — ref, requeue, mark, then
+// resume — span both fakes, so separate per-fake slices could never
+// observe it. Nil means unobserved.
+type opJournal struct {
+	mu  sync.Mutex
+	ops []string
+}
+
+func (j *opJournal) record(op string) {
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.ops = append(j.ops, op)
+}
+
+func (j *opJournal) snapshot() []string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return append([]string(nil), j.ops...)
+}
+
 // fakeEngine is the Engine stand-in of the sweep tests: List answers from
 // an injected snapshot, Add records the submission and answers from
 // injected fields, and every method the sweep never calls stays a panic so
@@ -54,6 +78,10 @@ type fakeEngine struct {
 	// cancel the caller's context mid-submission, the way a real engine
 	// call dies when its context does.
 	onAdd func(ctx context.Context)
+
+	// journal, when set, records engine calls into a log shared with the
+	// store fake so a test can assert cross-component ordering.
+	journal *opJournal
 
 	mu          sync.Mutex
 	addCalls    []engine.AddRequest
@@ -119,6 +147,7 @@ func (f *fakeEngine) Resume(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resumeCalls = append(f.resumeCalls, id)
+	f.journal.record("engine:resume:" + id)
 	return f.resumeErr
 }
 
@@ -224,15 +253,27 @@ type fakeTasks struct {
 	transitions []transitionRecord
 	engineRefs  map[string]string
 	events      []eventRecord
+	marks       []string
 
 	// failProgress names tasks whose UpdateProgress fails, to exercise the
 	// per-task isolation of a sweep.
 	failProgress map[string]error
 
+	// failMarks makes every MarkAdmissionPending call fail, to exercise a
+	// resubmission whose ownership mark cannot land.
+	failMarks bool
+	// declineMarks makes MarkAdmissionPending answer (false, nil) — the
+	// store's decline for a row that left queued before the mark could
+	// land — to pin that the sweep treats it like a failure: no resume.
+	declineMarks bool
 	// failSetEngineRef makes the first N SetEngineRef calls fail, to
 	// exercise the compensating removal of a transfer whose handle could
 	// not be recorded.
 	failSetEngineRef int
+
+	// journal, when set, records store writes into a log shared with the
+	// engine fake so a test can assert cross-component ordering.
+	journal *opJournal
 }
 
 type transitionRecord struct {
@@ -306,13 +347,33 @@ func (f *fakeTasks) SetEngineRef(_ context.Context, id, engineRef string) error 
 		return errors.New("store: write failed")
 	}
 	f.engineRefs[id] = engineRef
+	f.journal.record("store:ref:" + id + ":" + engineRef)
 	return nil
+}
+
+// MarkAdmissionPending records the pass's ownership marks a resubmit
+// lands; when a journal is shared with the engine fake the mark's place
+// in it — after the queued move, before the resume — is the ordering
+// contract the resubmit test asserts.
+func (f *fakeTasks) MarkAdmissionPending(_ context.Context, id string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failMarks {
+		return false, errors.New("store: write failed")
+	}
+	if f.declineMarks {
+		return false, nil
+	}
+	f.journal.record("store:mark:" + id)
+	f.marks = append(f.marks, id)
+	return true, nil
 }
 
 func (f *fakeTasks) Transition(_ context.Context, id, next, code, message string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.transitions = append(f.transitions, transitionRecord{id, next, code, message})
+	f.journal.record("store:transition:" + id + ":" + next)
 	return nil
 }
 
@@ -559,6 +620,11 @@ func TestVanishedHandleResubmissionRequeuesAPendingSelection(t *testing.T) {
 		// is still empty: the pending shape of a metadata-less magnet.
 		setFileErr: errors.New("file ids out of range"),
 	}
+	// One journal shared by both fakes makes the resubmit's ordering
+	// contract — record the handle, requeue, mark, then run — observable.
+	journal := &opJournal{}
+	tasks.journal = journal
+	e.journal = journal
 	r := newSweep(t, e, tasks)
 
 	if err := r.Boot(t.Context()); err != nil {
@@ -576,6 +642,98 @@ func TestVanishedHandleResubmissionRequeuesAPendingSelection(t *testing.T) {
 	if len(tasks.transitions) != 1 || tasks.transitions[0].next != "queued" ||
 		tasks.transitions[0].code != engine.CodeTaskReconciled {
 		t.Errorf("transitions = %+v, want one requeue to queued", tasks.transitions)
+	}
+	// The ordering is the contract: the mark may only follow the queued
+	// move it extends, and the resume may only follow the mark — an
+	// unmarked row whose transfer runs is one the next pass would gate
+	// instead of retry.
+	wantOps := []string{
+		"store:ref:tsk_1:newhash",
+		"store:transition:tsk_1:queued",
+		"store:mark:tsk_1",
+		"engine:resume:" + e.addID,
+	}
+	if ops := journal.snapshot(); !slices.Equal(ops, wantOps) {
+		t.Errorf("journal = %v, want %v", ops, wantOps)
+	}
+	if ref := tasks.engineRefs["tsk_1"]; ref != "newhash" {
+		t.Errorf("engine_ref of tsk_1 = %q, want newhash", ref)
+	}
+}
+
+// A re-submission whose ownership mark cannot land must not run the
+// transfer: a live transfer under an unmarked queued row is gated by the
+// admission pass instead of retried, so the sweep leaves it stopped —
+// the pass re-enters the row through its resume path on the next tick
+// (TestPassReGatesAResumedTaskAgainstTheLimit owns that half).
+func TestResubmitWithoutTheMarkKeepsTheTransferStopped(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameQBittorrent, map[string]store.Reconcilable{
+		"gone": {
+			ID: "tsk_1", EngineRef: "gone", State: "downloading",
+			InfohashV1:  ptr("0123456789abcdef0123456789abcdef01234567"),
+			Destination: "/data",
+			SelectFiles: ptr(`{"indices":[0,2],"priorities":{"0":1,"1":0,"2":6}}`),
+		},
+	})
+	tasks.failMarks = true
+
+	e := &fakeEngine{
+		name:       engine.NameQBittorrent,
+		caps:       []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority},
+		addID:      engine.NameQBittorrent + ":newhash",
+		setFileErr: errors.New("file ids out of range"),
+	}
+	r := newSweep(t, e, tasks)
+
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	if resumes := e.recordedResumes(); len(resumes) != 0 {
+		t.Errorf("Resume calls = %v, want none: the transfer stays stopped until the mark can land", resumes)
+	}
+	if len(tasks.transitions) != 1 || tasks.transitions[0].next != "queued" {
+		t.Errorf("transitions = %+v, want the requeue to queued", tasks.transitions)
+	}
+	// The fresh handle was already recorded when the mark failed — the
+	// ref write precedes the requeue, so the row the pass picks up next
+	// tick points at the stopped transfer, not the vanished one.
+	if ref := tasks.engineRefs["tsk_1"]; ref != "newhash" {
+		t.Errorf("engine_ref of tsk_1 = %q, want newhash", ref)
+	}
+}
+
+// A mark the store declines — the row left queued before the write
+// landed, (false, nil) with no error — is no more permission to run than
+// a failed one: the transfer stays stopped for the admission pass.
+func TestResubmitWithADeclinedMarkKeepsTheTransferStopped(t *testing.T) {
+	tasks := newFakeTasks().withEngine(engine.NameQBittorrent, map[string]store.Reconcilable{
+		"gone": {
+			ID: "tsk_1", EngineRef: "gone", State: "downloading",
+			InfohashV1:  ptr("0123456789abcdef0123456789abcdef01234567"),
+			Destination: "/data",
+			SelectFiles: ptr(`{"indices":[0,2],"priorities":{"0":1,"1":0,"2":6}}`),
+		},
+	})
+	tasks.declineMarks = true
+
+	e := &fakeEngine{
+		name:       engine.NameQBittorrent,
+		caps:       []engine.Capability{engine.CapPerFileSelect, engine.CapPerFilePriority},
+		addID:      engine.NameQBittorrent + ":newhash",
+		setFileErr: errors.New("file ids out of range"),
+	}
+	r := newSweep(t, e, tasks)
+
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+
+	if resumes := e.recordedResumes(); len(resumes) != 0 {
+		t.Errorf("Resume calls = %v, want none: a declined mark is not ownership", resumes)
+	}
+	if len(tasks.transitions) != 1 || tasks.transitions[0].next != "queued" {
+		t.Errorf("transitions = %+v, want the requeue to queued", tasks.transitions)
 	}
 	if ref := tasks.engineRefs["tsk_1"]; ref != "newhash" {
 		t.Errorf("engine_ref of tsk_1 = %q, want newhash", ref)

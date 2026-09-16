@@ -131,7 +131,7 @@ func (h *TaskHandlers) ListTaskFiles(ctx context.Context, in *ListTaskFilesInput
 // and the answer is the full list from the store, exactly the body GET
 // answers with.
 func (h *TaskHandlers) PatchTaskFiles(ctx context.Context, in *PatchTaskFilesInput) (*ListTaskFilesOutput, error) {
-	task, e, err := h.taskWithEngine(ctx, in.ID)
+	_, e, err := h.taskWithEngine(ctx, in.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +149,39 @@ func (h *TaskHandlers) PatchTaskFiles(ctx context.Context, in *PatchTaskFilesInp
 	if !hasCapability(e, engine.CapPerFilePriority) {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, filesDetailNoPrioritySupport)
 	}
+
+	return h.patchTaskFilesUnderLease(ctx, in, e)
+}
+
+// patchTaskFilesUnderLease is the state-dependent half of PATCH
+// /tasks/{id}/files: it joins the task-operation lease, then re-reads
+// the row, because the snapshot that resolved the engine predates the
+// wait — an admission release that ran meanwhile may have created the
+// transfer or replaced the handle, so the admission check, the listing
+// the indices validate against and the SetFiles handle below all
+// re-derive from the reloaded row. Under the lease a release either
+// finished before the acquire (its write stands until this PATCH lands)
+// or waits, and its under-lease re-read then picks up this PATCH's
+// stored intent. The wait runs under the operator budget, never the
+// request alone.
+func (h *TaskHandlers) patchTaskFilesUnderLease(ctx context.Context, in *PatchTaskFilesInput, e engine.Engine) (*ListTaskFilesOutput, error) {
+	waitCtx, cancelWait := context.WithTimeout(ctx, pauseLeaseWait)
+	defer cancelWait()
+
+	releaseLease, err := h.engines.AcquireTaskOp(waitCtx, in.ID, engine.TaskOpWait)
+	if err != nil {
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailTaskOpBusy)
+	}
+	defer releaseLease()
+
+	task, err := h.tasks.Get(ctx, in.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, Problem(SlugNotFound, http.StatusNotFound, filesDetailUnknownTask)
+	}
+	if err != nil {
+		return nil, internalFailure(ctx, "reread task under the task-operation lease", err)
+	}
+
 	if task.EngineRef == nil {
 		// No engine holds the transfer, so no engine can take a selection;
 		// the create-time selection of T033 is the moment for it.
@@ -174,21 +207,6 @@ func (h *TaskHandlers) PatchTaskFiles(ctx context.Context, in *PatchTaskFilesInp
 	if len(fieldErrs) > 0 {
 		return nil, fileSelectionProblem(fieldErrs)
 	}
-
-	// The engine call and the intent rewrite join the task-operation
-	// lease: an admission release applying its re-read snapshot must not
-	// interleave — under the lease the release either finished before the
-	// acquire (its write stands until this PATCH lands) or waits, and its
-	// under-lease re-read then picks up this PATCH's stored intent. The
-	// wait runs under the operator budget, never the request alone.
-	waitCtx, cancelWait := context.WithTimeout(ctx, pauseLeaseWait)
-	defer cancelWait()
-
-	releaseLease, err := h.engines.AcquireTaskOp(waitCtx, task.ID, engine.TaskOpWait)
-	if err != nil {
-		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detailTaskOpBusy)
-	}
-	defer releaseLease()
 
 	// Engine first: a daemon that cannot take the change leaves task_files
 	// untouched. selected stays nil — every entry carries a resolved

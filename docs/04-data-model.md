@@ -289,6 +289,14 @@ CREATE TABLE tasks (
   ratio_limit REAL, seeding_time_limit INTEGER,          -- seconds
   sequential INTEGER NOT NULL DEFAULT 0 CHECK (sequential IN (0,1)),
   queue_position INTEGER,
+  admission_pending INTEGER NOT NULL DEFAULT 0,  -- 1 while a queued row's release is mid-flight and the
+                                                -- admission pass still owns it; counted active and exempt
+                                                -- from the hold gates. Cleared by every state transition;
+                                                -- engine_ref alone does not imply it — a resumed task
+                                                -- requeues still holding its stopped handle. A crash that
+                                                -- orphans the mark is self-healing: the next pass selects
+                                                -- the queued row, exempts it, and finishes the release —
+                                                -- the mark is the retry token, never a skip flag
   select_files TEXT,                      -- JSON selection intent: {indices, priorities};
                                            -- written at create (5.2), rewritten by PATCH files (5.8)
   unzip_progress INTEGER,               -- 0-100, only while state = 'extracting'
@@ -668,7 +676,7 @@ Two independent reasons a task waits, two error codes. Never conflate them.
 | Dimension | Concurrency limit | Disk space |
 |---|---|---|
 | Where it lives | `settings` keys `max_active_total` and `max_active_per_engine` | `settings` key `min_free_space`, per data root |
-| What it measures | Count of started tasks, that is states `downloading`, `checking`, `extracting` and `moving`; `seeding` is excluded | Free bytes on the destination's filesystem, less the committed-but-unwritten bytes of active tasks sharing it |
+| What it measures | Count of started tasks, that is states `downloading`, `checking`, `extracting` and `moving`, plus `queued` rows the admission pass still owns mid-release (`admission_pending`); `seeding` is excluded | Free bytes on the destination's filesystem, less the committed-but-unwritten bytes of active tasks sharing it |
 | Breach at creation | Accept the task and hold it in `queued`, `error_code = 'concurrency_limit'` | Accept the task and hold it in `queued`, `error_code = 'disk_full'` |
 | Breach later | The task starts as soon as a slot frees | A running task is paused with `disk_full`; `ENOSPC` never deletes partial data |
 | Scope | Global and per engine | Per data root |
@@ -848,3 +856,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-02 | The store now enforces `0700` on the configuration directory and `0600` on the database, its sidecars and every backup, independent of `UMASK`; `VACUUM INTO` creates its target with `O_CREATE\|O_EXCL` at `0600`. |
 | 2026-09-02 | Review pass: added `notification_channels.last_send_at` and `.last_error`, which four consumers already read; removed the orphaned `rules.owner_id` comment block left inside `CREATE TABLE rules` by the multi-user cut, which T006 would otherwise have transcribed into `00001_init.sql`; corrected §4.2's count of the dl-tool `error_code` additions from seven to six. |
 | 2026-09-02 | Made the initial migration executable: corrected the post-account-removal settings count, defined host-independent seed values and stable IDs, supplied the 168-cell insert, kept explanatory prose outside the SQL fence, defined version zero without accepting foreign databases, filtered the version probe to applied rows, pinned integrity-check cadence and success, pinned and logged the backup path, and verified goose's version-table name against v3.27.3. |
+| 2026-09-16 | Added `tasks.admission_pending` (migration 00003): the admission pass's persisted ownership of a queued row mid-release, replacing `engine_ref IS NOT NULL` as the counted/exempt marker — an ordinary resume requeues a task still holding its stopped handle, so the handle alone could bypass the hold gates. §4.7's counted set restated. |
