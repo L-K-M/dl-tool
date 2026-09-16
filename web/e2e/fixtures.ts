@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { expect } from "@playwright/test";
 
-/** Wiped and recreated by the e2e:server script on every run. */
+/** Wiped by the Playwright webServer command and recreated by the server on every run. */
 export const STATE_DIR = path.join(os.tmpdir(), "dl-tool-e2e");
 export const BASE_URL = "http://127.0.0.1:8099";
 export const ADMIN = {
