@@ -18,7 +18,7 @@ export default tseslint.config(
         },
         {
           selector:
-            "JSXElement > JSXExpressionContainer > Literal[value=/[A-Za-z]{2,}/]",
+            ":matches(JSXElement, JSXFragment) > JSXExpressionContainer > Literal[value=/[A-Za-z]{2,}/]",
           message:
             "User-visible text must go through t(); add the key to a locale catalogue.",
         },
