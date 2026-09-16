@@ -1,0 +1,59 @@
+{
+  "nav": {
+    "label": "Settings sections",
+    "general": "General",
+    "connection": "Connection",
+    "bandwidth": "Bandwidth",
+    "bittorrent": "BitTorrent",
+    "downloads": "Downloads",
+    "rss": "RSS",
+    "indexers": "Indexers",
+    "account": "Account & Auth",
+    "notifications": "Notifications",
+    "advanced": "Advanced"
+  },
+  "arrives": "This section arrives with {{milestone}}.",
+  "dirty": {
+    "unsaved_one": "{{count}} unsaved change",
+    "unsaved_other": "{{count}} unsaved changes",
+    "save": "Save",
+    "revert": "Revert"
+  },
+  "general": {
+    "theme": "Theme",
+    "density": "Density",
+    "densityComfortable": "Comfortable",
+    "densityCompact": "Compact",
+    "startupFilter": "Default sidebar filter on startup",
+    "rememberLastDestination": "Remember last destination",
+    "confirmOnDelete": "Confirm on delete",
+    "doubleClick": "Action on double-click",
+    "doubleClickDownloading": "Downloading tasks",
+    "doubleClickCompleted": "Completed tasks",
+    "doubleClickStartStop": "Start/stop",
+    "doubleClickOpenDetail": "Open detail",
+    "doubleClickNone": "No action"
+  },
+  "connection": {
+    "name": "Name",
+    "kind": "Kind",
+    "endpoint": "Endpoint",
+    "status": "Status",
+    "version": "Version",
+    "capabilities": "Capabilities",
+    "lastSeen": "Last seen",
+    "test": "Test",
+    "testing": "Testing…",
+    "connected": "Connected",
+    "disconnected": "Not connected",
+    "envEndpoint": "Set by the container environment; edit the deployment configuration to change it.",
+    "exclusiveNote": "dl-tool assumes exclusive control of its engines and ignores transfers it did not create.",
+    "adrLink": "ADR-0017",
+    "loadError": "Could not load the engine list.",
+    "testRequestFailed": "Engine test request failed: {{detail}}",
+    "resultOk": "ok",
+    "resultVersion": "version",
+    "resultElapsed": "elapsed_ms",
+    "resultError": "error"
+  }
+}

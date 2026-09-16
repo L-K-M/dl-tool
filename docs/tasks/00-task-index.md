@@ -135,7 +135,7 @@ The application shell, the virtualised grid, the add dialog, the folder browser,
 | [T050](T050-categories-and-tags.md) | Serve category CRUD, the tag list and category path resolution | T017, T020, T021 | done |
 | [T051](T051-event-stream-and-reconnect.md) | Connect the event stream, the reconnect ladder and the polling fallback | T011, T025, T041, T044 | done |
 | [T052](T052-i18n-plumbing-and-lint-rule.md) | Complete the i18n plumbing and the string-literal lint rule | T039, T044, T048, T049 | done |
-| [T053](T053-settings-screens.md) | Build the settings screen shell, General and Connection | T027, T045, T047, T050, T052 | todo |
+| [T053](T053-settings-screens.md) | Build the settings screen shell, General and Connection | T027, T045, T047, T050, T052 | done |
 | [T103](T103-progressive-web-app.md) | Ship the web app manifest, maskable icons and the service worker | T039, T040, T043 | todo |
 | [T104](T104-accessibility-harness.md) | Add the accessibility harness: axe-core, the keyboard map and aria-rowcount | T042, T043, T044, T045, T048, T049, T051, T053 | todo |
 
@@ -342,7 +342,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T050 | Serve category CRUD, the tag list and category path resolution | T017, T020, T021 | no | done | [T050](T050-categories-and-tags.md) |
 | T051 | Connect the event stream, the reconnect ladder and the polling fallback | T011, T025, T041, T044 | yes | done | [T051](T051-event-stream-and-reconnect.md) |
 | T052 | Complete the i18n plumbing and the string-literal lint rule | T039, T044, T048, T049 | no | done | [T052](T052-i18n-plumbing-and-lint-rule.md) |
-| T053 | Build the settings screen shell, General and Connection | T027, T045, T047, T050, T052 | yes | todo | [T053](T053-settings-screens.md) |
+| T053 | Build the settings screen shell, General and Connection | T027, T045, T047, T050, T052 | yes | done | [T053](T053-settings-screens.md) |
 | T103 | Ship the web app manifest, maskable icons and the service worker | T039, T040, T043 | yes | todo | [T103](T103-progressive-web-app.md) |
 | T104 | Add the accessibility harness: axe-core, the keyboard map and aria-rowcount | T042, T043, T044, T045, T048, T049, T051, T053 | yes | todo | [T104](T104-accessibility-harness.md) |
 
