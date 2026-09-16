@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e:server": "if [ -z \"$DLTOOL_CONFIG_DIR\" ] || [ -z \"$DLTOOL_DATA_ROOTS\" ]; then echo \"DLTOOL_CONFIG_DIR and DLTOOL_DATA_ROOTS must be set (see playwright.config.ts)\" >&2; exit 1; fi; mkdir -p \"$DLTOOL_DATA_ROOTS\" && npm run build && rm -rf ../internal/api/dist.new && cp -R dist ../internal/api/dist.new && rm -rf ../internal/api/dist && mv ../internal/api/dist.new ../internal/api/dist && cd .. && go build -o bin/dl-tool ./cmd/dl-tool && exec ./bin/dl-tool"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",

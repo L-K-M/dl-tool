@@ -125,7 +125,7 @@ The application shell, the virtualised grid, the add dialog, the folder browser,
 | [T040](T040-router-and-authentication-screens.md) | Mount the router, the providers and the authentication screens | T009, T013, T014, T039 | done |
 | [T041](T041-task-store-and-formatters.md) | Build the live task store and the locale-aware formatters | T014, T025, T039 | done |
 | [T042](T042-virtualised-task-grid.md) | Render the virtualised task grid and the mobile card list | T021, T040, T041 | done |
-| [T043](T043-playwright-harness-and-grid-performance.md) | Stand up the Playwright harness with the setup and grid-performance specs | T040, T042, T051 | todo |
+| [T043](T043-playwright-harness-and-grid-performance.md) | Stand up the Playwright harness with the setup and grid-performance specs | T040, T042, T051 | done |
 | [T044](T044-sidebar-toolbar-and-status-bar.md) | Build the sidebar tree, the toolbar and the status bar | T022, T023, T041, T042 | done |
 | [T045](T045-column-management-and-ui-prefs.md) | Add column management and the UI preference document | T042, T044 | done |
 | [T046](T046-filesystem-roots-and-browse.md) | Serve the filesystem roots and browse endpoints | T007, T008, T020 | done |
@@ -332,7 +332,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T040 | Mount the router, the providers and the authentication screens | T009, T013, T014, T039 | yes | done | [T040](T040-router-and-authentication-screens.md) |
 | T041 | Build the live task store and the locale-aware formatters | T014, T025, T039 | yes | done | [T041](T041-task-store-and-formatters.md) |
 | T042 | Render the virtualised task grid and the mobile card list | T021, T040, T041 | yes | done | [T042](T042-virtualised-task-grid.md) |
-| T043 | Stand up the Playwright harness with the setup and grid-performance specs | T040, T042, T051 | yes | todo | [T043](T043-playwright-harness-and-grid-performance.md) |
+| T043 | Stand up the Playwright harness with the setup and grid-performance specs | T040, T042, T051 | yes | done | [T043](T043-playwright-harness-and-grid-performance.md) |
 | T044 | Build the sidebar tree, the toolbar and the status bar | T022, T023, T041, T042 | yes | done | [T044](T044-sidebar-toolbar-and-status-bar.md) |
 | T045 | Add column management and the UI preference document | T042, T044 | no | done | [T045](T045-column-management-and-ui-prefs.md) |
 | T046 | Serve the filesystem roots and browse endpoints | T007, T008, T020 | no | done | [T046](T046-filesystem-roots-and-browse.md) |
