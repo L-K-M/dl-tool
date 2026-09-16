@@ -149,11 +149,15 @@ func NewGuard(log *slog.Logger, allowPrivate bool) *Guard {
 }
 
 // AllowAddr applies the §2.1 tables to one already-resolved address. It calls Is4In6 and Unmap
-// before the IPv4 rules, and logs one warn record carrying url_redacted, resolved_ip,
-// matched_prefix and hop on every denial.
+// before the IPv4 rules, and logs one warn record per denial. The record carries the fields
+// section 2.4 names — url_redacted, resolved_ip, matched_prefix and hop — and a field this
+// layer cannot know, such as the URL inside the dialer, stays zero rather than fabricated.
 func (g *Guard) AllowAddr(ip netip.Addr) error {
 	if ip.Is4In6() {
 		ip = ip.Unmap()
+	}
+	if !g.usable() {
+		return &BlockedError{Reason: "address", IP: ip}
 	}
 	if ip.Is4() {
 		for _, p := range g.denied4 {
@@ -187,6 +191,9 @@ func (g *Guard) AllowAddr(ip netip.Addr) error {
 // addr is always "ip:port", never a hostname. Ports 80 and 443 are the only ones permitted,
 // except on a guard returned by ForOrigin, which also permits that one origin's own port.
 func (g *Guard) Check(_ context.Context, network, addr string) error {
+	if !g.usable() {
+		return &BlockedError{Reason: "network"}
+	}
 	if network != "tcp4" && network != "tcp6" {
 		return g.block(&BlockedError{Reason: "network"}, netip.Addr{}, "")
 	}
@@ -214,10 +221,12 @@ func (g *Guard) Check(_ context.Context, network, addr string) error {
 // is reachable while every redirect hop to another host stays limited to 80 and 443
 // (12-security-and-threat-model.md sections 2.2 rule 5 and 2.3).
 func (g *Guard) ForOrigin(u *url.URL) *Guard {
-	if !g.allowPrivate || u == nil || u.Port() == "" {
+	if g == nil || !g.allowPrivate || u == nil || u.Port() == "" {
 		return g
 	}
-	ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", u.Hostname())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", u.Hostname())
 	if err != nil || len(ips) == 0 {
 		// Fail closed: an unresolvable origin keeps the stock 80/443 set rather
 		// than permitting its port for every address.
@@ -249,6 +258,9 @@ func (g *Guard) portAllowed(port string, ip netip.Addr) bool {
 
 // CheckRedirect caps hops at 5 and requires the scheme to stay http or https on every hop.
 func (g *Guard) CheckRedirect(req *http.Request, via []*http.Request) error {
+	if !g.usable() {
+		return &BlockedError{Reason: "network", Hop: len(via)}
+	}
 	target := ""
 	if req.URL != nil {
 		target = RedactURL(req.URL.String())
@@ -308,7 +320,31 @@ func RedactURL(raw string) string {
 	}
 	u.User = nil
 	u.RawQuery = ""
+	u.Fragment = ""
+	u.RawFragment = ""
 	return u.String()
+}
+
+// RedactError rewrites the URL inside a *url.Error produced by the guarded client.
+// http.Client fills it with the password-stripped but query-intact request or redirect
+// target, so logging the raw error would leak API keys carried in query strings — callers
+// that log or return fetch errors route them through this first. Errors without a
+// *url.Error pass through unchanged, and the wrapped cause is untouched.
+func RedactError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		scrubbed := *urlErr
+		scrubbed.URL = RedactURL(urlErr.URL)
+		return &scrubbed
+	}
+	return err
+}
+
+// usable reports whether g came from NewGuard. A zero-value Guard must fail
+// closed rather than allow every IPv4 address through nil prefix tables or
+// panic on a nil logger at the first denial.
+func (g *Guard) usable() bool {
+	return g != nil && g.log != nil && g.denied4 != nil && g.allowed6 != nil
 }
 
 // deny builds the "address"-reason BlockedError for a prefix match (or an

@@ -128,9 +128,11 @@ func RedactURL(raw string) string
 6. Write `CheckRedirect`: `len(via) >= 5` returns a `*BlockedError` with reason `redirect_cap`; a
    `req.URL.Scheme` other than `http` or `https` returns reason `scheme` — a `301` to
    `file:///etc/passwd` must not pass. Set `Hop` to `len(via)`.
-7. Write `NewClient` with `&net.Dialer{Timeout: 10 * time.Second, ControlContext: g.Check}` and
-   `&http.Transport{DialContext: d.DialContext, ForceAttemptHTTP2: true}`, `Timeout: 120 * time.Second`.
-   Never set `Dialer.Control`: it is ignored whenever `ControlContext` is set.
+7. Write `NewClient` with `&net.Dialer{Timeout: 10 * time.Second, ControlContext: func(ctx context.Context, network, address string, _ syscall.RawConn) error { return g.Check(ctx, network, address) }}`
+   — the dialer hook carries a `syscall.RawConn` fourth argument, so `Check` is wired through a
+   closure — and `&http.Transport{DialContext: d.DialContext, ForceAttemptHTTP2: true}`,
+   `Timeout: 120 * time.Second`. Never set `Dialer.Control`: it is ignored whenever
+   `ControlContext` is set.
 8. Write `ReadCapped` and `RedactURL`. `RedactURL` clears `u.User` and `u.RawQuery` before `u.String()`,
    so a tracker passkey never reaches a log line or a problem detail.
 9. Create `internal/secure/ssrf_test.go` with the pure cases, all asserting
@@ -202,34 +204,44 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/secure/...
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.207s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.394s
 SSRF_GUARD_OK
 ```
 
-`go test -race -count=1 -v ./internal/secure/` on the same tree, trimmed to the tests named in
-steps 9 to 11 — all pass, none skipped:
+`go test -race -count=1 -v ./internal/secure/` on the same tree — the SSRF tests (every test
+named in steps 9 to 11, plus the review-added cases) all pass:
 
 ```text
 --- PASS: TestCheckBlocksLoopback (0.00s)
 --- PASS: TestCheckBlocksLinkLocalMapped (0.00s)
 --- PASS: TestCheckBlocksNonStandardPort (0.00s)
 --- PASS: TestCheckAllowsPublicAddress (0.00s)
+--- PASS: TestCheckBlocksIPv6Loopback (0.00s)
+--- PASS: TestCheckBlocksUnspecified (0.00s)
+--- PASS: TestZeroValueGuardFailsClosed (0.00s)
 --- PASS: TestAllowPrivateLiftsRFC1918 (0.00s)
 --- PASS: TestAllowPrivateKeepsLinkLocalDenied (0.00s)
+--- PASS: TestAllowPrivateLiftsIPv6Loopback (0.00s)
 --- PASS: TestCheckRedirectCapsAtFiveHops (0.00s)
 --- PASS: TestCheckRedirectRejectsFileScheme (0.00s)
 --- PASS: TestClientBlocksRedirectToMetadata (0.00s)
 --- PASS: TestReadCappedRejectsDeclaredLength (0.00s)
---- PASS: TestReadCappedRejectsLyingLength (0.13s)
+--- PASS: TestReadCappedRejectsLyingLength (0.14s)
+--- PASS: TestReadCappedRejectsUnknownLengthOverCap (0.13s)
+--- PASS: TestReadCappedAllowsBodyAtCap (0.11s)
 --- PASS: TestRedactURLDropsUserinfoAndQuery (0.00s)
+--- PASS: TestRedactErrorStripsQueryFromURLError (0.00s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.200s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.448s
 ```
 
+`go test -race -count=1 -v ./internal/secure/ | grep -c -- '--- SKIP'` prints `0`: none skipped.
+
 `grep -rn "Control:" internal/secure/ssrf.go` prints nothing (exit 1): only `ControlContext` is
-set. Note the doc sketch's `ControlContext: g.Check` does not compile as written — the dialer
-hook takes a `syscall.RawConn` fourth argument — so `NewClient` wires `Check` through a
-closure that drops it, keeping `Check`'s contract signature for direct calls.
+set. The dialer hook carries a `syscall.RawConn` fourth argument, so `NewClient` wires `Check`
+through a closure (step 7 shows the exact form), keeping `Check`'s contract signature for
+direct calls. The identical sketch in `docs/12-security-and-threat-model.md` §2.2 remains
+stale — that file is outside this task's Files table.
 
 Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
 
