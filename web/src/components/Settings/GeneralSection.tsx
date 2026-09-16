@@ -151,8 +151,14 @@ export function GeneralSection(): JSX.Element {
     useSettingsDirty.setState((prev) => {
       if (dirtyCount === 0)
         return prev.report === null ? prev : { report: null };
-      if (prev.report?.count === dirtyCount) return prev;
-      return { report: { count: dirtyCount, save, revert } };
+      if (
+        prev.report?.count === dirtyCount &&
+        prev.report.section === "general"
+      )
+        return prev;
+      return {
+        report: { section: "general", count: dirtyCount, save, revert },
+      };
     });
   }, [dirtyCount, save, revert]);
   useEffect(() => () => useSettingsDirty.setState({ report: null }), []);

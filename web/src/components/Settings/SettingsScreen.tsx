@@ -55,6 +55,8 @@ const ARRIVAL: Record<Exclude<Section, keyof typeof SECTION_FORMS>, string> = {
 
 /** What a section form reports to the shell's Save / Revert bar. */
 export interface DirtyReport {
+  /** Owning section; the shell drops a report published by any other. */
+  section: Section;
   count: number;
   save: () => void;
   revert: () => void;
@@ -78,10 +80,16 @@ export function SettingsScreen(): JSX.Element {
     requested === "users" ? "account" : requested
   ) as Section;
 
-  // Placeholder sections never publish a report; drop any stale one so the
-  // Save / Revert bar cannot outlive the form that created it.
+  // A report published by a different section is stale — its save/revert
+  // closures belong to an unmounted form. Drop it; the render-time guard
+  // below keeps even one committed frame from showing it.
   useEffect(() => {
-    if (KNOWN_SECTIONS.has(section) && !IMPLEMENTED.includes(section))
+    const stale = useSettingsDirty.getState().report;
+    if (
+      KNOWN_SECTIONS.has(section) &&
+      stale !== null &&
+      stale.section !== section
+    )
       useSettingsDirty.setState({ report: null });
   }, [section]);
 
@@ -136,9 +144,11 @@ export function SettingsScreen(): JSX.Element {
         </div>
         {/* Always mounted so the count change announces; visually hidden while clean. */}
         <p aria-live="polite" className="sr-only">
-          {report === null ? "" : t("dirty.unsaved", { count: report.count })}
+          {report === null || report.section !== section
+            ? ""
+            : t("dirty.unsaved", { count: report.count })}
         </p>
-        {report !== null && (
+        {report !== null && report.section === section && (
           <div className="sticky bottom-0 z-10 flex items-center gap-2 border-t border-border bg-background px-6 py-2">
             <p className="me-auto text-sm">
               {t("dirty.unsaved", { count: report.count })}
