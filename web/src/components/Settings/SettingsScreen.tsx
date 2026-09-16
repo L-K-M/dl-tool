@@ -83,23 +83,15 @@ export function SettingsScreen(): JSX.Element {
     requested === "users" ? "account" : requested
   ) as Section;
 
-  // A report published by a different section is stale — its save/revert
-  // closures belong to an unmounted form. Drop it; the render-time guard
-  // below keeps even one committed frame from showing it.
+  // Any report present when the section mounts or changes is stale — its
+  // save/revert closures belong to a previous form instance (including a
+  // save that resolved after navigation). The mounted form republishes from
+  // its own effect afterwards, so clear unconditionally at both transitions.
+  // The render-time guard below keeps even one committed frame from showing
+  // a report owned by another section.
   useEffect(() => {
-    const stale = useSettingsDirty.getState().report;
-    if (
-      KNOWN_SECTIONS.has(section) &&
-      stale !== null &&
-      stale.section !== section
-    )
-      useSettingsDirty.setState({ report: null });
-    // Leaving the screen (or the section) retires this section's report; a
-    // remount must never resurrect closures of the unmounted form.
-    return () => {
-      if (useSettingsDirty.getState().report?.section === section)
-        useSettingsDirty.setState({ report: null });
-    };
+    useSettingsDirty.setState({ report: null });
+    return () => useSettingsDirty.setState({ report: null });
   }, [section]);
 
   if (!KNOWN_SECTIONS.has(section))
