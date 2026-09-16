@@ -308,17 +308,6 @@ export function TaskProgress({ taskId }: { taskId: string }) {
         textAlign: "center",
       }}
     >
-      {/* Track copy: --fg on --progress-track. */}
-      <span
-        aria-hidden="true"
-        style={{
-          position: "relative",
-          color: "var(--fg)",
-          userSelect: "none",
-        }}
-      >
-        {progress ? percent : missing}
-      </span>
       <span
         className={
           indeterminate
@@ -333,29 +322,31 @@ export function TaskProgress({ taskId }: { taskId: string }) {
           inset: 0,
           width: indeterminate ? "100%" : `${progress * 100}%`,
           backgroundColor: `var(${statusTokens[state]})`,
-          overflow: "hidden",
+        }}
+      />
+      {/* One text node in two colours: the hard-stop gradient clipped to the
+          glyphs paints --accent-fg where the fill passes underneath and --fg
+          on the track. This replaces the paired-copy overlay, whose extra
+          span and 100/progress resize doubled the DOM writes every tick and
+          blew the scripting budget, and the older mix-blend-mode trick,
+          which no colour could keep above the WCAG AA floor on both halves.
+          --accent-fg is safe on every statusTokens fill because each one is
+          dark in the light theme and light in the dark theme — if a fill
+          ever breaks that invariant it needs a paired foreground token. */}
+      <span
+        className="progress-label"
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          color: "transparent",
+          backgroundImage: `linear-gradient(to right, var(--accent-fg) ${indeterminate ? 100 : progress * 100}%, var(--fg) ${indeterminate ? 100 : progress * 100}%)`,
+          backgroundClip: "text",
+          WebkitBackgroundClip: "text",
+          userSelect: "none",
         }}
       >
-        {/* Fill copy: sized back up to the full bar so it overlays the track
-            copy exactly. Two copies replace the old mix-blend-mode trick,
-            which no colour could keep above the WCAG AA contrast floor on
-            both halves at once. --accent-fg is safe on every statusTokens
-            fill because each one is dark in the light theme and light in the
-            dark theme — if a fill ever breaks that invariant it needs a
-            paired foreground token instead. */}
-        <span
-          style={{
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: 0,
-            width: indeterminate || !progress ? "100%" : `${100 / progress}%`,
-            color: "var(--accent-fg)",
-            userSelect: "none",
-          }}
-        >
-          {progress ? percent : missing}
-        </span>
+        {progress ? percent : missing}
       </span>
     </span>
   );
