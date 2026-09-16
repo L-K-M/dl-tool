@@ -276,6 +276,7 @@ func TestDefinitionRules(t *testing.T) {
 		{"header name control characters", mutate(baseJSON, `X-Token: "t-{{ .Config.safe }}"`, `"X`+`\n`+`Token": "t"`), "control characters"},
 		{"header name with space", mutate(baseJSON, `X-Token: "t-{{ .Config.safe }}"`, `X Token: "t"`), "control characters"},
 		{"header name form feed", mutate(baseJSON, `X-Token: "t-{{ .Config.safe }}"`, `"X`+`\f`+`Token": "t"`), "control characters"},
+		{"header value form feed", mutate(baseJSON, `X-Token: "t-{{ .Config.safe }}"`, `X-Token: "a`+`\f`+`b"`), "control characters"},
 		{"if without else", mutate(baseJSON, "){{ else }}{{ .Keywords }}{{ end }}", "){{ .Keywords }}{{ end }}"), "mandatory {{ else }}"},
 		{"else outside if", mutate(baseJSON, "qf: '{{ .Query.Title }} {{ .Today.Year }}'", "qf: '{{ else }}'"), "outside an {{ if }}"},
 		{"end without block", mutate(baseJSON, "qf: '{{ .Query.Title }} {{ .Today.Year }}'", "qf: '{{ end }}'"), "without a block"},

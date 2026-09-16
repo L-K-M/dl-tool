@@ -531,7 +531,7 @@ func (cx *checkCtx) checkRequest(r *Request) error {
 		if strings.IndexFunc(name, func(c rune) bool { return c <= 0x20 || c == 0x7f }) >= 0 {
 			return cx.fail("request.headers."+name, "must not contain whitespace or control characters")
 		}
-		if strings.ContainsAny(r.Headers[name], "\r\n\x00") {
+		if strings.IndexFunc(r.Headers[name], func(c rune) bool { return (c < 0x20 && c != '\t') || c == 0x7f }) >= 0 {
 			return cx.fail("request.headers."+name, "must not contain control characters")
 		}
 	}
