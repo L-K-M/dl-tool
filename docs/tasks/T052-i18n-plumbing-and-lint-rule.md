@@ -182,9 +182,9 @@ catalogue row covers the new `close` key and any sibling keys the repair wants),
 record-then-repair workflow of T046 (#160/#161), T049 (#167/#168) and T050 (#169/#170, #171/#172).
 The scope check emits paths sorted, so the repaired table — and its "in that order" expectation —
 should list them as `web/eslint.config.js`, `web/src/components/ui/dialog.tsx`,
-`web/src/components/ui/sheet.tsx`, `web/src/i18n.test.ts`, `web/src/i18n.ts`, `web/src/lib/format.ts`,
-`web/src/locales/en/common.json`, `web/src/locales/en/errors.json` (the current five rows are not in
-that order either — a second mismatch the same repair can settle).
+`web/src/components/ui/sheet.tsx`, `web/src/i18n.test.ts`, `web/src/i18n.ts`,
+`web/src/lib/format.ts`, `web/src/locales/en/common.json`, `web/src/locales/en/errors.json` (the
+current five rows are not in that order either — a second mismatch the same repair can settle).
 
 Second, smaller defect for the same repair: `## Verification` expects `Test Files  12 passed (12)`,
 but the tree already carries 13 Vitest files and this task's own `web/src/i18n.test.ts` makes 14.
