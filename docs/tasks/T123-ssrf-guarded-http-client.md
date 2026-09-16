@@ -55,7 +55,9 @@ var ErrBodyTooLarge = errors.New("secure: response body over cap")
 const MetadataFetchCap int64 = 8 << 20
 
 // BlockedError names the rule that fired so a support request ends in one round trip.
-// Reason is one of "network", "port", "scheme", "address", "resolve" or "redirect_cap".
+// Reason is one of "network", "port", "scheme", "address", "resolve", "redirect_cap" or
+// "guard" — the last means the Guard itself was never built by NewGuard, a wiring bug,
+// so it is kept distinct from the policy-denial reasons rather than masquerading as one.
 type BlockedError struct {
 	Reason string
 	IP     netip.Addr // zero when Reason is not "address"
@@ -204,7 +206,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/secure/...
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.394s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.406s
 SSRF_GUARD_OK
 ```
 

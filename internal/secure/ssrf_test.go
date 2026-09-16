@@ -98,6 +98,13 @@ func TestZeroValueGuardFailsClosed(t *testing.T) {
 	if err := g.Check(context.Background(), "tcp4", "8.8.8.8:443"); !errors.Is(err, ErrSSRFBlocked) {
 		t.Errorf("zero-value Guard.Check(8.8.8.8:443) = %v, want ErrSSRFBlocked", err)
 	}
+	req, err := http.NewRequest(http.MethodGet, "http://8.8.8.8/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	if err := g.CheckRedirect(req, nil); !errors.Is(err, ErrSSRFBlocked) {
+		t.Errorf("zero-value Guard.CheckRedirect = %v, want ErrSSRFBlocked", err)
+	}
 }
 
 func TestAllowPrivateLiftsRFC1918(t *testing.T) {

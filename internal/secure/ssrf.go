@@ -30,7 +30,9 @@ const MetadataFetchCap int64 = 8 << 20
 const redirectHopCap = 5
 
 // BlockedError names the rule that fired so a support request ends in one round trip.
-// Reason is one of "network", "port", "scheme", "address", "resolve" or "redirect_cap".
+// Reason is one of "network", "port", "scheme", "address", "resolve", "redirect_cap" or
+// "guard" — the last means the Guard itself was never built by NewGuard, a wiring bug,
+// so it is kept distinct from the policy-denial reasons rather than masquerading as one.
 type BlockedError struct {
 	Reason string
 	IP     netip.Addr // zero when Reason is not "address"
@@ -157,7 +159,7 @@ func (g *Guard) AllowAddr(ip netip.Addr) error {
 		ip = ip.Unmap()
 	}
 	if !g.usable() {
-		return &BlockedError{Reason: "address", IP: ip}
+		return &BlockedError{Reason: "guard", IP: ip}
 	}
 	if ip.Is4() {
 		for _, p := range g.denied4 {
@@ -192,7 +194,7 @@ func (g *Guard) AllowAddr(ip netip.Addr) error {
 // except on a guard returned by ForOrigin, which also permits that one origin's own port.
 func (g *Guard) Check(_ context.Context, network, addr string) error {
 	if !g.usable() {
-		return &BlockedError{Reason: "network"}
+		return &BlockedError{Reason: "guard"}
 	}
 	if network != "tcp4" && network != "tcp6" {
 		return g.block(&BlockedError{Reason: "network"}, netip.Addr{}, "")
@@ -259,7 +261,7 @@ func (g *Guard) portAllowed(port string, ip netip.Addr) bool {
 // CheckRedirect caps hops at 5 and requires the scheme to stay http or https on every hop.
 func (g *Guard) CheckRedirect(req *http.Request, via []*http.Request) error {
 	if !g.usable() {
-		return &BlockedError{Reason: "network", Hop: len(via)}
+		return &BlockedError{Reason: "guard", Hop: len(via)}
 	}
 	target := ""
 	if req.URL != nil {
