@@ -334,6 +334,7 @@ export function TaskProgress({ taskId }: { taskId: string }) {
           dark in the light theme and light in the dark theme — if a fill
           ever breaks that invariant it needs a paired foreground token. */}
       <span
+        className="progress-label"
         aria-hidden="true"
         style={{
           position: "absolute",
