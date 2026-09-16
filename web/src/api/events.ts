@@ -235,6 +235,10 @@ export function createTransport(opts: {
     source?.close();
     source = null;
     epoch += 1;
+    // Retired requests are already ignored via the epoch guard; aborting
+    // them now releases the slot instead of letting zombies linger until
+    // their own timeout fires.
+    for (const stale of inflight) stale.abort();
     epochBaselined = false;
     let stream: EventSource;
     try {

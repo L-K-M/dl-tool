@@ -249,8 +249,9 @@ test("TestPollingAfterThreeFailures", async () => {
 });
 
 test("TestHungProbeReleasesTheGuard", async () => {
-  // A /sync request that never responds must not stall the fallback: the
-  // deadline aborts it and a later poll probes again.
+  // A /sync request that never responds must not stall the fallback: each
+  // reconnect aborts the hung probe and releases the in-flight guard, and
+  // the deadline still covers a probe that outlives its rung.
   getSync.mockImplementation(
     (_path, init) =>
       new Promise<SyncResult>((_resolve, reject) => {
@@ -264,17 +265,22 @@ test("TestHungProbeReleasesTheGuard", async () => {
   act(() => FakeEventSource.instances[0].emit("error"));
   await tick(0);
   expect(getSync).toHaveBeenCalledTimes(1);
-  // Two more failures start the poller while the first probe still hangs.
+  // The 1 s rung's reconnect aborts the hung probe, so the next rung probes
+  // immediately instead of waiting out the deadline.
   await tick(1000);
   act(() => FakeEventSource.instances.at(-1)!.emit("error"));
+  await tick(0);
+  expect(getSync).toHaveBeenCalledTimes(2);
   await tick(2000);
   act(() => FakeEventSource.instances.at(-1)!.emit("error"));
   await tick(0);
   expect(useTasks.getState().connection).toBe("polling");
-  expect(getSync).toHaveBeenCalledTimes(1);
-  // The deadline aborts the hung probe, freeing the next poll tick.
-  await tick(POLL_INTERVAL_MS * 2);
-  expect(getSync.mock.calls.length).toBeGreaterThan(1);
+  expect(getSync).toHaveBeenCalledTimes(3);
+  // Polling keeps probing: the 4 s rung's reconnect aborts the latest hung
+  // probe — the poll tick sharing that millisecond still sees the latched
+  // guard — so the following tick probes again.
+  await tick(POLL_INTERVAL_MS * 3);
+  expect(getSync.mock.calls.length).toBeGreaterThan(3);
   transport.stop();
 });
 
