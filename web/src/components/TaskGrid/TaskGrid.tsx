@@ -288,6 +288,7 @@ export function TaskProgress({ taskId }: { taskId: string }) {
   return (
     <span
       role="progressbar"
+      aria-label={t("headers.progress")}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={progress * 100}
@@ -307,6 +308,13 @@ export function TaskProgress({ taskId }: { taskId: string }) {
         textAlign: "center",
       }}
     >
+      {/* Track copy: --fg on --progress-track. */}
+      <span
+        aria-hidden="true"
+        style={{ position: "relative", color: "var(--fg)" }}
+      >
+        {progress ? percent : missing}
+      </span>
       <span
         className={
           indeterminate
@@ -321,10 +329,25 @@ export function TaskProgress({ taskId }: { taskId: string }) {
           inset: 0,
           width: indeterminate ? "100%" : `${progress * 100}%`,
           backgroundColor: `var(${statusTokens[state]})`,
+          overflow: "hidden",
         }}
-      />
-      <span style={{ position: "relative", mixBlendMode: "difference" }}>
-        {progress ? percent : missing}
+      >
+        {/* Fill copy: --accent-fg on the fill, sized back up to the full bar so
+            it overlays the track copy exactly. Two copies replace the old
+            mix-blend-mode trick, which no colour could keep above the WCAG AA
+            contrast floor on both halves at once. */}
+        <span
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: indeterminate || !progress ? "100%" : `${100 / progress}%`,
+            color: "var(--accent-fg)",
+          }}
+        >
+          {progress ? percent : missing}
+        </span>
       </span>
     </span>
   );

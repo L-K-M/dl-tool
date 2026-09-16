@@ -247,6 +247,9 @@ test("TestRendersDefaultColumns", async () => {
     formatBytes(1024, "en"),
   );
   const progress = within(row("one")).getByRole("progressbar");
+  // A progressbar needs an accessible name, not just the value text
+  // (axe aria-progressbar-name).
+  expect(progress.getAttribute("aria-label")).toBe("Progress");
   expect(progress.getAttribute("aria-valuenow")).toBe("50");
   expect(progress.style.background).toBe("var(--progress-track)");
   expect(progress.getAttribute("aria-valuemin")).toBe("0");
@@ -694,8 +697,11 @@ test("TestMissingCellsAndErrorDetails", async () => {
   ];
   await mount();
   const cells = within(row("empty")).getAllByRole("gridcell");
-  for (const index of [1, 3, 4, 6, 7, 9, 10, 11, 12, 14])
+  for (const index of [1, 3, 6, 7, 9, 10, 11, 12, 14])
     expect(cells[index].textContent).toBe("—");
+  // The progress bar paints its label twice — once per tone layer — so the
+  // cell carries two copies of the placeholder.
+  expect(within(cells[4]).getByRole("progressbar").textContent).toBe("——");
   expect(cells[8].textContent).toBe("∞");
   expect(cells[5].textContent).toContain("Error: disk_full");
   expect(within(cells[5]).getByTitle("Not enough space")).toBeTruthy();

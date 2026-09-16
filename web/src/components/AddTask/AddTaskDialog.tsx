@@ -1012,7 +1012,7 @@ export function AddTaskDialog({
 
               <div>
                 <label
-                  className={`flex items-center gap-2 text-sm ${ftpEnabled ? "" : "opacity-50"}`}
+                  className={`flex items-center gap-2 text-sm ${ftpEnabled ? "" : "text-muted-foreground"}`}
                   title={ftpEnabled ? undefined : t("addTask.ftpDisabledTip")}
                 >
                   <Checkbox
@@ -1062,7 +1062,7 @@ export function AddTaskDialog({
               </div>
 
               <label
-                className={`flex items-center gap-2 text-sm ${canSelectFiles ? "" : "opacity-50"}`}
+                className={`flex items-center gap-2 text-sm ${canSelectFiles ? "" : "text-muted-foreground"}`}
                 title={
                   canSelectFiles
                     ? undefined
