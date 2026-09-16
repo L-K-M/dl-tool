@@ -48,6 +48,7 @@ function loadWorker(scope: string): FakeWorker {
 test("TestActivationDeletesOnlyOwnScopedCaches", async () => {
   const worker = loadWorker("https://nas.example/dl-tool/");
   worker.store.set("other-app-offline-v4", new Map());
+  worker.store.set("dl-tool-assets-v1", new Map()); // the pre-scope name
   worker.store.set("dl-tool@/dl-tool/:assets-v1", new Map());
   worker.store.set("dl-tool@/dl-tool/:assets-v0", new Map());
   worker.store.set("dl-tool@/other/:assets-v9", new Map());
@@ -59,6 +60,9 @@ test("TestActivationDeletesOnlyOwnScopedCaches", async () => {
     "dl-tool@/other/:assets-v9",
     "other-app-offline-v4",
   ]);
+  // The legacy unscoped name is reclaimed; nothing else outside the
+  // deployment's namespace is touched.
+  expect(worker.store.has("dl-tool-assets-v1")).toBe(false);
 });
 
 test("TestFetchCachesScopedAssetsOnly", async () => {

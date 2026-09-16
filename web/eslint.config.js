@@ -18,7 +18,7 @@ export default tseslint.config(
         },
         {
           selector:
-            ":matches(JSXElement[openingElement.name.name!=style], JSXFragment) > JSXExpressionContainer > :matches(Literal[value=/[A-Za-z]{2,}/], TemplateLiteral[expressions.length=0]:has(> TemplateElement[value.cooked=/[A-Za-z]{2,}/]))",
+            ":matches(JSXElement[openingElement.name.name!=style], JSXFragment) > JSXExpressionContainer > :matches(Literal[value=/[A-Za-z]{2,}/], TemplateLiteral:has(> TemplateElement[value.cooked=/[A-Za-z]{2,}/]))",
           message:
             "User-visible text must go through t(); add the key to a locale catalogue.",
         },

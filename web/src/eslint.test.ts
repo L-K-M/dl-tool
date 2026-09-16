@@ -12,19 +12,27 @@ const lint = async (code: string) => {
 
 test("TestUntranslatedJsxTextRuleCoversTemplateChildren", async () => {
   // String-literal and template-literal expression children are both
-  // user-visible text and must go through t().
-  for (const child of ['{"Hello world"}', "{`Hello world`}"]) {
-    const messages = await lint(`export const C = () => <p>${child}</p>;\n`);
+  // user-visible text and must go through t(); interpolation does not
+  // excuse a letter-bearing quasi.
+  for (const child of [
+    '{"Hello world"}',
+    "{`Hello world`}",
+    "{`Hello ${name}`}",
+  ]) {
+    const messages = await lint(
+      `declare const name: string;\nexport const C = () => <p>${child}</p>;\n`,
+    );
     expect(
       messages.filter((m) => m.ruleId === "no-restricted-syntax"),
       child,
     ).toHaveLength(1);
   }
-  // The JSX whitespace idiom, translated text and a <style> sheet — which is
-  // not user-visible text — stay legal.
-  for (const child of ["{` `}", '{t("general.theme")}']) {
+  // The JSX whitespace idiom, translated text, a template whose quasis
+  // carry no words and a <style> sheet — not user-visible text — stay
+  // legal.
+  for (const child of ["{` `}", "{`${a}-${b}`}", '{t("general.theme")}']) {
     const messages = await lint(
-      `declare const t: (k: string) => string;\nexport const C = () => <p>${child}</p>;\n`,
+      `declare const t: (k: string) => string;\ndeclare const a: string;\ndeclare const b: string;\nexport const C = () => <p>${child}</p>;\n`,
     );
     expect(
       messages.filter((m) => m.ruleId === "no-restricted-syntax"),

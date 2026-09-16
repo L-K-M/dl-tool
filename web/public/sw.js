@@ -5,6 +5,9 @@
 // "/dl-tool/" and "/dl-tool-extras/" in distinct namespaces.
 const CACHE_PREFIX = `dl-tool@${new URL(self.registration.scope).pathname}:`;
 const CACHE = `${CACHE_PREFIX}assets-v1`;
+// Deployments from before the scoped name existed used this one; only
+// dl-tool ever wrote to it, so activation may reclaim it.
+const LEGACY_CACHE = "dl-tool-assets-v1";
 // registration.scope is an absolute URL ending in "/", so this resolves to
 // the Vite output directory under the installed base path.
 const ASSETS_PATH = new URL("assets/", self.registration.scope).pathname;
@@ -20,7 +23,11 @@ self.addEventListener("activate", (e) => {
       .then((k) =>
         Promise.all(
           k
-            .filter((n) => n.startsWith(CACHE_PREFIX) && n !== CACHE)
+            .filter(
+              (n) =>
+                n === LEGACY_CACHE ||
+                (n.startsWith(CACHE_PREFIX) && n !== CACHE),
+            )
             .map(caches.delete, caches),
         ),
       )
