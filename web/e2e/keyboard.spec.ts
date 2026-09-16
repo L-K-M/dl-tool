@@ -182,14 +182,17 @@ test("every documented shortcut works with keyboard input only", async ({
         }
         case "PageDown": {
           await page.keyboard.press("Home");
+          // Home's focus move is asynchronous (see the Home case); settle it
+          // before paging so the step is measured from the first row.
+          await expect.poll(() => focusedTaskId(page)).toBe(fixture.ids[0]);
           await page.keyboard.press("PageDown");
           // aria-rowindex is 1-based plus the header row: index pageStep.
-          expect(await focusedRowIndex(page)).toBe(pageStep + 2);
+          await expect.poll(() => focusedRowIndex(page)).toBe(pageStep + 2);
           break;
         }
         case "PageUp": {
           await page.keyboard.press("PageUp");
-          expect(await focusedRowIndex(page)).toBe(2);
+          await expect.poll(() => focusedRowIndex(page)).toBe(2);
           break;
         }
         case "Space": {

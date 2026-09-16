@@ -191,11 +191,12 @@ grid perf p95: 7.937 ms (budget 8 ms)
 A11Y_OK
 ```
 
-Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs'` names exactly
-the four Files-table paths (`web/e2e/a11y.spec.ts`, `web/e2e/keyboard.spec.ts`,
-`web/package.json`, `web/package-lock.json`) plus nothing else; the component
+Scope check — the branch's diff against `origin/main` touches exactly the four
+Files-table paths (`web/e2e/a11y.spec.ts`, `web/e2e/keyboard.spec.ts`,
+`web/package.json`, `web/package-lock.json`) plus the task docs; the component
 repairs live on `main` via #191/#192/#193 and enter this branch only through
-merge commits.
+merge commits (`git log --merges --oneline origin/main..HEAD` → `e565eb7`,
+`96e5fb8`, `64fb53f`), so they net to zero in the PR diff.
 
 The T043 scripting-budget spec is marginal on this workstation (p95 measured
 7.1–11.8 ms across runs here vs 8 ms); CI `verify` is the authoritative gate.
