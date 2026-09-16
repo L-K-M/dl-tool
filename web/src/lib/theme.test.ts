@@ -640,6 +640,9 @@ test("TestShadcnIntegrationContract", () => {
     ".text-foreground,.text-foreground\\/60{color:var(--foreground)}",
     ".border-border{border-color:var(--border)}",
     ".focus-visible\\:border-ring:focus-visible{border-color:var(--ring)}",
+    // A class name glued to a template-literal `${` is invisible to the
+    // scanner; this rule proves the active sidebar link colour is emitted.
+    ".aria-\\[current\\=page\\]\\:text-accent-foreground[aria-current=page]{color:var(--accent-foreground)}",
   ])
     expect(built).toContain(utility);
   for (const state of ["open", "closed"]) {
