@@ -31,11 +31,14 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
-| `web/src/i18n.ts` | edit | Register all seven namespaces, plural handling and the missing-key handler. |
-| `web/src/locales/en/errors.json` | create | Problem types and `task_events` codes as sentences. |
-| `web/src/i18n.test.ts` | create | Catalogue completeness and plural resolution. |
-| `web/src/lib/format.ts` | edit | Bind the default locale of every formatter to the active i18next language. |
 | `web/eslint.config.js` | edit | The bare-literal rule over `web/src/**/*.tsx`. |
+| `web/src/components/ui/dialog.tsx` | edit | Route both `Close` literals through `t()`. |
+| `web/src/components/ui/sheet.tsx` | edit | Route the `Close` literal through `t()`. |
+| `web/src/i18n.test.ts` | create | Catalogue completeness and plural resolution. |
+| `web/src/i18n.ts` | edit | Register all seven namespaces, plural handling and the missing-key handler. |
+| `web/src/lib/format.ts` | edit | Bind the default locale of every formatter to the active i18next language. |
+| `web/src/locales/en/common.json` | edit | Add the `actions.close` key the two copy-in repairs consume. |
+| `web/src/locales/en/errors.json` | create | Problem types and `task_events` codes as sentences. |
 
 No other file may be modified.
 
@@ -123,7 +126,7 @@ Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && make typecheck && make test-web && echo I18N_OK
 ```
-Expected: ESLint prints no error, Vitest reports `Test Files  12 passed (12)` including
+Expected: ESLint prints no error, Vitest reports `Test Files  14 passed (14)` including
 `src/i18n.test.ts`, every test named above appears as passing, and the final line of stdout is exactly
 `I18N_OK`.
 
@@ -151,6 +154,18 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
+
+The defect recorded below met the same end as T046, T049 and T050: the record merged in pull request
+#184 and this repair amended the file as it prescribed.
+
+- `web/src/components/ui/dialog.tsx`, `web/src/components/ui/sheet.tsx` and
+  `web/src/locales/en/common.json` joined the `## Files` table, so step 5 routes the three `Close`
+  literals through `t()` instead of scoping the copy-ins out of the rule. The table now lists every
+  row in the sorted order the scope check emits.
+- `## Verification` now expects `Test Files  14 passed (14)`: the tree carries 13 Vitest files and
+  this task's `i18n.test.ts` makes 14.
+
+The original record follows for the history.
 
 Step 5 cannot run as written: the specified rule — the two `no-restricted-syntax` selectors scoped
 to `src/**/*.tsx` — reports three real violations in files the `## Files` table does not admit:
