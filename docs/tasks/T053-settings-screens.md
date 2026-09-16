@@ -182,7 +182,7 @@ cd web && npx vitest run
  ✓ src/main.test.ts (1 test)
  ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests)
  ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests)
- ✓ src/components/Settings/SettingsScreen.test.tsx (11 tests)
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests)
  ✓ src/components/AddTask/AddTaskDialog.test.tsx (12 tests)
  ✓ src/lib/theme.test.ts (9 tests)
  ✓ src/components/Shell/Shell.test.tsx (12 tests)
@@ -190,7 +190,7 @@ cd web && npx vitest run
  ✓ src/components/TaskGrid/TaskGrid.test.tsx (33 tests)
 
  Test Files  15 passed (15)
-      Tests  214 passed (214)
+      Tests  215 passed (215)
 
 SETTINGS_OK
 ```
@@ -198,8 +198,9 @@ SETTINGS_OK
 `src/components/Settings/SettingsScreen.test.tsx` contains `TestUnknownSectionRedirects`,
 `TestUsersAliasRendersAccountNote`, `TestGeneralWritesPrefs`, `TestDirtyBarAppearsAndAnnounces`,
 `TestRevertRestoresBaseline`, `TestConnectionRendersEngines`, `TestEngineTestFailureRendersError`,
-`TestEngineTestRequestErrorToastsFriendlyDetail`, `TestConformanceWarningRendersFromLastError`,
-`TestUnimplementedSectionsRenderNoteNotForm` and `TestScreenMakesNoSettingsApiCalls`, all passing. The verification text above expects
+`TestEngineTestRequestErrorToastsFriendlyDetail`, `TestEngineRowsSurviveFailedPostTestRefetch`,
+`TestConformanceWarningRendersFromLastError`, `TestUnimplementedSectionsRenderNoteNotForm` and
+`TestScreenMakesNoSettingsApiCalls`, all passing. The verification text above expects
 `Test Files  13 passed (13)`; the pre-task baseline is 14 files (T052's Evidence recorded the drift)
 and this task's `SettingsScreen.test.tsx` makes 15 — every file passes, so the criterion's intent holds.
 
@@ -218,7 +219,7 @@ web/src/locales/en/settings.json
 Exactly the `## Files` table, in the sorted order the check emits, and nothing else.
 
 `make ci` on the same tree: `lint`, `vet`, `typecheck`, `test` (Go `ok` for every package under
-`internal/`; Vitest `Test Files  15 passed (15)`, `Tests  214 passed (214)`),
+`internal/`; Vitest `Test Files  15 passed (15)`, `Tests  215 passed (215)`),
 `compose-check` (`docker compose config -q` clean for `compose.yaml` and `compose.dev.yaml`) and
 `doclint` (`2467 Total, 575 Unique, 2440 OK, 0 Errors`) all pass.
 
