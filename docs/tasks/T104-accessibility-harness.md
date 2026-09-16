@@ -152,4 +152,65 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+The harness is implemented and working — it is the shipped M3 UI that fails the axe
+gate, and this task may not touch those components ("Do NOT change a component to
+make a violation disappear"). `make e2e` on `task/T104-accessibility-harness`
+(2026-09-16, axe-core via `@axe-core/playwright@4.13.0`, Chromium) reports:
+
+```
+axe setup: 0 serious, 0 critical, 0 total
+axe login: 0 serious, 0 critical, 0 total
+axe tasks: 2 serious, 0 critical, 2 total
+axe detail: 2 serious, 0 critical, 2 total
+axe settings: 1 serious, 0 critical, 1 total
+axe add-task dialog: 1 serious, 0 critical, 1 total
+axe folder browser dialog: 1 serious, 0 critical, 1 total
+  5 failed  (the five axe scans above)
+ 16 passed  (incl. all setup.spec.ts / pwa.spec.ts / keyboard.spec.ts tests,
+            the aria-rowcount gate, the live-region and dirty-bar tests)
+```
+
+Three distinct defects, each owned by an earlier task:
+
+1. **`aria-progressbar-name` (serious) — owner: T042**
+   `web/src/components/TaskGrid/TaskGrid.tsx`. Every mounted Progress cell is a
+   `<span role="progressbar" aria-valuemin/max/now aria-valuetext="…">` with no
+   accessible name. One violation per mounted row, e.g.
+   `div[aria-rowindex="2"] > span[aria-colindex="5"] > span[role="progressbar"]`.
+   Fails the `tasks` and `detail` screens.
+
+2. **`color-contrast` (serious) — owner: T044**
+   `web/src/components/Shell/Sidebar.tsx`. Zero-count sidebar nodes are dimmed with
+   `opacity: 0.45` (`zeroCountOpacity`, implementing doc 09 §2.4 "a zero-count
+   DOWNLOAD node dims, it never hides"), which flattens to foreground `#919294`
+   on `#f7f7f8` = 2.9:1 vs the 4.5:1 WCAG AA requirement (e.g.
+   `<span class="truncate">Completed</span>`). Fails `tasks`, `detail`,
+   `settings` (all seven download nodes there) and both dialog scans, since the
+   sidebar stays rendered behind every screen. Because the dimming is a
+   documented design rule, the fix may also need a plan decision in
+   `docs/09-web-ui-spec.md` §2.4 (e.g. a compliant way to de-emphasise).
+
+3. **`color-contrast` (serious) — owner: T049**
+   `web/src/components/AddTask/AddTaskDialog.tsx`. Disabled option labels use
+   `opacity-50` (`<label class="flex items-center gap-2 text-sm opacity-50">`,
+   e.g. "Only applies to ftp:// URLs" and "Add a .torrent file or a magnet link
+   to select files"), flattening to `#8a8b8d` on `#ffffff` = 3.41:1. Fails the
+   `add-task dialog` and `folder browser dialog` scans (the second dialog leaves
+   the first one rendered under the overlay, so its labels are still measured).
+
+Everything T104 itself owns passes: the full doc 09 §3.6 `SHORTCUTS` walk with
+keyboard input only, `Tab` into/through/out of the grid as one stop, the
+editable-target guard, exactly one `tabindex="0"` inside the grid, the
+`aria-rowcount`/`aria-colcount` gate (10 000 stubbed tasks, < 200 DOM rows),
+the polite status bar, the `role="alert"` reconnect banner and the settings
+dirty-bar count announcement. The `setup` and `login` screens are clean.
+
+One adjacent observation for whoever unblocks this: `setup.spec.ts`'s
+"the grid stays inside the scripting budget" (T043) flaked once at p95 8.5 ms
+vs the 8 ms budget while running in parallel with the new specs, then passed on
+re-run. The budget may be tight for a suite this size.
+
+Status stays `todo`: the axe acceptance criterion cannot pass until the three
+component defects above are fixed under their owning tasks (or the plan is
+amended to accept a compliant alternative for the §2.4 dimming rule).
