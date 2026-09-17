@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:academictorrents="https://academictorrents.com" version="2.0">
+<channel>
+<title>Academic Torrents</title>
+<description>Recent Torrents</description>
+<link>https://academictorrents.com/</link>
+<item>
+<title>Algorithmic Lower Bounds: Fun with Hardness Proofs (MIT 6.890) - Video lectures 2014</title>
+<category>Course</category>
+<infohash>f447784b18231897c892dbe45d943924583eab64</infohash>
+<guid>https://academictorrents.com/details/f447784b18231897c892dbe45d943924583eab64</guid>
+<link>https://academictorrents.com/details/f447784b18231897c892dbe45d943924583eab64</link>
+<description>"Algorithmic Lower Bounds: Fun with Hardness Proofs" is a class taking a practical approach to proving problems can't be solved efficiently. (Description truncated for the fixture.)</description>
+<size>6169821184</size>
+</item><item>
+<title>Reddit comments/submissions 2026-08</title>
+<category>Dataset</category>
+<infohash>f4848163a5fb650e4b15eee0202858447bca120a</infohash>
+<guid>https://academictorrents.com/details/f4848163a5fb650e4b15eee0202858447bca120a</guid>
+<link>https://academictorrents.com/details/f4848163a5fb650e4b15eee0202858447bca120a</link>
+<description>Reddit comments and submissions from 2026-08. (Description truncated for the fixture.)</description>
+<size>74613168905</size>
+</item><item>
+<title>UnityLV-MultiX Dataset echocardiography videos</title>
+<category>Dataset</category>
+<infohash>6e8a8eac48777052f4f8b8f5b30954036d59405d</infohash>
+<guid>https://academictorrents.com/details/6e8a8eac48777052f4f8b8f5b30954036d59405d</guid>
+<link>https://academictorrents.com/details/6e8a8eac48777052f4f8b8f5b30954036d59405d</link>
+<description>Echocardiography videos sourced from the Imperial College Healthcare NHS Trust. (Description truncated for the fixture.)</description>
+<size>34590597</size>
+</item>
+</channel>
+</rss>
