@@ -265,6 +265,16 @@ func (r *Registry) readUserDir() (byID map[string]*Definition, sources map[strin
 // and read — so the check goes through the open handle: require a regular
 // file, then bound the read itself.
 func (r *Registry) readUserFile(path string) ([]byte, error) {
+	// Stat before open: stat never blocks, but open(O_RDONLY) on a FIFO
+	// with no writer blocks forever — reject non-regular targets first.
+	// os.Stat follows symlinks like os.Open does, so a link to a regular
+	// file still loads while a link to a device or pipe is refused. The
+	// f.Stat() check below covers the residual stat-then-open swap.
+	if st, err := os.Stat(path); err != nil {
+		return nil, &DefinitionError{Msg: err.Error()}
+	} else if !st.Mode().IsRegular() {
+		return nil, &DefinitionError{Msg: "not a regular file"}
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, &DefinitionError{Msg: err.Error()}

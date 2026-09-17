@@ -9,7 +9,9 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/L-K-M/dl-tool/definitions"
 	"github.com/L-K-M/dl-tool/internal/secure"
@@ -303,6 +305,48 @@ func TestUserDefinitionSymlinkToNonRegularRejected(t *testing.T) {
 	}
 	if got := errs[path].Error(); !strings.Contains(got, "not a regular file") {
 		t.Fatalf("symlink error = %q, want a non-regular-file rejection", got)
+	}
+}
+
+func TestUserDefinitionFIFORejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fifo.dlsearch.yaml")
+	// open(O_RDONLY) on a FIFO with no writer blocks forever, so the
+	// regular-file rejection must happen before the open.
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
+			t.Skipf("mkfifo unsupported on %s: %v", runtime.GOOS, err)
+		}
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	type outcome struct {
+		reg *Registry
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		reg, err := NewRegistry(testLogger(), dir)
+		done <- outcome{reg, err}
+	}()
+
+	var reg *Registry
+	select {
+	case out := <-done:
+		if out.err != nil {
+			t.Fatalf("NewRegistry: %v", out.err)
+		}
+		reg = out.reg
+	case <-time.After(10 * time.Second):
+		t.Fatal("NewRegistry hung on the FIFO — the regular-file check ran after open")
+	}
+
+	errs := reg.Errors()
+	if _, ok := errs[path]; !ok {
+		t.Fatalf("FIFO not recorded in Errors(); got %v", errs)
+	}
+	if got := errs[path].Error(); !strings.Contains(got, "not a regular file") {
+		t.Fatalf("FIFO error = %q, want a non-regular-file rejection", got)
 	}
 }
 

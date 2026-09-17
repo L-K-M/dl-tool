@@ -199,8 +199,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/search	2.197s
-ok  	github.com/L-K-M/dl-tool/internal/store	76.032s
+ok  	github.com/L-K-M/dl-tool/internal/search	2.131s
+ok  	github.com/L-K-M/dl-tool/internal/store	75.145s
 BUNDLED_OK
 ```
 
@@ -216,6 +216,7 @@ every test named in steps 8 and 9 passes:
 --- PASS: TestSeedIndexersIsIdempotent (0.46s)
 --- PASS: TestUserDefinitionOversizeRejected (0.02s)
 --- PASS: TestUserDefinitionSymlinkToNonRegularRejected (0.01s)
+--- PASS: TestUserDefinitionFIFORejected (0.02s)
 --- PASS: TestNoPiracyIndexerNamesInRepository (0.01s)
 --- PASS: TestLoadValidRSSDefinition (0.01s)
 --- PASS: TestLoadValidStaticDefinition (0.00s)
@@ -238,7 +239,7 @@ every test named in steps 8 and 9 passes:
 --- PASS: TestParseRetryAfter (0.00s)
 --- PASS: TestFinaliseDropsUnusableRow (0.00s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/search	2.267s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.987s
 ```
 
 Scope check on the working tree before the task commit (the check compares the emitted set against
