@@ -908,6 +908,20 @@ func TestPluginQuoteEscapes(t *testing.T) {
 	assert.Equal(t, "z", res.SiteCategories["after"])
 }
 
+// TestPluginDictContinuation: a `= \` line continuation puts the dict
+// literal on the next line; the reader follows it rather than reporting
+// the declaration unreadable.
+func TestPluginDictContinuation(t *testing.T) {
+	res, err := search.ImportNovaPlugin(
+		[]byte("class cont(object):\n\tname = 'C'\n"+
+			"\tsupported_categories = \\\n"+
+			"\t\t{'tv': '50', 'movies': '20'}\n"),
+		"cont.py")
+	require.NoError(t, err)
+	assert.Equal(t, "50", res.SiteCategories["tv"])
+	assert.Equal(t, "20", res.SiteCategories["movies"])
+}
+
 // TestPluginFieldsStayOnTheNovaPath pins the provenance gate on the
 // plugin_* extras: a .dlm import must never grow plugin_version or
 // plugin_categories keys, and a .py plugin whose declared url is not a

@@ -133,7 +133,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 
-Run on the review-fix head (1670d0b), after the PR #208 review round:
+Run on the review-fix head after the second PR #208 review round (the
+`supported_categories` line-continuation fix):
 
 ```
 $ make lint && make test PKG="./internal/search/... ./internal/api/..." && echo PY_IMPORT_OK
@@ -149,8 +150,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/search	7.284s
-ok  	github.com/L-K-M/dl-tool/internal/api	118.195s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.223s
+ok  	github.com/L-K-M/dl-tool/internal/api	118.551s
 PY_IMPORT_OK
 ```
 
@@ -161,12 +162,14 @@ The step-7 test set plus the review-round additions, run with `-v`:
 --- PASS: TestPluginMetadataExtracted (0.00s)
 --- PASS: TestPluginClassNameMismatchWarns (0.00s)
 --- PASS: TestHostilePluginIsNotExecuted (0.00s)
---- PASS: TestPluginImportedDisabled (0.46s)
---- PASS: TestPluginImportRefusals (0.49s)
+--- PASS: TestPluginImportedDisabled (0.43s)
+--- PASS: TestPluginImportRefusals (0.38s)
 --- PASS: TestPluginBOMPrefixedSource (0.00s)
 --- PASS: TestPluginCategoriesUnreadableWarns (0.00s)
---- PASS: TestPluginFieldsStayOnTheNovaPath (0.43s)
-ok  	github.com/L-K-M/dl-tool/internal/search	2.437s
+--- PASS: TestPluginQuoteEscapes (0.00s)
+--- PASS: TestPluginDictContinuation (0.00s)
+--- PASS: TestPluginFieldsStayOnTheNovaPath (0.37s)
+ok  	github.com/L-K-M/dl-tool/internal/search	2.238s
 ```
 
 `make ci` also passes on the same tree: lint, vet, typecheck, the full Go

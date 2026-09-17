@@ -861,9 +861,17 @@ func pyLiterals(src []byte) (name, url string, categories map[string]string, err
 			}
 		case "supported_categories":
 			var text strings.Builder
-			text.WriteString(m[2])
 			var scan pyBraceScan
-			scan.feed(m[2])
+			rhs := m[2]
+			// A `= \` line continuation (or a bare `=`) puts the literal
+			// on the next line; follow it before balancing braces.
+			for i+1 < len(lines) &&
+				strings.TrimSuffix(strings.TrimSpace(rhs), "\\") == "" {
+				i++
+				rhs = lines[i]
+			}
+			text.WriteString(rhs)
+			scan.feed(rhs)
 			// The dict literal may span lines; keep consuming until its
 			// braces balance. An unterminated dict is skipped like any
 			// other non-literal construct.
