@@ -886,7 +886,8 @@ export interface components {
       definition_source: string | null;
       enabled: boolean;
       id: string;
-      kind: string;
+      /** @enum {string} */
+      kind: "torznab" | "newznab" | "dlsearch";
       last_error: string | null;
       last_test_at: string | null;
       legal_tier: string;

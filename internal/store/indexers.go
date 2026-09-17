@@ -132,9 +132,9 @@ func (s *IndexerStore) Create(ctx context.Context, in Indexer, apiKey secure.Sec
 		// default made explicit.
 		in.LegalTier = "user-supplied"
 	}
-	if in.Priority == 0 {
-		in.Priority = 50
-	}
+	// Priority is stored verbatim: the API layer applies the documented
+	// default of 50 at create time, so an explicit 0 round-trips the same
+	// way PATCH stores it.
 	now := time.Now().UnixMilli()
 	in.CreatedAt, in.UpdatedAt = now, now
 

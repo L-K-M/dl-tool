@@ -274,43 +274,44 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/... ./internal/search/...
-ok  	github.com/L-K-M/dl-tool/internal/api	121.065s
-ok  	github.com/L-K-M/dl-tool/internal/store	76.446s
-ok  	github.com/L-K-M/dl-tool/internal/search	1.637s
+ok  	github.com/L-K-M/dl-tool/internal/api	121.525s
+ok  	github.com/L-K-M/dl-tool/internal/store	77.076s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.571s
 INDEXERS_OK
 ```
 
-`go test -race -count=1 -v -run '<the eight step-10 tests plus two added probe tests>' ./internal/api/`:
+`go test -race -count=1 -v -run 'TestCreateIndexerRequiresURL|TestAPIKeyNeverReturned|TestPatchIndexerPartial|TestDuplicateDefinitionIDConflicts|TestCategoriesMergeCapsOverDefaults|TestMergeCategoriesDoesNotMutateDefaults|TestImportProviderCreatesDisabledRows|TestImportProviderSkipsProwlarrIdZero|TestImportRejectsUnsupportedContentType|TestCreateIndexerSSRFBlocked|TestCreateIndexerStoresCaps' ./internal/api/`:
 
 ```
 === RUN   TestCreateIndexerRequiresURL
---- PASS: TestCreateIndexerRequiresURL (0.43s)
+--- PASS: TestCreateIndexerRequiresURL (0.41s)
 === RUN   TestAPIKeyNeverReturned
---- PASS: TestAPIKeyNeverReturned (0.38s)
+--- PASS: TestAPIKeyNeverReturned (0.46s)
 === RUN   TestPatchIndexerPartial
 --- PASS: TestPatchIndexerPartial (0.41s)
 === RUN   TestDuplicateDefinitionIDConflicts
---- PASS: TestDuplicateDefinitionIDConflicts (0.38s)
+--- PASS: TestDuplicateDefinitionIDConflicts (0.44s)
 === RUN   TestCategoriesMergeCapsOverDefaults
---- PASS: TestCategoriesMergeCapsOverDefaults (0.43s)
+--- PASS: TestCategoriesMergeCapsOverDefaults (0.44s)
+=== RUN   TestMergeCategoriesDoesNotMutateDefaults
+--- PASS: TestMergeCategoriesDoesNotMutateDefaults (0.00s)
 === RUN   TestImportProviderCreatesDisabledRows
---- PASS: TestImportProviderCreatesDisabledRows (0.44s)
+--- PASS: TestImportProviderCreatesDisabledRows (0.50s)
 === RUN   TestImportProviderSkipsProwlarrIdZero
---- PASS: TestImportProviderSkipsProwlarrIdZero (0.43s)
+--- PASS: TestImportProviderSkipsProwlarrIdZero (0.47s)
 === RUN   TestImportRejectsUnsupportedContentType
---- PASS: TestImportRejectsUnsupportedContentType (0.44s)
+--- PASS: TestImportRejectsUnsupportedContentType (0.41s)
 === RUN   TestCreateIndexerSSRFBlocked
---- PASS: TestCreateIndexerSSRFBlocked (0.37s)
+--- PASS: TestCreateIndexerSSRFBlocked (0.44s)
 === RUN   TestCreateIndexerStoresCaps
---- PASS: TestCreateIndexerStoresCaps (0.46s)
+--- PASS: TestCreateIndexerStoresCaps (0.44s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/api	5.346s
+ok  	github.com/L-K-M/dl-tool/internal/api	5.640s
 ```
 
-(All eight tests named in step 10 are present and passing.
-TestCreateIndexerSSRFBlocked and TestCreateIndexerStoresCaps were added to
-cover the step-6 guard denial and the successful probe's caps landing on the
-row.)
+(All eight tests named in step 10 are present and passing. Three more cover
+the step-6 guard denial, the successful probe's caps landing on the row, and
+the merge's deep copy of the default tree.)
 
 Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
 

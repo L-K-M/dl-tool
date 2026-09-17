@@ -660,10 +660,10 @@ func DefaultCategories() []Category {
 	}
 }
 
-// FlattenCategories renders a caps category tree as the flat id-ordered list
-// stored in indexers.categories_json: every root and every subcat becomes one
-// entry, parents ahead of children, so a stored document never depends on the
-// nesting of one provider's tree.
+// FlattenCategories renders a caps category tree as the flat list stored in
+// indexers.categories_json: a pre-order walk, so every root and every subcat
+// becomes one entry with parents ahead of children and a stored document
+// never depends on the nesting of one provider's tree.
 func FlattenCategories(roots []Category) []Category {
 	var flat []Category
 	var walk func(c Category)

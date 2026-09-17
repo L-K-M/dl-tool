@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -63,7 +64,7 @@ type Deps struct {
 type IndexerDTO struct {
 	ID               string            `json:"id"`
 	Name             string            `json:"name"`
-	Kind             string            `json:"kind"`
+	Kind             string            `json:"kind" enum:"torznab,newznab,dlsearch"`
 	Enabled          bool              `json:"enabled"`
 	URL              *string           `json:"url"`
 	APIKeySet        bool              `json:"api_key_set"`
@@ -270,6 +271,9 @@ func RegisterSearchRoutes(api huma.API, h *SearchHandlers) {
 		Tags:          []string{"indexers"},
 		Security:      credentialRequired,
 		RequestBody:   importRequestBody(),
+		// The body cap matches the outbound metadata cap; T059 and T060's
+		// multipart branch can raise it when file uploads land.
+		MaxBodyBytes: secure.MetadataFetchCap,
 	}, h.ImportIndexer)
 }
 
@@ -296,7 +300,7 @@ func (h *SearchHandlers) ListIndexers(ctx context.Context, _ *struct{}) (*ListIn
 	out := &ListIndexersOutput{}
 	out.Body.Indexers = make([]IndexerDTO, 0, len(rows))
 	for _, row := range rows {
-		out.Body.Indexers = append(out.Body.Indexers, toIndexerDTO(row))
+		out.Body.Indexers = append(out.Body.Indexers, toIndexerDTO(h.log, row))
 	}
 	return out, nil
 }
@@ -318,6 +322,11 @@ func (h *SearchHandlers) CreateIndexer(ctx context.Context, in *CreateIndexerInp
 	}
 	if body.Kind == indexerKindDlsearch && optionalString(body.DefinitionID) == nil {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "a dlsearch indexer needs definition_id")
+	}
+	if indexerURL != nil {
+		if err := checkIndexerURL(*indexerURL); err != nil {
+			return nil, err
+		}
 	}
 
 	allowPrivate := body.AllowPrivateNetwork != nil && *body.AllowPrivateNetwork
@@ -355,6 +364,7 @@ func (h *SearchHandlers) CreateIndexer(ctx context.Context, in *CreateIndexerInp
 		Kind:         body.Kind,
 		URL:          indexerURL,
 		DefinitionID: body.DefinitionID,
+		Priority:     50,
 		SettingsJSON: &settingsJSON,
 	}
 	if body.Enabled != nil {
@@ -384,7 +394,7 @@ func (h *SearchHandlers) CreateIndexer(ctx context.Context, in *CreateIndexerInp
 		}
 	}
 
-	return &IndexerOutput{Status: http.StatusCreated, Body: toIndexerDTO(created)}, nil
+	return &IndexerOutput{Status: http.StatusCreated, Body: toIndexerDTO(h.log, created)}, nil
 }
 
 // PatchIndexer serves PATCH /indexers/{id}: the non-nil body fields form the
@@ -419,6 +429,11 @@ func (h *SearchHandlers) PatchIndexer(ctx context.Context, in *PatchIndexerInput
 	if kind == indexerKindDlsearch && optionalString(definitionID) == nil {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "a dlsearch indexer needs definition_id")
 	}
+	if indexerURL != nil && *indexerURL != "" {
+		if err := checkIndexerURL(*indexerURL); err != nil {
+			return nil, err
+		}
+	}
 
 	patch := store.IndexerPatch{
 		Name:         body.Name,
@@ -430,7 +445,7 @@ func (h *SearchHandlers) PatchIndexer(ctx context.Context, in *PatchIndexerInput
 		APIKey:       body.APIKey,
 	}
 	if body.Settings != nil || body.AllowPrivateNetwork != nil {
-		settingsJSON, err := mergeIndexerSettings(row.SettingsJSON, body.Settings, body.AllowPrivateNetwork)
+		settingsJSON, err := mergeIndexerSettings(h.log, row.SettingsJSON, body.Settings, body.AllowPrivateNetwork)
 		if err != nil {
 			return nil, internalFailure(ctx, "patch indexer settings", err)
 		}
@@ -445,7 +460,7 @@ func (h *SearchHandlers) PatchIndexer(ctx context.Context, in *PatchIndexerInput
 		return nil, FromStore(err)
 	}
 
-	return &IndexerOutput{Status: http.StatusOK, Body: toIndexerDTO(updated)}, nil
+	return &IndexerOutput{Status: http.StatusOK, Body: toIndexerDTO(h.log, updated)}, nil
 }
 
 // DeleteIndexer serves DELETE /indexers/{id}.
@@ -474,7 +489,7 @@ func (h *SearchHandlers) IndexerCategories(ctx context.Context, _ *struct{}) (*C
 	}
 
 	out := &CategoriesOutput{}
-	out.Body.Categories = mergeCategories(search.DefaultCategories(), rows)
+	out.Body.Categories = mergeCategories(h.log, search.DefaultCategories(), rows)
 	return out, nil
 }
 
@@ -531,10 +546,28 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 		return nil, internalFailure(ctx, "import indexer settings", err)
 	}
 
+	// Re-running the wizard against the same provider is a normal workflow;
+	// the per-indexer base URL is the dedup key, so a second import skips
+	// known rows instead of doubling the list.
+	existing, err := st.List(ctx, false)
+	if err != nil {
+		return nil, internalFailure(ctx, "list indexers for import", err)
+	}
+	known := make(map[string]bool, len(existing))
+	for _, row := range existing {
+		if row.URL != nil {
+			known[*row.URL] = true
+		}
+	}
+
 	out := &ImportOutput{}
 	out.Body.Warnings = []string{}
 	var first *store.Indexer
 	for _, entry := range entries {
+		if known[entry.BaseURL] {
+			out.Body.Warnings = append(out.Body.Warnings, entry.Name+": already imported; skipped")
+			continue
+		}
 		row := store.Indexer{
 			Name:             entry.Name,
 			Kind:             indexerKindTorznab,
@@ -543,12 +576,18 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 			DefinitionSource: ptr(indexerImportedSource),
 			Provenance:       ptr(indexerImportedProvenance),
 			LegalTier:        indexerTierUserSupplied,
+			Priority:         50,
 			SettingsJSON:     &settingsJSON,
 		}
 		created, err := st.Create(ctx, row, apiKey)
 		if err != nil {
+			if errors.Is(err, store.ErrConflict) {
+				out.Body.Warnings = append(out.Body.Warnings, entry.Name+": conflicts with an existing row; skipped")
+				continue
+			}
 			return nil, internalFailure(ctx, "import indexer", err)
 		}
+		known[entry.BaseURL] = true
 		if first == nil {
 			first = &created
 		}
@@ -569,14 +608,27 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 		}
 	}
 
+	if first == nil {
+		return nil, Problem(SlugConflict, http.StatusConflict, "every indexer from this provider is already imported")
+	}
 	// The response reports the probe outcome: re-read the first row so its
 	// categories and last_test_at are the post-probe values.
 	fresh, err := st.Get(ctx, first.ID)
 	if err != nil {
 		return nil, internalFailure(ctx, "read back indexer", err)
 	}
-	out.Body.Indexer = toIndexerDTO(fresh)
+	out.Body.Indexer = toIndexerDTO(h.log, fresh)
 	return out, nil
+}
+
+// checkIndexerURL rejects a url the torznab client can never fetch: it must
+// be absolute http or https, the same shape NewTorznabClient accepts.
+func checkIndexerURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "url must be an absolute http or https URL")
+	}
+	return nil
 }
 
 // probeCaps fetches t=caps for one torznab/newznab base URL. allowPrivate
@@ -585,9 +637,11 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 func (h *SearchHandlers) probeCaps(ctx context.Context, rawURL string, apiKey secure.Secret, allowPrivate bool) (search.Caps, error) {
 	hc := h.hc
 	if allowPrivate {
-		if u, err := url.Parse(rawURL); err == nil {
-			hc = secure.NewClient(secure.NewGuard(h.log, true).ForOrigin(u))
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			return search.Caps{}, fmt.Errorf("parse indexer url: %w", err)
 		}
+		hc = secure.NewClient(secure.NewGuard(h.log, true).ForOrigin(u))
 	}
 	if hc == nil {
 		return search.Caps{}, errors.New("no outbound client")
@@ -659,12 +713,15 @@ func indexerSettingsJSON(settings map[string]string, allowPrivate bool, origin s
 
 // mergeIndexerSettings applies a PATCH's settings and allow_private_network
 // onto the stored document. A provided settings map replaces the per-engine
-// keys but keeps the internal keys (origin, the flag unless overridden).
-func mergeIndexerSettings(existing *string, settings map[string]string, allowPrivate *bool) (string, error) {
+// keys but keeps the internal keys (origin, the flag unless overridden). A
+// stored document that is not valid JSON is treated as empty and logged:
+// one corrupt row must not become unpatchable.
+func mergeIndexerSettings(log *slog.Logger, existing *string, settings map[string]string, allowPrivate *bool) (string, error) {
 	doc := map[string]any{}
 	if existing != nil && *existing != "" {
 		if err := json.Unmarshal([]byte(*existing), &doc); err != nil {
-			return "", err
+			log.Warn("indexer settings_json is not valid JSON; treating it as empty", "error", err)
+			doc = map[string]any{}
 		}
 	}
 	if settings != nil {
@@ -701,9 +758,17 @@ func mergeIndexerSettings(existing *string, settings map[string]string, allowPri
 // mergeCategories overlays every enabled indexer's cached flat categories on
 // the default tree: an id a default root or subcategory already carries keeps
 // its position with the indexer's name; an unknown id appends as a root.
-// Roots and subcategories sort ascending by id.
-func mergeCategories(defaults []search.Category, rows []store.Indexer) []search.Category {
-	roots := append([]search.Category(nil), defaults...)
+// Roots and subcategories sort ascending by id. When two enabled indexers
+// shadow the same id the row the store sorts last wins — rows arrive ordered
+// by priority then name, so the highest (priority, name) pair prevails.
+func mergeCategories(log *slog.Logger, defaults []search.Category, rows []store.Indexer) []search.Category {
+	// Deep-copy the tree: a caps rename writes into Subcategories, and the
+	// caller's defaults slice must never be mutated.
+	roots := make([]search.Category, len(defaults))
+	for i, r := range defaults {
+		roots[i] = r
+		roots[i].Subcategories = append([]search.Category(nil), r.Subcategories...)
+	}
 	type position struct{ root, sub int }
 	positions := map[int]position{}
 	for i, r := range roots {
@@ -718,6 +783,7 @@ func mergeCategories(defaults []search.Category, rows []store.Indexer) []search.
 		}
 		var cats []search.Category
 		if err := json.Unmarshal([]byte(*row.CategoriesJSON), &cats); err != nil {
+			log.Warn("indexer categories_json is not valid JSON; skipped in the merged tree", "indexer_id", row.ID)
 			continue
 		}
 		for _, c := range cats {
@@ -743,8 +809,11 @@ func mergeCategories(defaults []search.Category, rows []store.Indexer) []search.
 }
 
 // toIndexerDTO renders one store row. APIKeySet comes from a non-nil
-// api_key_enc — the key is never opened, copied or returned.
-func toIndexerDTO(row store.Indexer) IndexerDTO {
+// api_key_enc — the key is never opened, copied or returned. A
+// categories_json that does not parse degrades to an empty list with a
+// log line: only an out-of-band write can produce one, since SetCaps
+// stores json.Marshal output.
+func toIndexerDTO(log *slog.Logger, row store.Indexer) IndexerDTO {
 	dto := IndexerDTO{
 		ID:               row.ID,
 		Name:             row.Name,
@@ -765,6 +834,8 @@ func toIndexerDTO(row store.Indexer) IndexerDTO {
 		var cats []search.Category
 		if err := json.Unmarshal([]byte(*row.CategoriesJSON), &cats); err == nil {
 			dto.Categories = cats
+		} else {
+			log.Warn("indexer categories_json is not valid JSON; reporting an empty list", "indexer_id", row.ID)
 		}
 	}
 	if row.LastTestAt != nil {

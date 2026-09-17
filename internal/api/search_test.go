@@ -15,6 +15,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/L-K-M/dl-tool/internal/config"
+	"github.com/L-K-M/dl-tool/internal/search"
 	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
@@ -114,6 +115,10 @@ func TestCreateIndexerRequiresURL(t *testing.T) {
 
 	// A dlsearch indexer without definition_id is refused the same way.
 	resp := env.createIndexer(t, map[string]any{"name": "no def", "kind": "dlsearch"})
+	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	// A url the torznab client can never fetch is refused, not stored.
+	resp = env.createIndexer(t, map[string]any{"name": "bad url", "kind": "torznab", "url": "ftp://x"})
 	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
 
 	if got := env.indexerCount(t, ""); got != 0 {
@@ -297,8 +302,9 @@ func TestCategoriesMergeCapsOverDefaults(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &enabled); err != nil {
 		t.Fatalf("decode create body: %v", err)
 	}
-	// 3000 shadows the default root's name; 100001 is site-specific.
-	caps := `[{"id":3000,"name":"AudioX"},{"id":100001,"name":"Site Custom"}]`
+	// 3000 shadows the default root's name, 2040 a default subcategory's,
+	// and 100001 is site-specific.
+	caps := `[{"id":3000,"name":"AudioX"},{"id":2040,"name":"SiteHD"},{"id":100001,"name":"Site Custom"}]`
 	if err := env.indexers.SetCaps(t.Context(), enabled.ID, caps, false); err != nil {
 		t.Fatalf("set caps: %v", err)
 	}
@@ -326,7 +332,8 @@ func TestCategoriesMergeCapsOverDefaults(t *testing.T) {
 			ID            int    `json:"id"`
 			Name          string `json:"name"`
 			Subcategories []struct {
-				ID int `json:"id"`
+				ID   int    `json:"id"`
+				Name string `json:"name"`
 			} `json:"subcategories"`
 		} `json:"categories"`
 	}
@@ -347,6 +354,16 @@ func TestCategoriesMergeCapsOverDefaults(t *testing.T) {
 			if c.Name != "AudioX" {
 				t.Errorf("id 3000 name = %q, want the caps value AudioX", c.Name)
 			}
+		case 2000:
+			var renamed bool
+			for _, s := range c.Subcategories {
+				if s.ID == 2040 && s.Name == "SiteHD" {
+					renamed = true
+				}
+			}
+			if !renamed {
+				t.Errorf("subcat 2040 was not renamed in place under root 2000: %+v", c.Subcategories)
+			}
 		case 100001:
 			custom++
 		case 999999:
@@ -364,6 +381,44 @@ func TestCategoriesMergeCapsOverDefaults(t *testing.T) {
 	}
 	if len(out.Categories) != 8+1 {
 		t.Errorf("roots = %d, want the 8 defaults plus 1 site-specific", len(out.Categories))
+	}
+}
+
+// TestMergeCategoriesDoesNotMutateDefaults pins the deep copy: a caps rename
+// writes into the merged tree only, never through the shared subcategory
+// backing arrays into the caller's defaults.
+func TestMergeCategoriesDoesNotMutateDefaults(t *testing.T) {
+	defaults := search.DefaultCategories()
+	rows := []store.Indexer{{
+		ID:             "idx_mut",
+		CategoriesJSON: ptr(`[{"id":3000,"name":"Renamed"},{"id":2040,"name":"SubRenamed"}]`),
+	}}
+
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	merged := mergeCategories(log, defaults, rows)
+	var rootRenamed, subRenamed bool
+	for _, r := range merged {
+		if r.ID == 3000 && r.Name == "Renamed" {
+			rootRenamed = true
+		}
+		for _, s := range r.Subcategories {
+			if s.ID == 2040 && s.Name == "SubRenamed" {
+				subRenamed = true
+			}
+		}
+	}
+	if !rootRenamed || !subRenamed {
+		t.Fatalf("merged tree did not apply the caps renames: root=%v sub=%v", rootRenamed, subRenamed)
+	}
+	for _, r := range defaults {
+		if r.ID == 3000 && r.Name != "Audio" {
+			t.Errorf("defaults root 3000 mutated to %q", r.Name)
+		}
+		for _, s := range r.Subcategories {
+			if s.ID == 2040 && s.Name != "HD" {
+				t.Errorf("defaults subcat 2040 mutated to %q", s.Name)
+			}
+		}
 	}
 }
 
@@ -433,6 +488,20 @@ func TestImportProviderCreatesDisabledRows(t *testing.T) {
 	}
 	if got := env.indexerCount(t, "WHERE categories_json IS NULL"); got != 0 {
 		t.Errorf("rows without stored caps = %d, want 0", got)
+	}
+
+	// Re-running the wizard against the same provider is idempotent: every
+	// entry dedupes on its base URL, so the second import creates nothing
+	// and answers 409 /problems/conflict.
+	resp = env.api.Do(
+		http.MethodPost, "/indexers/import",
+		"Content-Type: application/json",
+		strings.NewReader(`{"torznab_url":"`+srv.URL+`/api/v2.0/indexers/all/results/torznab/api","api_key":"jackett-key"}`),
+		env.authz(),
+	)
+	assertProblem(t, resp, http.StatusConflict, SlugConflict)
+	if got := env.indexerCount(t, ""); got != 2 {
+		t.Errorf("indexer rows after re-import = %d, want 2", got)
 	}
 }
 
