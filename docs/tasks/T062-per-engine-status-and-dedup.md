@@ -170,24 +170,26 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/jobs/... ./internal/search/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	6.369s
-ok  	github.com/L-K-M/dl-tool/internal/search	6.977s
-ok  	github.com/L-K-M/dl-tool/internal/api	124.190s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	7.178s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.345s
+ok  	github.com/L-K-M/dl-tool/internal/api	124.296s
 SEARCH_STATUS_OK
 ```
 
-The step-7 and step-8 test set, run with `-v` (both suites pass):
+The step-7 and step-8 test set plus the review-added tests, run with `-v`:
 
 ```
---- PASS: TestFanOutWritesPerEngine (0.41s)
---- PASS: TestOneEngineFailsOthersSucceed (0.42s)
---- PASS: TestAllEnginesFailFinishesWithErrors (0.42s)
+--- PASS: TestFanOutWritesPerEngine (0.04s)
+--- PASS: TestOneEngineFailsOthersSucceed (0.04s)
+--- PASS: TestAllEnginesFailFinishesWithErrors (0.04s)
 --- PASS: TestTorznabErrorCodeClassification (0.00s) — 15 subcases incl. 300 → nil
---- PASS: TestRetryAfterIsReported (0.42s)
-ok  	github.com/L-K-M/dl-tool/internal/jobs	2.297s
---- PASS: TestEnginesArrayCarriesErrorAndResults (0.47s)
---- PASS: TestDuplicateAcrossEnginesAppearsOnce (0.43s)
-ok  	github.com/L-K-M/dl-tool/internal/api	1.992s
+--- PASS: TestRetryAfterIsReported (0.04s)
+--- PASS: TestEngineErrorRedactsAPIKey (0.03s)
+--- PASS: TestDuplicateRowsAreRetained (0.03s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	0.226s
+--- PASS: TestEnginesArrayCarriesErrorAndResults (0.08s)
+--- PASS: TestDuplicateAcrossEnginesAppearsOnce (0.04s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.137s
 ```
 
 Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
@@ -214,7 +216,18 @@ Notes on the contract, none widening the Files table:
   redacted transport message instead.
 - `Dedup` runs over the page `ListResults` returns, so `total` still counts
   the stored rows — the collapse is on read and the losing rows stay in
-  `search_results`, per the out-of-scope rules.
+  `search_results`, per the out-of-scope rules. Known limit of the specified
+  design: a duplicate pair straddling a page boundary can appear once per
+  page, and `total`/`limit` arithmetic over-counts collapsed pages. A fix
+  would need a dedup-stable `ORDER BY` in `internal/store`, which is outside
+  this task's Files table; surfaced by review as a follow-up for the search
+  screen task.
+- `EngineFailure.Text` is upstream-controlled text: the fan-out scrubs the
+  credential the request carried (`searchIndexer` returns it alongside the
+  results) before the message reaches the tracker, `RecordTest` or the log —
+  an error document that echoes the request URL cannot leak the api key.
+  `secure.RedactError` alone cannot cover this: it only rewrites `*url.Error`,
+  and a `*search.TorznabError` is not one.
 - `EngineFailure.Disable`/`DisableMode` are classification data only: the
   steps persist the message via `Searches.Set` and `idx.RecordTest`, and no
   per-mode disable mechanism exists in this task's Files table.

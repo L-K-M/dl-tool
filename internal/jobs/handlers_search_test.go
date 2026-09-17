@@ -36,7 +36,19 @@ func newSearchFixture(t *testing.T) (*sqlx.DB, *store.IndexerStore, *http.Client
 // seedSearchIndexer inserts an enabled torznab row pointed at the stub.
 func seedSearchIndexer(t *testing.T, idx *store.IndexerStore, name, baseURL string) store.Indexer {
 	t.Helper()
-	settings := `{"allow_private_network":true,"origin":"` + baseURL + `"}`
+	return seedSearchIndexerKey(t, idx, name, baseURL, secure.Secret("k"))
+}
+
+// seedSearchIndexerKey is seedSearchIndexer with a caller-chosen credential —
+// a redaction test needs a recognisable key to look for.
+func seedSearchIndexerKey(t *testing.T, idx *store.IndexerStore, name, baseURL string, key secure.Secret) store.Indexer {
+	t.Helper()
+	settingsJSON, err := json.Marshal(map[string]any{
+		"allow_private_network": true,
+		"origin":                baseURL,
+	})
+	require.NoError(t, err)
+	settings := string(settingsJSON)
 	row, err := idx.Create(t.Context(), store.Indexer{
 		Name:         name,
 		Kind:         "torznab",
@@ -44,7 +56,7 @@ func seedSearchIndexer(t *testing.T, idx *store.IndexerStore, name, baseURL stri
 		URL:          &baseURL,
 		SettingsJSON: &settings,
 		Priority:     store.DefaultIndexerPriority,
-	}, secure.Secret("k"))
+	}, key)
 	require.NoError(t, err)
 	return row
 }
@@ -78,6 +90,10 @@ func runSearchJob(t *testing.T, db *sqlx.DB, idx *store.IndexerStore, hc *http.C
 	require.NoError(t, h(t.Context(), job))
 }
 
+// xmlTextEsc escapes the characters XML text cannot carry raw, so a title
+// like "Tom & Jerry" does not break the feed document.
+var xmlTextEsc = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
 // searchFeedXML renders one RSS item per title, each carrying a .torrent
 // enclosure so Finalise keeps the row.
 func searchFeedXML(titles ...string) string {
@@ -86,7 +102,7 @@ func searchFeedXML(titles ...string) string {
 	for i, title := range titles {
 		fmt.Fprintf(&b,
 			`<item><title>%s</title><enclosure url="https://x.test/f%d.torrent" length="10%d"/></item>`,
-			title, i, i,
+			xmlTextEsc.Replace(title), i, i,
 		)
 	}
 	b.WriteString(`</channel></rss>`)
@@ -319,4 +335,64 @@ func TestRetryAfterIsReported(t *testing.T) {
 	stored, err := store.GetSearchJob(t.Context(), db, job.ID)
 	require.NoError(t, err)
 	require.True(t, stored.Finished)
+}
+
+// TestEngineErrorRedactsAPIKey is the credential-hygiene check: an error
+// document echoing the request — api key included — must not put that key
+// into engines[].error or the indexer row's last_error.
+func TestEngineErrorRedactsAPIKey(t *testing.T) {
+	db, idx, hc := newSearchFixture(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, `<error code="100" description="key %s rejected"/>`, r.URL.Query().Get("apikey"))
+	}))
+	defer srv.Close()
+
+	const key = "s3cr3t-ap1-k3y"
+	row := seedSearchIndexerKey(t, idx, "echo", srv.URL+"/api", secure.Secret(key))
+	job, queueRow := newSearchJob(t, db, row.ID)
+	runSearchJob(t, db, idx, hc, queueRow)
+
+	engines, ok := store.Searches.Snapshot(job.ID)
+	require.True(t, ok)
+	require.Len(t, engines, 1)
+	require.Equal(t, store.EngineError, engines[0].Status)
+	require.NotNil(t, engines[0].Error)
+	assert.NotContains(t, *engines[0].Error, key, "the upstream-echoed key must not reach the poll")
+	assert.Contains(t, *engines[0].Error, "[REDACTED]")
+
+	stored, err := idx.Get(t.Context(), row.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored.LastError)
+	assert.NotContains(t, *stored.LastError, key, "last_error must not persist the key")
+}
+
+// TestDuplicateRowsAreRetained: two engines returning the same item keep
+// their own search_results rows — the collapse is a read-time API concern
+// (doc 07 section 5), so the job total still counts every stored row.
+func TestDuplicateRowsAreRetained(t *testing.T) {
+	db, idx, hc := newSearchFixture(t)
+
+	one := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(searchFeedXML("Shared.Release")))
+	}))
+	defer one.Close()
+	two := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(searchFeedXML("shared_release")))
+	}))
+	defer two.Close()
+
+	r1 := seedSearchIndexer(t, idx, "one", one.URL+"/api")
+	r2 := seedSearchIndexer(t, idx, "two", two.URL+"/api")
+
+	job, queueRow := newSearchJob(t, db, r1.ID, r2.ID)
+	runSearchJob(t, db, idx, hc, queueRow)
+
+	require.Equal(t, 1, engineResultCount(t, db, job.ID, r1.ID))
+	require.Equal(t, 1, engineResultCount(t, db, job.ID, r2.ID))
+
+	stored, err := store.GetSearchJob(t.Context(), db, job.ID)
+	require.NoError(t, err)
+	require.True(t, stored.Finished)
+	require.Equal(t, 2, stored.Total, "duplicate rows persist; the read path collapses them")
 }

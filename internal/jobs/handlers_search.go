@@ -147,6 +147,18 @@ func descSuffix(desc string) string {
 	return ": " + desc
 }
 
+// redactSecret removes the indexer's credential wherever the upstream echoed
+// it: a torznab error document or an error page can embed the request URL,
+// api key included, and the classified text is persisted to the tracker, the
+// indexer row and the log. An empty secret means no credential went on the
+// wire, so the text is returned unchanged.
+func redactSecret(text, secret string) string {
+	if secret == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, secret, "[REDACTED]")
+}
+
 // retrySuffix names the upstream wait in the engine message, so the poll
 // shows why the engine stopped and when to try again. The engine still ends
 // now — nothing sleeps past the per-engine deadline waiting it out.
@@ -260,7 +272,7 @@ func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *
 				engineCtx, cancel := context.WithTimeout(ctx, engineSearchDeadline)
 				defer cancel()
 
-				results, err := searchIndexer(engineCtx, row, p, reg, run, idx, hc, ua, log)
+				results, apiKey, err := searchIndexer(engineCtx, row, p, reg, run, idx, hc, ua, log)
 				if err != nil {
 					f := classify(err, 0, engineURL(row, reg))
 					if f == nil {
@@ -269,6 +281,12 @@ func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *
 						store.Searches.Set(p.SearchJobID, id, store.EngineDone, 0, nil)
 						return
 					}
+					// The classified text is upstream-controlled: an error
+					// document can echo the request URL back, api key
+					// included, so the credential this call carried is
+					// scrubbed before the message reaches the tracker, the
+					// indexer row or the log.
+					f.Text = redactSecret(f.Text, apiKey.Reveal())
 					store.Searches.Set(p.SearchJobID, id, store.EngineError, 0, &f.Text)
 					failedEngines.Add(1)
 					// The indexer's settings row shows the same message
@@ -321,47 +339,51 @@ func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *
 }
 
 // searchIndexer runs one engine of the fan-out: the Torznab client for a
-// torznab/newznab row, the dlsearch runner for a definition-backed one.
-func searchIndexer(ctx context.Context, row store.Indexer, p SearchPayload, reg *search.Registry, run *search.Runner, idx *store.IndexerStore, hc *http.Client, ua string, log *slog.Logger) ([]search.SearchResult, error) {
+// torznab/newznab row, the dlsearch runner for a definition-backed one. The
+// credential the request carried comes back too, so the caller can scrub it
+// out of upstream-controlled error text.
+func searchIndexer(ctx context.Context, row store.Indexer, p SearchPayload, reg *search.Registry, run *search.Runner, idx *store.IndexerStore, hc *http.Client, ua string, log *slog.Logger) ([]search.SearchResult, secure.Secret, error) {
 	cfg := store.IndexerSettingsMap(log, row)
 
 	switch row.Kind {
 	case "torznab", "newznab":
 		if row.URL == nil || *row.URL == "" {
-			return nil, errors.New("the indexer has no url")
+			return nil, "", errors.New("the indexer has no url")
 		}
 		apiKey, err := idx.OpenAPIKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("open indexer key: %w", err)
+			return nil, "", fmt.Errorf("open indexer key: %w", err)
 		}
 		client, err := search.NewTorznabClient(
 			searchHTTPClient(hc, cfg, *row.URL, log), *row.URL, apiKey, row.ID, ua,
 		)
 		if err != nil {
-			return nil, err
+			return nil, apiKey, err
 		}
-		return client.Search(ctx, search.Query{T: "search", Q: p.Query, Categories: p.Categories})
+		results, err := client.Search(ctx, search.Query{T: "search", Q: p.Query, Categories: p.Categories})
+		return results, apiKey, err
 	case "dlsearch":
 		if reg == nil || run == nil {
-			return nil, errors.New("the search runner is not configured")
+			return nil, "", errors.New("the search runner is not configured")
 		}
 		if row.DefinitionID == nil || *row.DefinitionID == "" {
-			return nil, errors.New("the indexer has no definition_id")
+			return nil, "", errors.New("the indexer has no definition_id")
 		}
 		def, ok := reg.Get(*row.DefinitionID)
 		if !ok {
-			return nil, fmt.Errorf("the indexer's definition %q is not loaded", *row.DefinitionID)
+			return nil, "", fmt.Errorf("the indexer's definition %q is not loaded", *row.DefinitionID)
 		}
 		apiKey, err := idx.OpenAPIKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("open indexer key: %w", err)
+			return nil, "", fmt.Errorf("open indexer key: %w", err)
 		}
 		if apiKey.Reveal() != "" {
 			cfg["api_key"] = apiKey.Reveal()
 		}
-		return run.Search(ctx, def, cfg, search.Query{Q: p.Query, Categories: p.Categories})
+		results, err := run.Search(ctx, def, cfg, search.Query{Q: p.Query, Categories: p.Categories})
+		return results, apiKey, err
 	default:
-		return nil, fmt.Errorf("unknown indexer kind %q", row.Kind)
+		return nil, "", fmt.Errorf("unknown indexer kind %q", row.Kind)
 	}
 }
 

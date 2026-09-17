@@ -1621,4 +1621,10 @@ func TestDuplicateAcrossEnginesAppearsOnce(t *testing.T) {
 	if seeders["other_release_2026"] != 7 {
 		t.Errorf("title/size pair seeders = %d, want 7 (the higher count)", seeders["other_release_2026"])
 	}
+	// The collapse preserves the page's -seeders order: the 9-seeder
+	// survivor still precedes the 7-seeder one.
+	if *poll.Body.Results[0].Seeders != 9 || *poll.Body.Results[1].Seeders != 7 {
+		t.Errorf("result order after dedup = %d then %d, want the page's -seeders order preserved",
+			*poll.Body.Results[0].Seeders, *poll.Body.Results[1].Seeders)
+	}
 }
