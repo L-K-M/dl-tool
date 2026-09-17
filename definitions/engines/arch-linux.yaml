@@ -1,0 +1,30 @@
+dlsearch: 1
+id: arch-linux
+name: Arch Linux Releases
+description: "Monthly Arch Linux installation images, distributed as torrents by the Arch Linux project."
+homepage: https://archlinux.org/
+version: "1.0.0"
+legal_tier: legitimate
+kind: rss
+caps:
+  modes: {search: [q]}
+  categories: {release: 4020}   # PC/ISO
+  seeders_unknown: true
+request:
+  base_url: https://archlinux.org/
+  path: feeds/releases/
+  method: GET
+  rate_limit_per_minute: 6
+  timeout_seconds: 15
+response:
+  rows: "rss > channel > item"
+  fields:
+    title:     {path: "title"}
+    details:   {path: "link"}
+    published: {path: "pubDate", type: datetime, format: rfc1123}
+    download:  {path: "enclosure", attr: "url"}
+    size:      {path: "enclosure", attr: "length", type: bytes}
+    category:  {const: "release"}
+  transforms:
+    title:
+      - {op: trim}

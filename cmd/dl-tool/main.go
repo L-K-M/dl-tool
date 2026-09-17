@@ -21,6 +21,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/config"
 	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/obs"
+	"github.com/L-K-M/dl-tool/internal/search"
 	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
@@ -104,11 +105,12 @@ func main() {
 
 			// The process-wide search collaborators, in the order the task
 			// contract fixes: the SSRF guard and its outbound client, then
-			// the indexer store sealing under cfg.SecretKey — built once so
-			// the API and the job worker share one of each
-			// (docs/14-conventions.md section 8.3). The definition registry
-			// (T057), the dlsearch runner (T058) and the search worker
-			// registration (T061) extend this Deps in their own tasks.
+			// the indexer store sealing under cfg.SecretKey, then the
+			// definition registry seeding the bundled indexers — built once
+			// so the API and the job worker share one of each
+			// (docs/14-conventions.md section 8.3). The dlsearch runner
+			// (T058) and the search worker registration (T061) extend this
+			// Deps in their own tasks.
 			searchGuard := secure.NewGuard(logger, cfg.SSRFAllowPrivate)
 			searchHTTP := secure.NewClient(searchGuard)
 			indexers, err := store.NewIndexerStore(db, cfg.SecretKey)
@@ -117,7 +119,23 @@ func main() {
 				os.Exit(exitFailure)
 			}
 
-			server, err := api.NewServer(cfg, db, logger, api.Deps{Indexers: indexers, HTTP: searchHTTP})
+			defs, err := search.NewRegistry(logger, filepath.Join(cfg.ConfigDir, "engines"))
+			if err != nil {
+				logger.Error("definition registry failed", "err", err)
+				os.Exit(exitFailure)
+			}
+			// First boot seeds one enabled row per bundled definition; the
+			// unique index on definition_id makes later boots a no-op.
+			seeded, err := defs.SeedIndexers(ctx, indexers)
+			if err != nil {
+				logger.Error("bundled indexer seeding failed", "err", err)
+				os.Exit(exitFailure)
+			}
+			if seeded > 0 {
+				logger.Info("seeded bundled indexers", "created", seeded)
+			}
+
+			server, err := api.NewServer(cfg, db, logger, api.Deps{Indexers: indexers, Defs: defs, HTTP: searchHTTP})
 			if err != nil {
 				logger.Error("server build failed", "err", err)
 				os.Exit(exitFailure)

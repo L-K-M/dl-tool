@@ -148,7 +148,7 @@ The Torznab client, `dlsearch/v1` engines, `.dlm` import and the search screen. 
 | [T054](T054-torznab-client.md) | Fetch and parse Torznab caps and search responses | T005, T123 | done |
 | [T055](T055-indexer-store-and-provider-wizard.md) | Store indexers and import a Prowlarr or Jackett instance | T006, T007, T008, T054 | done |
 | [T056](T056-dlsearch-definition-loader.md) | Load and validate `dlsearch/v1` definitions | T004, T005 | done |
-| [T057](T057-bundled-engine-definitions.md) | Bundle the four default engine definitions | T055, T056 | todo |
+| [T057](T057-bundled-engine-definitions.md) | Bundle the four default engine definitions | T055, T056 | done |
 | [T058](T058-dlsearch-runner-and-probe.md) | Execute `rss` and `json` engines and probe an indexer | T054, T055, T056, T057 | todo |
 | [T059](T059-dlm-static-import.md) | Import a Synology `.dlm` module by static analysis | T055, T056 | todo |
 | [T060](T060-qbittorrent-plugin-metadata-import.md) | Import a qBittorrent nova3 `.py` plugin's metadata | T055, T056, T059 | todo |
@@ -353,7 +353,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T054 | Fetch and parse Torznab caps and search responses | T005, T123 | yes | done | [T054](T054-torznab-client.md) |
 | T055 | Store indexers and import a Prowlarr or Jackett instance | T006, T007, T008, T054 | no | done | [T055](T055-indexer-store-and-provider-wizard.md) |
 | T056 | Load and validate `dlsearch/v1` definitions | T004, T005 | yes | done | [T056](T056-dlsearch-definition-loader.md) |
-| T057 | Bundle the four default engine definitions | T055, T056 | no | todo | [T057](T057-bundled-engine-definitions.md) |
+| T057 | Bundle the four default engine definitions | T055, T056 | no | done | [T057](T057-bundled-engine-definitions.md) |
 | T058 | Execute `rss` and `json` engines and probe an indexer | T054, T055, T056, T057 | no | todo | [T058](T058-dlsearch-runner-and-probe.md) |
 | T059 | Import a Synology `.dlm` module by static analysis | T055, T056 | no | todo | [T059](T059-dlm-static-import.md) |
 | T060 | Import a qBittorrent nova3 `.py` plugin's metadata | T055, T056, T059 | no | todo | [T060](T060-qbittorrent-plugin-metadata-import.md) |

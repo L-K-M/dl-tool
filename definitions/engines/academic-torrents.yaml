@@ -1,0 +1,31 @@
+dlsearch: 1
+id: academic-torrents
+name: Academic Torrents
+description: "Research datasets and papers shared by universities and researchers, distributed as torrents."
+homepage: https://academictorrents.com/
+version: "1.0.0"
+legal_tier: legitimate
+kind: rss
+caps:
+  modes: {search: [q]}
+  categories: {Dataset: 8000, Paper: 7020}
+  seeders_unknown: true
+request:
+  base_url: https://academictorrents.com/
+  path: rss.xml
+  method: GET
+  rate_limit_per_minute: 6
+  timeout_seconds: 15
+response:
+  rows: "rss > channel > item"
+  fields:
+    title:    {path: "title"}
+    _hash:    {path: "infohash"}
+    infohash: {path: "infohash"}
+    details:  {path: "guid"}
+    size:     {path: "size", type: bytes}
+    category: {path: "category"}
+    download: {template: "https://academictorrents.com/download/{{ .Result._hash }}.torrent"}
+  transforms:
+    title:
+      - {op: trim}
