@@ -933,3 +933,29 @@ func TestTestIndexerNotFoundAndUnattempted(t *testing.T) {
 	resp = bare.api.Do(http.MethodPost, "/indexers/"+bareCreated.ID+"/test", bare.authz())
 	assertProblem(t, resp, http.StatusServiceUnavailable, SlugEngineUnavailable)
 }
+
+// TestIndexerSettingsMap covers the settings_json decode used by the probe:
+// numbers keep their exact text, nulls drop, and a document with trailing
+// garbage is invalid and yields empty settings.
+func TestIndexerSettingsMap(t *testing.T) {
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	j := `{"n": 1000000, "f": 0.00001, "flag": true, "s": "x", "z": null}`
+	out := indexerSettingsMap(log, store.Indexer{ID: "i1", SettingsJSON: &j})
+	if out["n"] != "1000000" {
+		t.Errorf("n = %q, want verbatim 1000000", out["n"])
+	}
+	if out["f"] != "0.00001" {
+		t.Errorf("f = %q, want verbatim 0.00001", out["f"])
+	}
+	if out["flag"] != "true" || out["s"] != "x" {
+		t.Errorf("flag/s = %q/%q, want true/x", out["flag"], out["s"])
+	}
+	if _, ok := out["z"]; ok {
+		t.Errorf("null key z should be dropped, got %q", out["z"])
+	}
+
+	bad := `{"a": "b"} trailing`
+	if out := indexerSettingsMap(log, store.Indexer{ID: "i2", SettingsJSON: &bad}); len(out) != 0 {
+		t.Errorf("trailing garbage should yield empty settings, got %v", out)
+	}
+}

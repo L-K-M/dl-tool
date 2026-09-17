@@ -629,6 +629,9 @@ func applyOp(v string, op TransformOp, s Scope) (string, error) {
 var regexCache sync.Map // pattern -> *regexp.Regexp
 
 func compilePattern(pattern string) (*regexp.Regexp, error) {
+	if len(pattern) > MaxPatternBytes {
+		return nil, fmt.Errorf("search: regex pattern is %d bytes, over the %d-byte limit", len(pattern), MaxPatternBytes)
+	}
 	if re, ok := regexCache.Load(pattern); ok {
 		return re.(*regexp.Regexp), nil
 	}
@@ -1034,6 +1037,11 @@ func (r *Runner) fetch(ctx context.Context, def *Definition, cfg map[string]stri
 // bodySnippet renders the leading text of a non-2xx body for the probe's
 // error string, whitespace-collapsed and truncated.
 func bodySnippet(body []byte) string {
+	// The snippet is 240 runes of collapsed whitespace — cap the input first
+	// so a multi-megabyte error page does not cost full-body conversions.
+	if len(body) > 1024 {
+		body = body[:1024]
+	}
 	s := strings.Join(strings.Fields(string(body)), " ")
 	if runes := []rune(s); len(runes) > 240 {
 		s = string(runes[:240])
@@ -1433,6 +1441,51 @@ func extractRSS(ctx context.Context, body []byte, def *Definition, scope Scope) 
 	return rows, skipped, nil
 }
 
+// validJSONPath checks a path's shape without touching data. Syntax errors —
+// a bad segment, a non-integer index, [*] anywhere but the end — are
+// definition bugs that must fail loudly, unlike traversal mismatches, which
+// depend on the row's data.
+func validJSONPath(path string) error {
+	p := strings.TrimSpace(path)
+	switch {
+	case strings.HasPrefix(p, "$"):
+	case strings.HasPrefix(p, "."):
+		p = "$" + p
+	default:
+		p = "$." + p
+	}
+	for i := 1; i < len(p); {
+		switch p[i] {
+		case '.':
+			j := i + 1
+			for j < len(p) && p[j] != '.' && p[j] != '[' {
+				j++
+			}
+			if p[i+1:j] == "" {
+				return fmt.Errorf("search: bad json path %q", path)
+			}
+			i = j
+		case '[':
+			j := strings.IndexByte(p[i:], ']')
+			if j < 0 {
+				return fmt.Errorf("search: bad json path %q", path)
+			}
+			inner := p[i+1 : i+j]
+			if inner == "*" {
+				if i+j+1 < len(p) {
+					return fmt.Errorf("search: json path %q: [*] must be the last segment", path)
+				}
+			} else if n, err := strconv.Atoi(inner); err != nil || n < 0 {
+				return fmt.Errorf("search: json path %q: bad index %q", path, inner)
+			}
+			i += j + 1
+		default:
+			return fmt.Errorf("search: bad json path %q", path)
+		}
+	}
+	return nil
+}
+
 // jsonPath evaluates the in-repo subset of JSONPath — $, .field, [n] and
 // [*] — over a decoded document. A path without a leading $ is relative to
 // the value it is evaluated on, which is how field paths address a row.
@@ -1532,6 +1585,17 @@ func extractJSON(ctx context.Context, body []byte, def *Definition, scope Scope)
 	if !ok {
 		return nil, 0, fmt.Errorf("search: response.rows %q does not select an array", def.Response.Rows)
 	}
+	// Field paths are shape-checked once up front: a syntax error is a
+	// definition bug and fails the call, while a traversal mismatch inside
+	// the row loop below is data-dependent and blanks only that field.
+	for _, name := range def.Response.OrderedFields() {
+		if f := def.Response.Fields[name]; f.Path != "" {
+			if err := validJSONPath(f.Path); err != nil {
+				return nil, 0, fmt.Errorf("search: field %s: %w", name, err)
+			}
+		}
+	}
+
 	rows := make([]map[string]string, 0, len(arr))
 	skipped := 0
 	for _, item := range arr {
@@ -1542,10 +1606,10 @@ func extractJSON(ctx context.Context, body []byte, def *Definition, scope Scope)
 			v, err := jsonPath(item, f.Path)
 			if err != nil {
 				// A missing key never reaches this branch — map lookups
-				// yield nil without an error — so an error here is a
-				// malformed path or a type mismatch: a definition bug the
-				// row must fail on, not silently empty data.
-				return "", err
+				// yield nil without an error — and a valid-syntax path
+				// that errors here hit a data-shape mismatch in this one
+				// row, so only the field is blanked, not the row.
+				return "", nil
 			}
 			return jsonScalar(v), nil
 		})

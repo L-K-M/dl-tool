@@ -687,6 +687,10 @@ func indexerSettingsMap(log *slog.Logger, row store.Indexer) map[string]string {
 		return out
 	}
 	var doc map[string]any
+	if !json.Valid([]byte(*row.SettingsJSON)) {
+		log.Warn("indexer settings_json is not valid JSON; probing with empty settings", "indexer_id", row.ID)
+		return out
+	}
 	dec := json.NewDecoder(strings.NewReader(*row.SettingsJSON))
 	dec.UseNumber()
 	if err := dec.Decode(&doc); err != nil {

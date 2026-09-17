@@ -221,32 +221,49 @@ test -z "$(gofmt -l cmd internal)"
 golangci-lint run ./...
 0 issues.
 cd web && npm run lint
+
+> lint
 > eslint .
+
 cd web && npx prettier --check .
+Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/search	2.602s
-ok  	github.com/L-K-M/dl-tool/internal/api	122.959s
+ok  	github.com/L-K-M/dl-tool/internal/search	2.685s
+ok  	github.com/L-K-M/dl-tool/internal/api	122.827s
 RUNNER_OK
 ```
 
-Named tests from step 12, run with `-v`:
+Tests in `internal/search/dlsearch_test.go` — the step-12 set plus the
+review-hardening additions — run with `-v`:
 
 ```
 --- PASS: TestExpandClosedSet (0.00s)
 --- PASS: TestExpandRejectsUnknownToken (0.00s)
 --- PASS: TestExpandOutputCap (0.00s)
 --- PASS: TestTransformOpsTable (0.00s)
---- PASS: TestRSSRowExtraction (0.01s)
---- PASS: TestJSONRowExtraction (0.01s)
---- PASS: TestBrowseEngineFiltersByKeyword (0.02s)
---- PASS: TestBodyCapEnforcedWhileStreaming (0.15s)
---- PASS: TestProbeReportsUpstreamErrorAsData (0.01s)
---- PASS: TestRateLimitPerEngine (0.01s)
---- PASS: TestDeadlineCoversParsing (0.21s)
---- PASS: TestTransformFieldOrder (0.01s)
+--- PASS: TestRSSRowExtraction (0.00s)
+--- PASS: TestJSONRowExtraction (0.00s)
+--- PASS: TestBrowseEngineFiltersByKeyword (0.00s)
+--- PASS: TestBodyCapEnforcedWhileStreaming (0.03s)
+--- PASS: TestProbeReportsUpstreamErrorAsData (0.00s)
+--- PASS: TestRateLimitPerEngine (0.00s)
+--- PASS: TestAdmitClampsNonpositiveRate (0.00s)
+--- PASS: TestDeadlineCoversParsing (0.20s)
+--- PASS: TestTransformFieldOrder (0.00s)
 --- PASS: TestExpandBadTemplatePins (0.00s)
-ok  	github.com/L-K-M/dl-tool/internal/search	1.535s
+--- PASS: TestTransformOpsArgCounts (0.00s)
+--- PASS: TestRegexCaptureNeedsGroup (0.00s)
+--- PASS: TestURLDecodeKeepsPlus (0.00s)
+--- PASS: TestQueryParamBareQuery (0.00s)
+--- PASS: TestOrderedFieldsFallback (0.00s)
+--- PASS: TestXMLTreeKeepsFirstRoot (0.00s)
+--- PASS: TestUpstreamErrorOnLargeErrorBody (0.02s)
+--- PASS: TestSearchKindHTML (0.00s)
+--- PASS: TestJSONPathStarLastSegment (0.00s)
+--- PASS: TestExtractJSONBadFieldPath (0.00s)
+--- PASS: TestMapResultMagnetCase (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/search	0.299s
 ```
 
 Scope check:

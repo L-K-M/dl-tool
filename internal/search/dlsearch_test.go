@@ -590,6 +590,12 @@ response:
 `))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no capture group")
+
+	// An oversized pattern is refused before it can fill the cache — the
+	// exported path enforces the same cap the loader does.
+	_, err = ApplyTransforms("v", []TransformOp{{Op: "regex_capture", Args: []string{strings.Repeat("a", MaxPatternBytes+1)}}}, Scope{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "512")
 }
 
 // TestURLDecodeKeepsPlus: url_decode is data-string percent decoding — a
@@ -684,19 +690,29 @@ func TestJSONPathStarLastSegment(t *testing.T) {
 	assert.NotNil(t, v)
 }
 
-// TestExtractJSONBadFieldPath: a field path that errors on a row — a type
-// mismatch, not a missing key — skips the row and counts it, rather than
-// surfacing as silently empty fields.
+// TestExtractJSONBadFieldPath: a syntactically valid field path that errors
+// on a row — a data-shape mismatch — blanks only that field, so the row
+// survives on its optional-field default and the search is not lost. A
+// syntactically invalid path is a definition bug and fails the call.
 func TestExtractJSONBadFieldPath(t *testing.T) {
 	def := jsonDef(t, "https://x.test")
-	def.Response.Fields["title"] = Field{Path: "response.oops"}
+	def.Response.Fields["title"] = Field{Path: "response.oops", Optional: true, Default: "Untitled {{ .Result._id }}"}
 
 	rows, skipped, err := extractJSON(context.Background(),
 		[]byte(`{"response": {"docs": [{"identifier": "a", "item_size": 1, "publicdate": "2026-01-01"}]}}`),
 		def, Scope{})
 	require.NoError(t, err)
-	assert.Equal(t, 1, skipped)
-	assert.Empty(t, rows)
+	assert.Equal(t, 0, skipped)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "Untitled a", rows[0]["title"],
+		"a traversal mismatch blanks the field; the default fills in")
+
+	def.Response.Fields["title"] = Field{Path: "a[*].b"}
+	_, _, err = extractJSON(context.Background(),
+		[]byte(`{"response": {"docs": [{"identifier": "a"}]}}`),
+		def, Scope{})
+	require.Error(t, err, "a path-syntax error is a definition bug")
+	assert.Contains(t, err.Error(), "field title")
 }
 
 // TestMapResultMagnetCase: the magnet: scheme check is case-insensitive per
