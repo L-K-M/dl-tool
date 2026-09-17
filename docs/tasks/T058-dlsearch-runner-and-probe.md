@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T058 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T054, T055, T056, T057 |
 | **Blocks** | T061, T062, T105, T116 |
 | **Parallel-safe** | no — extends T055's `internal/api/search.go` |
@@ -214,7 +214,70 @@ the openapi/schema diffs add only the `test-indexer` operation. For the file lis
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```
+$ make lint && make test PKG="./internal/search/... ./internal/api/..." && echo RUNNER_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> eslint .
+cd web && npx prettier --check .
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/search/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/search	2.602s
+ok  	github.com/L-K-M/dl-tool/internal/api	122.959s
+RUNNER_OK
+```
+
+Named tests from step 12, run with `-v`:
+
+```
+--- PASS: TestExpandClosedSet (0.00s)
+--- PASS: TestExpandRejectsUnknownToken (0.00s)
+--- PASS: TestExpandOutputCap (0.00s)
+--- PASS: TestTransformOpsTable (0.00s)
+--- PASS: TestRSSRowExtraction (0.01s)
+--- PASS: TestJSONRowExtraction (0.01s)
+--- PASS: TestBrowseEngineFiltersByKeyword (0.02s)
+--- PASS: TestBodyCapEnforcedWhileStreaming (0.15s)
+--- PASS: TestProbeReportsUpstreamErrorAsData (0.01s)
+--- PASS: TestRateLimitPerEngine (0.01s)
+--- PASS: TestDeadlineCoversParsing (0.21s)
+--- PASS: TestTransformFieldOrder (0.01s)
+--- PASS: TestExpandBadTemplatePins (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/search	1.535s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+cmd/dl-tool/main.go
+go.mod
+go.sum
+internal/api/search.go
+internal/api/search_test.go
+internal/search/definition.go
+internal/search/dlsearch.go
+internal/search/dlsearch_test.go
+internal/search/testdata/README.md
+internal/search/testdata/archive_advancedsearch.json
+internal/search/testdata/archlinux_releases.xml
+web/src/api/schema.d.ts
+```
+
+Exactly the Files table plus the four §7.1 standing-exception paths. `git diff go.mod go.sum`
+shows only gofeed-driven entries: the gofeed require line and its `// indirect` requires
+(`goxpp/v2`, `x/net`), each confirmed by `go mod why -m` to resolve through gofeed, plus the
+matching go.sum hashes; `git diff api/openapi.json web/src/api/schema.d.ts` adds only the
+`test-indexer` operation and its `TestIndexerOutput` schema.
+
+`make ci` (lint vet typecheck test compose-check doclint) green on this tree; no
+`text/template`, `html/template`, `os/exec` or JSONPath import in `internal/search` —
+the grep pattern `text/template|html/template|os/exec|jsonpath` over `internal/search`
+returns no hits.
 
 ## Blocked
 

@@ -75,6 +75,22 @@ type Response struct {
 	Total      string                   `yaml:"total"`
 	Fields     map[string]Field         `yaml:"fields"`
 	Transforms map[string][]TransformOp `yaml:"transforms"`
+
+	// fieldOrder records the declaration order of Fields, recovered from the
+	// YAML node tree — the typed decode into a map discards it, and
+	// {{ .Result.<field> }} resolution must observe declaration order
+	// (doc 07 section 3.3).
+	fieldOrder []string
+}
+
+// OrderedFields returns the field names in declaration order. A Response
+// built without LoadDefinition — a test literal — has no recorded order and
+// falls back to sorted keys, which is still deterministic.
+func (r *Response) OrderedFields() []string {
+	if r.fieldOrder != nil {
+		return r.fieldOrder
+	}
+	return sortedKeys(r.Fields)
 }
 
 // Field is exactly one of path, template or const, plus optional modifiers.
@@ -224,7 +240,44 @@ func decodeAndValidate(data []byte) (*Definition, error) {
 	if err := validateDefinition(def, &doc); err != nil {
 		return nil, err
 	}
+	if def.Response != nil {
+		def.Response.fieldOrder = fieldOrderOf(&doc)
+	}
 	return def, nil
+}
+
+// fieldOrderOf reads the response.fields mapping keys in document order from
+// the already-decoded node tree.
+func fieldOrderOf(doc *yaml.Node) []string {
+	if doc == nil || len(doc.Content) == 0 {
+		return nil
+	}
+	resp := mappingValue(doc.Content[0], "response")
+	if resp == nil {
+		return nil
+	}
+	fields := mappingValue(resp, "fields")
+	if fields == nil {
+		return nil
+	}
+	out := make([]string, 0, len(fields.Content)/2)
+	for i := 0; i+1 < len(fields.Content); i += 2 {
+		out = append(out, fields.Content[i].Value)
+	}
+	return out
+}
+
+// mappingValue returns the value node of key in the mapping node n, or nil.
+func mappingValue(n *yaml.Node, key string) *yaml.Node {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }
 
 var yamlLineRe = regexp.MustCompile(`line (\d+)`)

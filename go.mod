@@ -3,9 +3,15 @@ module github.com/L-K-M/dl-tool
 go 1.26
 
 require (
+	github.com/mmcdole/gofeed v1.4.2
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go v0.44.0
 	golang.org/x/text v0.41.0
+)
+
+require (
+	github.com/mmcdole/goxpp/v2 v2.0.0 // indirect
+	golang.org/x/net v0.57.0 // indirect
 )
 
 require (

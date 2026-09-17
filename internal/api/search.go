@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ const (
 	operationDeleteIndexer     = "delete-indexer"
 	operationIndexerCategories = "indexer-categories"
 	operationImportIndexer     = "import-indexer"
+	operationTestIndexer       = "test-indexer"
 )
 
 const (
@@ -50,11 +52,13 @@ const (
 
 // Deps carries the process-wide search collaborators, built exactly once in
 // cmd/dl-tool/main.go and passed into NewServer, so the API and the job
-// worker share one of each (docs/14-conventions.md section 8.3). Runner
-// (*search.Runner) joins the struct with T058 — the task that owns that type.
+// worker share one of each (docs/14-conventions.md section 8.3). Runner is
+// the dlsearch evaluator — its per-engine rate buckets are process state, so
+// the probe path and the search-job path must share the one instance.
 type Deps struct {
 	Indexers *store.IndexerStore
 	Defs     *search.Registry
+	Runner   *search.Runner
 	HTTP     *http.Client // the SSRF-guarded client of T123
 }
 
@@ -155,6 +159,18 @@ type ImportOutput struct {
 	}
 }
 
+// TestIndexerOutput is 200 whether or not the probe succeeded, mirroring
+// 05-api-contract.md section 9.1.
+type TestIndexerOutput struct {
+	Body struct {
+		Ok              bool    `json:"ok"`
+		ElapsedMS       int64   `json:"elapsed_ms"`
+		CategoriesFound int     `json:"categories_found"`
+		Server          string  `json:"server"`
+		Error           *string `json:"error"`
+	}
+}
+
 // importRequestBody declares the two media types of docs/05-api-contract.md
 // section 9.1 for the generated document; Huma's RawBody support adds its
 // own application/octet-stream entry beside them.
@@ -186,17 +202,20 @@ func importRequestBody() *huma.RequestBody {
 }
 
 // SearchHandlers owns the /indexers operations of docs/05-api-contract.md
-// section 9.1. indexers and hc arrive through Deps; nil means the server was
-// built for the OpenAPI document alone and the handlers answer 500.
+// section 9.1. indexers, defs, runner and hc arrive through Deps; nil means
+// the server was built for the OpenAPI document alone and the handlers
+// answer 500.
 type SearchHandlers struct {
 	log      *slog.Logger
 	indexers *store.IndexerStore
+	defs     *search.Registry
+	runner   *search.Runner
 	hc       *http.Client
 }
 
 // NewSearchHandlers builds the indexer handlers over the shared deps.
 func NewSearchHandlers(log *slog.Logger, d Deps) *SearchHandlers {
-	return &SearchHandlers{log: log, indexers: d.Indexers, hc: d.HTTP}
+	return &SearchHandlers{log: log, indexers: d.Indexers, defs: d.Defs, runner: d.Runner, hc: d.HTTP}
 }
 
 // RegisterSearchRoutes is the single registration point for every /indexers
@@ -247,6 +266,16 @@ func RegisterSearchRoutes(api huma.API, h *SearchHandlers) {
 		Tags:          []string{"indexers"},
 		Security:      credentialRequired,
 	}, h.DeleteIndexer)
+
+	huma.Register(api, huma.Operation{
+		OperationID: operationTestIndexer,
+		Method:      http.MethodPost,
+		Path:        "/indexers/{id}/test",
+		Summary:     "Test an indexer",
+		Description: "Performs exactly one capability probe — t=caps for a torznab or newznab indexer, one definition request for a dlsearch engine — and reports the outcome as data. A reachable-but-broken indexer is 200 with ok:false and the upstream status in error; 503 /problems/engine-unavailable means the probe could not be attempted at all.",
+		Tags:        []string{"indexers"},
+		Security:    credentialRequired,
+	}, h.TestIndexer)
 
 	huma.Register(api, huma.Operation{
 		OperationID: operationIndexerCategories,
@@ -473,6 +502,199 @@ func (h *SearchHandlers) DeleteIndexer(ctx context.Context, in *IndexerIDInput) 
 		return nil, FromStore(err)
 	}
 	return nil, nil
+}
+
+// TestIndexer serves POST /indexers/{id}/test: exactly one probe whose
+// outcome is data — a reachable-but-broken indexer is 200 with ok:false and
+// the upstream status in error. 503 /problems/engine-unavailable is only for
+// a probe dl-tool could not attempt, and an SSRF denial is 403 naming the
+// allow_private_network remedy (doc 05 section 9.1).
+func (h *SearchHandlers) TestIndexer(ctx context.Context, in *IndexerIDInput) (*TestIndexerOutput, error) {
+	st, err := h.indexerStore(ctx)
+	if err != nil {
+		return nil, err
+	}
+	row, err := st.Get(ctx, in.ID)
+	if err != nil {
+		return nil, FromStore(err)
+	}
+
+	var res search.ProbeResult
+	switch row.Kind {
+	case indexerKindTorznab, indexerKindNewznab:
+		res, err = h.probeTorznabIndexer(ctx, st, row)
+	case indexerKindDlsearch:
+		res, err = h.probeDlsearchIndexer(ctx, st, row)
+	default:
+		return nil, internalFailure(ctx, "test indexer", fmt.Errorf("unknown indexer kind %q", row.Kind))
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	out := &TestIndexerOutput{}
+	out.Body.Ok = res.Ok
+	out.Body.ElapsedMS = res.ElapsedMS
+	out.Body.CategoriesFound = res.CategoriesFound
+	out.Body.Server = res.Server
+	if res.Error != "" {
+		out.Body.Error = &res.Error
+	}
+	return out, nil
+}
+
+// probeTorznabIndexer runs the t=caps probe for a torznab or newznab row and
+// stamps the outcome on it — the same pair the create-time probe writes.
+func (h *SearchHandlers) probeTorznabIndexer(ctx context.Context, st *store.IndexerStore, row store.Indexer) (search.ProbeResult, error) {
+	res := search.ProbeResult{}
+	if row.URL == nil || *row.URL == "" {
+		return res, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the indexer has no url to probe")
+	}
+	apiKey, err := st.OpenAPIKey(row)
+	if err != nil {
+		return res, internalFailure(ctx, "open indexer key", err)
+	}
+	start := time.Now()
+	caps, probeErr := h.probeCaps(ctx, *row.URL, apiKey, indexerAllowPrivate(row))
+	res.ElapsedMS = time.Since(start).Milliseconds()
+
+	var good *search.Caps
+	if probeErr == nil {
+		good = &caps
+		res.Ok = true
+		res.CategoriesFound = len(search.FlattenCategories(caps.Categories))
+		res.Server = caps.ServerTitle
+	} else {
+		res.Error = probeErr.Error()
+	}
+	if err := h.recordProbe(ctx, row.ID, good, probeErr); err != nil {
+		return res, internalFailure(ctx, "record indexer test", err)
+	}
+	if errors.Is(probeErr, secure.ErrSSRFBlocked) {
+		return res, Problem(
+			SlugSSRFBlocked, http.StatusForbidden,
+			"the caps probe was refused by the SSRF guard; set allow_private_network for an indexer on a private-network address",
+		)
+	}
+	return res, nil
+}
+
+// probeDlsearchIndexer resolves the row's definition and runs the runner's
+// one-request probe. A definition that is not loaded or a runner that is not
+// configured means the probe could not be attempted — 503.
+func (h *SearchHandlers) probeDlsearchIndexer(ctx context.Context, st *store.IndexerStore, row store.Indexer) (search.ProbeResult, error) {
+	res := search.ProbeResult{}
+	if h.defs == nil || h.runner == nil {
+		return res, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the search runner is not configured")
+	}
+	if row.DefinitionID == nil || *row.DefinitionID == "" {
+		return res, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the indexer has no definition_id")
+	}
+	def, ok := h.defs.Get(*row.DefinitionID)
+	if !ok {
+		return res, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the indexer's definition is not loaded")
+	}
+
+	cfg := indexerSettingsMap(h.log, row)
+	apiKey, err := st.OpenAPIKey(row)
+	if err != nil {
+		return res, internalFailure(ctx, "open indexer key", err)
+	}
+	if apiKey.Reveal() != "" {
+		cfg["api_key"] = apiKey.Reveal()
+	}
+
+	res, err = h.runner.Probe(ctx, def, cfg)
+	if err != nil {
+		if errors.Is(err, secure.ErrSSRFBlocked) {
+			return res, Problem(
+				SlugSSRFBlocked, http.StatusForbidden,
+				"the definition request was refused by the SSRF guard; set allow_private_network for an indexer on a private-network address",
+			)
+		}
+		return res, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the probe could not be attempted: "+err.Error())
+	}
+	if err := h.recordDlsearchProbe(ctx, row.ID, def, res); err != nil {
+		return res, internalFailure(ctx, "record indexer test", err)
+	}
+	return res, nil
+}
+
+// recordDlsearchProbe stamps a dlsearch probe outcome on the row: on success
+// the definition's caps land on categories_json like a fetched torznab caps
+// document would, and last_test_at moves either way.
+func (h *SearchHandlers) recordDlsearchProbe(ctx context.Context, id string, def *search.Definition, res search.ProbeResult) error {
+	now := time.Now().UnixMilli()
+	if !res.Ok {
+		return h.indexers.RecordTest(ctx, id, now, &res.Error)
+	}
+	flat, err := json.Marshal(defCategories(def))
+	if err != nil {
+		return err
+	}
+	if err := h.indexers.SetCaps(ctx, id, string(flat), def.Caps.SeedersUnknown); err != nil {
+		return err
+	}
+	return h.indexers.RecordTest(ctx, id, now, nil)
+}
+
+// defCategories renders a definition's caps.categories as the flat list an
+// indexer row caches: the newznab id is the id, the site value the name.
+func defCategories(def *search.Definition) []search.Category {
+	type pair struct {
+		site string
+		id   int
+	}
+	pairs := make([]pair, 0, len(def.Caps.Categories))
+	for site, id := range def.Caps.Categories {
+		pairs = append(pairs, pair{site, id})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].id < pairs[j].id })
+	out := make([]search.Category, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, search.Category{ID: p.id, Name: p.site})
+	}
+	return out
+}
+
+// indexerAllowPrivate reads the reserved flag out of settings_json.
+func indexerAllowPrivate(row store.Indexer) bool {
+	if row.SettingsJSON == nil {
+		return false
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(*row.SettingsJSON), &doc); err != nil {
+		return false
+	}
+	v, _ := doc[indexerSettingAllowPrivate].(bool)
+	return v
+}
+
+// indexerSettingsMap decodes settings_json into the string map the runner's
+// Scope.Config reads — the reserved keys pass through so the runner sees
+// allow_private_network. A stored document that is not valid JSON is treated
+// as empty, matching mergeIndexerSettings.
+func indexerSettingsMap(log *slog.Logger, row store.Indexer) map[string]string {
+	out := map[string]string{}
+	if row.SettingsJSON == nil || *row.SettingsJSON == "" {
+		return out
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(*row.SettingsJSON), &doc); err != nil {
+		log.Warn("indexer settings_json is not valid JSON; probing with empty settings", "indexer_id", row.ID)
+		return out
+	}
+	for k, v := range doc {
+		switch t := v.(type) {
+		case string:
+			out[k] = t
+		case bool:
+			out[k] = strconv.FormatBool(t)
+		default:
+			out[k] = fmt.Sprint(t)
+		}
+	}
+	return out
 }
 
 // IndexerCategories serves GET /indexers/categories: the default newznab
