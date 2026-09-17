@@ -193,8 +193,9 @@ Expected: exactly the set of paths in the Files table (order-insensitive — `gi
 sorted, which differs from the table's display order) plus the doc 13 §7.1 standing-exception paths
 this task's diff legitimately carries — `go.mod`, `go.sum` (gofeed's first import), `api/openapi.json`
 and `web/src/api/schema.d.ts` (the `test-indexer` operation) — and nothing else. For the four exception
-paths, additionally verify with `git diff` that `go.mod`/`go.sum` change only by the gofeed require
-lines and that the openapi/schema diffs add only the `test-indexer` operation. Use `git status`, not
+paths, additionally verify with `git diff` that `go.mod`/`go.sum` change only by gofeed-driven entries —
+gofeed's require line, any `// indirect` requires it introduces, and matching go.sum hashes — and that
+the openapi/schema diffs add only the `test-indexer` operation. For the file list, use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
