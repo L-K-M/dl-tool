@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T061 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T012, T055, T058 |
 | **Blocks** | T062, T063, T064 |
 | **Parallel-safe** | no — extends T055's `internal/api/search.go` and registers a job kind in `cmd/dl-tool/main.go` |
@@ -204,11 +204,11 @@ Operation ids added inside `RegisterSearchRoutes`: `start-search` (`202`), `get-
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `POST /search` answers `202` with only `{"id":"sch_…"}` and does not block on any indexer.
-- [ ] `TestPollShowsPartialThenFinished` asserts a first poll with `finished:false` and a non-empty `results`, and a later poll with `finished:true`.
-- [ ] `DELETE /search/{id}` leaves zero rows in `search_results` for that job.
-- [ ] A second execution of the same job row writes no duplicate results.
-- [ ] `GET /search/{id}` for an unknown id returns `404` `/problems/not-found`.
+- [x] `POST /search` answers `202` with only `{"id":"sch_…"}` and does not block on any indexer — `TestStartSearchReturns202AndID` posts against a stub that never answers and fails if the request takes 5 s.
+- [x] `TestPollShowsPartialThenFinished` asserts a first poll with `finished:false` and a non-empty `results`, and a later poll with `finished:true`; the slow stub answers only once a poll has observed the fast stub's rows, so the partial window is proven by synchronization.
+- [x] `DELETE /search/{id}` leaves zero rows in `search_results` for that job — `TestDeleteRemovesJobAndResults` counts before and after.
+- [x] A second execution of the same job row writes no duplicate results — `TestPollShowsPartialThenFinished` re-runs the handler and re-counts.
+- [x] `GET /search/{id}` for an unknown id returns `404` `/problems/not-found` — `TestUnknownJobIs404` checks GET and DELETE.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -238,7 +238,90 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head before the merge commit:
+
+```
+$ make lint && make test PKG="./internal/api/... ./internal/store/... ./internal/jobs/..." && echo SEARCH_JOB_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/store/... ./internal/jobs/...
+ok  	github.com/L-K-M/dl-tool/internal/api	122.219s
+ok  	github.com/L-K-M/dl-tool/internal/store	75.861s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.835s
+SEARCH_JOB_OK
+```
+
+The step-10 test set plus the enqueue-rollback regression, run with `-v`:
+
+```
+--- PASS: TestStartSearchReturns202AndID (0.41s)
+--- PASS: TestPollShowsPartialThenFinished (0.51s)
+--- PASS: TestDeleteRemovesJobAndResults (0.48s)
+--- PASS: TestUnknownJobIs404 (0.39s)
+--- PASS: TestEmptyQueryIs422 (0.40s)
+--- PASS: TestEnqueueFailureLeavesNoJobRow (0.45s)
+--- PASS: TestNoEnabledIndexerIs503 (0.38s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.185s
+```
+
+Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+api/openapi.json
+cmd/dl-tool/main.go
+internal/api/search.go
+internal/api/search_test.go
+internal/jobs/handlers_search.go
+internal/store/search.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are the generated pair `make gen`
+rebuilt for the three new operations — the standing exception to the Files table.
+
+Deviations from the interface contract, all forced or noted:
+
+- `Tracker`/`NewTracker` are `SearchTracker`/`NewSearchTracker`: `internal/store/tasks.go`
+  already declares a `Tracker` type (torrent tracker info), so the contract name does not
+  compile. The `Searches` variable and the method set are unchanged.
+- `store.CreateSearchJobAndEnqueue` writes the `search_jobs` row and the `jobs` row —
+  with `max_attempts = 1` — in one transaction: `EnqueueJob`'s signature is fixed by
+  T012 and `internal/store/jobs.go` is outside the Files table, a separate clamp
+  `UPDATE` would race the worker's claim poll, and two independent writes could
+  strand an orphaned job row on a crash between them. The queue payload is built
+  inside the transaction from the freshly assigned `sch_…` id.
+- An explicit `indexer_ids` entry naming a disabled indexer is 422
+  (`TestNoEnabledIndexerIs503`): the contract is silent on that case, but `enabled` is
+  the operator's off-switch and the fan-out must not contact a disabled indexer.
+  Duplicate ids are deduplicated before resolution (`TestPollShowsPartialThenFinished`).
+- `DELETE /search/{id}` removes the `jobs` row and the `search_jobs` row in one
+  transaction via `store.DeleteSearchJobAndQueue`, so a still-pending search is
+  never claimed and a failed delete strands neither half
+  (`TestDeleteRemovesJobAndResults`). The queue-row match uses
+  `json_extract(payload_json, '$.search_job_id')`, not LIKE — exact and
+  case-sensitive.
+- `Deps` carries a `DB` field so `StartSearch` can reach the queue without touching
+  `internal/api/server.go` (outside the Files table); the `NewServer` signature is
+  unchanged — `cmd/dl-tool/main.go` (in the Files table) now passes `DB: db` in the
+  `Deps` literal.
+- `SearchResultDTO` exists per step 6's `SearchJobOutput` — no acquisition field
+  (`download_url`, `magnet_uri`, `details_url`) is serialized.
+- `GetSearch` reports `total` from the live `search_results` count, not the job row's
+  `total` column, which `FinishSearchJob` only stamps at the end — a mid-run poll must
+  see partial results counted.
+
+`make ci` also passes on this tree: lint, vet, typecheck, the full Go and web test
+suites, compose-check and doclint.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

@@ -152,7 +152,7 @@ The Torznab client, `dlsearch/v1` engines, `.dlm` import and the search screen. 
 | [T058](T058-dlsearch-runner-and-probe.md) | Execute `rss` and `json` engines and probe an indexer | T054, T055, T056, T057 | done |
 | [T059](T059-dlm-static-import.md) | Import a Synology `.dlm` module by static analysis | T055, T056 | done |
 | [T060](T060-qbittorrent-plugin-metadata-import.md) | Import a qBittorrent nova3 `.py` plugin's metadata | T055, T056, T059 | done |
-| [T061](T061-async-search-jobs.md) | Run a search as an asynchronous job | T012, T055, T058 | todo |
+| [T061](T061-async-search-jobs.md) | Run a search as an asynchronous job | T012, T055, T058 | done |
 | [T062](T062-per-engine-status-and-dedup.md) | Report per-engine status and collapse duplicate results | T054, T058, T061 | todo |
 | [T063](T063-search-screen.md) | Build the search screen | T014, T041, T042, T044, T061, T062 | todo |
 | [T064](T064-saved-searches.md) | Save and re-run a search | T043, T045, T061, T063 | todo |
@@ -357,7 +357,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T058 | Execute `rss` and `json` engines and probe an indexer | T054, T055, T056, T057 | no | done | [T058](T058-dlsearch-runner-and-probe.md) |
 | T059 | Import a Synology `.dlm` module by static analysis | T055, T056 | no | done | [T059](T059-dlm-static-import.md) |
 | T060 | Import a qBittorrent nova3 `.py` plugin's metadata | T055, T056, T059 | no | done | [T060](T060-qbittorrent-plugin-metadata-import.md) |
-| T061 | Run a search as an asynchronous job | T012, T055, T058 | no | todo | [T061](T061-async-search-jobs.md) |
+| T061 | Run a search as an asynchronous job | T012, T055, T058 | no | done | [T061](T061-async-search-jobs.md) |
 | T062 | Report per-engine status and collapse duplicate results | T054, T058, T061 | no | todo | [T062](T062-per-engine-status-and-dedup.md) |
 | T063 | Build the search screen | T014, T041, T042, T044, T061, T062 | no | todo | [T063](T063-search-screen.md) |
 | T064 | Save and re-run a search | T043, T045, T061, T063 | no | todo | [T064](T064-saved-searches.md) |
