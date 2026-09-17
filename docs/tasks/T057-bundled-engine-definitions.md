@@ -210,8 +210,8 @@ Everything else in the task fits the table, verified against the tree:
   is needed.
 
 Chosen remedy for the plan-repair PR: add one `internal/api/search.go` row (action `edit`, "add
-`Defs *search.Registry` to `Deps` and refresh the struct comment that still defers `Defs` to T057,
-so the one registry built in `main.go` reaches `NewServer`") to the `## Files` table. The scope
+`Defs *search.Registry` to `Deps` so the one registry built in `main.go` reaches `NewServer`, and
+refresh the struct comment that still defers `Defs` to T057") to the `## Files` table. The scope
 check emits paths sorted, so the repaired table should read:
 `cmd/dl-tool/main.go`, `definitions/embed.go`, `definitions/engines/` (the four YAML files),
 `internal/api/search.go`, `internal/search/bundled.go`, `internal/search/bundled_test.go`. This
