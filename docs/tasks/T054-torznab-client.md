@@ -223,11 +223,29 @@ ok  	github.com/L-K-M/dl-tool/internal/search	1.625s
 TORZNAB_OK
 ```
 
-`go test -v ./internal/search/` shows all six named tests passing with no
-`FAIL` or `SKIP`: TestParseTorznabItem, TestParseMagnetEnclosure,
-TestParseCapsTree, TestSeedersNullWhenAbsent, TestTorznabErrorDocument,
-TestFinaliseDropsUnusableRow (plus TestSearchClampsLimitToCaps, added in
-review to cover the caps-cached limit clamp).
+`go test -race -v -run 'TestParseTorznabItem|TestParseMagnetEnclosure|TestParseCapsTree|TestSeedersNullWhenAbsent|TestTorznabErrorDocument|TestFinaliseDropsUnusableRow|TestSearchClampsLimitToCaps' ./internal/search/`:
+
+```
+=== RUN   TestParseTorznabItem
+--- PASS: TestParseTorznabItem (0.00s)
+=== RUN   TestParseMagnetEnclosure
+--- PASS: TestParseMagnetEnclosure (0.00s)
+=== RUN   TestParseCapsTree
+--- PASS: TestParseCapsTree (0.00s)
+=== RUN   TestSeedersNullWhenAbsent
+--- PASS: TestSeedersNullWhenAbsent (0.00s)
+=== RUN   TestTorznabErrorDocument
+--- PASS: TestTorznabErrorDocument (0.00s)
+=== RUN   TestSearchClampsLimitToCaps
+--- PASS: TestSearchClampsLimitToCaps (0.02s)
+=== RUN   TestFinaliseDropsUnusableRow
+--- PASS: TestFinaliseDropsUnusableRow (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/search	1.073s
+```
+
+(TestSearchClampsLimitToCaps was added in review to cover the caps-cached
+limit clamp; the six named tests are all present and passing.)
 
 Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
 
