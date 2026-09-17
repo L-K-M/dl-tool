@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"log/slog"
@@ -587,4 +588,249 @@ func parseRetryAfter(h string) time.Duration {
 		return max(time.Until(t), 0)
 	}
 	return 0
+}
+
+// DefaultCategories is the newznab tree of 07-search-and-indexers.md
+// section 2.3, roots 1000..8000 with their documented subcategories. It is
+// the fallback for GET /indexers/categories when no indexer has cached caps.
+// Ids 9000-99999 are reserved and never assigned; ids >= 100000 are
+// engine-scoped and arrive through caps, not this table.
+func DefaultCategories() []Category {
+	return []Category{
+		{ID: 1000, Name: "Console", Subcategories: []Category{
+			{ID: 1010, Name: "NDS"},
+			{ID: 1020, Name: "PSP"},
+			{ID: 1030, Name: "Wii"},
+			{ID: 1040, Name: "XBox"},
+			{ID: 1050, Name: "XBox 360"},
+			{ID: 1060, Name: "Wiiware"},
+			{ID: 1070, Name: "XBox 360 DLC"},
+		}},
+		{ID: 2000, Name: "Movies", Subcategories: []Category{
+			{ID: 2010, Name: "Foreign"},
+			{ID: 2020, Name: "Other"},
+			{ID: 2030, Name: "SD"},
+			{ID: 2040, Name: "HD"},
+			{ID: 2045, Name: "UHD"},
+			{ID: 2050, Name: "BluRay"},
+			{ID: 2060, Name: "3D"},
+		}},
+		{ID: 3000, Name: "Audio", Subcategories: []Category{
+			{ID: 3010, Name: "MP3"},
+			{ID: 3020, Name: "Video"},
+			{ID: 3030, Name: "Audiobook"},
+			{ID: 3040, Name: "Lossless"},
+		}},
+		{ID: 4000, Name: "PC", Subcategories: []Category{
+			{ID: 4010, Name: "0day"},
+			{ID: 4020, Name: "ISO"},
+			{ID: 4030, Name: "Mac"},
+			{ID: 4040, Name: "Mobile-Other"},
+			{ID: 4050, Name: "Games"},
+			{ID: 4060, Name: "Mobile-iOS"},
+			{ID: 4070, Name: "Mobile-Android"},
+		}},
+		{ID: 5000, Name: "TV", Subcategories: []Category{
+			{ID: 5020, Name: "Foreign"},
+			{ID: 5030, Name: "SD"},
+			{ID: 5040, Name: "HD"},
+			{ID: 5045, Name: "UHD"},
+			{ID: 5050, Name: "Other"},
+			{ID: 5060, Name: "Sport"},
+			{ID: 5070, Name: "Anime"},
+			{ID: 5080, Name: "Documentary"},
+		}},
+		{ID: 6000, Name: "XXX", Subcategories: []Category{
+			{ID: 6010, Name: "DVD"},
+			{ID: 6020, Name: "WMV"},
+			{ID: 6030, Name: "XviD"},
+			{ID: 6040, Name: "x264"},
+			{ID: 6050, Name: "Pack"},
+			{ID: 6060, Name: "ImgSet"},
+			{ID: 6070, Name: "Other"},
+		}},
+		{ID: 7000, Name: "Books", Subcategories: []Category{
+			{ID: 7010, Name: "Mags"},
+			{ID: 7020, Name: "EBook"},
+			{ID: 7030, Name: "Comics"},
+		}},
+		{ID: 8000, Name: "Other", Subcategories: []Category{
+			{ID: 8010, Name: "Misc"},
+		}},
+	}
+}
+
+// FlattenCategories renders a caps category tree as the flat id-ordered list
+// stored in indexers.categories_json: every root and every subcat becomes one
+// entry, parents ahead of children, so a stored document never depends on the
+// nesting of one provider's tree.
+func FlattenCategories(roots []Category) []Category {
+	var flat []Category
+	var walk func(c Category)
+	walk = func(c Category) {
+		flat = append(flat, Category{ID: c.ID, Name: c.Name})
+		for _, sub := range c.Subcategories {
+			walk(sub)
+		}
+	}
+	for _, c := range roots {
+		walk(c)
+	}
+	return flat
+}
+
+// ProviderIndexer is one upstream indexer discovered on a Jackett or Prowlarr
+// instance (07-search-and-indexers.md section 2.7).
+type ProviderIndexer struct {
+	RemoteID string // Jackett indexer id, or the Prowlarr integer id as text
+	Name     string
+	BaseURL  string // fully built per-indexer Torznab base URL
+}
+
+// jackettPathMarker is the path segment that distinguishes a Jackett instance
+// URL from a Prowlarr one (07-search-and-indexers.md section 2.6).
+const jackettPathMarker = "/api/v2.0/indexers/"
+
+// EnumerateProvider detects the provider from the submitted URL's path and
+// issues the enumeration request of 07-search-and-indexers.md section 2.7,
+// returning one entry per configured indexer. The path marker selects
+// Jackett; anything else is asked the Prowlarr question. hc is the guarded
+// client the caller scoped for this origin — Prowlarr id 0 is skipped: it is
+// a synthetic self-test indexer.
+func EnumerateProvider(ctx context.Context, hc *http.Client, host string, apiKey secure.Secret) ([]ProviderIndexer, error) {
+	if hc == nil {
+		return nil, fmt.Errorf("search: enumerate provider requires an *http.Client from secure.NewClient")
+	}
+	u, err := url.Parse(host)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("search: invalid provider url %q", secure.RedactURL(host))
+	}
+	origin := u.Scheme + "://" + u.Host
+
+	if strings.Contains(u.Path, jackettPathMarker) {
+		return enumerateJackett(ctx, hc, origin, apiKey)
+	}
+	return enumerateProwlarr(ctx, hc, origin, apiKey)
+}
+
+// providerGet issues one enumeration GET, enforces the metadata cap and the
+// redirect hop limit the client carries, and maps a torznab error document or
+// a non-2xx status to an error. prowlarr selects the X-Api-Key header over
+// the apikey query parameter.
+func providerGet(ctx context.Context, hc *http.Client, rawURL string, apiKey secure.Secret, prowlarr bool) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("search: build provider request: %w", secure.RedactError(err))
+	}
+	if prowlarr {
+		req.Header.Set("X-Api-Key", apiKey.Reveal())
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		// The error chain renders the request URL, apikey included.
+		return nil, fmt.Errorf("search: provider fetch: %w", secure.RedactError(err))
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Debug("search: close provider response body", "error", err)
+		}
+	}()
+	body, err := secure.ReadCapped(resp, secure.MetadataFetchCap)
+	if err != nil {
+		return nil, err
+	}
+	if te := parseErrorDoc(body); te != nil {
+		te.HTTPStatus = resp.StatusCode
+		return nil, te
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("search: provider http %d from %s", resp.StatusCode, secure.RedactURL(rawURL))
+	}
+	return body, nil
+}
+
+// jackettIndexersXML is the t=indexers document of section 2.7: one
+// <indexer> child per configured indexer.
+type jackettIndexersXML struct {
+	XMLName  xml.Name `xml:"indexers"`
+	Indexers []struct {
+		ID         string `xml:"id,attr"`
+		Configured string `xml:"configured,attr"`
+		Title      string `xml:"title"`
+	} `xml:"indexer"`
+}
+
+// enumerateJackett asks the aggregate endpoint for t=indexers&configured=true
+// and builds each per-indexer base URL of section 2.6.
+func enumerateJackett(ctx context.Context, hc *http.Client, origin string, apiKey secure.Secret) ([]ProviderIndexer, error) {
+	v := url.Values{}
+	v.Set("apikey", apiKey.Reveal())
+	v.Set("t", "indexers")
+	v.Set("configured", "true")
+	body, err := providerGet(ctx, hc, origin+jackettPathMarker+"all/results/torznab/api?"+v.Encode(), apiKey, false)
+	if err != nil {
+		return nil, err
+	}
+
+	var doc jackettIndexersXML
+	if err := xml.Unmarshal(body, &doc); err != nil {
+		return nil, fmt.Errorf("search: parse jackett indexers: %w", err)
+	}
+
+	out := make([]ProviderIndexer, 0, len(doc.Indexers))
+	for _, ix := range doc.Indexers {
+		if ix.ID == "" || (ix.Configured != "" && ix.Configured != "true") {
+			continue
+		}
+		name := strings.TrimSpace(ix.Title)
+		if name == "" {
+			name = ix.ID
+		}
+		out = append(out, ProviderIndexer{
+			RemoteID: ix.ID,
+			Name:     name,
+			BaseURL:  origin + jackettPathMarker + url.PathEscape(ix.ID) + "/results/torznab/api",
+		})
+	}
+	return out, nil
+}
+
+// prowlarrIndexerJSON is the one field pair of the /api/v1/indexer document
+// the enumeration needs; every other member is ignored.
+type prowlarrIndexerJSON struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// enumerateProwlarr asks {origin}/api/v1/indexer with the X-Api-Key header
+// and builds each base URL as {origin}/<id>/api. Id 0 is the synthetic
+// self-test indexer and never becomes a row.
+func enumerateProwlarr(ctx context.Context, hc *http.Client, origin string, apiKey secure.Secret) ([]ProviderIndexer, error) {
+	body, err := providerGet(ctx, hc, origin+"/api/v1/indexer", apiKey, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var list []prowlarrIndexerJSON
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("search: parse prowlarr indexers: %w", err)
+	}
+
+	out := make([]ProviderIndexer, 0, len(list))
+	for _, ix := range list {
+		if ix.ID == 0 {
+			continue
+		}
+		name := strings.TrimSpace(ix.Name)
+		id := strconv.Itoa(ix.ID)
+		if name == "" {
+			name = id
+		}
+		out = append(out, ProviderIndexer{
+			RemoteID: id,
+			Name:     name,
+			BaseURL:  origin + "/" + id + "/api",
+		})
+	}
+	return out, nil
 }

@@ -272,6 +272,94 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/indexers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the indexers
+     * @description Every indexer row, sorted by priority then name, served from the database only — no indexer is contacted. api_key_set reports whether a key is stored; the key is never returned.
+     */
+    get: operations["list-indexers"];
+    put?: never;
+    /**
+     * Add an indexer
+     * @description Creates one indexer row. A torznab or newznab indexer without url is 422; its t=caps is probed through the SSRF guard and a denial is 403 /problems/ssrf-blocked whose detail names allow_private_network as the remedy. A duplicate definition_id is 409 /problems/conflict.
+     */
+    post: operations["create-indexer"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/indexers/categories": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the newznab categories
+     * @description The standard newznab tree merged with every enabled indexer's cached caps, de-duplicated on category id and sorted ascending.
+     */
+    get: operations["indexer-categories"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/indexers/import": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Import indexers
+     * @description With an application/json body {torznab_url, api_key} this is the provider wizard: it enumerates a Prowlarr or Jackett instance and creates one disabled row per upstream indexer. multipart/form-data carries a .dlsearch.yaml, .dlm or .py file; those branches land with T059 and T060.
+     */
+    post: operations["import-indexer"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/indexers/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete an indexer
+     * @description Removes the indexer row; its search results cascade with it. No other row and no file is touched.
+     */
+    delete: operations["delete-indexer"];
+    options?: never;
+    head?: never;
+    /**
+     * Update an indexer
+     * @description Partial update of name, kind, enabled, url, definition_id, priority, allow_private_network and settings; omitted fields are untouched. api_key replaces the stored key and api_key: "" clears it. A duplicate definition_id is 409 /problems/conflict.
+     */
+    patch: operations["patch-indexer"];
+    trace?: never;
+  };
   "/sync": {
     parameters: {
       query?: never;
@@ -561,6 +649,15 @@ export interface components {
       /** @description The operator account */
       user: components["schemas"]["UserBody"];
     };
+    CategoriesOutputBody: {
+      categories: components["schemas"]["Category"][] | null;
+    };
+    Category: {
+      /** Format: int64 */
+      id: number;
+      name: string;
+      subcategories?: components["schemas"]["Category"][] | null;
+    };
     CategoryDTO: {
       name: string;
       save_path: string;
@@ -572,6 +669,35 @@ export interface components {
       name: string;
       /** @description Default destination of tasks created in this category; must resolve inside a configured data root */
       save_path: string;
+    };
+    CreateIndexerInputBody: {
+      /** @description Lift the SSRF private-range denial for this indexer's origin */
+      allow_private_network?: boolean;
+      /**
+       * Format: password
+       * @description Stored sealed; never returned
+       */
+      api_key?: string;
+      definition_id?: string;
+      enabled?: boolean;
+      /**
+       * @description torznab and newznab need url; dlsearch needs definition_id
+       * @enum {string}
+       */
+      kind: "torznab" | "newznab" | "dlsearch";
+      /** @description Display name */
+      name: string;
+      /** Format: int64 */
+      priority?: number;
+      /** @description Per-engine setting values */
+      settings?: {
+        [key: string]: string;
+      };
+      /**
+       * Format: uri
+       * @description Torznab/Newznab base URL
+       */
+      url?: string;
     };
     CreateTasksBody: {
       /** @description Category name; must already exist */
@@ -749,6 +875,28 @@ export interface components {
       total_bytes: number;
     };
     HeartbeatEvent: Record<string, never>;
+    ImportOutputBody: {
+      indexer: components["schemas"]["IndexerDTO"];
+      warnings: string[] | null;
+    };
+    IndexerDTO: {
+      api_key_set: boolean;
+      categories: components["schemas"]["Category"][] | null;
+      definition_id: string | null;
+      definition_source: string | null;
+      enabled: boolean;
+      id: string;
+      kind: string;
+      last_error: string | null;
+      last_test_at: string | null;
+      legal_tier: string;
+      name: string;
+      /** Format: int64 */
+      priority: number;
+      provenance: string | null;
+      seeders_unknown: boolean;
+      url: string | null;
+    };
     InspectTasksBody: {
       /** @description A base64-encoded .torrent file, 10 MiB decoded maximum */
       blob?: string;
@@ -766,6 +914,9 @@ export interface components {
     };
     ListEnginesOutputBody: {
       engines: components["schemas"]["EngineDTO"][] | null;
+    };
+    ListIndexersOutputBody: {
+      indexers: components["schemas"]["IndexerDTO"][] | null;
     };
     ListTagsOutputBody: {
       tags: components["schemas"]["TagDTO"][] | null;
@@ -857,6 +1008,23 @@ export interface components {
       new_name?: string;
       /** @description New default destination; must resolve inside a configured data root */
       save_path?: string;
+    };
+    PatchIndexerInputBody: {
+      allow_private_network?: boolean;
+      /** Format: password */
+      api_key?: string;
+      definition_id?: string;
+      enabled?: boolean;
+      /** @enum {string} */
+      kind?: "torznab" | "newznab" | "dlsearch";
+      name?: string;
+      /** Format: int64 */
+      priority?: number;
+      settings?: {
+        [key: string]: string;
+      };
+      /** Format: uri */
+      url?: string;
     };
     PatchTaskBody: {
       /** @description Category name; must already exist */
@@ -1583,6 +1751,214 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["RootsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-indexers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListIndexersOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-indexer": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateIndexerInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IndexerDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "indexer-categories": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CategoriesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "import-indexer": {
+    parameters: {
+      query?: never;
+      header?: {
+        "Content-Type"?: string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": {
+          /**
+           * Format: password
+           * @description The instance API key, stored sealed on every created row
+           */
+          api_key: string;
+          /**
+           * Format: uri
+           * @description The instance's base or Torznab URL
+           */
+          torznab_url: string;
+        };
+        "application/octet-stream": string;
+        "multipart/form-data": {
+          /** Format: binary */
+          file?: string;
+        };
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ImportOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-indexer": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The idx_… row id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-indexer": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The idx_… row id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PatchIndexerInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IndexerDTO"];
         };
       };
       /** @description Error */

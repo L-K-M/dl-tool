@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T055 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T006, T007, T008, T054 |
 | **Blocks** | T057, T058, T059, T060, T061, T116 |
 | **Parallel-safe** | no — creates `internal/api/search.go` and edits the shared files `internal/api/server.go` and `cmd/dl-tool/main.go` |
@@ -224,11 +224,11 @@ Operation ids registered here: `list-indexers`, `create-indexer`, `patch-indexer
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `GET /indexers` returns `api_key_set` and never a key, a ciphertext or a `[REDACTED]` placeholder in place of one.
-- [ ] `SELECT api_key_enc FROM indexers` holds no substring of the submitted key in any test row.
-- [ ] `TestImportProviderCreatesDisabledRows` asserts every created row has `enabled = 0` and a non-null `provenance`.
-- [ ] `TestImportProviderSkipsProwlarrIdZero` asserts no row is created for the synthetic indexer.
-- [ ] A second indexer with the same `definition_id` returns `409` with `type` `/problems/conflict`.
+- [x] `GET /indexers` returns `api_key_set` and never a key, a ciphertext or a `[REDACTED]` placeholder in place of one.
+- [x] `SELECT api_key_enc FROM indexers` holds no substring of the submitted key in any test row.
+- [x] `TestImportProviderCreatesDisabledRows` asserts every created row has `enabled = 0` and a non-null `provenance`.
+- [x] `TestImportProviderSkipsProwlarrIdZero` asserts no row is created for the synthetic indexer.
+- [x] A second indexer with the same `definition_id` returns `409` with `type` `/problems/conflict`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -258,7 +258,97 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG="./internal/api/... ./internal/store/... ./internal/search/..." && echo INDEXERS_OK`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/store/... ./internal/search/...
+ok  	github.com/L-K-M/dl-tool/internal/api	122.892s
+ok  	github.com/L-K-M/dl-tool/internal/store	75.596s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.623s
+INDEXERS_OK
+```
+
+`go test -race -count=1 -v -run '<the eight step-10 tests plus two added probe tests>' ./internal/api/`:
+
+```
+=== RUN   TestCreateIndexerRequiresURL
+--- PASS: TestCreateIndexerRequiresURL (0.46s)
+=== RUN   TestAPIKeyNeverReturned
+--- PASS: TestAPIKeyNeverReturned (0.41s)
+=== RUN   TestPatchIndexerPartial
+--- PASS: TestPatchIndexerPartial (0.37s)
+=== RUN   TestDuplicateDefinitionIDConflicts
+--- PASS: TestDuplicateDefinitionIDConflicts (0.45s)
+=== RUN   TestCategoriesMergeCapsOverDefaults
+--- PASS: TestCategoriesMergeCapsOverDefaults (0.46s)
+=== RUN   TestImportProviderCreatesDisabledRows
+--- PASS: TestImportProviderCreatesDisabledRows (0.51s)
+=== RUN   TestImportProviderSkipsProwlarrIdZero
+--- PASS: TestImportProviderSkipsProwlarrIdZero (0.40s)
+=== RUN   TestImportRejectsUnsupportedContentType
+--- PASS: TestImportRejectsUnsupportedContentType (0.38s)
+=== RUN   TestCreateIndexerSSRFBlocked
+--- PASS: TestCreateIndexerSSRFBlocked (0.38s)
+=== RUN   TestCreateIndexerStoresCaps
+--- PASS: TestCreateIndexerStoresCaps (0.42s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	5.421s
+```
+
+(All eight tests named in step 10 are present and passing.
+TestCreateIndexerSSRFBlocked and TestCreateIndexerStoresCaps were added to
+cover the step-6 guard denial and the successful probe's caps landing on the
+row.)
+
+Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```
+api/openapi.json
+cmd/dl-tool/main.go
+internal/api/search.go
+internal/api/search_test.go
+internal/api/server.go
+internal/search/torznab.go
+internal/store/indexers.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are the `make gen` outputs
+regenerated for the six new operations, per the standing generated-file
+exception; every hand-written path is in the Files table.
+
+`make ci` also passes on this tree: `lint`, `vet`, `typecheck`, `test`
+(Go + 223 web tests), `compose-check` and `doclint` all green.
+
+Documented deviations from the interface contract, each forced by the plan
+itself:
+
+- `Deps` declares `Indexers` and `HTTP` only. The contract also lists
+  `Defs *search.Registry` and `Runner *search.Runner`, but T057 and T058 own
+  those types: neither exists on this branch and both depend on T055, so
+  declaring the fields cannot compile. The struct comment states they join
+  `Deps` with T057 and T058, and step 9's construction order in
+  `cmd/dl-tool/main.go` is annotated with the same note.
+- `NewServer` takes `deps ...Deps` (variadic, at most one) rather than a
+  required fourth parameter. A required parameter would break compilation of
+  the ~18 `NewServer(cfg, db, log)` callers in `internal/api/*_test.go`,
+  `internal/obs`, `internal/sync` and the engine tests, all outside this
+  Files table. The composition root still passes exactly one `api.Deps`.
+- The sealing root secret is `cfg.SecretKey`, the field `config.Config`
+  actually carries; the contract's `cfg.SessionKey` name does not exist.
+  `NewIndexerStore`'s parameter keeps the contract's `sessionKey` name.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
