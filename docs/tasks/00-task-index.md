@@ -150,7 +150,7 @@ The Torznab client, `dlsearch/v1` engines, `.dlm` import and the search screen. 
 | [T056](T056-dlsearch-definition-loader.md) | Load and validate `dlsearch/v1` definitions | T004, T005 | done |
 | [T057](T057-bundled-engine-definitions.md) | Bundle the four default engine definitions | T055, T056 | done |
 | [T058](T058-dlsearch-runner-and-probe.md) | Execute `rss` and `json` engines and probe an indexer | T054, T055, T056, T057 | done |
-| [T059](T059-dlm-static-import.md) | Import a Synology `.dlm` module by static analysis | T055, T056 | todo |
+| [T059](T059-dlm-static-import.md) | Import a Synology `.dlm` module by static analysis | T055, T056 | done |
 | [T060](T060-qbittorrent-plugin-metadata-import.md) | Import a qBittorrent nova3 `.py` plugin's metadata | T055, T056, T059 | todo |
 | [T061](T061-async-search-jobs.md) | Run a search as an asynchronous job | T012, T055, T058 | todo |
 | [T062](T062-per-engine-status-and-dedup.md) | Report per-engine status and collapse duplicate results | T054, T058, T061 | todo |
@@ -355,7 +355,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T056 | Load and validate `dlsearch/v1` definitions | T004, T005 | yes | done | [T056](T056-dlsearch-definition-loader.md) |
 | T057 | Bundle the four default engine definitions | T055, T056 | no | done | [T057](T057-bundled-engine-definitions.md) |
 | T058 | Execute `rss` and `json` engines and probe an indexer | T054, T055, T056, T057 | no | done | [T058](T058-dlsearch-runner-and-probe.md) |
-| T059 | Import a Synology `.dlm` module by static analysis | T055, T056 | no | todo | [T059](T059-dlm-static-import.md) |
+| T059 | Import a Synology `.dlm` module by static analysis | T055, T056 | no | done | [T059](T059-dlm-static-import.md) |
 | T060 | Import a qBittorrent nova3 `.py` plugin's metadata | T055, T056, T059 | no | todo | [T060](T060-qbittorrent-plugin-metadata-import.md) |
 | T061 | Run a search as an asynchronous job | T012, T055, T058 | no | todo | [T061](T061-async-search-jobs.md) |
 | T062 | Report per-engine status and collapse duplicate results | T054, T058, T061 | no | todo | [T062](T062-per-engine-status-and-dedup.md) |

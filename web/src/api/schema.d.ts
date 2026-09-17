@@ -327,7 +327,7 @@ export interface paths {
     put?: never;
     /**
      * Import indexers
-     * @description With an application/json body {torznab_url, api_key} this is the provider wizard: it enumerates a Prowlarr or Jackett instance and creates one disabled row per upstream indexer. multipart/form-data carries a .dlsearch.yaml, .dlm or .py file; those branches land with T059 and T060.
+     * @description With an application/json body {torznab_url, api_key} this is the provider wizard: it enumerates a Prowlarr or Jackett instance and creates one disabled row per upstream indexer. multipart/form-data carries one file part — a .dlsearch.yaml or .dlm import, .py with T060; every row it creates is disabled.
      */
     post: operations["import-indexer"];
     delete?: never;

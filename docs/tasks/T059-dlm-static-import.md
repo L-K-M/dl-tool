@@ -136,11 +136,11 @@ and its file name decides the importer.
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestImportJackettDLMBecomesTorznab` asserts `kind == "torznab"`, the two settings exist and the host/API-key warning is present.
-- [ ] Every import path produces a row with `enabled = 0` and `provenance = 'imported:dlm'` for a `.dlm`.
-- [ ] `hostile.dlm` is rejected three ways — symlink member, `..` in a name, 5 MiB member — each naming the rule.
-- [ ] Nothing is written outside the process: the test asserts the temporary directory is empty after every import.
-- [ ] `TestNoInterpreterIsSpawned` asserts `internal/search` imports no `os/exec`, no `plugin` and no PHP or Python runtime.
+- [x] `TestImportJackettDLMBecomesTorznab` asserts `kind == "torznab"`, the two settings exist and the host/API-key warning is present.
+- [x] Every import path produces a row with `enabled = 0` and `provenance = 'imported:dlm'` for a `.dlm`.
+- [x] `hostile.dlm` is rejected three ways — symlink member, `..` in a name, 5 MiB member — each naming the rule.
+- [x] Nothing is written outside the process: the test asserts the temporary directory is empty after every import.
+- [x] `TestNoInterpreterIsSpawned` asserts `internal/search` imports no `os/exec`, no `plugin` and no PHP or Python runtime.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -170,7 +170,72 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```
+$ make lint && make test PKG="./internal/search/... ./internal/api/..." && echo DLM_IMPORT_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/search/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/search	5.341s
+ok  	github.com/L-K-M/dl-tool/internal/api	124.885s
+DLM_IMPORT_OK
+```
+
+The step-10 test set plus the endpoint and regression additions in
+`internal/search/dlm_import_test.go`, run with `-v`:
+
+```
+--- PASS: TestImportJackettDLMBecomesTorznab (0.01s)
+--- PASS: TestImportRSSModuleBecomesRSSDefinition (0.01s)
+--- PASS: TestUnconvertibleModuleImportsDisabledMetadataOnly (0.45s)
+--- PASS: TestRejectsSymlinkMember (0.00s)
+--- PASS: TestRejectsTraversalName (0.00s)
+--- PASS: TestRejectsOversizeMember (0.18s)
+--- PASS: TestHostileFixtureRejected (0.09s)
+--- PASS: TestRejectsMissingModuleMember (0.00s)
+--- PASS: TestRejectsMalformedArchives (0.01s)
+--- PASS: TestRSSModuleDecodesStaticQueryPairs (0.00s)
+--- PASS: TestNoInterpreterIsSpawned (0.00s)
+--- PASS: TestImportEndpointCreatesDisabledRows (0.83s)
+    --- PASS: TestImportEndpointCreatesDisabledRows/dlm (0.46s)
+    --- PASS: TestImportEndpointCreatesDisabledRows/dlsearch.yaml (0.37s)
+--- PASS: TestImportEndpointSettingsJSON (0.40s)
+--- PASS: TestImportEndpointRejections (0.50s)
+--- PASS: TestImportEndpointDuplicateConflicts (0.40s)
+ok  	github.com/L-K-M/dl-tool/internal/search	4.006s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/search.go
+internal/search/dlm_import.go
+internal/search/dlm_import_test.go
+internal/search/testdata/README.md
+internal/search/testdata/hostile.dlm
+internal/search/testdata/jackett.dlm
+internal/search/testdata/rssmodule.dlm
+web/src/api/schema.d.ts
+```
+
+Exactly the Files table plus the two doc 13 §7.1 standing-exception paths
+(`api/openapi.json`, `web/src/api/schema.d.ts` — the import operation's
+request-body description changed; `git diff` on both shows only that
+description text). `make ci` (lint vet typecheck test compose-check doclint)
+green on this tree. `TestNoInterpreterIsSpawned` walks the package's own
+imports and asserts none of `os/exec`, `plugin`, or a PHP/Python runtime
+appears in `internal/search`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
