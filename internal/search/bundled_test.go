@@ -283,7 +283,7 @@ func TestUserDefinitionSymlinkToNonRegularRejected(t *testing.T) {
 	path := filepath.Join(dir, "evil.dlsearch.yaml")
 	// lstat sees the symlink's own tiny size; the target is a device node,
 	// not a regular file — the read must refuse it rather than follow it.
-	if err := os.Symlink("/dev/null", path); err != nil {
+	if err := os.Symlink(os.DevNull, path); err != nil {
 		// Only platforms without symlink support may skip; on Linux a
 		// failed symlink is a real environment problem, not a portability
 		// gap, and must not silently zero out this rejection path.
