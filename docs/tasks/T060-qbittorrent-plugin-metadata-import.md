@@ -103,7 +103,7 @@ func pyLiterals(src []byte) (name, url string, categories map[string]string, err
 - [x] `TestPluginMetadataExtracted` asserts `name`, `url` and all nine category keys are read from `legacy_plugin.py`.
 - [x] `TestHostilePluginIsNotExecuted` asserts no file, process or environment side effect occurs during import.
 - [x] Every `.py` import produces `enabled = 0`, `provenance = 'imported:qbt-py'` and a warning naming `dlsearch/v1`.
-- [ ] `go list -deps ./internal/search` contains no `os/exec` and no `plugin`.
+- [x] `TestNoInterpreterIsSpawned` asserts `internal/search` imports no `os/exec`, no `plugin` and no PHP or Python runtime.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -133,8 +133,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 
-Run on the review-fix head after the second PR #208 review round (the
-`supported_categories` line-continuation fix):
+Run on the merge head after the criterion-5 repair (PR #209) landed:
 
 ```
 $ make lint && make test PKG="./internal/search/... ./internal/api/..." && echo PY_IMPORT_OK
@@ -150,8 +149,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/search	7.223s
-ok  	github.com/L-K-M/dl-tool/internal/api	118.551s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.220s
+ok  	github.com/L-K-M/dl-tool/internal/api	119.147s
 PY_IMPORT_OK
 ```
 
@@ -172,7 +171,7 @@ The step-7 test set plus the review-round additions, run with `-v`:
 ok  	github.com/L-K-M/dl-tool/internal/search	2.238s
 ```
 
-`make ci` also passes on the same tree: lint, vet, typecheck, the full Go
+`make ci` also passes on this tree: lint, vet, typecheck, the full Go
 and web test suites, compose-check and doclint.
 
 Scope check — the working tree is clean; the branch diff names the files:
@@ -180,6 +179,7 @@ Scope check — the working tree is clean; the branch diff names the files:
 ```
 $ git diff --name-only origin/main...HEAD | sort
 api/openapi.json
+docs/tasks/00-task-index.md
 docs/tasks/T060-qbittorrent-plugin-metadata-import.md
 internal/api/search.go
 internal/search/dlm_import.go
@@ -192,7 +192,8 @@ web/src/api/schema.d.ts
 
 Exactly the Files table plus the two doc 13 §7.1 standing-exception paths
 (`api/openapi.json`, `web/src/api/schema.d.ts` — the import operation's
-multipart description changed; `git diff` on both shows only that text).
+multipart description changed; `git diff` on both shows only that text) and
+the index row this task flips to `done`.
 
 ## Blocked
 
@@ -234,4 +235,5 @@ b. Point the criterion at `TestNoInterpreterIsSpawned`, the enforcement the tree
    package imports no os/exec, no plugin…").
 c. Keep `-deps` but whitelist the `modernc.org/libc` chain explicitly.
 
-The row stays `todo`; the PR is not to be merged until the criterion is repaired.
+Resolved: PR #209 applied option (b) — criterion 5 now points at
+`TestNoInterpreterIsSpawned`, which passes on this tree.
