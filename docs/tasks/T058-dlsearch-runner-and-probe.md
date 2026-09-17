@@ -38,7 +38,10 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 |---|---|---|
 | `internal/search/dlsearch.go` | create | `Runner`, `Scope`, `Expand`, `ApplyTransforms`, the row extractors and `Probe`. |
 | `internal/search/dlsearch_test.go` | create | Expansion, transforms, both fetchers and the limit cases. |
-| `internal/api/search.go` | modify | Add the `POST /indexers/{id}/test` handler. |
+| `internal/search/definition.go` | modify | Record `response.fields` declaration order so `{{ .Result.<field> }}` resolves in declaration order (doc 07 §3.3). |
+| `internal/api/search.go` | modify | Add the `POST /indexers/{id}/test` handler and the `Runner *search.Runner` field on `Deps`. |
+| `internal/api/search_test.go` | modify | The `test-indexer` endpoint cases. |
+| `cmd/dl-tool/main.go` | modify | Build the one shared `*search.Runner` after the registry and pass it as `Runner` in the `api.Deps` literal. |
 | `internal/search/testdata/` | modify | Add `archlinux_releases.xml` and `archive_advancedsearch.json`, recorded per doc 13 §5. |
 
 No other file may be modified.
@@ -186,7 +189,10 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the set of paths in the Files table (order-insensitive — `git status` emits them
+sorted, which differs from the table's display order) plus the doc 13 §7.1 standing-exception paths
+this task's diff legitimately carries — `go.mod`, `go.sum` (gofeed's first import), `api/openapi.json`
+and `web/src/api/schema.d.ts` (the `test-indexer` operation) — and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -208,10 +214,15 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Blocked
 
-This task cannot run as written: three requirements need files the `## Files` table does not
-admit. Recorded rather than silently widened, matching the record-then-repair workflow of
-T046 (#160/#161), T049 (#167/#168), T050 (#169/#170, #171/#172), T052 (#184/#185) and
-T057 (#201/#202).
+Resolved by the plan repair: the `## Files` table now admits all three files the record
+prescribed — `internal/search/definition.go` (remedy (a): the loader records field order),
+`internal/api/search_test.go` and `cmd/dl-tool/main.go` — and the scope check names the §7.1
+standing-exception paths the diff carries. T058 remains unimplemented and still marked `todo`.
+
+Original blocker: this task could not run as written — three requirements needed files the
+`## Files` table did not admit. Recorded rather than silently widened, matching the
+record-then-repair workflow of T046 (#160/#161), T049 (#167/#168), T050 (#169/#170, #171/#172),
+T052 (#184/#185) and T057 (#201/#202).
 
 1. `cmd/dl-tool/main.go` — the shared `*search.Runner` cannot reach `api.Deps` from a
    permitted file. T055's merged Files row for `cmd/dl-tool/main.go` says the composition
