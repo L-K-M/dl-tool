@@ -199,8 +199,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/search	2.078s
-ok  	github.com/L-K-M/dl-tool/internal/store	73.585s
+ok  	github.com/L-K-M/dl-tool/internal/search	2.197s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.032s
 BUNDLED_OK
 ```
 
@@ -210,25 +210,27 @@ every test named in steps 8 and 9 passes:
 ```text
 --- PASS: TestBundledSetIsExactlyFour (0.00s)
 --- PASS: TestEveryBundledDefinitionValidates (0.01s)
---- PASS: TestNoBundledDefinitionUsesKindHTML (0.02s)
+--- PASS: TestNoBundledDefinitionUsesKindHTML (0.01s)
 --- PASS: TestUserDefinitionCollidingIDRejected (0.01s)
 --- PASS: TestInvalidUserDefinitionDoesNotBlockOthers (0.01s)
 --- PASS: TestSeedIndexersIsIdempotent (0.46s)
---- PASS: TestNoPiracyIndexerNamesInRepository (0.02s)
---- PASS: TestLoadValidRSSDefinition (0.00s)
+--- PASS: TestUserDefinitionOversizeRejected (0.02s)
+--- PASS: TestUserDefinitionSymlinkToNonRegularRejected (0.01s)
+--- PASS: TestNoPiracyIndexerNamesInRepository (0.01s)
+--- PASS: TestLoadValidRSSDefinition (0.01s)
 --- PASS: TestLoadValidStaticDefinition (0.00s)
---- PASS: TestRequestDefaults (0.00s)
+--- PASS: TestRequestDefaults (0.01s)
 --- PASS: TestUnknownKeyNamesTheKey (0.00s)
 --- PASS: TestOversizeRejectedBeforeParse (0.00s)
 --- PASS: TestLanguageTagRejected (0.00s)
 --- PASS: TestUnknownPlaceholderRejected (0.00s)
 --- PASS: TestUnknownTransformOpRejected (0.00s)
 --- PASS: TestPatternOverCapRejected (0.01s)
---- PASS: TestStaticRequiresEntriesAndRefreshNote (0.01s)
---- PASS: TestDefinitionRules (0.42s)
---- PASS: TestValidDefinitionVariants (0.07s)
---- PASS: TestParseTorznabItem (0.01s)
---- PASS: TestParseMagnetEnclosure (0.01s)
+--- PASS: TestStaticRequiresEntriesAndRefreshNote (0.00s)
+--- PASS: TestDefinitionRules (0.46s)
+--- PASS: TestValidDefinitionVariants (0.09s)
+--- PASS: TestParseTorznabItem (0.00s)
+--- PASS: TestParseMagnetEnclosure (0.00s)
 --- PASS: TestParseCapsTree (0.00s)
 --- PASS: TestSeedersNullWhenAbsent (0.00s)
 --- PASS: TestTorznabErrorDocument (0.00s)
@@ -236,7 +238,7 @@ every test named in steps 8 and 9 passes:
 --- PASS: TestParseRetryAfter (0.00s)
 --- PASS: TestFinaliseDropsUnusableRow (0.00s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/search	2.130s
+ok  	github.com/L-K-M/dl-tool/internal/search	2.267s
 ```
 
 Scope check on the working tree before the task commit (the check compares the emitted set against

@@ -255,6 +255,50 @@ func TestSeedIndexersIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestUserDefinitionOversizeRejected(t *testing.T) {
+	dir := t.TempDir()
+	// One byte over the cap, so the bounded read stops inside the file.
+	path := writeUserDef(t, dir, "fat.dlsearch.yaml",
+		userDefYAML("fat-engine")+strings.Repeat("#", MaxDefinitionBytes))
+
+	reg, err := NewRegistry(testLogger(), dir)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	errs := reg.Errors()
+	if _, ok := errs[path]; !ok {
+		t.Fatalf("oversize file not recorded in Errors(); got %v", errs)
+	}
+	if got := errs[path].Error(); !strings.Contains(got, "over the") || !strings.Contains(got, "byte") {
+		t.Fatalf("oversize error = %q, want the byte limit named", got)
+	}
+	if _, ok := reg.Get("fat-engine"); ok {
+		t.Fatal("oversize definition reached the registry")
+	}
+}
+
+func TestUserDefinitionSymlinkToNonRegularRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "evil.dlsearch.yaml")
+	// lstat sees the symlink's own tiny size; the target is a device node,
+	// not a regular file — the read must refuse it rather than follow it.
+	if err := os.Symlink("/dev/null", path); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	reg, err := NewRegistry(testLogger(), dir)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	errs := reg.Errors()
+	if _, ok := errs[path]; !ok {
+		t.Fatalf("symlinked file not recorded in Errors(); got %v", errs)
+	}
+	if got := errs[path].Error(); !strings.Contains(got, "not a regular file") {
+		t.Fatalf("symlink error = %q, want a non-regular-file rejection", got)
+	}
+}
+
 func TestNoPiracyIndexerNamesInRepository(t *testing.T) {
 	// The repository root is two levels up from this package's directory.
 	root := filepath.Join("..", "..", "definitions")
@@ -284,10 +328,20 @@ func TestNoPiracyIndexerNamesInRepository(t *testing.T) {
 			t.Errorf("%s does not validate: %v", path, err)
 			return nil
 		}
+		// A tracker could hide behind a neutral id, so the identity fields
+		// and every host the definition points at are probed too.
+		targets := []string{def.ID, def.Name, def.Homepage}
+		if def.Request != nil {
+			targets = append(targets, def.Request.BaseURL)
+		}
+		for _, e := range def.Entries {
+			targets = append(targets, e.Download, e.Magnet, e.Details)
+		}
 		for _, probe := range piracyProbes {
-			if strings.Contains(strings.ToLower(def.ID), probe) ||
-				strings.Contains(strings.ToLower(def.Name), probe) {
-				t.Errorf("%s declares a public tracker identity %q", path, probe)
+			for _, target := range targets {
+				if strings.Contains(strings.ToLower(target), probe) {
+					t.Errorf("%s references the public tracker %q via %q", path, probe, target)
+				}
 			}
 		}
 		return nil

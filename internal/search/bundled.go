@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -197,6 +198,12 @@ func (r *Registry) loadBundled() error {
 			r.log.Warn("bundled definition rejected", "path", path, "err", err)
 			continue
 		}
+		if _, dup := r.bundled[def.ID]; dup {
+			dupErr := &DefinitionError{Msg: "duplicate bundled id: " + def.ID}
+			r.bundledErrs[path] = dupErr
+			r.log.Warn("bundled definition rejected", "path", path, "err", dupErr)
+			continue
+		}
 		r.bundled[def.ID] = def
 	}
 	return nil
@@ -229,7 +236,7 @@ func (r *Registry) readUserDir() (byID map[string]*Definition, sources map[strin
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("search: resolve %s: %w", entry.Name(), err)
 		}
-		data, err := readUserFile(path, entry)
+		data, err := r.readUserFile(path)
 		if err != nil {
 			errs[path] = err
 			r.log.Warn("user definition rejected", "path", path, "err", err)
@@ -252,21 +259,38 @@ func (r *Registry) readUserDir() (byID map[string]*Definition, sources map[strin
 	return byID, sources, errs, nil
 }
 
-// readUserFile stat-checks the size cap before reading, so a multi-hundred-
-// megabyte drop never reaches memory; the error matches the message
-// LoadDefinition would have returned.
-func readUserFile(path string, entry fs.DirEntry) ([]byte, error) {
-	info, err := entry.Info()
+// readUserFile enforces the size cap while reading. entry.Info() would lstat —
+// a symlink reports its own tiny size while os.ReadFile follows it to an
+// arbitrarily large or endless target, and the file could grow between stat
+// and read — so the check goes through the open handle: require a regular
+// file, then bound the read itself.
+func (r *Registry) readUserFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, &DefinitionError{Msg: err.Error()}
 	}
-	if info.Size() > MaxDefinitionBytes {
+	// Close cannot fail meaningfully for a read-only file; the error is
+	// logged rather than discarded, so no linter exception is needed.
+	defer func() {
+		if err := f.Close(); err != nil {
+			r.log.Warn("close user definition", "path", path, "err", err)
+		}
+	}()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, &DefinitionError{Msg: err.Error()}
+	}
+	if !info.Mode().IsRegular() {
+		return nil, &DefinitionError{Msg: "not a regular file"}
+	}
+	data, err := io.ReadAll(io.LimitReader(f, MaxDefinitionBytes+1))
+	if err != nil {
+		return nil, &DefinitionError{Msg: err.Error()}
+	}
+	if len(data) > MaxDefinitionBytes {
 		return nil, &DefinitionError{Msg: fmt.Sprintf(
-			"document is %d bytes, over the %d-byte limit", info.Size(), MaxDefinitionBytes)}
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, &DefinitionError{Msg: err.Error()}
+			"document is %d bytes, over the %d-byte limit", len(data), MaxDefinitionBytes)}
 	}
 	return data, nil
 }
