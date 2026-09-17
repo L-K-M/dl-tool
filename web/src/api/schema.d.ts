@@ -380,6 +380,50 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Start a search
+     * @description Enqueues one asynchronous search job and answers 202 with its id immediately — no indexer is contacted on this request. indexer_ids defaults to every enabled indexer; an unknown id is 422, and 503 /problems/engine-unavailable means no indexer is enabled at all.
+     */
+    post: operations["start-search"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/search/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Poll a search
+     * @description One search job: finished, the live per-engine status array and one cursor-paginated page of results — sort, limit and cursor apply to results only. A deleted or unknown id is 404 /problems/not-found.
+     */
+    get: operations["get-search"];
+    put?: never;
+    post?: never;
+    /**
+     * Delete a search
+     * @description Removes the search job; its results cascade with it and its engine status is forgotten. An unknown id is 404 /problems/not-found.
+     */
+    delete: operations["delete-search"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/sync": {
     parameters: {
       query?: never;
@@ -811,6 +855,14 @@ export interface components {
       url: string | null;
       version: string | null;
     };
+    EngineStatus: {
+      /** Format: int64 */
+      count: number;
+      error: string | null;
+      id: string;
+      name: string;
+      status: string;
+    };
     Entry: {
       name: string;
       path: string;
@@ -1103,6 +1155,53 @@ export interface components {
     RootsOutputBody: {
       roots: components["schemas"]["FSRoot"][] | null;
     };
+    SearchJobOutputBody: {
+      engines: components["schemas"]["EngineStatus"][] | null;
+      finished: boolean;
+      id: string;
+      next_cursor: string | null;
+      query: string;
+      results: components["schemas"]["SearchResultDTO"][] | null;
+      /** Format: int64 */
+      total: number;
+    };
+    SearchResultDTO: {
+      album: string | null;
+      artist: string | null;
+      author: string | null;
+      category_desc: string | null;
+      category_ids: number[] | null;
+      /** Format: double */
+      download_volume_factor: number;
+      genre: string | null;
+      /** Format: int64 */
+      grabs: number | null;
+      id: string;
+      imdb_id: string | null;
+      indexer_id: string;
+      indexer_name: string;
+      info_hash: string | null;
+      language: string | null;
+      /** Format: int64 */
+      leechers: number | null;
+      /** Format: double */
+      minimum_ratio: number | null;
+      /** Format: int64 */
+      minimum_seed_time_seconds: number | null;
+      published_at: string | null;
+      publisher: string | null;
+      /** Format: int64 */
+      seeders: number | null;
+      /** Format: int64 */
+      size_bytes: number | null;
+      title: string;
+      tmdb_id: string | null;
+      tvdb_id: string | null;
+      /** Format: double */
+      upload_volume_factor: number;
+      /** Format: int64 */
+      year: number | null;
+    };
     SetupInputBody: {
       /**
        * @description Preferred UI locale
@@ -1115,6 +1214,17 @@ export interface components {
       setup_token: string;
       /** @description Operator username */
       username: string;
+    };
+    StartSearchInputBody: {
+      /** @description Newznab category ids; empty means no category filter */
+      categories?: number[] | null;
+      /** @description Indexers to run; default is every enabled indexer */
+      indexer_ids?: string[] | null;
+      /** @description Search text */
+      query: string;
+    };
+    StartedOutputBody: {
+      id: string;
     };
     Stats: {
       /** Format: int64 */
@@ -2022,6 +2132,108 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["TestIndexerOutputBody"];
         };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "start-search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["StartSearchInputBody"];
+      };
+    };
+    responses: {
+      /** @description Accepted */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["StartedOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-search": {
+    parameters: {
+      query?: {
+        /** @description seeders, title, size_bytes, leechers, published_at or indexer, with a leading - to reverse; default -seeders */
+        sort?: string;
+        /** @description Page size of the results page */
+        limit?: number;
+        /** @description Opaque page token from a previous response */
+        cursor?: string;
+      };
+      header?: never;
+      path: {
+        /** @description The sch_… job id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SearchJobOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The sch_… job id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description Error */
       default: {

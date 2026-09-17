@@ -1,0 +1,557 @@
+package store
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jmoiron/sqlx"
+)
+
+// SearchJob is one row of the search_jobs table (docs/04-data-model.md
+// section 3.4): the durable half of an asynchronous search.
+type SearchJob struct {
+	ID             string  `db:"id"`
+	Query          string  `db:"query"`
+	IndexerIDsJSON string  `db:"indexer_ids_json"`
+	CategoriesJSON *string `db:"categories_json"`
+	Finished       bool    `db:"finished"`
+	Total          int     `db:"total"`
+	LastError      *string `db:"last_error"`
+	StartedAt      int64   `db:"started_at"`
+	FinishedAt     *int64  `db:"finished_at"`
+	CreatedAt      int64   `db:"created_at"`
+	UpdatedAt      int64   `db:"updated_at"`
+}
+
+// SearchResultRow mirrors the search_results DDL. Package store never
+// imports internal/search, so the job handler converts search.SearchResult
+// into this type. DownloadURL, MagnetURI and DetailsURL are acquisition
+// handles — they persist for the later POST /tasks resolution but are never
+// serialized by an API mapper (07-search-and-indexers.md section 5 rule 6).
+type SearchResultRow struct {
+	ID                     string   `db:"id"`
+	SearchJobID            string   `db:"search_job_id"`
+	IndexerID              string   `db:"indexer_id"`
+	Title                  string   `db:"title"`
+	DownloadURL            *string  `db:"download_url"`
+	MagnetURI              *string  `db:"magnet_uri"`
+	InfoHash               *string  `db:"info_hash"`
+	SizeBytes              *int64   `db:"size_bytes"`
+	Seeders                *int     `db:"seeders"`
+	Leechers               *int     `db:"leechers"`
+	Grabs                  *int     `db:"grabs"`
+	PublishedAt            *int64   `db:"published_at"` // unix ms
+	DetailsURL             *string  `db:"details_url"`
+	CategoryIDsJSON        *string  `db:"category_ids_json"`
+	CategoryDesc           *string  `db:"category_desc"`
+	DownloadVolumeFactor   float64  `db:"download_volume_factor"`
+	UploadVolumeFactor     float64  `db:"upload_volume_factor"`
+	MinimumRatio           *float64 `db:"minimum_ratio"`
+	MinimumSeedTimeSeconds *int     `db:"minimum_seed_time_seconds"`
+	IMDBID                 *string  `db:"imdb_id"`
+	TMDBID                 *string  `db:"tmdb_id"`
+	TVDBID                 *string  `db:"tvdb_id"`
+	Year                   *int     `db:"year"`
+	Genre                  *string  `db:"genre"`
+	Language               *string  `db:"language"`
+	Publisher              *string  `db:"publisher"`
+	Author                 *string  `db:"author"`
+	Album                  *string  `db:"album"`
+	Artist                 *string  `db:"artist"`
+	CreatedAt              int64    `db:"created_at"`
+	UpdatedAt              int64    `db:"updated_at"`
+}
+
+const searchJobColumns = `id, query, indexer_ids_json, categories_json, finished,
+total, last_error, started_at, finished_at, created_at, updated_at`
+
+const searchResultColumns = `id, search_job_id, indexer_id, title, download_url,
+magnet_uri, info_hash, size_bytes, seeders, leechers, grabs, published_at,
+details_url, category_ids_json, category_desc, download_volume_factor,
+upload_volume_factor, minimum_ratio, minimum_seed_time_seconds, imdb_id,
+tmdb_id, tvdb_id, year, genre, language, publisher, author, album, artist,
+created_at, updated_at`
+
+const (
+	queryCreateSearchJob = `INSERT INTO search_jobs
+(id, query, indexer_ids_json, categories_json, finished, total, last_error,
+ started_at, finished_at, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	queryGetSearchJob = `SELECT ` + searchJobColumns + `
+FROM search_jobs WHERE id = ?`
+
+	queryFinishSearchJob = `UPDATE search_jobs
+SET finished = 1, total = ?, last_error = ?, finished_at = ?, updated_at = ?
+WHERE id = ?`
+
+	queryDeleteSearchJob = `DELETE FROM search_jobs WHERE id = ?`
+
+	// The 24-hour retention of docs/04-data-model.md section 3.4; the
+	// nightly cron of T091 is the caller. Results cascade with the job.
+	queryPurgeSearchJobs = `DELETE FROM search_jobs WHERE created_at < ?`
+
+	queryDeleteIndexerResults = `DELETE FROM search_results
+WHERE search_job_id = ? AND indexer_id = ?`
+
+	queryInsertSearchResult = `INSERT INTO search_results
+(` + searchResultColumns + `)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	// COUNT(*) has no column name; the alias keeps the StructScan explicit.
+	queryCountResultsByIndexer = `SELECT indexer_id, COUNT(*) AS count FROM search_results
+WHERE search_job_id = ? GROUP BY indexer_id`
+
+	queryListSearchResults = `SELECT ` + searchResultColumns + `
+FROM search_results
+WHERE search_job_id = ?`
+
+	queryCountSearchResults = `SELECT COUNT(*) FROM search_results WHERE search_job_id = ?`
+)
+
+// CreateSearchJob inserts one running job row; the id (sch_…), started_at and
+// the timestamps are assigned here. IndexerIDsJSON and CategoriesJSON are the
+// verbatim JSON documents the job fans out over.
+func CreateSearchJob(ctx context.Context, db *sqlx.DB, j SearchJob) (SearchJob, error) {
+	j.ID = NewID(PrefixSearchJob)
+	now := time.Now().UnixMilli()
+	j.StartedAt = now
+	j.CreatedAt, j.UpdatedAt = now, now
+	if _, err := db.ExecContext(
+		ctx, queryCreateSearchJob,
+		j.ID, j.Query, j.IndexerIDsJSON, j.CategoriesJSON, j.Finished,
+		j.Total, j.LastError, j.StartedAt, j.FinishedAt, j.CreatedAt, j.UpdatedAt,
+	); err != nil {
+		return SearchJob{}, fmt.Errorf("store: create search job: %w", err)
+	}
+
+	return j, nil
+}
+
+// GetSearchJob resolves one row by id. ErrNotFound means the id addresses no
+// row — deleted and unknown are the same answer.
+func GetSearchJob(ctx context.Context, db *sqlx.DB, id string) (SearchJob, error) {
+	var row SearchJob
+	err := db.GetContext(ctx, &row, queryGetSearchJob, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SearchJob{}, fmt.Errorf("store: search job %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return SearchJob{}, fmt.Errorf("store: search job %s: %w", id, err)
+	}
+
+	return row, nil
+}
+
+// FinishSearchJob stamps the terminal state: finished, the total rows written
+// across every engine, an optional job-level error summary and finished_at.
+// ErrNotFound means the job was deleted underneath the worker — the handler
+// treats that as a completed job, not a failure.
+func FinishSearchJob(ctx context.Context, db *sqlx.DB, id string, total int, lastErr *string, now int64) error {
+	result, err := db.ExecContext(ctx, queryFinishSearchJob, total, lastErr, now, now, id)
+	if err != nil {
+		return fmt.Errorf("store: finish search job %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: finish search job %s: read rows affected: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: finish search job %s: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+// DeleteSearchJob removes the job row; its results cascade through the ON
+// DELETE CASCADE of docs/04-data-model.md section 3.4. ErrNotFound means the
+// id addresses no row.
+func DeleteSearchJob(ctx context.Context, db *sqlx.DB, id string) error {
+	result, err := db.ExecContext(ctx, queryDeleteSearchJob, id)
+	if err != nil {
+		return fmt.Errorf("store: delete search job %s: %w", id, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete search job %s: read rows affected: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: delete search job %s: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+// PurgeSearchJobs deletes every job created before olderThan (unix ms) and
+// reports how many; results cascade. The 24-hour retention sweep of T091 is
+// the intended caller.
+func PurgeSearchJobs(ctx context.Context, db *sqlx.DB, olderThan int64) (int64, error) {
+	result, err := db.ExecContext(ctx, queryPurgeSearchJobs, olderThan)
+	if err != nil {
+		return 0, fmt.Errorf("store: purge search jobs: %w", err)
+	}
+	purged, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: purge search jobs: read rows affected: %w", err)
+	}
+
+	return purged, nil
+}
+
+// InsertResults writes one engine's page in a single transaction and returns
+// the number of rows written. It is idempotent per (search_job_id,
+// indexer_id): it deletes that indexer's rows first, because the job queue is
+// at-least-once — a re-run replaces the page instead of doubling it.
+func InsertResults(ctx context.Context, db *sqlx.DB, jobID, indexerID string, rows []SearchResultRow) (int, error) {
+	tx, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: begin result insert: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "search result insert rollback failed", "err", err)
+		}
+	}()
+
+	if _, err := tx.ExecContext(ctx, queryDeleteIndexerResults, jobID, indexerID); err != nil {
+		return 0, fmt.Errorf("store: replace indexer %s results: %w", indexerID, err)
+	}
+
+	now := time.Now().UnixMilli()
+	for _, r := range rows {
+		r.ID = NewID(PrefixSearchResult)
+		r.SearchJobID = jobID
+		r.IndexerID = indexerID
+		r.CreatedAt, r.UpdatedAt = now, now
+		if _, err := tx.ExecContext(
+			ctx, queryInsertSearchResult,
+			r.ID, r.SearchJobID, r.IndexerID, r.Title, r.DownloadURL,
+			r.MagnetURI, r.InfoHash, r.SizeBytes, r.Seeders, r.Leechers,
+			r.Grabs, r.PublishedAt, r.DetailsURL, r.CategoryIDsJSON,
+			r.CategoryDesc, r.DownloadVolumeFactor, r.UploadVolumeFactor,
+			r.MinimumRatio, r.MinimumSeedTimeSeconds, r.IMDBID, r.TMDBID,
+			r.TVDBID, r.Year, r.Genre, r.Language, r.Publisher, r.Author,
+			r.Album, r.Artist, r.CreatedAt, r.UpdatedAt,
+		); err != nil {
+			return 0, fmt.Errorf("store: insert search result for indexer %s: %w", indexerID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: commit search results: %w", err)
+	}
+
+	return len(rows), nil
+}
+
+// CountResultsByIndexer returns the per-engine row counts of one job. The API
+// rebuilds the engines array from it once the in-memory tracker has forgotten
+// the job (a restart), where the volatile per-engine status no longer exists.
+func CountResultsByIndexer(ctx context.Context, db *sqlx.DB, jobID string) (map[string]int, error) {
+	var pairs []struct {
+		IndexerID string `db:"indexer_id"`
+		Count     int    `db:"count"`
+	}
+	if err := db.SelectContext(ctx, &pairs, queryCountResultsByIndexer, jobID); err != nil {
+		return nil, fmt.Errorf("store: count results of %s: %w", jobID, err)
+	}
+
+	out := make(map[string]int, len(pairs))
+	for _, p := range pairs {
+		out[p.IndexerID] = p.Count
+	}
+
+	return out, nil
+}
+
+// searchSortColumns maps every documented sort key of docs/05-api-contract.md
+// section 9.2 to its column. Only values from this map reach ORDER BY or a
+// cursor predicate; a user-supplied key is looked up, never concatenated.
+var searchSortColumns = map[string]string{
+	"seeders":      "seeders",
+	"title":        "title",
+	"size_bytes":   "size_bytes",
+	"leechers":     "leechers",
+	"published_at": "published_at",
+	"indexer":      "indexer_id",
+}
+
+// searchSortKeys is the allowlist in documented order, for legible errors.
+var searchSortKeys = []string{
+	"seeders", "title", "size_bytes", "leechers", "published_at", "indexer",
+}
+
+// defaultSearchSort is the documented default of GET /search/{id}: seeders
+// descending.
+const defaultSearchSort = "-seeders"
+
+// ListResults pages one job's results. sort is one of seeders, title,
+// size_bytes, leechers, published_at, indexer, each reversible with a leading
+// '-'; the default is "-seeders". Every column sorts NULLS LAST in both
+// directions — an unknown seeder count never outranks a real one. The cursor
+// is a base64 JSON token holding the last row's sort value, its id and a hash
+// of (job, sort), exactly like ListTasks; a mismatched or undecodable token
+// is ErrStaleCursor. total counts the job's rows, ignoring the cursor
+// (docs/05-api-contract.md section 1.4).
+func ListResults(ctx context.Context, db *sqlx.DB, jobID, sort string, limit int, cursor string) (rows []SearchResultRow, nextCursor string, total int, err error) {
+	if limit == 0 {
+		limit = taskListDefaultLimit
+	}
+	if limit < 1 || limit > taskListMaxLimit {
+		return nil, "", 0, fmt.Errorf("store: list results: limit %d outside 1..%d", limit, taskListMaxLimit)
+	}
+
+	sortKey := sort
+	if sortKey == "" {
+		sortKey = defaultSearchSort
+	}
+	key, descending := strings.CutPrefix(sortKey, "-")
+	column, ok := searchSortColumns[key]
+	if !ok {
+		return nil, "", 0, fmt.Errorf("%w: %q, want one of %q", ErrInvalidSort, sort, searchSortKeys)
+	}
+
+	pageQuery := queryListSearchResults
+	pageArgs := []any{jobID}
+	if cursor != "" {
+		token, err := decodeTaskCursor(cursor)
+		if err != nil {
+			return nil, "", 0, err
+		}
+		if token.Hash != searchCursorHash(jobID, column, descending) {
+			return nil, "", 0, fmt.Errorf("%w: issued for a different job or sort", ErrStaleCursor)
+		}
+
+		predicate, cursorArgs := searchCursorPredicate(column, descending, token.Value, token.LastID)
+		pageQuery += " AND " + predicate
+		pageArgs = append(pageArgs, cursorArgs...)
+	}
+
+	if err := db.GetContext(ctx, &total, queryCountSearchResults, jobID); err != nil {
+		return nil, "", 0, fmt.Errorf("store: list results: count: %w", err)
+	}
+
+	direction := "ASC"
+	if descending {
+		direction = "DESC"
+	}
+	// One row past the limit decides whether another page exists, so
+	// next_cursor is null exactly on the last page. NULLS LAST holds in
+	// both directions: the cursor predicate treats the NULL cluster as the
+	// tail of either ordering.
+	pageQuery += fmt.Sprintf(
+		" ORDER BY %s %s NULLS LAST, id %s LIMIT %d",
+		column, direction, direction, limit+1,
+	)
+
+	var page []SearchResultRow
+	if err := db.SelectContext(ctx, &page, pageQuery, pageArgs...); err != nil {
+		return nil, "", 0, fmt.Errorf("store: list results: read page: %w", err)
+	}
+	if len(page) <= limit {
+		return page, "", total, nil
+	}
+	page = page[:limit]
+
+	last := page[len(page)-1]
+	encoded, err := encodeTaskCursor(taskPageCursor{
+		Hash:   searchCursorHash(jobID, column, descending),
+		LastID: last.ID,
+		Value:  searchSortValue(last, key),
+	})
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("store: list results: encode cursor: %w", err)
+	}
+
+	return page, encoded, total, nil
+}
+
+// searchCursorPredicate is the keyset predicate for the NULLS-LAST orderings
+// ListResults produces. column comes from searchSortColumns only. A cursor
+// inside the NULL cluster can only be followed by more NULLs; a non-NULL
+// cursor is followed by the strictly-later non-NULL rows plus the whole NULL
+// tail.
+func searchCursorPredicate(column string, descending bool, value any, lastID string) (string, []any) {
+	cmp := ">"
+	if descending {
+		cmp = "<"
+	}
+	if value == nil {
+		return fmt.Sprintf("(%s IS NULL AND id %s ?)", column, cmp), []any{lastID}
+	}
+
+	return fmt.Sprintf(
+		"(%s IS NULL OR %s %s ? OR (%s = ? AND id %s ?))",
+		column, column, cmp, column, cmp,
+	), []any{value, value, lastID}
+}
+
+// searchCursorHash binds a cursor to the job and the parsed sort that issued
+// it.
+func searchCursorHash(jobID, column string, descending bool) string {
+	sum := sha256.Sum256([]byte(
+		"job:" + jobID + "\x00" + fmt.Sprintf("sort:%s:%t", column, descending),
+	))
+
+	return base64.RawStdEncoding.EncodeToString(sum[:])
+}
+
+// searchSortValue extracts the cursor's sort value from the last row of a
+// page. NULL columns decode as nil, which the cursor predicate's IS NULL
+// branch answers.
+func searchSortValue(row SearchResultRow, key string) any {
+	switch key {
+	case "seeders":
+		return nilOrValue(row.Seeders)
+	case "title":
+		return row.Title
+	case "size_bytes":
+		return nilOrValue(row.SizeBytes)
+	case "leechers":
+		return nilOrValue(row.Leechers)
+	case "published_at":
+		return nilOrValue(row.PublishedAt)
+	case "indexer":
+		return row.IndexerID
+	default:
+		// Unreachable: the allowlist already rejected every other key.
+		return nil
+	}
+}
+
+// EngineStatus is the volatile half of a search job: what each indexer is
+// doing right now. status is queued | searching | done | error
+// (docs/05-api-contract.md section 9.2).
+type EngineStatus struct {
+	ID     string  `json:"id"`
+	Name   string  `json:"name"`
+	Status string  `json:"status"`
+	Count  int     `json:"count"`
+	Error  *string `json:"error"`
+}
+
+// Engine status vocabulary of the wire contract.
+const (
+	EngineQueued    = "queued"
+	EngineSearching = "searching"
+	EngineDone      = "done"
+	EngineError     = "error"
+)
+
+// SearchTracker holds EngineStatus per running search job. One process, one
+// tracker: the durable rows live in search_jobs and search_results, this
+// holds only what is in flight. Searches is the process-wide instance both
+// internal/api and internal/jobs use.
+type SearchTracker struct {
+	mu    sync.RWMutex
+	byJob map[string][]EngineStatus
+}
+
+// Searches is the process-wide tracker instance.
+var Searches = NewSearchTracker()
+
+// NewSearchTracker returns an empty tracker.
+func NewSearchTracker() *SearchTracker {
+	return &SearchTracker{byJob: map[string][]EngineStatus{}}
+}
+
+// Start (re)seeds one job's engine list; the fan-out worker calls it with
+// every engine "searching" before the goroutines launch, so a re-run of the
+// same job row resets a stale snapshot instead of leaking it.
+func (t *SearchTracker) Start(jobID string, engines []EngineStatus) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.byJob[jobID] = append([]EngineStatus(nil), engines...)
+}
+
+// Set updates one engine of one job. An unknown job — deleted, forgotten or
+// never started — is a no-op: a row deleted under a running fan-out must not
+// resurrect its tracker entry.
+func (t *SearchTracker) Set(jobID, indexerID, status string, count int, errText *string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	engines, ok := t.byJob[jobID]
+	if !ok {
+		return
+	}
+	for i := range engines {
+		if engines[i].ID == indexerID {
+			engines[i].Status = status
+			engines[i].Count = count
+			engines[i].Error = errText
+			return
+		}
+	}
+}
+
+// Snapshot returns a copy of one job's engine list; the bool is false once
+// the job was forgotten (or never started), which is how the API knows to
+// reconstruct the list from stored counts.
+func (t *SearchTracker) Snapshot(jobID string) ([]EngineStatus, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	engines, ok := t.byJob[jobID]
+	if !ok {
+		return nil, false
+	}
+
+	return append([]EngineStatus(nil), engines...), true
+}
+
+// Forget drops one job's entry; DELETE /search/{id} and the retention purge
+// call it.
+func (t *SearchTracker) Forget(jobID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.byJob, jobID)
+}
+
+// IndexerSettingsMap decodes an indexer row's settings_json into the string
+// map the dlsearch runner's Scope.Config reads — the reserved keys pass
+// through so the runner sees allow_private_network. A stored document that is
+// not valid JSON is treated as empty and logged: one corrupt row must not
+// make the indexer unusable. The API's probe path and the job fan-out share
+// this one decode so a setting can never drift between the two.
+func IndexerSettingsMap(log *slog.Logger, row Indexer) map[string]string {
+	out := map[string]string{}
+	if row.SettingsJSON == nil || *row.SettingsJSON == "" {
+		return out
+	}
+	var doc map[string]any
+	if !json.Valid([]byte(*row.SettingsJSON)) {
+		log.Warn("indexer settings_json is not valid JSON; using empty settings", "indexer_id", row.ID)
+		return out
+	}
+	dec := json.NewDecoder(strings.NewReader(*row.SettingsJSON))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
+		log.Warn("indexer settings_json is not valid JSON; using empty settings", "indexer_id", row.ID)
+		return out
+	}
+	for k, v := range doc {
+		switch t := v.(type) {
+		case string:
+			out[k] = t
+		case bool:
+			out[k] = strconv.FormatBool(t)
+		case json.Number:
+			// verbatim — a float64 would render 1e+06 or lose precision
+			out[k] = t.String()
+		case nil:
+			// JSON null carries no value; the key is dropped.
+		default:
+			out[k] = fmt.Sprint(t)
+		}
+	}
+	return out
+}

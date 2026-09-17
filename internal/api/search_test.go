@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/L-K-M/dl-tool/internal/config"
+	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/search"
 	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -72,7 +75,7 @@ func newSearchTestEnvDeps(t *testing.T, hc *http.Client, defs *search.Registry, 
 		&config.Config{ConfigDir: configDir, SessionTTL: time.Hour},
 		db,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: hc},
+		Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: hc, DB: db},
 	)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -958,4 +961,360 @@ func TestIndexerSettingsMap(t *testing.T) {
 	if out := indexerSettingsMap(log, store.Indexer{ID: "i2", SettingsJSON: &bad}); len(out) != 0 {
 		t.Errorf("trailing garbage should yield empty settings, got %v", out)
 	}
+}
+
+// ---------------------------------------------------------------------
+// T061: the asynchronous search lifecycle — POST, GET and DELETE /search.
+// ---------------------------------------------------------------------
+
+// torznabFeedXML renders one RSS item per title, each carrying a .torrent
+// enclosure so Finalise keeps the row — a result with no acquisition handle
+// is dropped before it can persist.
+func torznabFeedXML(titles ...string) string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0"?><rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>`)
+	for i, title := range titles {
+		fmt.Fprintf(&b,
+			`<item><title>%s</title><enclosure url="https://x.test/f%d.torrent" length="10%d"/>`+
+				`<torznab:attr name="seeders" value="%d"/></item>`,
+			title, i, i, i+1,
+		)
+	}
+	b.WriteString(`</channel></rss>`)
+	return b.String()
+}
+
+// seedSearchIndexer inserts an enabled torznab row straight through the
+// store: the API's create path probes t=caps first, which a latency stub
+// would delay, and the search lifecycle needs the row, not the wizard.
+// allow_private_network lets the fan-out's per-origin guard reach the
+// loopback stub.
+func (e *searchTestEnv) seedSearchIndexer(t *testing.T, name, baseURL string) store.Indexer {
+	t.Helper()
+	settings := `{"allow_private_network":true,"origin":"` + baseURL + `"}`
+	row, err := e.indexers.Create(t.Context(), store.Indexer{
+		Name:         name,
+		Kind:         "torznab",
+		Enabled:      true,
+		URL:          &baseURL,
+		SettingsJSON: &settings,
+		Priority:     store.DefaultIndexerPriority,
+	}, secure.Secret("k"))
+	if err != nil {
+		t.Fatalf("seed indexer %q: %v", name, err)
+	}
+	return row
+}
+
+// claimSearchJob claims the single queued row the way the worker's
+// claimLoop does. The tests then run the real handler over it directly —
+// the worker's 1 s poll would make the partial-result window
+// timing-dependent instead of deterministic.
+func (e *searchTestEnv) claimSearchJob(t *testing.T) store.Job {
+	t.Helper()
+	job, err := store.ClaimJob(t.Context(), e.db, time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("claim search job: %v", err)
+	}
+	if job.Kind != jobs.JobKindSearch {
+		t.Fatalf("claimed kind = %q, want %q", job.Kind, jobs.JobKindSearch)
+	}
+	return job
+}
+
+// runSearchJob executes the registered handler over one claimed row and
+// returns its error so a goroutine can report it.
+func (e *searchTestEnv) runSearchJob(job store.Job) error {
+	h := jobs.NewSearchHandler(
+		e.db,
+		slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		nil, nil,
+		e.indexers,
+		http.DefaultClient,
+	)
+	return h(context.Background(), job)
+}
+
+// getSearch polls GET /search/{id} once and decodes the body.
+func (e *searchTestEnv) getSearch(t *testing.T, id string) SearchJobOutput {
+	t.Helper()
+	resp := e.api.Get("/search/"+id, e.authz())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("GET /search/%s status = %d: %s", id, resp.Code, resp.Body.String())
+	}
+	var out SearchJobOutput
+	if err := json.Unmarshal(resp.Body.Bytes(), &out.Body); err != nil {
+		t.Fatalf("decode search body: %v", err)
+	}
+	return out
+}
+
+// resultCount counts one job's persisted rows.
+func (e *searchTestEnv) resultCount(t *testing.T, jobID string) int {
+	t.Helper()
+	var n int
+	if err := e.db.GetContext(t.Context(), &n,
+		"SELECT COUNT(*) FROM search_results WHERE search_job_id = ?", jobID); err != nil {
+		t.Fatalf("count search_results: %v", err)
+	}
+	return n
+}
+
+// TestStartSearchReturns202AndID pins step 5: POST /search writes the job
+// row and its queue entry and answers immediately — a stub that never
+// answers proves no indexer is contacted on the request.
+func TestStartSearchReturns202AndID(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		_, _ = w.Write([]byte(torznabFeedXML("late")))
+	}))
+	t.Cleanup(func() {
+		close(release)
+		srv.Close()
+	})
+	env.seedSearchIndexer(t, "blocking", srv.URL+"/api")
+
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		answered <- env.api.Post("/search", map[string]any{"query": "late"}, env.authz())
+	}()
+	var resp *httptest.ResponseRecorder
+	select {
+	case resp = <-answered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("POST /search did not answer within 5 s — it must never wait on an indexer")
+	}
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("POST status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode 202 body: %v", err)
+	}
+	if len(body) != 1 {
+		keys := make([]string, 0, len(body))
+		for k := range body {
+			keys = append(keys, k)
+		}
+		t.Errorf("202 body keys = %v, want exactly [id]", keys)
+	}
+	id, _ := body["id"].(string)
+	if !strings.HasPrefix(id, "sch_") {
+		t.Fatalf("id = %q, want a sch_… job id", id)
+	}
+
+	var jobRows int
+	if err := env.db.GetContext(t.Context(), &jobRows,
+		"SELECT COUNT(*) FROM search_jobs WHERE id = ?", id); err != nil {
+		t.Fatalf("count search_jobs: %v", err)
+	}
+	if jobRows != 1 {
+		t.Errorf("search_jobs rows for %s = %d, want 1", id, jobRows)
+	}
+
+	var kind string
+	var maxAttempts int
+	if err := env.db.QueryRowContext(t.Context(),
+		"SELECT kind, max_attempts FROM jobs WHERE payload_json LIKE ?", "%"+id+"%",
+	).Scan(&kind, &maxAttempts); err != nil {
+		t.Fatalf("read queue row: %v", err)
+	}
+	if kind != jobs.JobKindSearch {
+		t.Errorf("jobs.kind = %q, want %q", kind, jobs.JobKindSearch)
+	}
+	if maxAttempts != 1 {
+		t.Errorf("jobs.max_attempts = %d, want 1 — a search is re-run by the user, not retried", maxAttempts)
+	}
+}
+
+// TestPollShowsPartialThenFinished is the task's acceptance case: two
+// engines 50 ms and 400 ms apart, so a poll between them must report
+// finished:false with the fast engine's rows already visible, and a later
+// poll finished:true with both.
+func TestPollShowsPartialThenFinished(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write([]byte(torznabFeedXML("fast-release")))
+	}))
+	defer fast.Close()
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(400 * time.Millisecond)
+		_, _ = w.Write([]byte(torznabFeedXML("slow-release")))
+	}))
+	defer slow.Close()
+
+	env.seedSearchIndexer(t, "fast", fast.URL+"/api")
+	env.seedSearchIndexer(t, "slow", slow.URL+"/api")
+
+	resp := env.api.Post("/search", map[string]any{"query": "release"}, env.authz())
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("POST status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+	var started StartedOutput
+	if err := json.Unmarshal(resp.Body.Bytes(), &started.Body); err != nil {
+		t.Fatalf("decode 202 body: %v", err)
+	}
+	id := started.Body.ID
+
+	job := env.claimSearchJob(t)
+	done := make(chan error, 1)
+	go func() {
+		done <- env.runSearchJob(job)
+	}()
+
+	var sawPartial bool
+	var last SearchJobOutput
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		last = env.getSearch(t, id)
+		if !last.Body.Finished && len(last.Body.Results) > 0 {
+			sawPartial = true
+		}
+		if last.Body.Finished {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("search handler: %v", err)
+	}
+	if !sawPartial {
+		t.Error("no poll observed partial results with finished:false — engines did not write rows as they answered")
+	}
+	if !last.Body.Finished {
+		t.Fatal("search never reported finished:true within 5 s")
+	}
+	if last.Body.Total != 2 || len(last.Body.Results) != 2 {
+		t.Errorf("finished job total/results = %d/%d, want 2/2", last.Body.Total, len(last.Body.Results))
+	}
+	for _, eng := range last.Body.Engines {
+		if eng.Status != store.EngineDone || eng.Count != 1 {
+			t.Errorf("engine %s status/count = %s/%d, want done/1", eng.ID, eng.Status, eng.Count)
+		}
+	}
+
+	// A re-delivery of the same queue row (at-least-once) replaces each
+	// engine's page instead of doubling it.
+	if err := env.runSearchJob(job); err != nil {
+		t.Fatalf("second handler run: %v", err)
+	}
+	if n := env.resultCount(t, id); n != 2 {
+		t.Errorf("results after re-run = %d, want 2 — a repeated execution must not duplicate rows", n)
+	}
+}
+
+// TestDeleteRemovesJobAndResults covers the cascade: DELETE removes the
+// search_jobs row, its results go with it, and a later GET is 404.
+func TestDeleteRemovesJobAndResults(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(torznabFeedXML("gone")))
+	}))
+	defer srv.Close()
+	env.seedSearchIndexer(t, "ephemeral", srv.URL+"/api")
+
+	resp := env.api.Post("/search", map[string]any{"query": "gone"}, env.authz())
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("POST status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var started StartedOutput
+	if err := json.Unmarshal(resp.Body.Bytes(), &started.Body); err != nil {
+		t.Fatalf("decode 202 body: %v", err)
+	}
+	id := started.Body.ID
+
+	if err := env.runSearchJob(env.claimSearchJob(t)); err != nil {
+		t.Fatalf("search handler: %v", err)
+	}
+	if n := env.resultCount(t, id); n != 1 {
+		t.Fatalf("results before delete = %d, want 1", n)
+	}
+
+	del := env.api.Do(http.MethodDelete, "/search/"+id, env.authz())
+	if del.Code != http.StatusNoContent {
+		t.Fatalf("DELETE status = %d, want 204: %s", del.Code, del.Body.String())
+	}
+	if n := env.resultCount(t, id); n != 0 {
+		t.Errorf("results after delete = %d, want 0 — the cascade must remove them", n)
+	}
+	var jobRows int
+	if err := env.db.GetContext(t.Context(), &jobRows,
+		"SELECT COUNT(*) FROM search_jobs WHERE id = ?", id); err != nil {
+		t.Fatalf("count search_jobs: %v", err)
+	}
+	if jobRows != 0 {
+		t.Errorf("search_jobs rows after delete = %d, want 0", jobRows)
+	}
+	assertProblem(t, env.api.Get("/search/"+id, env.authz()), http.StatusNotFound, SlugNotFound)
+}
+
+// TestUnknownJobIs404 pins the 404 /problems/not-found answer for a job id
+// that never existed — GET and DELETE agree.
+func TestUnknownJobIs404(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	assertProblem(t, env.api.Get("/search/sch_missing", env.authz()), http.StatusNotFound, SlugNotFound)
+	assertProblem(t,
+		env.api.Do(http.MethodDelete, "/search/sch_missing", env.authz()),
+		http.StatusNotFound, SlugNotFound)
+}
+
+// TestEmptyQueryIs422 covers the input validation: an empty or missing
+// query is /problems/validation-failed, an unknown indexer id the same —
+// and neither writes a search_jobs row.
+func TestEmptyQueryIs422(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+	env.seedSearchIndexer(t, "idle", "http://127.0.0.1:1/api")
+
+	assertProblem(t,
+		env.api.Post("/search", map[string]any{"query": ""}, env.authz()),
+		http.StatusUnprocessableEntity, SlugValidationFailed)
+	assertProblem(t,
+		env.api.Post("/search", map[string]any{}, env.authz()),
+		http.StatusUnprocessableEntity, SlugValidationFailed)
+	assertProblem(t,
+		env.api.Post("/search",
+			map[string]any{"query": "x", "indexer_ids": []string{"idx_missing"}},
+			env.authz()),
+		http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	var jobRows int
+	if err := env.db.GetContext(t.Context(), &jobRows, "SELECT COUNT(*) FROM search_jobs"); err != nil {
+		t.Fatalf("count search_jobs: %v", err)
+	}
+	if jobRows != 0 {
+		t.Errorf("search_jobs rows = %d, want 0 after refused posts", jobRows)
+	}
+}
+
+// TestNoEnabledIndexerIs503 covers the empty-selection answer: no indexers
+// at all, and then one disabled indexer — the default selection is every
+// enabled indexer, so both answer 503 /problems/engine-unavailable.
+func TestNoEnabledIndexerIs503(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	assertProblem(t,
+		env.api.Post("/search", map[string]any{"query": "x"}, env.authz()),
+		http.StatusServiceUnavailable, SlugEngineUnavailable)
+
+	url := "http://127.0.0.1:1/api"
+	if _, err := env.indexers.Create(t.Context(), store.Indexer{
+		Name:     "off",
+		Kind:     "torznab",
+		Enabled:  false,
+		URL:      &url,
+		Priority: store.DefaultIndexerPriority,
+	}, secure.Secret("k")); err != nil {
+		t.Fatalf("seed disabled indexer: %v", err)
+	}
+	assertProblem(t,
+		env.api.Post("/search", map[string]any{"query": "x"}, env.authz()),
+		http.StatusServiceUnavailable, SlugEngineUnavailable)
 }

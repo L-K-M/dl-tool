@@ -15,13 +15,14 @@ import (
 	"net/url"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/jmoiron/sqlx"
 	"go.yaml.in/yaml/v3"
 
+	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/search"
 	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -35,6 +36,9 @@ const (
 	operationIndexerCategories = "indexer-categories"
 	operationImportIndexer     = "import-indexer"
 	operationTestIndexer       = "test-indexer"
+	operationStartSearch       = "start-search"
+	operationGetSearch         = "get-search"
+	operationDeleteSearch      = "delete-search"
 )
 
 const (
@@ -98,12 +102,16 @@ var indexerInternalSettingKeys = []string{
 // cmd/dl-tool/main.go and passed into NewServer, so the API and the job
 // worker share one of each (docs/14-conventions.md section 8.3). Runner is
 // the dlsearch evaluator — its per-engine rate buckets are process state, so
-// the probe path and the search-job path must share the one instance.
+// the probe path and the search-job path must share the one instance. DB is
+// the queue the /search lifecycle enqueues into; it is the same handle
+// NewServer receives, re-delivered here because the registration call sites
+// are fixed (T061).
 type Deps struct {
 	Indexers *store.IndexerStore
 	Defs     *search.Registry
 	Runner   *search.Runner
 	HTTP     *http.Client // the SSRF-guarded client of T123
+	DB       *sqlx.DB
 }
 
 // IndexerDTO is the wire shape of docs/05-api-contract.md section 9.1.
@@ -214,6 +222,85 @@ type TestIndexerOutput struct {
 	}
 }
 
+// StartSearchInput is the JSON body of POST /search (doc 05 section 9.2).
+type StartSearchInput struct {
+	Body struct {
+		Query      string   `json:"query"      required:"true" minLength:"1" doc:"Search text"`
+		IndexerIDs []string `json:"indexer_ids,omitempty" doc:"Indexers to run; default is every enabled indexer"`
+		Categories []int    `json:"categories,omitempty" doc:"Newznab category ids; empty means no category filter"`
+	}
+}
+
+// GetSearchInput addresses one search job and carries the results page
+// query: sort, limit and cursor apply to results only (doc 05 section 1.4).
+type GetSearchInput struct {
+	ID     string `path:"id"     doc:"The sch_… job id"`
+	Sort   string `query:"sort"  doc:"seeders, title, size_bytes, leechers, published_at or indexer, with a leading - to reverse; default -seeders"`
+	Limit  int    `query:"limit" minimum:"1" maximum:"500" default:"100" doc:"Page size of the results page"`
+	Cursor string `query:"cursor" doc:"Opaque page token from a previous response"`
+}
+
+// SearchIDInput addresses one search job for DELETE.
+type SearchIDInput struct {
+	ID string `path:"id" doc:"The sch_… job id"`
+}
+
+// StartedOutput is the 202 body of POST /search: the opaque job id only, so
+// the response can never imply the search already ran.
+type StartedOutput struct {
+	Status int `json:"-"`
+	Body   struct {
+		ID string `json:"id"`
+	}
+}
+
+// SearchJobOutput is the GET /search/{id} body of doc 05 section 9.2: the
+// job state, the per-engine status array and one page of results.
+type SearchJobOutput struct {
+	Body struct {
+		ID         string               `json:"id"`
+		Query      string               `json:"query"`
+		Finished   bool                 `json:"finished"`
+		Total      int                  `json:"total"`
+		Engines    []store.EngineStatus `json:"engines"`
+		Results    []SearchResultDTO    `json:"results"`
+		NextCursor *string              `json:"next_cursor"`
+	}
+}
+
+// SearchResultDTO is the wire shape of one search_results row. It carries
+// metadata and the opaque res_ id only: download_url, magnet_uri and
+// details_url are server-only acquisition data and have no field here
+// (docs/07-search-and-indexers.md section 5 rule 6).
+type SearchResultDTO struct {
+	ID                     string   `json:"id"`
+	IndexerID              string   `json:"indexer_id"`
+	IndexerName            string   `json:"indexer_name"`
+	Title                  string   `json:"title"`
+	InfoHash               *string  `json:"info_hash"`
+	SizeBytes              *int64   `json:"size_bytes"`
+	Seeders                *int     `json:"seeders"`
+	Leechers               *int     `json:"leechers"`
+	Grabs                  *int     `json:"grabs"`
+	PublishedAt            *string  `json:"published_at"` // RFC 3339 UTC
+	CategoryIDs            []int    `json:"category_ids"`
+	CategoryDesc           *string  `json:"category_desc"`
+	DownloadVolumeFactor   float64  `json:"download_volume_factor"`
+	UploadVolumeFactor     float64  `json:"upload_volume_factor"`
+	MinimumRatio           *float64 `json:"minimum_ratio"`
+	MinimumSeedTimeSeconds *int     `json:"minimum_seed_time_seconds"`
+	IMDBID                 *string  `json:"imdb_id"`
+	TMDBID                 *string  `json:"tmdb_id"`
+	TVDBID                 *string  `json:"tvdb_id"`
+	Year                   *int     `json:"year"`
+	Genre                  *string  `json:"genre"`
+	Language               *string  `json:"language"`
+	Publisher              *string  `json:"publisher"`
+	Author                 *string  `json:"author"`
+	Album                  *string  `json:"album"`
+	Artist                 *string  `json:"artist"`
+}
+
 // importRequestBody declares the two media types of docs/05-api-contract.md
 // section 9.1 for the generated document; Huma's RawBody support adds its
 // own application/octet-stream entry beside them.
@@ -254,11 +341,12 @@ type SearchHandlers struct {
 	defs     *search.Registry
 	runner   *search.Runner
 	hc       *http.Client
+	db       *sqlx.DB
 }
 
 // NewSearchHandlers builds the indexer handlers over the shared deps.
 func NewSearchHandlers(log *slog.Logger, d Deps) *SearchHandlers {
-	return &SearchHandlers{log: log, indexers: d.Indexers, defs: d.Defs, runner: d.Runner, hc: d.HTTP}
+	return &SearchHandlers{log: log, indexers: d.Indexers, defs: d.Defs, runner: d.Runner, hc: d.HTTP, db: d.DB}
 }
 
 // RegisterSearchRoutes is the single registration point for every /indexers
@@ -347,6 +435,41 @@ func RegisterSearchRoutes(api huma.API, h *SearchHandlers) {
 		// body cap must clear the 1 MiB part cap, not merely match it.
 		MaxBodyBytes: max(secure.MetadataFetchCap, maxImportFileBytes+4096),
 	}, h.ImportIndexer)
+
+	huma.Register(api, huma.Operation{
+		OperationID:   operationStartSearch,
+		Method:        http.MethodPost,
+		Path:          "/search",
+		DefaultStatus: http.StatusAccepted,
+		Summary:       "Start a search",
+		Description:   "Enqueues one asynchronous search job and answers 202 with its id immediately — no indexer is contacted on this request. indexer_ids defaults to every enabled indexer; an unknown id is 422, and 503 /problems/engine-unavailable means no indexer is enabled at all.",
+		Tags:          []string{"search"},
+		Security:      credentialRequired,
+	}, h.StartSearch)
+
+	huma.Register(api, huma.Operation{
+		OperationID: operationGetSearch,
+		Method:      http.MethodGet,
+		Path:        "/search/{id}",
+		Summary:     "Poll a search",
+		Description: "One search job: finished, the live per-engine status array and one cursor-paginated page of results — sort, limit and cursor apply to results only. A deleted or unknown id is 404 /problems/not-found.",
+		Tags:        []string{"search"},
+		Security:    credentialRequired,
+		// Same strictness as every other operation: a mistyped query key
+		// is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, h.GetSearch)
+
+	huma.Register(api, huma.Operation{
+		OperationID:   operationDeleteSearch,
+		Method:        http.MethodDelete,
+		Path:          "/search/{id}",
+		DefaultStatus: http.StatusNoContent,
+		Summary:       "Delete a search",
+		Description:   "Removes the search job; its results cascade with it and its engine status is forgotten. An unknown id is 404 /problems/not-found.",
+		Tags:          []string{"search"},
+		Security:      credentialRequired,
+	}, h.DeleteSearch)
 }
 
 // indexerStore returns the shared store or the generic internal problem when
@@ -722,40 +845,10 @@ func indexerAllowPrivate(row store.Indexer) bool {
 
 // indexerSettingsMap decodes settings_json into the string map the runner's
 // Scope.Config reads — the reserved keys pass through so the runner sees
-// allow_private_network. A stored document that is not valid JSON is treated
-// as empty, matching mergeIndexerSettings.
+// allow_private_network. The single decode lives in the store package
+// (T061): the probe path and the search-job fan-out share it.
 func indexerSettingsMap(log *slog.Logger, row store.Indexer) map[string]string {
-	out := map[string]string{}
-	if row.SettingsJSON == nil || *row.SettingsJSON == "" {
-		return out
-	}
-	var doc map[string]any
-	if !json.Valid([]byte(*row.SettingsJSON)) {
-		log.Warn("indexer settings_json is not valid JSON; probing with empty settings", "indexer_id", row.ID)
-		return out
-	}
-	dec := json.NewDecoder(strings.NewReader(*row.SettingsJSON))
-	dec.UseNumber()
-	if err := dec.Decode(&doc); err != nil {
-		log.Warn("indexer settings_json is not valid JSON; probing with empty settings", "indexer_id", row.ID)
-		return out
-	}
-	for k, v := range doc {
-		switch t := v.(type) {
-		case string:
-			out[k] = t
-		case bool:
-			out[k] = strconv.FormatBool(t)
-		case json.Number:
-			// verbatim — a float64 would render 1e+06 or lose precision
-			out[k] = t.String()
-		case nil:
-			// JSON null carries no value; the key is dropped.
-		default:
-			out[k] = fmt.Sprint(t)
-		}
-	}
-	return out
+	return store.IndexerSettingsMap(log, row)
 }
 
 // IndexerCategories serves GET /indexers/categories: the default newznab
@@ -1343,4 +1436,304 @@ func toIndexerDTO(log *slog.Logger, row store.Indexer) IndexerDTO {
 		dto.LastTestAt = &s
 	}
 	return dto
+}
+
+// querySearchJobSingleAttempt clamps the queue row of kind "search" to
+// max_attempts 1 — a search is re-run by the user, not retried
+// (docs/04-data-model.md section 3.6, task T061). EnqueueJob's signature is
+// fixed, so the clamp is one follow-up statement on the enqueued row.
+const querySearchJobSingleAttempt = `UPDATE jobs SET max_attempts = 1 WHERE id = ?`
+
+// searchDB returns the queue handle, or the generic internal problem when
+// the server was built for the OpenAPI document alone.
+func (h *SearchHandlers) searchDB(ctx context.Context) (*sqlx.DB, error) {
+	if h.db == nil {
+		return nil, internalFailure(ctx, "search jobs", errors.New("no database"))
+	}
+	return h.db, nil
+}
+
+// StartSearch serves POST /search. It validates the selection, writes the
+// search_jobs row, seeds the tracker with every engine queued and enqueues
+// one jobs row of kind "search" — the 202 carries the id only, and no
+// indexer is contacted on this request (doc 05 section 9.2).
+func (h *SearchHandlers) StartSearch(ctx context.Context, in *StartSearchInput) (*StartedOutput, error) {
+	db, err := h.searchDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	st, err := h.indexerStore(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// An explicit indexer_ids list is resolved row by row — an unknown id
+	// is 422 — while the empty list defaults to every enabled indexer, and
+	// no enabled indexer at all is 503 /problems/engine-unavailable.
+	var selected []store.Indexer
+	if len(in.Body.IndexerIDs) == 0 {
+		selected, err = st.List(ctx, true)
+		if err != nil {
+			return nil, internalFailure(ctx, "list enabled indexers", err)
+		}
+		if len(selected) == 0 {
+			return nil, Problem(
+				SlugEngineUnavailable, http.StatusServiceUnavailable,
+				"no indexer is enabled",
+			)
+		}
+	} else {
+		selected = make([]store.Indexer, 0, len(in.Body.IndexerIDs))
+		for _, id := range in.Body.IndexerIDs {
+			row, err := st.Get(ctx, id)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, Problem(
+					SlugValidationFailed, http.StatusUnprocessableEntity,
+					fmt.Sprintf("unknown indexer id %q", id),
+				)
+			}
+			if err != nil {
+				return nil, internalFailure(ctx, "resolve indexer", err)
+			}
+			selected = append(selected, row)
+		}
+	}
+
+	ids := make([]string, len(selected))
+	engines := make([]store.EngineStatus, len(selected))
+	for i, row := range selected {
+		ids[i] = row.ID
+		engines[i] = store.EngineStatus{ID: row.ID, Name: row.Name, Status: store.EngineQueued}
+	}
+	idsJSON, err := json.Marshal(ids)
+	if err != nil {
+		return nil, internalFailure(ctx, "encode indexer ids", err)
+	}
+	var categoriesJSON *string
+	if len(in.Body.Categories) > 0 {
+		raw, err := json.Marshal(in.Body.Categories)
+		if err != nil {
+			return nil, internalFailure(ctx, "encode categories", err)
+		}
+		categoriesJSON = ptr(string(raw))
+	}
+
+	job, err := store.CreateSearchJob(ctx, db, store.SearchJob{
+		Query:          in.Body.Query,
+		IndexerIDsJSON: string(idsJSON),
+		CategoriesJSON: categoriesJSON,
+	})
+	if err != nil {
+		return nil, internalFailure(ctx, "create search job", err)
+	}
+
+	// The tracker is seeded before the enqueue so the first poll can never
+	// observe a claimed-but-unknown engine list.
+	store.Searches.Start(job.ID, engines)
+
+	payload := jobs.SearchPayload{
+		SearchJobID: job.ID,
+		Query:       in.Body.Query,
+		IndexerIDs:  ids,
+		Categories:  in.Body.Categories,
+	}
+	queueID, err := store.EnqueueJob(ctx, db, jobs.JobKindSearch, nil, payload, time.Now().UnixMilli())
+	if err != nil {
+		return nil, internalFailure(ctx, "enqueue search job", err)
+	}
+	if _, err := db.ExecContext(ctx, querySearchJobSingleAttempt, queueID); err != nil {
+		return nil, internalFailure(ctx, "clamp search job attempts", err)
+	}
+
+	out := &StartedOutput{Status: http.StatusAccepted}
+	out.Body.ID = job.ID
+	return out, nil
+}
+
+// GetSearch serves GET /search/{id}: the job row, the per-engine status
+// array — the tracker snapshot while the job is live, reconstructed from
+// stored counts once a restart forgot it — and one page of results.
+func (h *SearchHandlers) GetSearch(ctx context.Context, in *GetSearchInput) (*SearchJobOutput, error) {
+	db, err := h.searchDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	st, err := h.indexerStore(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	job, err := store.GetSearchJob(ctx, db, in.ID)
+	if err != nil {
+		return nil, FromStore(err)
+	}
+
+	// One indexer list read serves the engine names and indexer_name on
+	// every result row.
+	names, err := h.indexerNames(ctx, st)
+	if err != nil {
+		return nil, err
+	}
+
+	engines, ok := store.Searches.Snapshot(job.ID)
+	if !ok {
+		engines, err = reconstructEngines(ctx, db, job, names)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	rows, nextCursor, total, err := store.ListResults(ctx, db, job.ID, in.Sort, in.Limit, in.Cursor)
+	if err != nil {
+		return nil, searchListProblem(ctx, err)
+	}
+
+	out := &SearchJobOutput{}
+	out.Body.ID = job.ID
+	out.Body.Query = job.Query
+	out.Body.Finished = job.Finished
+	// total is the live result count — the job row's own total column is
+	// only stamped at finish, and a poll mid-run must see partial results
+	// counted (doc 05 section 9.2).
+	out.Body.Total = total
+	out.Body.Engines = engines
+	out.Body.Results = toSearchResultDTOs(rows, names)
+	if nextCursor != "" {
+		out.Body.NextCursor = &nextCursor
+	}
+	return out, nil
+}
+
+// DeleteSearch serves DELETE /search/{id}: the job row goes, its results
+// cascade, and the tracker forgets the in-flight engine status.
+func (h *SearchHandlers) DeleteSearch(ctx context.Context, in *SearchIDInput) (*struct{}, error) {
+	db, err := h.searchDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.DeleteSearchJob(ctx, db, in.ID); err != nil {
+		return nil, FromStore(err)
+	}
+	store.Searches.Forget(in.ID)
+	return nil, nil
+}
+
+// indexerNames maps every indexer id to its display name — one list read
+// covers the engines array and indexer_name on every result row.
+func (h *SearchHandlers) indexerNames(ctx context.Context, st *store.IndexerStore) (map[string]string, error) {
+	all, err := st.List(ctx, false)
+	if err != nil {
+		return nil, internalFailure(ctx, "list indexers", err)
+	}
+	names := make(map[string]string, len(all))
+	for _, row := range all {
+		names[row.ID] = row.Name
+	}
+	return names, nil
+}
+
+// reconstructEngines rebuilds a job's engines array once the in-memory
+// tracker has forgotten it — a restart. Per-engine error detail is volatile
+// and gone by then; a stored row count marks the engine done, and on an
+// unfinished job a count-less engine reports queued — the state the
+// re-claimed queue row will start it in.
+func reconstructEngines(ctx context.Context, db *sqlx.DB, job store.SearchJob, names map[string]string) ([]store.EngineStatus, error) {
+	var ids []string
+	if err := json.Unmarshal([]byte(job.IndexerIDsJSON), &ids); err != nil {
+		return nil, internalFailure(ctx, "decode search job indexers", err)
+	}
+	counts, err := store.CountResultsByIndexer(ctx, db, job.ID)
+	if err != nil {
+		return nil, internalFailure(ctx, "count search results", err)
+	}
+
+	engines := make([]store.EngineStatus, 0, len(ids))
+	for _, id := range ids {
+		name, ok := names[id]
+		if !ok {
+			name = id
+		}
+		status := store.EngineQueued
+		if job.Finished || counts[id] > 0 {
+			status = store.EngineDone
+		}
+		engines = append(engines, store.EngineStatus{ID: id, Name: name, Status: status, Count: counts[id]})
+	}
+	return engines, nil
+}
+
+// searchListProblem maps the store's list errors onto the registered
+// problem slugs: an unknown sort key or a foreign cursor is 422 with the
+// offending field located in errors[]; anything else is internal.
+func searchListProblem(ctx context.Context, err error) error {
+	var field, detail string
+	switch {
+	case errors.Is(err, store.ErrInvalidSort):
+		field = "query.sort"
+		detail = "the sort key is not a sortable column"
+	case errors.Is(err, store.ErrStaleCursor):
+		field = "query.cursor"
+		detail = "the cursor was issued for a different job or sort"
+	default:
+		return internalFailure(ctx, "list search results", err)
+	}
+
+	return &huma.ErrorModel{
+		Type:   SlugValidationFailed,
+		Title:  http.StatusText(http.StatusUnprocessableEntity),
+		Status: http.StatusUnprocessableEntity,
+		Detail: detail,
+		Errors: []*huma.ErrorDetail{{Message: detail, Location: field}},
+	}
+}
+
+// toSearchResultDTOs renders one page of stored rows: unix milliseconds to
+// RFC 3339 at the boundary, category_ids decoded, indexer_name resolved
+// from the id map. Acquisition fields have no counterpart here by design.
+func toSearchResultDTOs(rows []store.SearchResultRow, names map[string]string) []SearchResultDTO {
+	out := make([]SearchResultDTO, 0, len(rows))
+	for _, r := range rows {
+		dto := SearchResultDTO{
+			ID:                     r.ID,
+			IndexerID:              r.IndexerID,
+			IndexerName:            r.IndexerID,
+			Title:                  r.Title,
+			InfoHash:               r.InfoHash,
+			SizeBytes:              r.SizeBytes,
+			Seeders:                r.Seeders,
+			Leechers:               r.Leechers,
+			Grabs:                  r.Grabs,
+			CategoryIDs:            []int{},
+			CategoryDesc:           r.CategoryDesc,
+			DownloadVolumeFactor:   r.DownloadVolumeFactor,
+			UploadVolumeFactor:     r.UploadVolumeFactor,
+			MinimumRatio:           r.MinimumRatio,
+			MinimumSeedTimeSeconds: r.MinimumSeedTimeSeconds,
+			IMDBID:                 r.IMDBID,
+			TMDBID:                 r.TMDBID,
+			TVDBID:                 r.TVDBID,
+			Year:                   r.Year,
+			Genre:                  r.Genre,
+			Language:               r.Language,
+			Publisher:              r.Publisher,
+			Author:                 r.Author,
+			Album:                  r.Album,
+			Artist:                 r.Artist,
+		}
+		if name, ok := names[r.IndexerID]; ok {
+			dto.IndexerName = name
+		}
+		if r.PublishedAt != nil {
+			s := time.UnixMilli(*r.PublishedAt).UTC().Format(time.RFC3339)
+			dto.PublishedAt = &s
+		}
+		if r.CategoryIDsJSON != nil {
+			var ids []int
+			if err := json.Unmarshal([]byte(*r.CategoryIDsJSON), &ids); err == nil {
+				dto.CategoryIDs = ids
+			}
+		}
+		out = append(out, dto)
+	}
+	return out
 }

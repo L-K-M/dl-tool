@@ -136,9 +136,11 @@ func main() {
 
 			// One runner for the process: its per-engine rate buckets are
 			// shared state between the probe endpoint and the search jobs.
+			// The search fan-out's torznab calls carry the same honest UA.
 			runner := search.NewRunner(searchHTTP, logger, "dl-tool/"+version)
+			jobs.SearchUserAgent = "dl-tool/" + version
 
-			server, err := api.NewServer(cfg, db, logger, api.Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: searchHTTP})
+			server, err := api.NewServer(cfg, db, logger, api.Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: searchHTTP, DB: db})
 			if err != nil {
 				logger.Error("server build failed", "err", err)
 				os.Exit(exitFailure)
@@ -150,9 +152,13 @@ func main() {
 
 			// The job worker pool shares runCtx, so OnStop cancels it and
 			// runDone.Wait blocks until every in-flight handler has finished.
-			// Handlers arrive with T061/T066/T074/T091; until then the pool is
-			// intentionally empty and any enqueued kind is dead-lettered.
+			// The search fan-out (T061) reuses the same Deps collaborators
+			// the API holds — one runner, one registry, one guarded client
+			// per process. T066/T074/T091 register their kinds here later.
 			worker := jobs.NewWorker(db, logger, workerPoolSize)
+			worker.Register(jobs.JobKindSearch, jobs.NewSearchHandler(
+				db, logger, defs, runner, indexers, searchHTTP,
+			))
 			runDone.Add(1)
 			go func() {
 				defer runDone.Done()
