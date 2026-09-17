@@ -22,8 +22,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
@@ -452,6 +454,14 @@ func importInput(t *testing.T, filename string, data []byte) *api.ImportIndexerI
 // cmd/dl-tool wires it — minus the auth middleware a direct call bypasses.
 func newImportHandlers(t *testing.T) *api.SearchHandlers {
 	t.Helper()
+	h, _ := newImportHandlersWithDB(t)
+	return h
+}
+
+// newImportHandlersWithDB additionally returns the store's handle so a test
+// can assert on the persisted row.
+func newImportHandlersWithDB(t *testing.T) (*api.SearchHandlers, *sqlx.DB) {
+	t.Helper()
 	root := t.TempDir()
 	db, err := store.Open(
 		t.Context(),
@@ -469,7 +479,7 @@ func newImportHandlers(t *testing.T) *api.SearchHandlers {
 	return api.NewSearchHandlers(
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		api.Deps{Indexers: indexers},
-	)
+	), db
 }
 
 // problemOf unwraps the handler error into its problem document.
@@ -524,24 +534,14 @@ func TestImportEndpointCreatesDisabledRows(t *testing.T) {
 // plus the converted draft for the .dlm path.
 func TestImportEndpointSettingsJSON(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
-	db, err := store.Open(
-		ctx, filepath.Join(root, "config", "dl-tool.db"), filepath.Join(root, "backups"))
-	require.NoError(t, err)
-	defer func() { assert.NoError(t, db.Close()) }()
-	indexers, err := store.NewIndexerStore(db, secure.Secret("import-test-secret-key"))
-	require.NoError(t, err)
-	h := api.NewSearchHandlers(
-		slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		api.Deps{Indexers: indexers},
-	)
+	h, db := newImportHandlersWithDB(t)
 
 	// The fixture must be read before chdir: dlmFixture resolves
 	// testdata/ relative to the working directory.
 	fixture := dlmFixture(t, "jackett.dlm")
 	scratch := t.TempDir()
 	t.Chdir(scratch)
-	_, err = h.ImportIndexer(ctx, importInput(t, "jackett.dlm", fixture))
+	_, err := h.ImportIndexer(ctx, importInput(t, "jackett.dlm", fixture))
 	require.NoError(t, err)
 
 	var settingsJSON string
@@ -563,6 +563,32 @@ func TestImportEndpointSettingsJSON(t *testing.T) {
 	// Nothing the import ran touched the filesystem: the scratch directory
 	// is still empty.
 	assertDirEmpty(t, scratch)
+}
+
+// TestImportEndpointCapsOrigin: an over-long client-supplied file name is
+// stored truncated at 255 bytes and still valid UTF-8 — the byte cap must
+// not split a multi-byte rune.
+func TestImportEndpointCapsOrigin(t *testing.T) {
+	ctx := context.Background()
+	h, db := newImportHandlersWithDB(t)
+
+	archive := buildDLM(t,
+		dlmMember{name: "INFO", body: testINFO(t, "search.php")},
+		regMember("search.php", "<?php"),
+	)
+	longName := strings.Repeat("é", 200) + ".dlm"
+	_, err := h.ImportIndexer(ctx, importInput(t, longName, archive))
+	require.NoError(t, err)
+
+	var settingsJSON string
+	require.NoError(t, db.GetContext(ctx, &settingsJSON,
+		"SELECT settings_json FROM indexers LIMIT 1"))
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(settingsJSON), &doc))
+	origin, ok := doc["origin"].(string)
+	require.True(t, ok, "origin missing from settings_json: %s", settingsJSON)
+	assert.LessOrEqual(t, len(origin), 255)
+	assert.True(t, utf8.ValidString(origin), "stored origin is not valid UTF-8: %q", origin)
 }
 
 // TestImportEndpointRejections maps the multipart failures: an unknown

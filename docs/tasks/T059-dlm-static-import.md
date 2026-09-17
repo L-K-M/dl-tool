@@ -185,8 +185,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/search	5.776s
-ok  	github.com/L-K-M/dl-tool/internal/api	121.275s
+ok  	github.com/L-K-M/dl-tool/internal/search	6.050s
+ok  	github.com/L-K-M/dl-tool/internal/api	118.625s
 DLM_IMPORT_OK
 ```
 
@@ -217,6 +217,7 @@ The step-10 test set plus the endpoint and regression additions in
     --- PASS: TestImportEndpointCreatesDisabledRows/dlm (0.42s)
     --- PASS: TestImportEndpointCreatesDisabledRows/dlsearch.yaml (0.38s)
 --- PASS: TestImportEndpointSettingsJSON (0.38s)
+--- PASS: TestImportEndpointCapsOrigin (0.03s)
 --- PASS: TestImportEndpointRejections (0.50s)
 --- PASS: TestImportEndpointDuplicateConflicts (0.38s)
 ok  	github.com/L-K-M/dl-tool/internal/search	3.969s

@@ -1052,7 +1052,7 @@ func importedIndexerSettings(res search.ImportResult) (string, error) {
 	// mime/multipart already, but still capped before it is stored.
 	origin := res.Origin
 	if len(origin) > 255 {
-		origin = origin[:255]
+		origin = strings.ToValidUTF8(origin[:255], "")
 	}
 	doc := map[string]any{
 		indexerSettingAllowPrivate: false,
