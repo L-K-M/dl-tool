@@ -145,7 +145,7 @@ The Torznab client, `dlsearch/v1` engines, `.dlm` import and the search screen. 
 
 | Task | Title | Depends on | Status |
 |---|---|---|---|
-| [T054](T054-torznab-client.md) | Fetch and parse Torznab caps and search responses | T005, T123 | todo |
+| [T054](T054-torznab-client.md) | Fetch and parse Torznab caps and search responses | T005, T123 | done |
 | [T055](T055-indexer-store-and-provider-wizard.md) | Store indexers and import a Prowlarr or Jackett instance | T006, T007, T008, T054 | todo |
 | [T056](T056-dlsearch-definition-loader.md) | Load and validate `dlsearch/v1` definitions | T004, T005 | done |
 | [T057](T057-bundled-engine-definitions.md) | Bundle the four default engine definitions | T055, T056 | todo |
@@ -350,7 +350,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
-| T054 | Fetch and parse Torznab caps and search responses | T005, T123 | yes | todo | [T054](T054-torznab-client.md) |
+| T054 | Fetch and parse Torznab caps and search responses | T005, T123 | yes | done | [T054](T054-torznab-client.md) |
 | T055 | Store indexers and import a Prowlarr or Jackett instance | T006, T007, T008, T054 | no | todo | [T055](T055-indexer-store-and-provider-wizard.md) |
 | T056 | Load and validate `dlsearch/v1` definitions | T004, T005 | yes | done | [T056](T056-dlsearch-definition-loader.md) |
 | T057 | Bundle the four default engine definitions | T055, T056 | no | todo | [T057](T057-bundled-engine-definitions.md) |

@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T054 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T005, T123 |
 | **Blocks** | T055, T058, T062, T066, T077 |
 | **Parallel-safe** | yes — creates `internal/search/` only |
@@ -203,7 +203,46 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/search/... && echo TORZNAB_OK`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/search/...
+ok  	github.com/L-K-M/dl-tool/internal/search	1.570s
+TORZNAB_OK
+```
+
+`go test -v ./internal/search/` shows all six named tests passing with no
+`FAIL` or `SKIP`: TestParseTorznabItem, TestParseMagnetEnclosure,
+TestParseCapsTree, TestSeedersNullWhenAbsent, TestTorznabErrorDocument,
+TestFinaliseDropsUnusableRow.
+
+Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```
+internal/search/normalize.go
+internal/search/testdata/README.md
+internal/search/testdata/academic_torrents_rss.xml
+internal/search/testdata/torznab_caps.xml
+internal/search/testdata/torznab_error.xml
+internal/search/testdata/torznab_hdaccess.xml
+internal/search/testdata/torznab_tpb.xml
+internal/search/torznab.go
+internal/search/torznab_test.go
+```
+
+`grep -rn "http.Get\|http.Post\|http.Client{" internal/search` returns nothing (exit 1).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
