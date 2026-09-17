@@ -165,8 +165,8 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table — `git status` emits them sorted, so the display order
-differs from the table order — and nothing else. Use `git status`, not
+Expected: exactly the set of paths in the Files table (order-insensitive — `git status` emits them
+sorted, which differs from the table's display order) and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
