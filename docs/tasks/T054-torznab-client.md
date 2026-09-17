@@ -219,14 +219,15 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/...
-ok  	github.com/L-K-M/dl-tool/internal/search	1.570s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.625s
 TORZNAB_OK
 ```
 
 `go test -v ./internal/search/` shows all six named tests passing with no
 `FAIL` or `SKIP`: TestParseTorznabItem, TestParseMagnetEnclosure,
 TestParseCapsTree, TestSeedersNullWhenAbsent, TestTorznabErrorDocument,
-TestFinaliseDropsUnusableRow.
+TestFinaliseDropsUnusableRow (plus TestSearchClampsLimitToCaps, added in
+review to cover the caps-cached limit clamp).
 
 Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
 

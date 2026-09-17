@@ -79,6 +79,11 @@ func TestParseMagnetEnclosure(t *testing.T) {
 	require.NotNil(t, results[0].Leechers)
 	assert.Equal(t, 2596, *results[0].Leechers)
 	assert.Equal(t, "https://thepiratebay.se/torrent/11811366/Series_Title_S05E02_HDTV_x264-Xclusive_%5Beztv%5D", r.DetailsURL)
+
+	// dn is percent-encoded: spaces as %20, not '+', and '&'/'+' escaped.
+	assert.Equal(t,
+		"magnet:?xt=urn:btih:abc&dn=A%20B%26C%2BD",
+		MagnetFromInfohash("abc", "A B&C+D"))
 }
 
 // TestParseCapsTree checks the flattened category/subcat tree and the
@@ -167,6 +172,36 @@ func TestTorznabErrorDocument(t *testing.T) {
 	assert.Equal(t, "5000,5040", gotQuery.Get("cat"))
 	assert.Equal(t, "50", gotQuery.Get("limit"))
 	assert.Equal(t, "false", gotQuery.Get("cache"))
+}
+
+// TestSearchClampsLimitToCaps checks that a cached caps <limits max> clamps
+// Query.Limit on subsequent searches, and that a pre-Caps search sends the
+// requested value unclamped.
+func TestSearchClampsLimitToCaps(t *testing.T) {
+	var gotLimit []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = append(gotLimit, r.URL.Query().Get("limit"))
+		if r.URL.Query().Get("t") == "caps" {
+			_, _ = w.Write([]byte(`<caps><limits max="60"/></caps>`))
+			return
+		}
+		_, _ = w.Write([]byte(`<rss version="2.0"><channel></channel></rss>`))
+	}))
+	defer srv.Close()
+
+	c, err := NewTorznabClient(srv.Client(), srv.URL+"/api", secure.Secret("k"), "idx_test", "dl-tool/test")
+	require.NoError(t, err)
+
+	_, err = c.Search(context.Background(), Query{Q: "x", Limit: 500})
+	require.NoError(t, err)
+	assert.Equal(t, "500", gotLimit[len(gotLimit)-1], "no caps fetched yet: limit unclamped")
+
+	_, err = c.Caps(context.Background())
+	require.NoError(t, err)
+
+	_, err = c.Search(context.Background(), Query{Q: "x", Limit: 500})
+	require.NoError(t, err)
+	assert.Equal(t, "60", gotLimit[len(gotLimit)-1], "limit clamps to caps <limits max>")
 }
 
 // TestFinaliseDropsUnusableRow covers section 5 rule 5: a row with no

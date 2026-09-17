@@ -180,7 +180,8 @@ func (c *TorznabClient) fetch(ctx context.Context, q Query) ([]byte, error) {
 	u := c.buildURL(q)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, fmt.Errorf("search: build torznab request: %w", err)
+		// url parse errors embed the raw URL, apikey included.
+		return nil, fmt.Errorf("search: build torznab request: %w", secure.RedactError(err))
 	}
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
@@ -206,7 +207,7 @@ func (c *TorznabClient) fetch(ctx context.Context, q Query) ([]byte, error) {
 		}
 		return nil, te
 	}
-	if resp.StatusCode >= http.StatusBadRequest {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("search: torznab http %d from %s", resp.StatusCode, secure.RedactURL(u))
 	}
 	return body, nil
@@ -264,9 +265,10 @@ type categoryXML struct {
 
 // ParseCaps parses a t=caps document. It is pure; it never touches the
 // network. available="no" modes and modes the document does not declare are
-// left out of Modes; supportedParams falls back to the newznab defaults for
-// search and tv-search when the attribute is absent; LimitsMax defaults to
-// 100.
+// left out of Modes; supportedParams falls back to the newznab defaults of
+// 07-search-and-indexers.md section 2.2 when the attribute is absent — that
+// document names defaults for search and tv-search only, so the other modes
+// report no params rather than an invented set. LimitsMax defaults to 100.
 func ParseCaps(doc []byte) (Caps, error) {
 	var c capsXML
 	if err := xml.Unmarshal(doc, &c); err != nil {

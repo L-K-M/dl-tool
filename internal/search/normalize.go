@@ -1,10 +1,16 @@
 package search
 
-import "net/url"
+import (
+	"net/url"
+	"strings"
+)
 
 // SearchResult is the normalised row every search tier produces, per
-// 07-search-and-indexers.md section 5. Unknown numeric fields are nil
-// pointers — null in JSON — never -1 and never a fabricated 1.
+// 07-search-and-indexers.md section 5. Fields declared as pointers are nil
+// when the source does not report them — null in JSON — never -1 and never a
+// fabricated 1. Producers set DownloadVolumeFactor and UploadVolumeFactor to
+// 1.0 at construction; their zero value would mean freeleech, so a bare
+// SearchResult{} literal is not a valid row.
 //
 // DownloadURL, MagnetURI and DetailsURL are acquisition handles: they can
 // embed the operator's tracker passkey and must never be emitted by an API
@@ -72,7 +78,9 @@ func Finalise(in []SearchResult) (out []SearchResult, dropped int) {
 }
 
 // MagnetFromInfohash builds magnet:?xt=urn:btih:<infohash>&dn=<title> for an
-// infohash-only result.
+// infohash-only result. The dn value is percent-encoded — QueryEscape plus a
+// "+"/"%20" fixup — because form-encoding's '+' would render literally in
+// BitTorrent clients, while PathEscape would leave '&' and '=' unescaped.
 func MagnetFromInfohash(infohash, title string) string {
-	return "magnet:?xt=urn:btih:" + infohash + "&dn=" + url.QueryEscape(title)
+	return "magnet:?xt=urn:btih:" + infohash + "&dn=" + strings.ReplaceAll(url.QueryEscape(title), "+", "%20")
 }
