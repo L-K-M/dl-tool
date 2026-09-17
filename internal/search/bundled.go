@@ -289,8 +289,14 @@ func (r *Registry) readUserFile(path string) ([]byte, error) {
 		return nil, &DefinitionError{Msg: err.Error()}
 	}
 	if len(data) > MaxDefinitionBytes {
+		// The read is capped at MaxDefinitionBytes+1, so report the larger
+		// stat'd size — the real size of the dropped file.
+		size := int64(len(data))
+		if info.Size() > size {
+			size = info.Size()
+		}
 		return nil, &DefinitionError{Msg: fmt.Sprintf(
-			"document is %d bytes, over the %d-byte limit", len(data), MaxDefinitionBytes)}
+			"document is %d bytes, over the %d-byte limit", size, MaxDefinitionBytes)}
 	}
 	return data, nil
 }

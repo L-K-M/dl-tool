@@ -283,7 +283,7 @@ func TestUserDefinitionSymlinkToNonRegularRejected(t *testing.T) {
 	// lstat sees the symlink's own tiny size; the target is a device node,
 	// not a regular file — the read must refuse it rather than follow it.
 	if err := os.Symlink("/dev/null", path); err != nil {
-		t.Fatalf("symlink: %v", err)
+		t.Skipf("symlink unavailable on this platform: %v", err)
 	}
 
 	reg, err := NewRegistry(testLogger(), dir)
