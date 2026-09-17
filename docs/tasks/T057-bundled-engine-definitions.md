@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T057 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T055, T056 |
 | **Blocks** | T058, T105 |
 | **Parallel-safe** | no — wires the registry into `cmd/dl-tool/main.go` |
@@ -147,11 +147,11 @@ response:
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestBundledSetIsExactlyFour` asserts `definitions/engines/` contains exactly the four files of `BundledIDs` and no other entry.
-- [ ] Every bundled definition loads with `LoadDefinition` returning no error, and none has `kind: html`.
-- [ ] A user file with `id: arch-linux` is refused with `id already in use: arch-linux` and the bundled engine still loads.
-- [ ] `SeedIndexers` on a database that already has the four rows creates zero rows and returns no error.
-- [ ] Every seeded row has `enabled = 1`, `legal_tier = 'legitimate'` and `definition_source = 'bundled'`.
+- [x] `TestBundledSetIsExactlyFour` asserts `definitions/engines/` contains exactly the four files of `BundledIDs` and no other entry.
+- [x] Every bundled definition loads with `LoadDefinition` returning no error, and none has `kind: html`.
+- [x] A user file with `id: arch-linux` is refused with `id already in use: arch-linux` and the bundled engine still loads.
+- [x] `SeedIndexers` on a database that already has the four rows creates zero rows and returns no error.
+- [x] Every seeded row has `enabled = 1`, `legal_tier = 'legitimate'` and `definition_source = 'bundled'`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -182,7 +182,81 @@ sorted, which differs from the table's display order) and nothing else. Use `git
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG="./internal/search/... ./internal/store/..." && echo BUNDLED_OK` on the
+final tree:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/search/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/search	2.078s
+ok  	github.com/L-K-M/dl-tool/internal/store	73.585s
+BUNDLED_OK
+```
+
+`go test -race -count=1 -v ./internal/search/` on the same tree, trimmed to the top-level results —
+every test named in steps 8 and 9 passes:
+
+```text
+--- PASS: TestBundledSetIsExactlyFour (0.00s)
+--- PASS: TestEveryBundledDefinitionValidates (0.01s)
+--- PASS: TestNoBundledDefinitionUsesKindHTML (0.02s)
+--- PASS: TestUserDefinitionCollidingIDRejected (0.01s)
+--- PASS: TestInvalidUserDefinitionDoesNotBlockOthers (0.01s)
+--- PASS: TestSeedIndexersIsIdempotent (0.46s)
+--- PASS: TestNoPiracyIndexerNamesInRepository (0.02s)
+--- PASS: TestLoadValidRSSDefinition (0.00s)
+--- PASS: TestLoadValidStaticDefinition (0.00s)
+--- PASS: TestRequestDefaults (0.00s)
+--- PASS: TestUnknownKeyNamesTheKey (0.00s)
+--- PASS: TestOversizeRejectedBeforeParse (0.00s)
+--- PASS: TestLanguageTagRejected (0.00s)
+--- PASS: TestUnknownPlaceholderRejected (0.00s)
+--- PASS: TestUnknownTransformOpRejected (0.00s)
+--- PASS: TestPatternOverCapRejected (0.01s)
+--- PASS: TestStaticRequiresEntriesAndRefreshNote (0.01s)
+--- PASS: TestDefinitionRules (0.42s)
+--- PASS: TestValidDefinitionVariants (0.07s)
+--- PASS: TestParseTorznabItem (0.01s)
+--- PASS: TestParseMagnetEnclosure (0.01s)
+--- PASS: TestParseCapsTree (0.00s)
+--- PASS: TestSeedersNullWhenAbsent (0.00s)
+--- PASS: TestTorznabErrorDocument (0.00s)
+--- PASS: TestSearchClampsLimitToCaps (0.00s)
+--- PASS: TestParseRetryAfter (0.00s)
+--- PASS: TestFinaliseDropsUnusableRow (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/search	2.130s
+```
+
+Scope check on the working tree before the task commit (the check compares the emitted set against
+the Files table, order-insensitive):
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+definitions/embed.go
+definitions/engines/academic-torrents.yaml
+definitions/engines/arch-linux.yaml
+definitions/engines/internet-archive.yaml
+definitions/engines/linux-distributions.yaml
+internal/api/search.go
+internal/search/bundled.go
+internal/search/bundled_test.go
+```
+
+Exactly the `## Files` table — `definitions/engines/` expands to its four YAML files, and
+`internal/api/search.go` joined the table in the plan-repair PR #202.
 
 ## Blocked
 
