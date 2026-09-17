@@ -615,12 +615,20 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 	}
 
 	if first == nil {
+		// Nothing usable came back at all. An empty enumeration and
+		// all-unusable input are validation failures; only pure duplicates
+		// are a real conflict.
+		if len(entries) == 0 {
+			return nil, Problem(
+				SlugValidationFailed,
+				http.StatusUnprocessableEntity,
+				"provider returned no indexers",
+			)
+		}
 		detail := "every indexer from this provider was skipped"
 		if len(out.Body.Warnings) > 0 {
 			detail = strings.Join(out.Body.Warnings, "; ")
 		}
-		// A provider that enumerated but produced no usable row at all is a
-		// validation failure; only pure duplicates are a real conflict.
 		if badSkips > 0 {
 			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detail)
 		}

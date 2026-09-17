@@ -575,6 +575,35 @@ func TestImportProviderSkipsProwlarrIdZero(t *testing.T) {
 	}
 }
 
+// TestImportProviderEmptyEnumerationReturns422 pins the post-loop guard: a
+// provider that enumerates successfully but lists zero configured indexers
+// is unusable input (422), not a duplicate conflict (409).
+func TestImportProviderEmptyEnumerationReturns422(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v2.0/indexers/all/results/torznab/api"):
+			_, _ = w.Write([]byte(`<indexers></indexers>`))
+		default:
+			t.Errorf("unexpected stub request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	resp := env.api.Do(
+		http.MethodPost, "/indexers/import",
+		"Content-Type: application/json",
+		strings.NewReader(`{"torznab_url":"`+srv.URL+`/api/v2.0/indexers/all/results/torznab/api","api_key":"k"}`),
+		env.authz(),
+	)
+	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if got := env.indexerCount(t, ""); got != 0 {
+		t.Errorf("indexer rows = %d, want 0", got)
+	}
+}
+
 // TestImportRejectsUnsupportedContentType covers the content-type switch:
 // only application/json runs the wizard in this task.
 func TestImportRejectsUnsupportedContentType(t *testing.T) {
