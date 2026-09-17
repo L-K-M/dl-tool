@@ -62,6 +62,14 @@ const (
 	// the row, alongside the inert original — an imported definition has
 	// no file under /config/engines and nothing may be written to disk.
 	indexerSettingDefinition = "definition_yaml"
+	// indexerSettingPluginVersion is the #VERSION: header a .py import
+	// extracted; the row has no version column, so provenance lives in
+	// the settings document.
+	indexerSettingPluginVersion = "plugin_version"
+	// indexerSettingPluginCategories keeps a .py plugin's
+	// supported_categories verbatim — the site values, alongside the
+	// newznab ids on categories_json.
+	indexerSettingPluginCategories = "plugin_categories"
 
 	indexerImportedSource     = "imported"
 	indexerImportedProvenance = "imported:torznab-provider"
@@ -82,6 +90,8 @@ var indexerInternalSettingKeys = []string{
 	indexerSettingModuleSource,
 	indexerSettingConverted,
 	indexerSettingDefinition,
+	indexerSettingPluginVersion,
+	indexerSettingPluginCategories,
 }
 
 // Deps carries the process-wide search collaborators, built exactly once in
@@ -156,8 +166,7 @@ type IndexerIDInput struct {
 
 // ImportIndexerInput carries both accepted bodies of POST /indexers/import
 // and switches on Content-Type: application/json is the provider wizard;
-// multipart/form-data is a file upload — .dlm and .dlsearch.yaml land in
-// T059, .py in T060.
+// multipart/form-data is a file upload — .dlm, .dlsearch.yaml and .py.
 type ImportIndexerInput struct {
 	ContentType string `header:"Content-Type"`
 	RawBody     []byte
@@ -225,7 +234,7 @@ func importRequestBody() *huma.RequestBody {
 			"multipart/form-data": {
 				Schema: &huma.Schema{
 					Type:        "object",
-					Description: "A .dlsearch.yaml or .dlm engine file upload in one file part, at most 1 MiB; .py lands with T060.",
+					Description: "A .dlsearch.yaml, .dlm or .py engine file upload in one file part, at most 1 MiB; a .py nova3 plugin imports metadata only and is never executed.",
 					Properties: map[string]*huma.Schema{
 						"file": {Type: "string", Format: "binary"},
 					},
@@ -330,7 +339,7 @@ func RegisterSearchRoutes(api huma.API, h *SearchHandlers) {
 		Path:          "/indexers/import",
 		DefaultStatus: http.StatusCreated,
 		Summary:       "Import indexers",
-		Description:   "With an application/json body {torznab_url, api_key} this is the provider wizard: it enumerates a Prowlarr or Jackett instance and creates one disabled row per upstream indexer. multipart/form-data carries one file part — a .dlsearch.yaml or .dlm import, .py with T060; every row it creates is disabled.",
+		Description:   "With an application/json body {torznab_url, api_key} this is the provider wizard: it enumerates a Prowlarr or Jackett instance and creates one disabled row per upstream indexer. multipart/form-data carries one file part — a .dlsearch.yaml, .dlm or .py import; every row it creates is disabled.",
 		Tags:          []string{"indexers"},
 		Security:      credentialRequired,
 		RequestBody:   importRequestBody(),
@@ -769,8 +778,8 @@ func (h *SearchHandlers) IndexerCategories(ctx context.Context, _ *struct{}) (*C
 
 // ImportIndexer serves POST /indexers/import. application/json runs the
 // provider wizard; multipart/form-data carries one "file" part whose name
-// picks the importer — .dlm and .dlsearch.yaml here, .py with T060. Every
-// other media type is 415.
+// picks the importer — .dlm, .dlsearch.yaml or .py. Every other media type
+// is 415.
 func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInput) (*ImportOutput, error) {
 	st, err := h.indexerStore(ctx)
 	if err != nil {
@@ -780,7 +789,7 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 	if err != nil {
 		return nil, Problem(
 			SlugUnsupportedMediaType, http.StatusUnsupportedMediaType,
-			"POST /indexers/import accepts application/json {torznab_url, api_key} or multipart/form-data with one .dlm or .dlsearch.yaml file part",
+			"POST /indexers/import accepts application/json {torznab_url, api_key} or multipart/form-data with one .dlm, .dlsearch.yaml or .py file part",
 		)
 	}
 	if mediaType == "multipart/form-data" {
@@ -789,7 +798,7 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 	if mediaType != "application/json" {
 		return nil, Problem(
 			SlugUnsupportedMediaType, http.StatusUnsupportedMediaType,
-			"POST /indexers/import accepts application/json {torznab_url, api_key} or multipart/form-data with one .dlm or .dlsearch.yaml file part",
+			"POST /indexers/import accepts application/json {torznab_url, api_key} or multipart/form-data with one .dlm, .dlsearch.yaml or .py file part",
 		)
 	}
 
@@ -931,8 +940,9 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 // importIndexerFile is the multipart branch of POST /indexers/import: the
 // form carries exactly one "file" part, capped at 1 MiB, and the file name
 // picks the importer — .dlm goes through the static analyser,
-// .dlsearch.yaml through the definition loader. The created row is always
-// disabled and always records where it came from (doc 07 section 7).
+// .dlsearch.yaml through the definition loader, and .py through the
+// literal-only nova3 reader. The created row is always disabled and always
+// records where it came from (doc 07 section 7).
 func (h *SearchHandlers) importIndexerFile(ctx context.Context, st *store.IndexerStore, body []byte, params map[string]string) (*ImportOutput, error) {
 	if params["boundary"] == "" {
 		return nil, Problem(
@@ -994,10 +1004,12 @@ func (h *SearchHandlers) importIndexerFile(ctx context.Context, st *store.Indexe
 		res, err = search.ImportDLM(file.Bytes, file.Name)
 	case strings.HasSuffix(name, ".dlsearch.yaml"):
 		res, err = search.ImportDefinitionFile(file.Bytes, file.Name)
+	case strings.HasSuffix(name, ".py"):
+		res, err = search.ImportNovaPlugin(file.Bytes, file.Name)
 	default:
 		return nil, Problem(
 			SlugValidationFailed, http.StatusUnprocessableEntity,
-			"the file part must be a .dlm or .dlsearch.yaml upload",
+			"the file part must be a .dlm, .dlsearch.yaml or .py upload",
 		)
 	}
 	if err != nil {
@@ -1026,6 +1038,22 @@ func (h *SearchHandlers) importIndexerFile(ctx context.Context, st *store.Indexe
 	if res.Definition != nil {
 		row.DefinitionID = &res.Definition.ID
 		row.SeedersUnknown = res.Definition.Caps.SeedersUnknown
+	}
+	// A .py import has no definition; the row itself carries the plugin's
+	// declared site URL and its supported_categories folded to newznab
+	// ids, so the list shows what the plugin claimed (doc 07 section 4.3).
+	if res.URL != "" {
+		if u, perr := url.Parse(res.URL); perr == nil && u.Host != "" &&
+			(u.Scheme == "http" || u.Scheme == "https") {
+			row.URL = &res.URL
+		}
+	}
+	if len(res.Categories) > 0 {
+		flat, cerr := json.Marshal(res.Categories)
+		if cerr != nil {
+			return nil, internalFailure(ctx, "import indexer categories", cerr)
+		}
+		row.CategoriesJSON = ptr(string(flat))
 	}
 
 	created, err := st.Create(ctx, row, "")
@@ -1066,6 +1094,15 @@ func importedIndexerSettings(res search.ImportResult) (string, error) {
 			return "", fmt.Errorf("marshal imported definition: %w", err)
 		}
 		doc[indexerSettingDefinition] = string(defYAML)
+	}
+	// A .py import's provenance extras: the version has no row column and
+	// the site values of supported_categories are kept verbatim beside the
+	// mapped newznab ids.
+	if res.Version != "" {
+		doc[indexerSettingPluginVersion] = res.Version
+	}
+	if len(res.SiteCategories) > 0 {
+		doc[indexerSettingPluginCategories] = res.SiteCategories
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {

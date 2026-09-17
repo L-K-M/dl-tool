@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"go/parser"
 	"go/token"
 	"io"
@@ -652,4 +653,202 @@ func TestImportEndpointDuplicateConflicts(t *testing.T) {
 	em := problemOf(t, err)
 	assert.Equal(t, http.StatusConflict, em.Status)
 	assert.Equal(t, "/problems/conflict", em.Type)
+}
+
+// --- nova3 .py import (T060) --------------------------------------------
+
+// TestPluginVersionRule pins the doc 07 section 4.3 version scan: every
+// line is read, ALL spaces are stripped, the first line starting with
+// #VERSION: case-insensitively wins, and a line longer than the 16 bytes
+// qBittorrent reads counts as absent.
+func TestPluginVersionRule(t *testing.T) {
+	body := "class v(object):\n    name = \"x\"\n"
+	for name, tc := range map[string]struct {
+		header string
+		want   string
+	}{
+		"normal":        {"#VERSION:1.42\n", "1.42"},
+		"spaced":        {"# VERSION: 1.42\n", "1.42"},
+		"mixed case":    {"#version:2.0\n", "2.0"},
+		"over 16 bytes": {"#VERSION:1.42.4.5\n", ""},
+		"absent":        {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := search.ImportNovaPlugin([]byte(tc.header+body), "v.py")
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, res.Version)
+		})
+	}
+}
+
+// TestPluginMetadataExtracted covers acceptance criterion 2: the name, url
+// and all nine supported_categories keys are read from legacy_plugin.py,
+// and the friendly names fold to their jackett.py newznab ids.
+func TestPluginMetadataExtracted(t *testing.T) {
+	res, err := search.ImportNovaPlugin(dlmFixture(t, "legacy_plugin.py"), "legacy_plugin.py")
+	require.NoError(t, err)
+
+	assert.False(t, res.Converted)
+	assert.Nil(t, res.Definition)
+	assert.Equal(t, "dlsearch", res.Kind)
+	assert.Equal(t, "imported:qbt-py", res.Provenance)
+	assert.Equal(t, "legacy_plugin.py", res.Origin)
+	assert.NotEmpty(t, res.Source)
+
+	assert.Equal(t, "1.42", res.Version)
+	assert.Equal(t, "Legacy Tracker", res.Name)
+	assert.Equal(t, "https://legacy-tracker.example", res.URL)
+
+	require.NotNil(t, res.SiteCategories)
+	for _, key := range []string{
+		"all", "anime", "books", "games", "movies", "music", "pictures", "software", "tv",
+	} {
+		assert.Contains(t, res.SiteCategories, key)
+	}
+	assert.Equal(t, "100", res.SiteCategories["books"], "site value is carried verbatim")
+
+	ids := make([]int, 0, len(res.Categories))
+	for _, c := range res.Categories {
+		ids = append(ids, c.ID)
+	}
+	// games and software share 4000 — deduplicated and sorted.
+	assert.Equal(t, []int{1000, 2000, 3000, 4000, 5000, 5070, 8000}, ids)
+}
+
+// TestPluginClassNameMismatchWarns: qBittorrent resolves the class with
+// getattr(module, file_stem); a class named differently imports with a
+// warning, not a refusal.
+func TestPluginClassNameMismatchWarns(t *testing.T) {
+	res, err := search.ImportNovaPlugin(dlmFixture(t, "legacy_plugin.py"), "renamed.py")
+	require.NoError(t, err)
+
+	var warned bool
+	for _, w := range res.Warnings {
+		if strings.Contains(w, `"legacy_plugin"`) && strings.Contains(w, `"renamed"`) &&
+			strings.Contains(w, "getattr") {
+			warned = true
+		}
+	}
+	assert.True(t, warned, "warnings %v lack the class/stem mismatch message", res.Warnings)
+	// The row still needs a name: the literal one is kept.
+	assert.Equal(t, "Legacy Tracker", res.Name)
+}
+
+// TestPicturesCategoryWarns: the one friendly name with no documented
+// newznab id is imported unmapped and raises the mandated warning.
+func TestPicturesCategoryWarns(t *testing.T) {
+	res, err := search.ImportNovaPlugin(dlmFixture(t, "legacy_plugin.py"), "legacy_plugin.py")
+	require.NoError(t, err)
+	assert.Contains(t, res.Warnings,
+		`category "pictures" has no newznab equivalent and is imported unmapped`)
+}
+
+// TestHostilePluginIsNotExecuted covers acceptance criterion 3: the
+// hostile fixture's module-scope calls — a file write, a subprocess and an
+// environment poke — produce none of their side effects, because nothing
+// in the file ever runs.
+func TestHostilePluginIsNotExecuted(t *testing.T) {
+	// Read the fixture before chdir: it resolves testdata/ relative to the
+	// working directory.
+	fixture := dlmFixture(t, "hostile_plugin.py")
+	scratch := t.TempDir()
+	t.Chdir(scratch)
+	t.Setenv("DLTOOL_PWNED", "clean")
+
+	res, err := search.ImportNovaPlugin(fixture, "hostile_plugin.py")
+	require.NoError(t, err)
+	assert.Equal(t, "Hostile Plugin", res.Name)
+	assert.Equal(t, "9.9", res.Version)
+
+	assert.Equal(t, "clean", os.Getenv("DLTOOL_PWNED"))
+	_, statErr := os.Stat("PWNED_FROM_PLUGIN.txt")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the plugin's marker file exists")
+	assertDirEmpty(t, scratch)
+}
+
+// TestPluginImportedDisabled covers acceptance criterion 4 at the handler
+// level: the row a .py upload creates is disabled, carries
+// imported:qbt-py provenance, and the response warns that dl-tool does not
+// run Python and points at dlsearch/v1.
+func TestPluginImportedDisabled(t *testing.T) {
+	ctx := context.Background()
+	h, db := newImportHandlersWithDB(t)
+
+	fixture := dlmFixture(t, "legacy_plugin.py")
+	out, err := h.ImportIndexer(ctx, importInput(t, "legacy_plugin.py", fixture))
+	require.NoError(t, err)
+
+	dto := out.Body.Indexer
+	assert.False(t, dto.Enabled)
+	assert.Equal(t, "dlsearch", dto.Kind)
+	require.NotNil(t, dto.Provenance)
+	assert.Equal(t, "imported:qbt-py", *dto.Provenance)
+	require.NotNil(t, dto.DefinitionSource)
+	assert.Equal(t, "imported", *dto.DefinitionSource)
+	assert.Equal(t, "user-supplied", dto.LegalTier)
+	assert.Nil(t, dto.DefinitionID, "a nova3 plugin never converts to a definition")
+	assert.True(t, dto.SeedersUnknown)
+	assert.Equal(t, "Legacy Tracker", dto.Name)
+	require.NotNil(t, dto.URL)
+	assert.Equal(t, "https://legacy-tracker.example", *dto.URL)
+	// The mapped newznab ids ride on the row's categories.
+	require.NotEmpty(t, dto.Categories)
+	ids := make([]int, 0, len(dto.Categories))
+	for _, c := range dto.Categories {
+		ids = append(ids, c.ID)
+	}
+	assert.Equal(t, []int{1000, 2000, 3000, 4000, 5000, 5070, 8000}, ids)
+
+	var warned bool
+	for _, w := range out.Body.Warnings {
+		if strings.Contains(w, "dlsearch/v1") && strings.Contains(w, "does not run Python") {
+			warned = true
+		}
+	}
+	assert.True(t, warned, "warnings %v lack the dlsearch/v1 message", out.Body.Warnings)
+
+	// settings_json keeps the inert source, the origin, the version and
+	// the verbatim site categories.
+	var settingsJSON string
+	require.NoError(t, db.GetContext(ctx, &settingsJSON,
+		"SELECT settings_json FROM indexers LIMIT 1"))
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(settingsJSON), &doc))
+	assert.Equal(t, "legacy_plugin.py", doc["origin"])
+	assert.Equal(t, false, doc["auto_converted"])
+	assert.Equal(t, "1.42", doc["plugin_version"])
+	siteCats, ok := doc["plugin_categories"].(map[string]any)
+	require.True(t, ok, "plugin_categories missing from settings_json: %s", settingsJSON)
+	assert.Equal(t, "100", siteCats["books"])
+	srcB64, ok := doc["module_source_b64"].(string)
+	require.True(t, ok, "module_source_b64 missing from settings_json: %s", settingsJSON)
+	src, err := base64.StdEncoding.DecodeString(srcB64)
+	require.NoError(t, err)
+	assert.Contains(t, string(src), "legacy_plugin")
+}
+
+// TestPluginImportRefusals names the rules a .py upload is rejected on:
+// over the 512 KiB cap, not valid UTF-8, or no class at all — a file with
+// no class is not a nova3 plugin.
+func TestPluginImportRefusals(t *testing.T) {
+	_, err := search.ImportNovaPlugin(
+		bytes.Repeat([]byte("x"), search.MaxNovaPluginBytes+1), "big.py")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin limit")
+
+	_, err = search.ImportNovaPlugin([]byte{0xff, 0xfe, 0x00}, "x.py")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UTF-8")
+
+	_, err = search.ImportNovaPlugin([]byte("name = 'x'\n"), "noclass.py")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "class")
+
+	// A refused upload surfaces as the 422 validation problem.
+	h := newImportHandlers(t)
+	_, herr := h.ImportIndexer(context.Background(),
+		importInput(t, "noclass.py", []byte("name = 'x'\n")))
+	em := problemOf(t, herr)
+	assert.Equal(t, http.StatusUnprocessableEntity, em.Status)
+	assert.Equal(t, "/problems/validation-failed", em.Type)
 }
