@@ -179,9 +179,11 @@ func TestTorznabErrorDocument(t *testing.T) {
 // requested value unclamped.
 func TestSearchClampsLimitToCaps(t *testing.T) {
 	var gotLimit []string
+	capsFetches := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotLimit = append(gotLimit, r.URL.Query().Get("limit"))
 		if r.URL.Query().Get("t") == "caps" {
+			capsFetches++
 			_, _ = w.Write([]byte(`<caps><limits max="60"/></caps>`))
 			return
 		}
@@ -202,6 +204,7 @@ func TestSearchClampsLimitToCaps(t *testing.T) {
 	_, err = c.Search(context.Background(), Query{Q: "x", Limit: 500})
 	require.NoError(t, err)
 	assert.Equal(t, "60", gotLimit[len(gotLimit)-1], "limit clamps to caps <limits max>")
+	assert.Equal(t, 1, capsFetches, "second search must reuse the cached caps document")
 }
 
 // TestFinaliseDropsUnusableRow covers section 5 rule 5: a row with no
