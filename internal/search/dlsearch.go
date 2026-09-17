@@ -973,10 +973,12 @@ func (r *Runner) fetch(ctx context.Context, def *Definition, cfg map[string]stri
 	}
 	out := fetchOutcome{body: body, status: resp.StatusCode, server: resp.Header.Get("Server")}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		var retryAfter time.Duration
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-			r.hold(def.ID, parseRetryAfter(resp.Header.Get("Retry-After")))
+			retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
+			r.hold(def.ID, retryAfter)
 		}
-		return out, &UpstreamError{Status: resp.StatusCode, Detail: bodySnippet(body)}
+		return out, &UpstreamError{Status: resp.StatusCode, Detail: bodySnippet(body), RetryAfter: retryAfter}
 	}
 	return out, nil
 }
@@ -1071,7 +1073,7 @@ func (r *Runner) Search(ctx context.Context, def *Definition, cfg map[string]str
 	if def.Request.Method != "" && def.Request.Method != http.MethodGet {
 		return nil, fmt.Errorf("search: request method %q is not GET", def.Request.Method)
 	}
-	var extract func([]byte, *Definition, Scope) ([]map[string]string, int, error)
+	var extract func(context.Context, []byte, *Definition, Scope) ([]map[string]string, int, error)
 	switch def.Kind {
 	case "rss":
 		extract = extractRSS
@@ -1081,6 +1083,15 @@ func (r *Runner) Search(ctx context.Context, def *Definition, cfg map[string]str
 		return nil, fmt.Errorf("search: kind %q has no row extraction", def.Kind)
 	}
 
+	// The section 3.5 total deadline covers redirects AND parsing, so it is
+	// applied here around the whole call, not only inside fetch.
+	deadline := engineDeadline
+	if d := time.Duration(def.Request.TimeoutSeconds) * time.Second; d > 0 && d < deadline {
+		deadline = d
+	}
+	ctx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+
 	scope := scopeFor(def, cfg, q)
 	browse := !usesKeywords(def.Request.Query)
 
@@ -1088,7 +1099,7 @@ func (r *Runner) Search(ctx context.Context, def *Definition, cfg map[string]str
 	if err != nil {
 		return nil, err
 	}
-	rows, skipped, extractErr := extract(out.body, def, scope)
+	rows, skipped, extractErr := extract(ctx, out.body, def, scope)
 	if extractErr != nil {
 		return nil, extractErr
 	}
@@ -1102,6 +1113,9 @@ func (r *Runner) Search(ctx context.Context, def *Definition, cfg map[string]str
 
 	results := make([]SearchResult, 0, len(rows))
 	for _, fields := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		results = append(results, mapResult(def, fields))
 	}
 	final, dropped := Finalise(results)
@@ -1317,7 +1331,7 @@ func childPath(el *xmlElement, path string) *xmlElement {
 // extractRSS parses the feed, selects the row elements by response.rows and
 // resolves every declared field per row — a field's path names a child
 // element, its attr an attribute of that element.
-func extractRSS(body []byte, def *Definition, scope Scope) ([]map[string]string, int, error) {
+func extractRSS(ctx context.Context, body []byte, def *Definition, scope Scope) ([]map[string]string, int, error) {
 	if _, err := gofeed.NewParser().Parse(bytes.NewReader(body)); err != nil {
 		return nil, 0, fmt.Errorf("search: response is not a feed: %w", err)
 	}
@@ -1329,6 +1343,9 @@ func extractRSS(body []byte, def *Definition, scope Scope) ([]map[string]string,
 	rows := make([]map[string]string, 0, len(items))
 	skipped := 0
 	for _, item := range items {
+		if err := ctx.Err(); err != nil {
+			return nil, skipped, err
+		}
 		fields, err := resolveFields(def, scope, func(f Field) (string, error) {
 			el := childPath(item, f.Path)
 			if el == nil {
@@ -1427,7 +1444,7 @@ func jsonScalar(v any) string {
 
 // extractJSON decodes the document, evaluates response.rows into the row
 // list and resolves every declared field against its row.
-func extractJSON(body []byte, def *Definition, scope Scope) ([]map[string]string, int, error) {
+func extractJSON(ctx context.Context, body []byte, def *Definition, scope Scope) ([]map[string]string, int, error) {
 	var doc any
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
@@ -1445,6 +1462,9 @@ func extractJSON(body []byte, def *Definition, scope Scope) ([]map[string]string
 	rows := make([]map[string]string, 0, len(arr))
 	skipped := 0
 	for _, item := range arr {
+		if err := ctx.Err(); err != nil {
+			return nil, skipped, err
+		}
 		fields, err := resolveFields(def, scope, func(f Field) (string, error) {
 			v, err := jsonPath(item, f.Path)
 			if err != nil {
