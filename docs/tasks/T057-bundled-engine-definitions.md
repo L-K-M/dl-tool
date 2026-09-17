@@ -165,7 +165,8 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the paths in the Files table — `git status` emits them sorted, so the display order
+differs from the table order — and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -189,7 +190,7 @@ Resolved by the plan repair: `internal/api/search.go` is now in the `## Files` t
 action, so step 7 can add `Defs *search.Registry` to `Deps` and refresh the struct comment that deferred
 the field to T057. The scope check emits paths sorted, so the diff reads `cmd/dl-tool/main.go`,
 `definitions/embed.go`, `definitions/engines/` (the four YAML files), `internal/api/search.go`,
-`internal/search/bundled.go` and `internal/search/bundled_test.go`. T057 remains unimplemented and `todo`.
+`internal/search/bundled.go` and `internal/search/bundled_test.go`. T057 remains unimplemented and still marked `todo`.
 
 Original blocker: step 7 could not run as written: "put that same registry into the `api.Deps` value handed to
 `NewServer`" requires a `Defs *search.Registry` field on `Deps`, and `Deps` is declared in
