@@ -137,8 +137,8 @@ func main() {
 			// One runner for the process: its per-engine rate buckets are
 			// shared state between the probe endpoint and the search jobs.
 			// The search fan-out's torznab calls carry the same honest UA.
-			runner := search.NewRunner(searchHTTP, logger, "dl-tool/"+version)
-			jobs.SearchUserAgent = "dl-tool/" + version
+			userAgent := "dl-tool/" + version
+			runner := search.NewRunner(searchHTTP, logger, userAgent)
 
 			server, err := api.NewServer(cfg, db, logger, api.Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: searchHTTP, DB: db})
 			if err != nil {
@@ -157,7 +157,7 @@ func main() {
 			// per process. T066/T074/T091 register their kinds here later.
 			worker := jobs.NewWorker(db, logger, workerPoolSize)
 			worker.Register(jobs.JobKindSearch, jobs.NewSearchHandler(
-				db, logger, defs, runner, indexers, searchHTTP,
+				db, logger, defs, runner, indexers, searchHTTP, userAgent,
 			))
 			runDone.Add(1)
 			go func() {

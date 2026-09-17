@@ -225,8 +225,8 @@ type TestIndexerOutput struct {
 // StartSearchInput is the JSON body of POST /search (doc 05 section 9.2).
 type StartSearchInput struct {
 	Body struct {
-		Query      string   `json:"query"      required:"true" minLength:"1" doc:"Search text"`
-		IndexerIDs []string `json:"indexer_ids,omitempty" doc:"Indexers to run; default is every enabled indexer"`
+		Query      string   `json:"query"      required:"true" minLength:"1" maxLength:"512" doc:"Search text"`
+		IndexerIDs []string `json:"indexer_ids,omitempty" doc:"Enabled indexers to run; default is every enabled indexer"`
 		Categories []int    `json:"categories,omitempty" doc:"Newznab category ids; empty means no category filter"`
 	}
 }
@@ -235,7 +235,7 @@ type StartSearchInput struct {
 // query: sort, limit and cursor apply to results only (doc 05 section 1.4).
 type GetSearchInput struct {
 	ID     string `path:"id"     doc:"The sch_… job id"`
-	Sort   string `query:"sort"  doc:"seeders, title, size_bytes, leechers, published_at or indexer, with a leading - to reverse; default -seeders"`
+	Sort   string `query:"sort"  enum:"seeders,title,size_bytes,leechers,published_at,indexer,-seeders,-title,-size_bytes,-leechers,-published_at,-indexer" doc:"seeders, title, size_bytes, leechers, published_at or indexer, with a leading - to reverse; default -seeders"`
 	Limit  int    `query:"limit" minimum:"1" maximum:"500" default:"100" doc:"Page size of the results page"`
 	Cursor string `query:"cursor" doc:"Opaque page token from a previous response"`
 }
@@ -261,10 +261,10 @@ type SearchJobOutput struct {
 		ID         string               `json:"id"`
 		Query      string               `json:"query"`
 		Finished   bool                 `json:"finished"`
-		Total      int                  `json:"total"`
-		Engines    []store.EngineStatus `json:"engines"`
-		Results    []SearchResultDTO    `json:"results"`
-		NextCursor *string              `json:"next_cursor"`
+		Total      int                  `json:"total"        doc:"Result count across all pages of this job, ignoring the cursor"`
+		Engines    []store.EngineStatus `json:"engines"     doc:"One entry per selected indexer: queued, searching, done or error"`
+		Results    []SearchResultDTO    `json:"results"     doc:"One page of results; sort, limit and cursor apply to this array only"`
+		NextCursor *string              `json:"next_cursor" doc:"Opaque cursor for the next results page; null when this is the last page"`
 	}
 }
 
@@ -442,9 +442,11 @@ func RegisterSearchRoutes(api huma.API, h *SearchHandlers) {
 		Path:          "/search",
 		DefaultStatus: http.StatusAccepted,
 		Summary:       "Start a search",
-		Description:   "Enqueues one asynchronous search job and answers 202 with its id immediately — no indexer is contacted on this request. indexer_ids defaults to every enabled indexer; an unknown id is 422, and 503 /problems/engine-unavailable means no indexer is enabled at all.",
+		Description:   "Enqueues one asynchronous search job and answers 202 with its id immediately — no indexer is contacted on this request. indexer_ids defaults to every enabled indexer; an unknown or disabled id is 422, and 503 /problems/engine-unavailable means no indexer is enabled at all.",
 		Tags:          []string{"search"},
 		Security:      credentialRequired,
+		// Same strictness as GetSearch: a stray query key is 422, not ignored.
+		RejectUnknownQueryParameters: true,
 	}, h.StartSearch)
 
 	huma.Register(api, huma.Operation{
@@ -1438,12 +1440,6 @@ func toIndexerDTO(log *slog.Logger, row store.Indexer) IndexerDTO {
 	return dto
 }
 
-// querySearchJobSingleAttempt clamps the queue row of kind "search" to
-// max_attempts 1 — a search is re-run by the user, not retried
-// (docs/04-data-model.md section 3.6, task T061). EnqueueJob's signature is
-// fixed, so the clamp is one follow-up statement on the enqueued row.
-const querySearchJobSingleAttempt = `UPDATE jobs SET max_attempts = 1 WHERE id = ?`
-
 // searchDB returns the queue handle, or the generic internal problem when
 // the server was built for the OpenAPI document alone.
 func (h *SearchHandlers) searchDB(ctx context.Context) (*sqlx.DB, error) {
@@ -1483,8 +1479,17 @@ func (h *SearchHandlers) StartSearch(ctx context.Context, in *StartSearchInput) 
 			)
 		}
 	} else {
+		// The explicit list resolves row by row: an unknown id is 422, a
+		// disabled one the same — enabled is the operator's off-switch and
+		// the fan-out must not contact an indexer that was turned off —
+		// and a repeated id is deduped so an engine never appears twice.
 		selected = make([]store.Indexer, 0, len(in.Body.IndexerIDs))
+		seen := make(map[string]struct{}, len(in.Body.IndexerIDs))
 		for _, id := range in.Body.IndexerIDs {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
 			row, err := st.Get(ctx, id)
 			if errors.Is(err, store.ErrNotFound) {
 				return nil, Problem(
@@ -1494,6 +1499,12 @@ func (h *SearchHandlers) StartSearch(ctx context.Context, in *StartSearchInput) 
 			}
 			if err != nil {
 				return nil, internalFailure(ctx, "resolve indexer", err)
+			}
+			if !row.Enabled {
+				return nil, Problem(
+					SlugValidationFailed, http.StatusUnprocessableEntity,
+					fmt.Sprintf("indexer %q is disabled", id),
+				)
 			}
 			selected = append(selected, row)
 		}
@@ -1537,12 +1548,17 @@ func (h *SearchHandlers) StartSearch(ctx context.Context, in *StartSearchInput) 
 		IndexerIDs:  ids,
 		Categories:  in.Body.Categories,
 	}
-	queueID, err := store.EnqueueJob(ctx, db, jobs.JobKindSearch, nil, payload, time.Now().UnixMilli())
-	if err != nil {
+	// One statement carries max_attempts 1: a polling worker can never claim
+	// the row between an insert and a clamp update and read the DDL
+	// default. On failure the search_jobs row and tracker entry roll back —
+	// an enqueue that failed must not leave a job polling queued forever.
+	if _, err := store.EnqueueSearchJob(ctx, db, payload, time.Now().UnixMilli()); err != nil {
+		store.Searches.Forget(job.ID)
+		if derr := store.DeleteSearchJob(context.WithoutCancel(ctx), db, job.ID); derr != nil {
+			h.log.WarnContext(ctx, "search job cleanup after enqueue failure failed",
+				"search_job_id", job.ID, "err", derr)
+		}
 		return nil, internalFailure(ctx, "enqueue search job", err)
-	}
-	if _, err := db.ExecContext(ctx, querySearchJobSingleAttempt, queueID); err != nil {
-		return nil, internalFailure(ctx, "clamp search job attempts", err)
 	}
 
 	out := &StartedOutput{Status: http.StatusAccepted}
@@ -1596,6 +1612,11 @@ func (h *SearchHandlers) GetSearch(ctx context.Context, in *GetSearchInput) (*Se
 	// only stamped at finish, and a poll mid-run must see partial results
 	// counted (doc 05 section 9.2).
 	out.Body.Total = total
+	// The arrays are always non-null on the wire — [] for an empty state,
+	// so a consumer never maps over null.
+	if engines == nil {
+		engines = []store.EngineStatus{}
+	}
 	out.Body.Engines = engines
 	out.Body.Results = toSearchResultDTOs(rows, names)
 	if nextCursor != "" {
@@ -1613,6 +1634,12 @@ func (h *SearchHandlers) DeleteSearch(ctx context.Context, in *SearchIDInput) (*
 	}
 	if err := store.DeleteSearchJob(ctx, db, in.ID); err != nil {
 		return nil, FromStore(err)
+	}
+	// Drop the queue row too, so a still-pending job is never claimed for a
+	// search that no longer exists. Best-effort: a row already running exits
+	// quietly once the search_jobs row is gone.
+	if err := store.DeleteSearchQueueRow(ctx, db, in.ID); err != nil {
+		h.log.WarnContext(ctx, "search queue row delete failed", "search_job_id", in.ID, "err", err)
 	}
 	store.Searches.Forget(in.ID)
 	return nil, nil

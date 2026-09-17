@@ -205,7 +205,7 @@ Operation ids added inside `RegisterSearchRoutes`: `start-search` (`202`), `get-
 
 ## Acceptance criteria
 - [x] `POST /search` answers `202` with only `{"id":"sch_…"}` and does not block on any indexer — `TestStartSearchReturns202AndID` posts against a stub that never answers and fails if the request takes 5 s.
-- [x] `TestPollShowsPartialThenFinished` asserts a first poll with `finished:false` and a non-empty `results`, and a later poll with `finished:true`, over stubs 50 ms and 400 ms apart.
+- [x] `TestPollShowsPartialThenFinished` asserts a first poll with `finished:false` and a non-empty `results`, and a later poll with `finished:true`; the slow stub answers only once a poll has observed the fast stub's rows, so the partial window is proven by synchronization.
 - [x] `DELETE /search/{id}` leaves zero rows in `search_results` for that job — `TestDeleteRemovesJobAndResults` counts before and after.
 - [x] A second execution of the same job row writes no duplicate results — `TestPollShowsPartialThenFinished` re-runs the handler and re-counts.
 - [x] `GET /search/{id}` for an unknown id returns `404` `/problems/not-found` — `TestUnknownJobIs404` checks GET and DELETE.
@@ -255,22 +255,23 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/... ./internal/jobs/...
-ok  	github.com/L-K-M/dl-tool/internal/api	123.832s
-ok  	github.com/L-K-M/dl-tool/internal/store	75.800s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.746s
+ok  	github.com/L-K-M/dl-tool/internal/api	128.989s
+ok  	github.com/L-K-M/dl-tool/internal/store	77.184s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.882s
 SEARCH_JOB_OK
 ```
 
-The step-10 test set, run with `-v`:
+The step-10 test set plus the enqueue-rollback regression, run with `-v`:
 
 ```
---- PASS: TestStartSearchReturns202AndID (0.06s)
---- PASS: TestPollShowsPartialThenFinished (0.87s)
---- PASS: TestDeleteRemovesJobAndResults (0.04s)
---- PASS: TestUnknownJobIs404 (0.03s)
---- PASS: TestEmptyQueryIs422 (0.03s)
---- PASS: TestNoEnabledIndexerIs503 (0.03s)
-ok  	github.com/L-K-M/dl-tool/internal/api	1.094s
+--- PASS: TestStartSearchReturns202AndID (0.49s)
+--- PASS: TestPollShowsPartialThenFinished (0.51s)
+--- PASS: TestDeleteRemovesJobAndResults (0.43s)
+--- PASS: TestUnknownJobIs404 (0.41s)
+--- PASS: TestEmptyQueryIs422 (0.38s)
+--- PASS: TestEnqueueFailureLeavesNoJobRow (0.48s)
+--- PASS: TestNoEnabledIndexerIs503 (0.41s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.260s
 ```
 
 Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
@@ -293,9 +294,16 @@ Deviations from the interface contract, all forced or noted:
 - `Tracker`/`NewTracker` are `SearchTracker`/`NewSearchTracker`: `internal/store/tasks.go`
   already declares a `Tracker` type (torrent tracker info), so the contract name does not
   compile. The `Searches` variable and the method set are unchanged.
-- `max_attempts = 1` is applied as a one-statement `UPDATE` after `EnqueueJob` in
-  `StartSearch`: `EnqueueJob`'s signature is fixed by T012 and `internal/store/jobs.go`
-  is outside the Files table.
+- `max_attempts = 1` is inserted atomically by `store.EnqueueSearchJob`, a search-kind
+  `INSERT` living in `internal/store/search.go`: `EnqueueJob`'s signature is fixed by
+  T012 and `internal/store/jobs.go` is outside the Files table, and a separate clamp
+  `UPDATE` would race the worker's claim poll.
+- An explicit `indexer_ids` entry naming a disabled indexer is 422
+  (`TestNoEnabledIndexerIs503`): the contract is silent on that case, but `enabled` is
+  the operator's off-switch and the fan-out must not contact a disabled indexer.
+  Duplicate ids are deduplicated before resolution (`TestPollShowsPartialThenFinished`).
+- `DELETE /search/{id}` also removes the `jobs` row via `store.DeleteSearchQueueRow`,
+  so a still-pending search is never claimed (`TestDeleteRemovesJobAndResults`).
 - `Deps` carries a `DB` field so `StartSearch` can reach the queue without touching
   `internal/api/server.go` (outside the Files table); the `NewServer` call sites are
   unchanged.

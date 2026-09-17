@@ -391,7 +391,7 @@ export interface paths {
     put?: never;
     /**
      * Start a search
-     * @description Enqueues one asynchronous search job and answers 202 with its id immediately — no indexer is contacted on this request. indexer_ids defaults to every enabled indexer; an unknown id is 422, and 503 /problems/engine-unavailable means no indexer is enabled at all.
+     * @description Enqueues one asynchronous search job and answers 202 with its id immediately — no indexer is contacted on this request. indexer_ids defaults to every enabled indexer; an unknown or disabled id is 422, and 503 /problems/engine-unavailable means no indexer is enabled at all.
      */
     post: operations["start-search"];
     delete?: never;
@@ -861,7 +861,8 @@ export interface components {
       error: string | null;
       id: string;
       name: string;
-      status: string;
+      /** @enum {string} */
+      status: "queued" | "searching" | "done" | "error";
     };
     Entry: {
       name: string;
@@ -1156,13 +1157,19 @@ export interface components {
       roots: components["schemas"]["FSRoot"][] | null;
     };
     SearchJobOutputBody: {
+      /** @description One entry per selected indexer: queued, searching, done or error */
       engines: components["schemas"]["EngineStatus"][] | null;
       finished: boolean;
       id: string;
+      /** @description Opaque cursor for the next results page; null when this is the last page */
       next_cursor: string | null;
       query: string;
+      /** @description One page of results; sort, limit and cursor apply to this array only */
       results: components["schemas"]["SearchResultDTO"][] | null;
-      /** Format: int64 */
+      /**
+       * Format: int64
+       * @description Result count across all pages of this job, ignoring the cursor
+       */
       total: number;
     };
     SearchResultDTO: {
@@ -1218,7 +1225,7 @@ export interface components {
     StartSearchInputBody: {
       /** @description Newznab category ids; empty means no category filter */
       categories?: number[] | null;
-      /** @description Indexers to run; default is every enabled indexer */
+      /** @description Enabled indexers to run; default is every enabled indexer */
       indexer_ids?: string[] | null;
       /** @description Search text */
       query: string;
@@ -2181,7 +2188,19 @@ export interface operations {
     parameters: {
       query?: {
         /** @description seeders, title, size_bytes, leechers, published_at or indexer, with a leading - to reverse; default -seeders */
-        sort?: string;
+        sort?:
+          | "seeders"
+          | "title"
+          | "size_bytes"
+          | "leechers"
+          | "published_at"
+          | "indexer"
+          | "-seeders"
+          | "-title"
+          | "-size_bytes"
+          | "-leechers"
+          | "-published_at"
+          | "-indexer";
         /** @description Page size of the results page */
         limit?: number;
         /** @description Opaque page token from a previous response */

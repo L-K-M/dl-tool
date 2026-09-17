@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,8 +99,10 @@ WHERE id = ?`
 	queryDeleteSearchJob = `DELETE FROM search_jobs WHERE id = ?`
 
 	// The 24-hour retention of docs/04-data-model.md section 3.4; the
-	// nightly cron of T091 is the caller. Results cascade with the job.
-	queryPurgeSearchJobs = `DELETE FROM search_jobs WHERE created_at < ?`
+	// nightly cron of T091 is the caller. Results cascade with the job. The
+	// id list lets the sweep also forget the tracker entries.
+	queryPurgeSearchJobIDs = `SELECT id FROM search_jobs WHERE created_at < ?`
+	queryPurgeSearchJobs   = `DELETE FROM search_jobs WHERE created_at < ?`
 
 	queryDeleteIndexerResults = `DELETE FROM search_results
 WHERE search_job_id = ? AND indexer_id = ?`
@@ -192,10 +195,63 @@ func DeleteSearchJob(ctx context.Context, db *sqlx.DB, id string) error {
 	return nil
 }
 
+// queryEnqueueSearchJob inserts the queue row for one search job in a
+// single statement — including max_attempts 1, so a polling worker can
+// never claim the row between an insert and a clamp update and read the
+// DDL default. The jobs table belongs to T012; this insert is the search
+// kind's own statement so the two statements it would otherwise need stay
+// atomic without touching that file.
+const queryEnqueueSearchJob = `INSERT INTO jobs
+(id, kind, task_id, payload_json, run_after, max_attempts, created_at, updated_at)
+VALUES (?, 'search', NULL, ?, ?, 1, ?, ?)`
+
+// EnqueueSearchJob writes one pending queue row of kind "search" with
+// max_attempts 1 — a search is re-run by the user, not retried. The payload
+// is stored as JSON exactly as EnqueueJob would marshal it.
+func EnqueueSearchJob(ctx context.Context, db *sqlx.DB, payload any, runAfter int64) (string, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("store: marshal search job payload: %w", err)
+	}
+
+	id := NewID(PrefixJob)
+	now := time.Now().UnixMilli()
+	if _, err := db.ExecContext(ctx, queryEnqueueSearchJob, id, string(data), runAfter, now, now); err != nil {
+		return "", fmt.Errorf("store: enqueue search job: %w", err)
+	}
+
+	return id, nil
+}
+
+// queryDeleteSearchQueueRow removes the queue row bound to one search job;
+// DELETE /search/{id} calls it so a still-pending job is never claimed. The
+// payload embeds the search job id as "search_job_id":"<id>" — the id
+// alphabet carries no LIKE wildcards, so the match is exact.
+const queryDeleteSearchQueueRow = `DELETE FROM jobs
+WHERE kind = 'search' AND payload_json LIKE '%"search_job_id":"' || ? || '"%'`
+
+// DeleteSearchQueueRow drops the queue row of one search job, whichever
+// state it is in: a pending row is never claimed, and a running row's
+// handler exits quietly once the search_jobs row is gone (its first read
+// answers ErrNotFound).
+func DeleteSearchQueueRow(ctx context.Context, db *sqlx.DB, searchJobID string) error {
+	if _, err := db.ExecContext(ctx, queryDeleteSearchQueueRow, searchJobID); err != nil {
+		return fmt.Errorf("store: delete queue row of search job %s: %w", searchJobID, err)
+	}
+
+	return nil
+}
+
 // PurgeSearchJobs deletes every job created before olderThan (unix ms) and
-// reports how many; results cascade. The 24-hour retention sweep of T091 is
-// the intended caller.
+// reports how many; results cascade, and each purged job's tracker entry is
+// forgotten so the sweep cannot leak volatile state. The 24-hour retention
+// sweep of T091 is the intended caller.
 func PurgeSearchJobs(ctx context.Context, db *sqlx.DB, olderThan int64) (int64, error) {
+	var ids []string
+	if err := db.SelectContext(ctx, &ids, queryPurgeSearchJobIDs, olderThan); err != nil {
+		return 0, fmt.Errorf("store: list purgeable search jobs: %w", err)
+	}
+
 	result, err := db.ExecContext(ctx, queryPurgeSearchJobs, olderThan)
 	if err != nil {
 		return 0, fmt.Errorf("store: purge search jobs: %w", err)
@@ -203,6 +259,9 @@ func PurgeSearchJobs(ctx context.Context, db *sqlx.DB, olderThan int64) (int64, 
 	purged, err := result.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("store: purge search jobs: read rows affected: %w", err)
+	}
+	for _, id := range ids {
+		Searches.Forget(id)
 	}
 
 	return purged, nil
@@ -254,6 +313,17 @@ func InsertResults(ctx context.Context, db *sqlx.DB, jobID, indexerID string, ro
 	return len(rows), nil
 }
 
+// CountSearchResults returns one job's total row count — the value
+// FinishSearchJob stamps and the GET poll reports.
+func CountSearchResults(ctx context.Context, db *sqlx.DB, jobID string) (int, error) {
+	var n int
+	if err := db.GetContext(ctx, &n, queryCountSearchResults, jobID); err != nil {
+		return 0, fmt.Errorf("store: count results of %s: %w", jobID, err)
+	}
+
+	return n, nil
+}
+
 // CountResultsByIndexer returns the per-engine row counts of one job. The API
 // rebuilds the engines array from it once the in-memory tracker has forgotten
 // the job (a restart), where the volatile per-engine status no longer exists.
@@ -274,21 +344,35 @@ func CountResultsByIndexer(ctx context.Context, db *sqlx.DB, jobID string) (map[
 	return out, nil
 }
 
-// searchSortColumns maps every documented sort key of docs/05-api-contract.md
-// section 9.2 to its column. Only values from this map reach ORDER BY or a
-// cursor predicate; a user-supplied key is looked up, never concatenated.
-var searchSortColumns = map[string]string{
-	"seeders":      "seeders",
-	"title":        "title",
-	"size_bytes":   "size_bytes",
-	"leechers":     "leechers",
-	"published_at": "published_at",
-	"indexer":      "indexer_id",
+// searchSortSpec is one documented sort key of docs/05-api-contract.md
+// section 9.2: its column and the cursor value extractor. Each key is
+// defined exactly once — column and extractor cannot drift apart, which is
+// what a separate map-plus-switch would allow.
+type searchSortSpec struct {
+	column string
+	value  func(SearchResultRow) any
 }
 
-// searchSortKeys is the allowlist in documented order, for legible errors.
-var searchSortKeys = []string{
-	"seeders", "title", "size_bytes", "leechers", "published_at", "indexer",
+// searchSorts is the sort allowlist. Only values from this map reach ORDER
+// BY or a cursor predicate; a user-supplied key is looked up, never
+// concatenated.
+var searchSorts = map[string]searchSortSpec{
+	"seeders":      {"seeders", func(r SearchResultRow) any { return nilOrValue(r.Seeders) }},
+	"title":        {"title", func(r SearchResultRow) any { return r.Title }},
+	"size_bytes":   {"size_bytes", func(r SearchResultRow) any { return nilOrValue(r.SizeBytes) }},
+	"leechers":     {"leechers", func(r SearchResultRow) any { return nilOrValue(r.Leechers) }},
+	"published_at": {"published_at", func(r SearchResultRow) any { return nilOrValue(r.PublishedAt) }},
+	"indexer":      {"indexer_id", func(r SearchResultRow) any { return r.IndexerID }},
+}
+
+// searchSortKeys renders the allowlist in sorted order for legible errors.
+func searchSortKeys() []string {
+	keys := make([]string, 0, len(searchSorts))
+	for k := range searchSorts {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // defaultSearchSort is the documented default of GET /search/{id}: seeders
@@ -316,10 +400,11 @@ func ListResults(ctx context.Context, db *sqlx.DB, jobID, sort string, limit int
 		sortKey = defaultSearchSort
 	}
 	key, descending := strings.CutPrefix(sortKey, "-")
-	column, ok := searchSortColumns[key]
+	spec, ok := searchSorts[key]
 	if !ok {
-		return nil, "", 0, fmt.Errorf("%w: %q, want one of %q", ErrInvalidSort, sort, searchSortKeys)
+		return nil, "", 0, fmt.Errorf("%w: %q, want one of %q", ErrInvalidSort, sort, searchSortKeys())
 	}
+	column := spec.column
 
 	pageQuery := queryListSearchResults
 	pageArgs := []any{jobID}
@@ -367,7 +452,7 @@ func ListResults(ctx context.Context, db *sqlx.DB, jobID, sort string, limit int
 	encoded, err := encodeTaskCursor(taskPageCursor{
 		Hash:   searchCursorHash(jobID, column, descending),
 		LastID: last.ID,
-		Value:  searchSortValue(last, key),
+		Value:  spec.value(last),
 	})
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("store: list results: encode cursor: %w", err)
@@ -406,36 +491,13 @@ func searchCursorHash(jobID, column string, descending bool) string {
 	return base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
-// searchSortValue extracts the cursor's sort value from the last row of a
-// page. NULL columns decode as nil, which the cursor predicate's IS NULL
-// branch answers.
-func searchSortValue(row SearchResultRow, key string) any {
-	switch key {
-	case "seeders":
-		return nilOrValue(row.Seeders)
-	case "title":
-		return row.Title
-	case "size_bytes":
-		return nilOrValue(row.SizeBytes)
-	case "leechers":
-		return nilOrValue(row.Leechers)
-	case "published_at":
-		return nilOrValue(row.PublishedAt)
-	case "indexer":
-		return row.IndexerID
-	default:
-		// Unreachable: the allowlist already rejected every other key.
-		return nil
-	}
-}
-
 // EngineStatus is the volatile half of a search job: what each indexer is
 // doing right now. status is queued | searching | done | error
 // (docs/05-api-contract.md section 9.2).
 type EngineStatus struct {
 	ID     string  `json:"id"`
 	Name   string  `json:"name"`
-	Status string  `json:"status"`
+	Status string  `json:"status" enum:"queued,searching,done,error"`
 	Count  int     `json:"count"`
 	Error  *string `json:"error"`
 }
@@ -550,7 +612,11 @@ func IndexerSettingsMap(log *slog.Logger, row Indexer) map[string]string {
 		case nil:
 			// JSON null carries no value; the key is dropped.
 		default:
-			out[k] = fmt.Sprint(t)
+			// Nested objects and arrays are not runner config; fmt.Sprint
+			// would smuggle Go-syntax garbage into Scope.Config, so the key
+			// is dropped and logged like any other malformed value.
+			log.Warn("indexer settings_json value is not a scalar; dropping key",
+				"indexer_id", row.ID, "key", k)
 		}
 	}
 	return out

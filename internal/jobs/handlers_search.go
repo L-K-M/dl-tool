@@ -27,10 +27,6 @@ const JobKindSearch = "search"
 // gets at most 15 s, and a hung engine can never stall the job's finish.
 const engineSearchDeadline = 15 * time.Second
 
-// SearchUserAgent is the honest User-Agent the fan-out's torznab calls send;
-// cmd/dl-tool stamps it with the build version at OnStart.
-var SearchUserAgent = "dl-tool"
-
 // SearchPayload is the jobs.payload_json of kind "search".
 type SearchPayload struct {
 	SearchJobID string   `json:"search_job_id"`
@@ -43,13 +39,40 @@ type SearchPayload struct {
 // selected indexer "searching", runs one goroutine per indexer with the
 // per-engine 15 s deadline, writes each engine's rows as they arrive, and
 // finishes the job when the last goroutine returns. max_attempts for this
-// kind is 1: a search is re-run by the user, not retried.
-func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *search.Runner, idx *store.IndexerStore, hc *http.Client) Handler {
+// kind is 1: a search is re-run by the user, not retried. ua is the
+// User-Agent the torznab path sends — the same dl-tool/<version> string the
+// Runner carries for dlsearch indexers.
+func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *search.Runner, idx *store.IndexerStore, hc *http.Client, ua string) Handler {
 	return func(ctx context.Context, j store.Job) error {
 		var p SearchPayload
 		if err := json.Unmarshal([]byte(j.PayloadJSON), &p); err != nil {
 			return fmt.Errorf("jobs: decode %q payload: %w", JobKindSearch, err)
 		}
+
+		// Every return below this point — a store error, a cancel mid-run —
+		// must still close the search_jobs row: max_attempts is 1, so the
+		// queue never re-drives a failed handler, and an unfinished row
+		// would poll as finished:false forever. Best-effort on a detached,
+		// time-bounded context; a row deleted mid-run is already gone and
+		// FinishSearchJob's ErrNotFound is the quiet answer.
+		finished := false
+		defer func() {
+			if finished || p.SearchJobID == "" {
+				return
+			}
+			writeCtx, cancel := detachedWrite(ctx)
+			defer cancel()
+			total, err := store.CountSearchResults(writeCtx, db, p.SearchJobID)
+			if err != nil {
+				log.WarnContext(ctx, "search result count failed during abnormal finish",
+					"search_job_id", p.SearchJobID, "err", err)
+			}
+			msg := "the search ended without completing"
+			if err := store.FinishSearchJob(writeCtx, db, p.SearchJobID, total, &msg, time.Now().UnixMilli()); err != nil &&
+				!errors.Is(err, store.ErrNotFound) {
+				log.WarnContext(ctx, "search job left unfinished", "search_job_id", p.SearchJobID, "err", err)
+			}
+		}()
 
 		// A job whose search_jobs row is gone — the user deleted it between
 		// enqueue and claim, or a re-delivery after the row went — has
@@ -98,7 +121,7 @@ func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *
 				engineCtx, cancel := context.WithTimeout(ctx, engineSearchDeadline)
 				defer cancel()
 
-				results, err := searchIndexer(engineCtx, row, p, reg, run, idx, hc, log)
+				results, err := searchIndexer(engineCtx, row, p, reg, run, idx, hc, ua, log)
 				if err != nil {
 					// The wire message is the redacted upstream one: a
 					// torznab error can embed the request URL, api key
@@ -136,17 +159,19 @@ func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *
 		if err := store.FinishSearchJob(ctx, db, p.SearchJobID, int(written.Load()), lastErr, time.Now().UnixMilli()); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				// Deleted mid-run; the results cascaded with the row.
+				finished = true
 				return nil
 			}
 			return fmt.Errorf("jobs: finish search job %s: %w", p.SearchJobID, err)
 		}
+		finished = true
 		return nil
 	}
 }
 
 // searchIndexer runs one engine of the fan-out: the Torznab client for a
 // torznab/newznab row, the dlsearch runner for a definition-backed one.
-func searchIndexer(ctx context.Context, row store.Indexer, p SearchPayload, reg *search.Registry, run *search.Runner, idx *store.IndexerStore, hc *http.Client, log *slog.Logger) ([]search.SearchResult, error) {
+func searchIndexer(ctx context.Context, row store.Indexer, p SearchPayload, reg *search.Registry, run *search.Runner, idx *store.IndexerStore, hc *http.Client, ua string, log *slog.Logger) ([]search.SearchResult, error) {
 	cfg := store.IndexerSettingsMap(log, row)
 
 	switch row.Kind {
@@ -159,7 +184,7 @@ func searchIndexer(ctx context.Context, row store.Indexer, p SearchPayload, reg 
 			return nil, fmt.Errorf("open indexer key: %w", err)
 		}
 		client, err := search.NewTorznabClient(
-			searchHTTPClient(hc, cfg, *row.URL, log), *row.URL, apiKey, row.ID, SearchUserAgent,
+			searchHTTPClient(hc, cfg, *row.URL, log), *row.URL, apiKey, row.ID, ua,
 		)
 		if err != nil {
 			return nil, err
