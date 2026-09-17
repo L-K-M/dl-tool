@@ -274,9 +274,9 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/... ./internal/search/...
-ok  	github.com/L-K-M/dl-tool/internal/api	122.892s
-ok  	github.com/L-K-M/dl-tool/internal/store	75.596s
-ok  	github.com/L-K-M/dl-tool/internal/search	1.623s
+ok  	github.com/L-K-M/dl-tool/internal/api	121.065s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.446s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.637s
 INDEXERS_OK
 ```
 
@@ -284,27 +284,27 @@ INDEXERS_OK
 
 ```
 === RUN   TestCreateIndexerRequiresURL
---- PASS: TestCreateIndexerRequiresURL (0.46s)
+--- PASS: TestCreateIndexerRequiresURL (0.43s)
 === RUN   TestAPIKeyNeverReturned
---- PASS: TestAPIKeyNeverReturned (0.41s)
+--- PASS: TestAPIKeyNeverReturned (0.38s)
 === RUN   TestPatchIndexerPartial
---- PASS: TestPatchIndexerPartial (0.37s)
+--- PASS: TestPatchIndexerPartial (0.41s)
 === RUN   TestDuplicateDefinitionIDConflicts
---- PASS: TestDuplicateDefinitionIDConflicts (0.45s)
+--- PASS: TestDuplicateDefinitionIDConflicts (0.38s)
 === RUN   TestCategoriesMergeCapsOverDefaults
---- PASS: TestCategoriesMergeCapsOverDefaults (0.46s)
+--- PASS: TestCategoriesMergeCapsOverDefaults (0.43s)
 === RUN   TestImportProviderCreatesDisabledRows
---- PASS: TestImportProviderCreatesDisabledRows (0.51s)
+--- PASS: TestImportProviderCreatesDisabledRows (0.44s)
 === RUN   TestImportProviderSkipsProwlarrIdZero
---- PASS: TestImportProviderSkipsProwlarrIdZero (0.40s)
+--- PASS: TestImportProviderSkipsProwlarrIdZero (0.43s)
 === RUN   TestImportRejectsUnsupportedContentType
---- PASS: TestImportRejectsUnsupportedContentType (0.38s)
+--- PASS: TestImportRejectsUnsupportedContentType (0.44s)
 === RUN   TestCreateIndexerSSRFBlocked
---- PASS: TestCreateIndexerSSRFBlocked (0.38s)
+--- PASS: TestCreateIndexerSSRFBlocked (0.37s)
 === RUN   TestCreateIndexerStoresCaps
---- PASS: TestCreateIndexerStoresCaps (0.42s)
+--- PASS: TestCreateIndexerStoresCaps (0.46s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/api	5.421s
+ok  	github.com/L-K-M/dl-tool/internal/api	5.346s
 ```
 
 (All eight tests named in step 10 are present and passing.
@@ -349,6 +349,19 @@ itself:
 - The sealing root secret is `cfg.SecretKey`, the field `config.Config`
   actually carries; the contract's `cfg.SessionKey` name does not exist.
   `NewIndexerStore`'s parameter keeps the contract's `sessionKey` name.
+- Two plan inconsistencies surfaced in review, recorded here rather than
+  fixed because both homes are outside this Files table:
+  - The `indexers` DDL already carries `allow_private_network INTEGER`
+    (migrations/00001_init.sql), yet this task's "Out of scope" section
+    places the flag in `settings_json`. The column is now permanently 0;
+    `docs/04-data-model.md` section 3.4 and the task file disagree, and a
+    later task should reconcile which is authoritative.
+  - `docs/05-api-contract.md` section 9.1 shows `allow_private_network` in
+    the indexer response object and says a private-network url is "not
+    rejected at save time". This task's contract omits the field from
+    `IndexerDTO` (the flag lives in `settings_json`, which is `json:"-"`)
+    and its step 6 mandates the create-time probe that returns 403, so the
+    API document is stale relative to this task.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

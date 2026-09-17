@@ -111,6 +111,11 @@ func TestCreateIndexerRequiresURL(t *testing.T) {
 		resp := env.createIndexer(t, map[string]any{"name": "no url", "kind": kind})
 		assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
 	}
+
+	// A dlsearch indexer without definition_id is refused the same way.
+	resp := env.createIndexer(t, map[string]any{"name": "no def", "kind": "dlsearch"})
+	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
+
 	if got := env.indexerCount(t, ""); got != 0 {
 		t.Errorf("indexer rows = %d, want 0 after refused creates", got)
 	}
@@ -231,6 +236,34 @@ func TestPatchIndexerPartial(t *testing.T) {
 	}
 	if patched.APIKeySet {
 		t.Error("api_key_set = true after clearing patch, want false")
+	}
+
+	// A settings map cannot forge the reserved keys: allow_private_network
+	// and origin are owned by the API, never by caller-supplied settings.
+	patch = env.api.Patch(
+		"/indexers/"+created.ID,
+		map[string]any{"settings": map[string]any{
+			"allow_private_network": "forged",
+			"origin":                "https://attacker.example",
+			"custom":                "kept",
+		}},
+		env.authz(),
+	)
+	if patch.Code != http.StatusOK {
+		t.Fatalf("settings patch status = %d: %s", patch.Code, patch.Body.String())
+	}
+	var settingsJSON string
+	if err := env.db.GetContext(
+		t.Context(), &settingsJSON,
+		"SELECT settings_json FROM indexers WHERE id = ?", created.ID,
+	); err != nil {
+		t.Fatalf("read settings_json: %v", err)
+	}
+	if strings.Contains(settingsJSON, "forged") || strings.Contains(settingsJSON, "attacker.example") {
+		t.Errorf("settings_json carries forged reserved keys: %s", settingsJSON)
+	}
+	if !strings.Contains(settingsJSON, `"custom":"kept"`) {
+		t.Errorf("settings_json lost the caller's own key: %s", settingsJSON)
 	}
 }
 

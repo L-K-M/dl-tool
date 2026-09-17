@@ -637,14 +637,18 @@ func ptr[T any](v T) *T { return &v }
 
 // indexerSettingsJSON renders the settings_json document: the per-engine
 // settings plus the allow_private_network flag and, on imported rows, the
-// provider origin.
+// provider origin. The reserved keys are written last so a caller's
+// settings map can never forge them.
 func indexerSettingsJSON(settings map[string]string, allowPrivate bool, origin string) (string, error) {
-	doc := map[string]any{indexerSettingAllowPrivate: allowPrivate}
+	doc := make(map[string]any, len(settings)+2)
 	for k, v := range settings {
 		doc[k] = v
 	}
+	doc[indexerSettingAllowPrivate] = allowPrivate
 	if origin != "" {
 		doc[indexerSettingOrigin] = origin
+	} else {
+		delete(doc, indexerSettingOrigin)
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {
@@ -672,6 +676,12 @@ func mergeIndexerSettings(existing *string, settings map[string]string, allowPri
 		}
 		doc = make(map[string]any, len(settings)+len(internal))
 		for k, v := range settings {
+			// The reserved keys are the API's, never the caller's: a
+			// settings map carrying them cannot forge the private-range
+			// lift or an import origin the row does not have.
+			if k == indexerSettingAllowPrivate || k == indexerSettingOrigin {
+				continue
+			}
 			doc[k] = v
 		}
 		for k, v := range internal {
