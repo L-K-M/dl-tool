@@ -311,8 +311,9 @@ Deviations from the interface contract, all forced or noted:
   `json_extract(payload_json, '$.search_job_id')`, not LIKE — exact and
   case-sensitive.
 - `Deps` carries a `DB` field so `StartSearch` can reach the queue without touching
-  `internal/api/server.go` (outside the Files table); the `NewServer` call sites are
-  unchanged.
+  `internal/api/server.go` (outside the Files table); the `NewServer` signature is
+  unchanged — `cmd/dl-tool/main.go` (in the Files table) now passes `DB: db` in the
+  `Deps` literal.
 - `SearchResultDTO` exists per step 6's `SearchJobOutput` — no acquisition field
   (`download_url`, `magnet_uri`, `details_url`) is serialized.
 - `GetSearch` reports `total` from the live `search_results` count, not the job row's
