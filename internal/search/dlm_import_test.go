@@ -896,11 +896,11 @@ func TestPluginCategoriesUnreadableWarns(t *testing.T) {
 func TestPluginQuoteEscapes(t *testing.T) {
 	res, err := search.ImportNovaPlugin(
 		[]byte("class esc(object):\n\tname = 'E'\n"+
-			"\tsupported_categories = {'movies': '20\\'s', 'tv': \"x\\ty\"}\n"),
+			"\tsupported_categories = {'movies': '20\\'\\\"s', 'tv': \"x\\'y\\tw\"}\n"),
 		"esc.py")
 	require.NoError(t, err)
-	assert.Equal(t, "20's", res.SiteCategories["movies"])
-	assert.Equal(t, `x\ty`, res.SiteCategories["tv"])
+	assert.Equal(t, `20'"s`, res.SiteCategories["movies"])
+	assert.Equal(t, `x'y\tw`, res.SiteCategories["tv"])
 }
 
 // TestPluginFieldsStayOnTheNovaPath pins the provenance gate on the
