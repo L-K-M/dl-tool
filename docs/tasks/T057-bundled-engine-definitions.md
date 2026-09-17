@@ -183,4 +183,36 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+Step 7 cannot run as written: "put that same registry into the `api.Deps` value handed to
+`NewServer`" requires a `Defs *search.Registry` field on `Deps`, and `Deps` is declared in
+`internal/api/search.go` (lines 51-59) — a file the `## Files` table does not admit. There is no
+alternative carrier: `Deps` is a struct, so carrying the registry needs a new field, and no
+permitted file can declare it. Skipping the field would leave a stated step unimplemented, and the
+documented intent that T057 owns it is explicit in three places:
+
+- T055's merged interface contract declares
+  `Deps{Indexers, Defs *search.Registry, Runner *search.Runner, HTTP}`.
+- T055's merged deviations note records "`Deps` declares `Indexers` and `HTTP` only ... T057 and
+  T058 own those types".
+- The struct comment at `internal/api/search.go:51-55` says "Defs (*search.Registry) and Runner
+  (*search.Runner) join the struct with T057 and T058".
+
+Everything else in the task fits the table, verified against the tree:
+
+- The `indexers` DDL (`internal/store/migrations/00001_init.sql:158-173`) admits `kind='dlsearch'`,
+  `definition_source='bundled'` and `legal_tier='legitimate'`, and the partial unique index on
+  `definition_id` backs the idempotent `SeedIndexers`.
+- No import cycle: `internal/store` does not import `internal/search`, so `bundled.go` may take a
+  `*store.IndexerStore`; `internal/api/search.go` already imports `internal/search`, so the repair
+  is a one-line field plus a comment touch-up.
+- `deps ...Deps` is already variadic on `NewServer`, so no `internal/api/server.go` or caller edit
+  is needed.
+
+Chosen remedy for the plan-repair PR: add one `internal/api/search.go` row (action `edit`, "add
+`Defs *search.Registry` to `Deps` so the one registry built in `main.go` reaches `NewServer`") to
+the `## Files` table. The scope check emits paths sorted, so the repaired table should read:
+`cmd/dl-tool/main.go`, `definitions/embed.go`, `definitions/engines/` (the four YAML files),
+`internal/api/search.go`, `internal/search/bundled.go`, `internal/search/bundled_test.go`. This
+matches the record-then-repair workflow of T046 (#160/#161), T049 (#167/#168), T050
+(#169/#170, #171/#172) and T052 (#184/#185).
