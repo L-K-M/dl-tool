@@ -79,6 +79,9 @@ func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *
 		// nothing to do; the queue row completes quietly.
 		if _, err := store.GetSearchJob(ctx, db, p.SearchJobID); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
+				// Already deleted — there is no row for the deferred finish
+				// to close, so skip the wasted writes too.
+				finished = true
 				return nil
 			}
 			return fmt.Errorf("jobs: load search job %s: %w", p.SearchJobID, err)
