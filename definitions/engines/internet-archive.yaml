@@ -1,0 +1,57 @@
+dlsearch: 1
+id: internet-archive
+name: Internet Archive
+description: "Public-domain and openly licensed books, films, music and software, served as .torrent."
+homepage: https://archive.org/
+license_note: "Content licensing varies per item; check each item page."
+version: "1.0.0"
+legal_tier: legitimate
+kind: json
+caps:
+  modes:
+    search: [q]
+    book-search: [q]
+    movie-search: [q]
+    music-search: [q]
+  categories: {texts: 7000, movies: 2000, audio: 3000, software: 4000, image: 8010, data: 8000}
+  seeders_unknown: true
+settings:
+  - name: title_only
+    type: checkbox
+    label: Search titles only
+    default: true
+  - name: sort
+    type: select
+    label: Sort by
+    default: publicdate
+    options: {publicdate: Newest, downloads: Most downloaded, item_size: Largest}
+request:
+  base_url: https://archive.org/
+  path: advancedsearch.php
+  method: GET
+  rate_limit_per_minute: 30
+  timeout_seconds: 15
+  query:
+    q: '{{ if .Config.title_only }}title:({{ .Keywords }}){{ else }}{{ .Keywords }}{{ end }} AND format:("Archive BitTorrent"){{ if .Categories }} AND mediatype:({{ join .Categories " OR " }}){{ else }}{{ end }}'
+    "fl[]": "identifier,title,mediatype,item_size,downloads,btih,publicdate"
+    sort: "-{{ .Config.sort }}"
+    rows: "{{ .Limit }}"
+    page: "{{ .Page }}"
+    output: json
+response:
+  rows: "$.response.docs"
+  total: "$.response.numFound"
+  fields:
+    _id:       {path: "identifier"}
+    title:     {path: "title", optional: true, default: "Untitled {{ .Result._id }}"}
+    category:  {path: "mediatype"}
+    size:      {path: "item_size", type: bytes}
+    published: {path: "publicdate", type: datetime, format: iso8601}
+    infohash:  {path: "btih", optional: true}
+    grabs:     {path: "downloads", optional: true, type: int}
+    details:   {template: "https://archive.org/details/{{ .Result._id }}"}
+    download:  {template: "https://archive.org/download/{{ .Result._id }}/{{ .Result._id }}_archive.torrent"}
+  transforms:
+    title:
+      - {op: trim}
+      - {op: html_decode}

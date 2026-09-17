@@ -50,11 +50,11 @@ const (
 
 // Deps carries the process-wide search collaborators, built exactly once in
 // cmd/dl-tool/main.go and passed into NewServer, so the API and the job
-// worker share one of each (docs/14-conventions.md section 8.3). Defs
-// (*search.Registry) and Runner (*search.Runner) join the struct with T057
-// and T058 — the tasks that own those types.
+// worker share one of each (docs/14-conventions.md section 8.3). Runner
+// (*search.Runner) joins the struct with T058 — the task that owns that type.
 type Deps struct {
 	Indexers *store.IndexerStore
+	Defs     *search.Registry
 	HTTP     *http.Client // the SSRF-guarded client of T123
 }
 
