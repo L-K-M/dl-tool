@@ -978,11 +978,11 @@ func (d *pyDictScanner) quoted() (string, bool) {
 	d.pos++
 	var b strings.Builder
 	for d.pos < len(d.s) && d.s[d.pos] != q {
-		// Only \' \" and \\ are escapes; every other sequence keeps its
-		// backslash verbatim, matching Python's preservation of unknown
-		// escapes rather than mangling the literal.
+		// Only the quote escapes and \\ are honored — in either quote
+		// style, as Python does. Every other sequence (\n included) keeps
+		// its backslash verbatim rather than being interpreted.
 		if d.s[d.pos] == '\\' && d.pos+1 < len(d.s) &&
-			(d.s[d.pos+1] == q || d.s[d.pos+1] == '\\') {
+			(d.s[d.pos+1] == '\'' || d.s[d.pos+1] == '"' || d.s[d.pos+1] == '\\') {
 			d.pos++
 		}
 		b.WriteByte(d.s[d.pos])
