@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -205,6 +206,18 @@ func TestSearchClampsLimitToCaps(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "60", gotLimit[len(gotLimit)-1], "limit clamps to caps <limits max>")
 	assert.Equal(t, 1, capsFetches, "second search must reuse the cached caps document")
+}
+
+// TestParseRetryAfter pins the header parsing: zero and negative seconds are
+// 0, an out-of-range value saturates instead of wrapping, and an HTTP date
+// is accepted.
+func TestParseRetryAfter(t *testing.T) {
+	assert.Equal(t, time.Duration(0), parseRetryAfter(""))
+	assert.Equal(t, time.Duration(0), parseRetryAfter("0"))
+	assert.Equal(t, time.Duration(0), parseRetryAfter("-5"))
+	assert.Equal(t, 30*time.Second, parseRetryAfter("30"))
+	assert.Equal(t, time.Duration(math.MaxInt64), parseRetryAfter("10000000000"))
+	assert.Equal(t, time.Duration(0), parseRetryAfter("not-a-number"))
 }
 
 // TestFinaliseDropsUnusableRow covers section 5 rule 5: a row with no

@@ -223,7 +223,7 @@ ok  	github.com/L-K-M/dl-tool/internal/search	1.625s
 TORZNAB_OK
 ```
 
-`go test -race -v -run 'TestParseTorznabItem|TestParseMagnetEnclosure|TestParseCapsTree|TestSeedersNullWhenAbsent|TestTorznabErrorDocument|TestFinaliseDropsUnusableRow|TestSearchClampsLimitToCaps' ./internal/search/`:
+`go test -race -v -run 'TestParseTorznabItem|TestParseMagnetEnclosure|TestParseCapsTree|TestSeedersNullWhenAbsent|TestTorznabErrorDocument|TestFinaliseDropsUnusableRow|TestSearchClampsLimitToCaps|TestParseRetryAfter' ./internal/search/`:
 
 ```
 === RUN   TestParseTorznabItem
@@ -237,15 +237,18 @@ TORZNAB_OK
 === RUN   TestTorznabErrorDocument
 --- PASS: TestTorznabErrorDocument (0.00s)
 === RUN   TestSearchClampsLimitToCaps
---- PASS: TestSearchClampsLimitToCaps (0.02s)
+--- PASS: TestSearchClampsLimitToCaps (0.00s)
+=== RUN   TestParseRetryAfter
+--- PASS: TestParseRetryAfter (0.00s)
 === RUN   TestFinaliseDropsUnusableRow
 --- PASS: TestFinaliseDropsUnusableRow (0.00s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/search	1.073s
+ok  	github.com/L-K-M/dl-tool/internal/search	1.063s
 ```
 
-(TestSearchClampsLimitToCaps was added in review to cover the caps-cached
-limit clamp; the six named tests are all present and passing.)
+(TestSearchClampsLimitToCaps and TestParseRetryAfter were added in review to
+cover the caps-cached limit clamp and Retry-After parsing; the six named
+tests are all present and passing.)
 
 Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
 

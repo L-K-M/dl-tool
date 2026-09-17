@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -571,7 +572,16 @@ func parseRetryAfter(h string) time.Duration {
 		return 0
 	}
 	if secs, err := strconv.Atoi(h); err == nil {
-		return max(time.Duration(secs)*time.Second, 0)
+		switch {
+		case secs <= 0:
+			return 0
+		case int64(secs) > math.MaxInt64/int64(time.Second):
+			// Saturate rather than wrap: a wrapped value could come out
+			// near zero and report "retry immediately".
+			return time.Duration(math.MaxInt64)
+		default:
+			return time.Duration(secs) * time.Second
+		}
 	}
 	if t, err := http.ParseTime(h); err == nil {
 		return max(time.Until(t), 0)
