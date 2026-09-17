@@ -108,9 +108,8 @@ func main() {
 			// the indexer store sealing under cfg.SecretKey, then the
 			// definition registry seeding the bundled indexers — built once
 			// so the API and the job worker share one of each
-			// (docs/14-conventions.md section 8.3). The dlsearch runner
-			// (T058) and the search worker registration (T061) extend this
-			// Deps in their own tasks.
+			// (docs/14-conventions.md section 8.3). The search worker
+			// registration (T061) extends this Deps in its own task.
 			searchGuard := secure.NewGuard(logger, cfg.SSRFAllowPrivate)
 			searchHTTP := secure.NewClient(searchGuard)
 			indexers, err := store.NewIndexerStore(db, cfg.SecretKey)
@@ -135,7 +134,11 @@ func main() {
 				logger.Info("seeded bundled indexers", "created", seeded)
 			}
 
-			server, err := api.NewServer(cfg, db, logger, api.Deps{Indexers: indexers, Defs: defs, HTTP: searchHTTP})
+			// One runner for the process: its per-engine rate buckets are
+			// shared state between the probe endpoint and the search jobs.
+			runner := search.NewRunner(searchHTTP, logger, "dl-tool/"+version)
+
+			server, err := api.NewServer(cfg, db, logger, api.Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: searchHTTP})
 			if err != nil {
 				logger.Error("server build failed", "err", err)
 				os.Exit(exitFailure)

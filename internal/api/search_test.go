@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +38,14 @@ const searchTestKey = "search-test-secret-key"
 
 func newSearchTestEnv(t *testing.T, hc *http.Client) *searchTestEnv {
 	t.Helper()
+	return newSearchTestEnvDeps(t, hc, nil, nil)
+}
+
+// newSearchTestEnvDeps is newSearchTestEnv with the registry and runner the
+// test-indexer cases need; nil means the server behaves as built for the
+// OpenAPI document alone.
+func newSearchTestEnvDeps(t *testing.T, hc *http.Client, defs *search.Registry, runner *search.Runner) *searchTestEnv {
+	t.Helper()
 
 	root := t.TempDir()
 	configDir := filepath.Join(root, "config")
@@ -62,7 +72,7 @@ func newSearchTestEnv(t *testing.T, hc *http.Client) *searchTestEnv {
 		&config.Config{ConfigDir: configDir, SessionTTL: time.Hour},
 		db,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		Deps{Indexers: indexers, HTTP: hc},
+		Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: hc},
 	)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -666,5 +676,286 @@ func TestCreateIndexerStoresCaps(t *testing.T) {
 	}
 	if created.LastTestAt == nil {
 		t.Error("last_test_at is null after a successful probe")
+	}
+}
+
+// probeStubDef is the user definition the dlsearch probe cases load: one rss
+// engine pointing at the test server, two categories, a const category so
+// caps.categories need not pin a single id.
+func probeStubDef(baseURL string) string {
+	return `dlsearch: 1
+id: probe-stub
+name: Probe Stub
+description: "fixture engine for the test-indexer cases"
+homepage: https://x.test/
+version: "1.0.0"
+legal_tier: user-supplied
+kind: rss
+caps:
+  modes: {search: [q]}
+  categories: {A: 2000, B: 3000}
+  seeders_unknown: true
+request:
+  base_url: ` + baseURL + `
+  path: rss.xml
+  method: GET
+response:
+  rows: "rss > channel > item"
+  fields:
+    title:    {path: "title"}
+    size:     {path: "enclosure", attr: "length", type: bytes}
+    download: {path: "enclosure", attr: "url"}
+    category: {const: "A"}
+`
+}
+
+const probeStubRSS = `<?xml version="1.0"?><rss version="2.0"><channel><item>` +
+	`<title>r1</title><enclosure url="https://x.test/a.torrent" length="7"/></item>` +
+	`</channel></rss>`
+
+// newProbeRegistry builds a registry carrying the probe-stub user definition.
+func newProbeRegistry(t *testing.T, baseURL string) *search.Registry {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(dir, "probe-stub.dlsearch.yaml"),
+		[]byte(probeStubDef(baseURL)), 0o600,
+	); err != nil {
+		t.Fatalf("write user definition: %v", err)
+	}
+	reg, err := search.NewRegistry(slog.New(slog.NewJSONHandler(io.Discard, nil)), dir)
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	if _, ok := reg.Get("probe-stub"); !ok {
+		t.Fatalf("probe-stub did not load: %v", reg.Errors())
+	}
+	return reg
+}
+
+// TestTestIndexerDlsearch503 covers the acceptance case: a reachable-but-
+// broken upstream is 200 with ok:false and the upstream status in error; the
+// row's last_test_at and last_error are stamped.
+func TestTestIndexerDlsearch503(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("upstream maintenance"))
+	}))
+	defer srv.Close()
+
+	env := newSearchTestEnvDeps(t, nil, newProbeRegistry(t, srv.URL), search.NewRunner(srv.Client(), nil, "dl-tool/test"))
+
+	resp := env.createIndexer(t, map[string]any{
+		"name": "broken-dlsearch", "kind": "dlsearch", "definition_id": "probe-stub",
+		"allow_private_network": true,
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var created IndexerDTO
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create body: %v", err)
+	}
+
+	resp = env.api.Do(http.MethodPost, "/indexers/"+created.ID+"/test", env.authz())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("test status = %d, want 200 with the outcome as data: %s", resp.Code, resp.Body.String())
+	}
+	var out TestIndexerOutput
+	if err := json.Unmarshal(resp.Body.Bytes(), &out.Body); err != nil {
+		t.Fatalf("decode test body: %v", err)
+	}
+	if out.Body.Ok {
+		t.Error("ok = true for a 503 upstream, want false")
+	}
+	if out.Body.Error == nil || !strings.Contains(*out.Body.Error, "503") {
+		t.Errorf("error = %v, want the upstream status 503 named", out.Body.Error)
+	}
+
+	row, err := env.indexers.Get(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.LastTestAt == nil {
+		t.Error("last_test_at is null after a failed probe")
+	}
+	if row.LastError == nil || !strings.Contains(*row.LastError, "503") {
+		t.Errorf("last_error = %v, want the upstream status recorded", row.LastError)
+	}
+}
+
+// TestTestIndexerDlsearchOK covers the healthy path: ok:true, the
+// definition's categories counted, and the caps cached on the row.
+func TestTestIndexerDlsearchOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(probeStubRSS))
+	}))
+	defer srv.Close()
+
+	env := newSearchTestEnvDeps(t, nil, newProbeRegistry(t, srv.URL), search.NewRunner(srv.Client(), nil, "dl-tool/test"))
+
+	resp := env.createIndexer(t, map[string]any{
+		"name": "healthy-dlsearch", "kind": "dlsearch", "definition_id": "probe-stub",
+		"allow_private_network": true,
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var created IndexerDTO
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create body: %v", err)
+	}
+
+	resp = env.api.Do(http.MethodPost, "/indexers/"+created.ID+"/test", env.authz())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("test status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var out TestIndexerOutput
+	if err := json.Unmarshal(resp.Body.Bytes(), &out.Body); err != nil {
+		t.Fatalf("decode test body: %v", err)
+	}
+	if !out.Body.Ok {
+		t.Fatalf("ok = false for a healthy stub: error %v", out.Body.Error)
+	}
+	if out.Body.CategoriesFound != 2 {
+		t.Errorf("categories_found = %d, want the definition's 2", out.Body.CategoriesFound)
+	}
+	if out.Body.Error != nil {
+		t.Errorf("error = %v, want null on success", out.Body.Error)
+	}
+
+	row, err := env.indexers.Get(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.CategoriesJSON == nil || !strings.Contains(*row.CategoriesJSON, "2000") {
+		t.Errorf("categories_json = %v, want the definition's caps cached", row.CategoriesJSON)
+	}
+	if row.LastError != nil {
+		t.Errorf("last_error = %v, want null after a clean probe", row.LastError)
+	}
+}
+
+// TestTestIndexerTorznab covers the torznab branch: exactly one t=caps
+// request, ok:true with the caps-derived category count.
+func TestTestIndexerTorznab(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	var capsCalls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capsCalls.Add(1)
+		if r.URL.Query().Get("t") != "caps" {
+			t.Errorf("probe query = %q, want t=caps", r.URL.RawQuery)
+		}
+		w.Header().Set("Server", "stub/1")
+		_, _ = w.Write([]byte(capsStubXML))
+	}))
+	defer srv.Close()
+
+	resp := env.createIndexer(t, map[string]any{
+		"name": "probed-torznab", "kind": "torznab", "url": srv.URL + "/api",
+		"api_key": "k", "allow_private_network": true,
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var created IndexerDTO
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create body: %v", err)
+	}
+	capsCalls.Store(0)
+
+	resp = env.api.Do(http.MethodPost, "/indexers/"+created.ID+"/test", env.authz())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("test status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var out TestIndexerOutput
+	if err := json.Unmarshal(resp.Body.Bytes(), &out.Body); err != nil {
+		t.Fatalf("decode test body: %v", err)
+	}
+	if !out.Body.Ok {
+		t.Fatalf("ok = false for a healthy torznab stub: %v", out.Body.Error)
+	}
+	if got := capsCalls.Load(); got != 1 {
+		t.Errorf("caps requests = %d, want exactly 1", got)
+	}
+	if out.Body.CategoriesFound != 3 {
+		t.Errorf("categories_found = %d, want 3", out.Body.CategoriesFound)
+	}
+	if out.Body.Server != "stub" {
+		t.Errorf("server = %q, want stub from the caps title", out.Body.Server)
+	}
+}
+
+// TestTestIndexerNotFoundAndUnattempted covers the non-200 paths: an unknown
+// id is 404, and a dlsearch row whose definition is not loaded — or a server
+// built without a runner — is 503 /problems/engine-unavailable because the
+// probe could not be attempted at all.
+func TestTestIndexerNotFoundAndUnattempted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(probeStubRSS))
+	}))
+	defer srv.Close()
+
+	env := newSearchTestEnvDeps(t, nil, newProbeRegistry(t, srv.URL), search.NewRunner(srv.Client(), nil, "dl-tool/test"))
+
+	resp := env.api.Do(http.MethodPost, "/indexers/idx_missing/test", env.authz())
+	assertProblem(t, resp, http.StatusNotFound, SlugNotFound)
+
+	// A definition_id the registry never loaded means the probe cannot be
+	// attempted: 503, not 200-with-ok:false.
+	resp = env.createIndexer(t, map[string]any{
+		"name": "unknown-def", "kind": "dlsearch", "definition_id": "not-loaded",
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var created IndexerDTO
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create body: %v", err)
+	}
+	resp = env.api.Do(http.MethodPost, "/indexers/"+created.ID+"/test", env.authz())
+	assertProblem(t, resp, http.StatusServiceUnavailable, SlugEngineUnavailable)
+
+	// A server built without defs or runner answers the same 503 — the
+	// probe cannot be attempted because no evaluator exists.
+	bare := newSearchTestEnvDeps(t, nil, nil, nil)
+	resp = bare.createIndexer(t, map[string]any{
+		"name": "no-runner", "kind": "dlsearch", "definition_id": "any",
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var bareCreated IndexerDTO
+	if err := json.Unmarshal(resp.Body.Bytes(), &bareCreated); err != nil {
+		t.Fatalf("decode create body: %v", err)
+	}
+	resp = bare.api.Do(http.MethodPost, "/indexers/"+bareCreated.ID+"/test", bare.authz())
+	assertProblem(t, resp, http.StatusServiceUnavailable, SlugEngineUnavailable)
+}
+
+// TestIndexerSettingsMap covers the settings_json decode used by the probe:
+// numbers keep their exact text, nulls drop, and a document with trailing
+// garbage is invalid and yields empty settings.
+func TestIndexerSettingsMap(t *testing.T) {
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	j := `{"n": 1000000, "f": 0.00001, "flag": true, "s": "x", "z": null}`
+	out := indexerSettingsMap(log, store.Indexer{ID: "i1", SettingsJSON: &j})
+	if out["n"] != "1000000" {
+		t.Errorf("n = %q, want verbatim 1000000", out["n"])
+	}
+	if out["f"] != "0.00001" {
+		t.Errorf("f = %q, want verbatim 0.00001", out["f"])
+	}
+	if out["flag"] != "true" || out["s"] != "x" {
+		t.Errorf("flag/s = %q/%q, want true/x", out["flag"], out["s"])
+	}
+	if _, ok := out["z"]; ok {
+		t.Errorf("null key z should be dropped, got %q", out["z"])
+	}
+
+	bad := `{"a": "b"} trailing`
+	if out := indexerSettingsMap(log, store.Indexer{ID: "i2", SettingsJSON: &bad}); len(out) != 0 {
+		t.Errorf("trailing garbage should yield empty settings, got %v", out)
 	}
 }

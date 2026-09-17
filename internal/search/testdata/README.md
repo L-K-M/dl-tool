@@ -10,6 +10,8 @@ trimmed, the edit is noted.
 | `torznab_caps.xml` | Sonarr repository, `src/NzbDrone.Core.Test/Files/Indexers/Newznab/newznab_caps.xml` (develop branch), verbatim; the caps schema is shared between newznab and torznab | 2026-09-17 |
 | `academic_torrents_rss.xml` | `https://academictorrents.com/rss.xml`, trimmed to the first three items with descriptions shortened; no pubDate or torznab attrs, as upstream emits | 2026-09-17 |
 | `torznab_error.xml` | Sonarr repository, `src/NzbDrone.Core.Test/Files/Indexers/Newznab/unauthorized.xml` (develop branch); UTF-8 BOM stripped | 2026-09-17 |
+| `archlinux_releases.xml` | `https://archlinux.org/feeds/releases/`, verbatim — three release items with enclosure length/type/url, the shape `def_valid_rss.yaml` expects | 2026-09-18 |
+| `archive_advancedsearch.json` | `https://archive.org/advancedsearch.php?q=format%3A%22Archive+BitTorrent%22+AND+mediatype%3Atexts&fl%5B%5D=identifier%2Ctitle%2Citem_size%2Cbtih%2Cpublicdate&rows=2&output=json`, verbatim — `response.numFound`/`response.docs[]` shape | 2026-09-18 |
 
 Verbatim quirks kept on purpose: `torznab_tpb.xml` carries upstream's
 misspelled `<lanuage>` element, and its magnet `dn=` parameters still contain

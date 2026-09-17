@@ -360,6 +360,26 @@ export interface paths {
     patch: operations["patch-indexer"];
     trace?: never;
   };
+  "/indexers/{id}/test": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Test an indexer
+     * @description Performs exactly one capability probe — t=caps for a torznab or newznab indexer, one definition request for a dlsearch engine — and reports the outcome as data. A reachable-but-broken indexer is 200 with ok:false and the upstream status in error; 503 /problems/engine-unavailable means the probe could not be attempted at all.
+     */
+    post: operations["test-indexer"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/sync": {
     parameters: {
       query?: never;
@@ -1223,6 +1243,15 @@ export interface components {
       ok: boolean;
       version: string | null;
     };
+    TestIndexerOutputBody: {
+      /** Format: int64 */
+      categories_found: number;
+      /** Format: int64 */
+      elapsed_ms: number;
+      error: string | null;
+      ok: boolean;
+      server: string;
+    };
     TrackerDTO: {
       message: string;
       /** Format: int64 */
@@ -1960,6 +1989,38 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["IndexerDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "test-indexer": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The idx_… row id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TestIndexerOutputBody"];
         };
       };
       /** @description Error */

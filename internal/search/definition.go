@@ -75,6 +75,32 @@ type Response struct {
 	Total      string                   `yaml:"total"`
 	Fields     map[string]Field         `yaml:"fields"`
 	Transforms map[string][]TransformOp `yaml:"transforms"`
+
+	// fieldOrder records the declaration order of Fields, recovered from the
+	// YAML node tree — the typed decode into a map discards it, and
+	// {{ .Result.<field> }} resolution must observe declaration order
+	// (doc 07 section 3.3).
+	fieldOrder []string
+}
+
+// OrderedFields returns the field names in declaration order. A Response
+// built without LoadDefinition — a test literal — has no recorded order and
+// falls back to sorted keys, which is still deterministic. The recorded
+// order is filtered to names that actually decoded into Fields: a YAML merge
+// key leaves a "<<" entry the typed decode resolves into real fields, and an
+// aliased mapping leaves none, so a recorded order that does not cover every
+// field falls back to sorted keys rather than dropping or inventing names.
+func (r *Response) OrderedFields() []string {
+	out := make([]string, 0, len(r.Fields))
+	for _, name := range r.fieldOrder {
+		if _, ok := r.Fields[name]; ok {
+			out = append(out, name)
+		}
+	}
+	if len(out) == len(r.Fields) {
+		return out
+	}
+	return sortedKeys(r.Fields)
 }
 
 // Field is exactly one of path, template or const, plus optional modifiers.
@@ -224,7 +250,47 @@ func decodeAndValidate(data []byte) (*Definition, error) {
 	if err := validateDefinition(def, &doc); err != nil {
 		return nil, err
 	}
+	if def.Response != nil {
+		def.Response.fieldOrder = fieldOrderOf(&doc)
+	}
 	return def, nil
+}
+
+// fieldOrderOf reads the response.fields mapping keys in document order from
+// the already-decoded node tree.
+func fieldOrderOf(doc *yaml.Node) []string {
+	if doc == nil || len(doc.Content) == 0 {
+		return nil
+	}
+	resp := mappingValue(doc.Content[0], "response")
+	if resp == nil {
+		return nil
+	}
+	fields := mappingValue(resp, "fields")
+	// An aliased mapping (fields: *base) is an AliasNode, not a MappingNode —
+	// treat it as no recorded order so OrderedFields falls back instead of
+	// pinning an empty one.
+	if fields == nil || fields.Kind != yaml.MappingNode {
+		return nil
+	}
+	out := make([]string, 0, len(fields.Content)/2)
+	for i := 0; i+1 < len(fields.Content); i += 2 {
+		out = append(out, fields.Content[i].Value)
+	}
+	return out
+}
+
+// mappingValue returns the value node of key in the mapping node n, or nil.
+func mappingValue(n *yaml.Node, key string) *yaml.Node {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }
 
 var yamlLineRe = regexp.MustCompile(`line (\d+)`)
@@ -681,8 +747,14 @@ func (cx *checkCtx) checkOpArgs(op TransformOp, path string) error {
 		if len(op.Args[0]) > MaxPatternBytes {
 			return cx.fail(path+".args", "regex_capture pattern is %d bytes, over the %d-byte limit", len(op.Args[0]), MaxPatternBytes)
 		}
-		if _, err := regexp.Compile(op.Args[0]); err != nil {
+		re, err := regexp.Compile(op.Args[0])
+		if err != nil {
 			return cx.fail(path+".args", "regex_capture pattern does not compile: %v", err)
+		}
+		// The op returns capture group 1 only; a groupless pattern is dead
+		// weight the runner would reject per call.
+		if re.NumSubexp() < 1 {
+			return cx.fail(path+".args", "regex_capture pattern %q has no capture group", op.Args[0])
 		}
 	}
 	return nil
