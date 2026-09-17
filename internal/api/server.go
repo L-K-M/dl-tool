@@ -119,6 +119,9 @@ type Server struct {
 	// fs owns the /fs browse operations of doc 05 section 7.
 	fs *FSHandlers
 
+	// search owns the /indexers and /search operations of doc 05 section 9.
+	search *SearchHandlers
+
 	// SSE owns the live-update endpoints: GET /events and GET /sync, and
 	// the hub they read from. It is exported for the composition root in
 	// cmd/dl-tool, which owns the *obs.Metrics instance whose
@@ -135,7 +138,21 @@ type Server struct {
 
 // NewServer builds the router and the Huma API. Every route lives under
 // cfg.BasePath; a request outside it gets 404. db may be nil in a unit test.
-func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, error) {
+// deps is the search collaborator bundle the composition root owns
+// (docs/14-conventions.md section 8.3); it is variadic so the document-only
+// builds — the openapi subcommand and router-only unit tests — keep their
+// three-argument call, while the zero Deps leaves the search operations
+// registered but backed by nil stores.
+func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) (*Server, error) {
+	var searchDeps Deps
+	switch len(deps) {
+	case 0:
+	case 1:
+		searchDeps = deps[0]
+	default:
+		return nil, errors.New("api: NewServer accepts at most one Deps value")
+	}
+
 	installErrorFactory()
 
 	root := chi.NewMux()
@@ -289,6 +306,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger) (*Server, erro
 		settings:   NewSettingsHandlers(db, engines),
 		categories: NewCategoryHandlers(db, cfg.DataRoots),
 		fs:         NewFSHandlers(cfg.DataRoots),
+		search:     NewSearchHandlers(log, searchDeps),
 		SSE:        sseHandlers,
 		bgCancel:   bgCancel,
 	}
@@ -448,6 +466,7 @@ func (s *Server) registerOperations() {
 	s.settings.registerOperations(s.API)
 	s.categories.Register(s.API)
 	s.fs.Register(s.API)
+	RegisterSearchRoutes(s.API, s.search)
 	s.SSE.RegisterOperations(s.API)
 
 	// The bulk-action and patch operations of docs/05-api-contract.md
