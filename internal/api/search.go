@@ -1050,7 +1050,7 @@ func (h *SearchHandlers) importIndexerFile(ctx context.Context, st *store.Indexe
 func importedIndexerSettings(res search.ImportResult) (string, error) {
 	// Origin is the client-supplied file name — basename'd by
 	// mime/multipart already, but still capped before it is stored.
-	origin := res.Origin
+	origin := strings.ToValidUTF8(res.Origin, "")
 	if len(origin) > 255 {
 		origin = strings.ToValidUTF8(origin[:255], "")
 	}
