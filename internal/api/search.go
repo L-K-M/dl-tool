@@ -1042,18 +1042,25 @@ func (h *SearchHandlers) importIndexerFile(ctx context.Context, st *store.Indexe
 	// A .py import has no definition; the row itself carries the plugin's
 	// declared site URL and its supported_categories folded to newznab
 	// ids, so the list shows what the plugin claimed (doc 07 section 4.3).
-	if res.URL != "" {
-		if u, perr := url.Parse(res.URL); perr == nil && u.Host != "" &&
-			(u.Scheme == "http" || u.Scheme == "https") {
-			row.URL = &res.URL
+	// The provenance check, not the extension, is the gate: only the
+	// nova3 reader may populate these fields on an ImportResult.
+	if res.Provenance == search.ProvenanceQbtPy {
+		if res.URL != "" {
+			if u, perr := url.Parse(res.URL); perr == nil && u.Host != "" &&
+				(u.Scheme == "http" || u.Scheme == "https") {
+				row.URL = &res.URL
+			} else {
+				res.Warnings = append(res.Warnings,
+					"the plugin's url is not an http or https URL; it is kept only in the stored source")
+			}
 		}
-	}
-	if len(res.Categories) > 0 {
-		flat, cerr := json.Marshal(res.Categories)
-		if cerr != nil {
-			return nil, internalFailure(ctx, "import indexer categories", cerr)
+		if len(res.Categories) > 0 {
+			flat, cerr := json.Marshal(res.Categories)
+			if cerr != nil {
+				return nil, internalFailure(ctx, "import indexer categories", cerr)
+			}
+			row.CategoriesJSON = ptr(string(flat))
 		}
-		row.CategoriesJSON = ptr(string(flat))
 	}
 
 	created, err := st.Create(ctx, row, "")
@@ -1097,12 +1104,15 @@ func importedIndexerSettings(res search.ImportResult) (string, error) {
 	}
 	// A .py import's provenance extras: the version has no row column and
 	// the site values of supported_categories are kept verbatim beside the
-	// mapped newznab ids.
-	if res.Version != "" {
-		doc[indexerSettingPluginVersion] = res.Version
-	}
-	if len(res.SiteCategories) > 0 {
-		doc[indexerSettingPluginCategories] = res.SiteCategories
+	// mapped newznab ids. Gated on the provenance the nova3 importer sets
+	// so no other import path can write plugin_* keys.
+	if res.Provenance == search.ProvenanceQbtPy {
+		if res.Version != "" {
+			doc[indexerSettingPluginVersion] = res.Version
+		}
+		if len(res.SiteCategories) > 0 {
+			doc[indexerSettingPluginCategories] = res.SiteCategories
+		}
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {

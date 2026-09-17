@@ -625,11 +625,17 @@ var NovaCategories = map[string][]int{
 	"tv":       {5000},
 }
 
-// novaCategoryNames fixes the canonical iteration order of the nine
-// friendly names so warnings and shared-id labels are deterministic.
-var novaCategoryNames = []string{
-	"all", "anime", "books", "games", "movies", "music", "pictures", "software", "tv",
-}
+// novaCategoryNames is the canonical iteration order of the friendly
+// names, derived from NovaCategories sorted so the two can never drift;
+// warnings and shared-id labels stay deterministic.
+var novaCategoryNames = func() []string {
+	names := make([]string, 0, len(NovaCategories))
+	for name := range NovaCategories {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}()
 
 // ImportNovaPlugin extracts metadata from a qBittorrent nova3 plugin. It
 // never runs the file. The result always has Converted=false and
@@ -649,23 +655,31 @@ func ImportNovaPlugin(data []byte, filename string) (ImportResult, error) {
 	}
 
 	stem := novaStem(filename)
-	classes := pyClassNames(data)
+	if stem == "" {
+		return ImportResult{}, errors.New("py: the file name has no stem; a nova3 plugin is named <class>.py")
+	}
+	// The UTF-8 BOM CPython accepts transparently must not hide a first
+	// line's class definition or #VERSION: header from the reader. Source
+	// keeps the uploaded bytes verbatim; only the parse view is stripped.
+	src := bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+
+	classes := pyClassNames(src)
 	if len(classes) == 0 {
 		return ImportResult{}, errors.New("py: no class definition found; a nova3 plugin defines a class named after its file")
 	}
 
-	name, site, siteCategories, err := pyLiterals(data)
+	name, site, siteCategories, err := pyLiterals(src)
 	if err != nil {
 		return ImportResult{}, err
 	}
 
 	res := ImportResult{
 		Name:           name,
-		Kind:           "dlsearch",
+		Kind:           "dlsearch", // metadata only: Definition stays nil on this path
 		Provenance:     ProvenanceQbtPy,
-		Origin:         filename,
+		Origin:         filename, // display-only provenance; never used as a path
 		Source:         data,
-		Version:        parsePluginVersion(data),
+		Version:        parsePluginVersion(src),
 		URL:            site,
 		SiteCategories: siteCategories,
 		Warnings:       []string{novaPluginWarning},
@@ -677,6 +691,10 @@ func ImportNovaPlugin(data []byte, filename string) (ImportResult, error) {
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
 			"class %q does not match the file stem %q; qBittorrent resolves the plugin as getattr(module, %q)",
 			classes[0], stem, stem))
+	}
+	if siteCategories != nil && len(siteCategories) == 0 {
+		res.Warnings = append(res.Warnings,
+			"supported_categories yielded no quoted-string mappings; no categories were imported")
 	}
 	res.Categories = novaCategories(siteCategories, &res.Warnings)
 	return res, nil
@@ -791,7 +809,10 @@ func pyClassNames(src []byte) []string {
 // pyLiterals reads class-scope assignments of string, integer and dict
 // literals and nothing else. Any other construct on the right-hand side is
 // ignored, never evaluated. Returns the values of name, url and
-// supported_categories when present.
+// supported_categories when present; the categories map is non-nil when a
+// supported_categories assignment was seen, even one that did not parse.
+// Assignments nested inside class-body if/try blocks sit below the body
+// indent and are not read, though qBittorrent would see them at runtime.
 func pyLiterals(src []byte) (name, url string, categories map[string]string, err error) {
 	if !utf8.Valid(src) {
 		return "", "", nil, errors.New("py: the plugin source is not valid UTF-8")
@@ -839,15 +860,21 @@ func pyLiterals(src []byte) (name, url string, categories map[string]string, err
 				url = v
 			}
 		case "supported_categories":
-			text := m[2]
+			var text strings.Builder
+			text.WriteString(m[2])
+			var scan pyBraceScan
+			scan.feed(m[2])
 			// The dict literal may span lines; keep consuming until its
 			// braces balance. An unterminated dict is skipped like any
 			// other non-literal construct.
-			for !pyBracesBalanced(text) && i+1 < len(lines) {
+			for !scan.balanced() && i+1 < len(lines) {
 				i++
-				text += "\n" + lines[i]
+				text.WriteByte('\n')
+				text.WriteString(lines[i])
+				scan.feed(lines[i])
 			}
-			if d, ok := pyStringDict(text); ok {
+			categories = map[string]string{} // the assignment was seen
+			if d, ok := pyStringDict(text.String()); ok {
 				categories = d
 			}
 		default:
@@ -875,36 +902,45 @@ func pyString(rhs string) (string, bool) {
 	return v, true
 }
 
-// pyBracesBalanced reports whether text contains no open dict literal or
-// every opened brace is closed. Quotes are skipped so a "}" inside a string
-// does not close the dict, and comments so a "{" inside one does not open.
-func pyBracesBalanced(s string) bool {
-	depth := 0
-	opened := false
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
+// pyBraceScan tracks dict-literal depth across the lines a
+// supported_categories value may span, keeping the multi-line consume
+// linear in the input. Quotes are skipped so a "}" inside a string does
+// not close the dict and comments so a "{" inside one does not open it; a
+// quote still open at end of line does not continue — Python's one-line
+// strings cannot either.
+type pyBraceScan struct {
+	depth  int
+	opened bool
+}
+
+// feed scans one line.
+func (s *pyBraceScan) feed(line string) {
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
 		case '\'', '"':
-			q := s[i]
+			q := line[i]
 			i++
-			for i < len(s) && s[i] != q {
-				if s[i] == '\\' {
+			for i < len(line) && line[i] != q {
+				if line[i] == '\\' {
 					i++
 				}
 				i++
 			}
 		case '#':
-			for i < len(s) && s[i] != '\n' {
-				i++
-			}
+			return // the rest of the line is a comment
 		case '{':
-			depth++
-			opened = true
+			s.depth++
+			s.opened = true
 		case '}':
-			depth--
+			s.depth--
 		}
 	}
-	return !opened || depth == 0
 }
+
+// balanced reports that no dict was opened or every opened brace closed.
+// A negative depth means a stray "}" ended the literal early; the dict
+// reader rejects the text either way, so consuming stops here.
+func (s *pyBraceScan) balanced() bool { return !s.opened || s.depth <= 0 }
 
 // pyDictScanner walks a dict or string literal: it accepts quoted strings,
 // whitespace and comments and nothing else. It never evaluates — a token it
@@ -942,7 +978,11 @@ func (d *pyDictScanner) quoted() (string, bool) {
 	d.pos++
 	var b strings.Builder
 	for d.pos < len(d.s) && d.s[d.pos] != q {
-		if d.s[d.pos] == '\\' && d.pos+1 < len(d.s) {
+		// Only \' \" and \\ are escapes; every other sequence keeps its
+		// backslash verbatim, matching Python's preservation of unknown
+		// escapes rather than mangling the literal.
+		if d.s[d.pos] == '\\' && d.pos+1 < len(d.s) &&
+			(d.s[d.pos+1] == q || d.s[d.pos+1] == '\\') {
 			d.pos++
 		}
 		b.WriteByte(d.s[d.pos])

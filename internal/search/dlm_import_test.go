@@ -670,7 +670,11 @@ func TestPluginVersionRule(t *testing.T) {
 		"normal":        {"#VERSION:1.42\n", "1.42"},
 		"spaced":        {"# VERSION: 1.42\n", "1.42"},
 		"mixed case":    {"#version:2.0\n", "2.0"},
+		"first wins":    {"#VERSION:9.9\n#VERSION:1.0\n", "9.9"},
+		"exactly 16":    {"#VERSION:1234567\n", "1234567"},
+		"spaces folded": {"#VERSION: 1.0b\n", "1.0b"},
 		"over 16 bytes": {"#VERSION:1.42.4.5\n", ""},
+		"over 16 raw":   {"#VERSION: 1.0 beta\n", ""},
 		"absent":        {"", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -844,6 +848,13 @@ func TestPluginImportRefusals(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "class")
 
+	// A name with no stem — ".py" itself — can never name the class
+	// qBittorrent would resolve.
+	_, err = search.ImportNovaPlugin(
+		[]byte("class unnamed(object):\n\tname = 'X'\n"), ".py")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no stem")
+
 	// A refused upload surfaces as the 422 validation problem.
 	h := newImportHandlers(t)
 	_, herr := h.ImportIndexer(context.Background(),
@@ -851,4 +862,57 @@ func TestPluginImportRefusals(t *testing.T) {
 	em := problemOf(t, herr)
 	assert.Equal(t, http.StatusUnprocessableEntity, em.Status)
 	assert.Equal(t, "/problems/validation-failed", em.Type)
+}
+
+// TestPluginBOMPrefixedSource: a UTF-8 BOM — which CPython accepts — must
+// not hide the first line's class or #VERSION: header from the reader,
+// while the stored source keeps the uploaded bytes verbatim.
+func TestPluginBOMPrefixedSource(t *testing.T) {
+	src := append([]byte("\xef\xbb\xbf"),
+		[]byte("#VERSION:1.0\nclass bommed(object):\n\tname = 'Bom'\n")...)
+	res, err := search.ImportNovaPlugin(src, "bommed.py")
+	require.NoError(t, err)
+	assert.Equal(t, "Bom", res.Name)
+	assert.Equal(t, "1.0", res.Version)
+	assert.Equal(t, src, res.Source)
+}
+
+// TestPluginCategoriesUnreadableWarns: a supported_categories spelled with
+// a non-literal value — a name reference here — imports nothing but must
+// say so, rather than silently losing the declaration.
+func TestPluginCategoriesUnreadableWarns(t *testing.T) {
+	res, err := search.ImportNovaPlugin(
+		[]byte("class nounmap(object):\n\tname = 'N'\n"+
+			"\tsupported_categories = CATS\n"), "nounmap.py")
+	require.NoError(t, err)
+	assert.Empty(t, res.SiteCategories)
+	assert.Contains(t, res.Warnings,
+		"supported_categories yielded no quoted-string mappings; no categories were imported")
+}
+
+// TestPluginFieldsStayOnTheNovaPath pins the provenance gate on the
+// plugin_* extras: a .dlm import must never grow plugin_version or
+// plugin_categories keys, and a .py plugin whose declared url is not a
+// valid http(s) URL warns rather than landing on the row.
+func TestPluginFieldsStayOnTheNovaPath(t *testing.T) {
+	ctx := context.Background()
+	h, db := newImportHandlersWithDB(t)
+
+	_, err := h.ImportIndexer(ctx,
+		importInput(t, "jackett.dlm", dlmFixture(t, "jackett.dlm")))
+	require.NoError(t, err)
+	var settingsJSON string
+	require.NoError(t, db.GetContext(ctx, &settingsJSON,
+		"SELECT settings_json FROM indexers WHERE definition_id = 'jackett'"))
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(settingsJSON), &doc))
+	assert.NotContains(t, doc, "plugin_version")
+	assert.NotContains(t, doc, "plugin_categories")
+
+	bad := []byte("class badurl(object):\n\tname = 'B'\n\turl = 'no-scheme.example.com'\n")
+	out, err := h.ImportIndexer(ctx, importInput(t, "badurl.py", bad))
+	require.NoError(t, err)
+	assert.Nil(t, out.Body.Indexer.URL)
+	assert.Contains(t, out.Body.Warnings,
+		"the plugin's url is not an http or https URL; it is kept only in the stored source")
 }

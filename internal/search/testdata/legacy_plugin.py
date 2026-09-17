@@ -3,7 +3,8 @@
 #
 # Synthetic nova3 plugin for the T060 tests. The class name equals the file
 # stem, every class attribute is a literal, and all nine friendly
-# supported_categories keys are declared. It is never executed.
+# supported_categories keys are declared. Its methods must never be
+# called; the RuntimeErrors below are the tripwire.
 
 
 class legacy_plugin(object):
