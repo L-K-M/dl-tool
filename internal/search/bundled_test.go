@@ -313,10 +313,10 @@ func TestUserDefinitionFIFORejected(t *testing.T) {
 	path := filepath.Join(dir, "fifo.dlsearch.yaml")
 	// open(O_RDONLY) on a FIFO with no writer blocks forever, so the
 	// regular-file rejection must happen before the open.
+	// No portability gate: this package imports internal/store, which uses
+	// linux-only unix.Renameat2, so it only ever compiles where Mkfifo
+	// exists — a failure here is a real environment problem.
 	if err := syscall.Mkfifo(path, 0o600); err != nil {
-		if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
-			t.Skipf("mkfifo unsupported on %s: %v", runtime.GOOS, err)
-		}
 		t.Fatalf("mkfifo: %v", err)
 	}
 
