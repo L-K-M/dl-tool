@@ -150,13 +150,19 @@ func descSuffix(desc string) string {
 // redactSecret removes the indexer's credential wherever the upstream echoed
 // it: a torznab error document or an error page can embed the request URL,
 // api key included, and the classified text is persisted to the tracker, the
-// indexer row and the log. An empty secret means no credential went on the
-// wire, so the text is returned unchanged.
+// indexer row and the log. Both the raw and the query-escaped forms are
+// replaced — the key travels as a url.Values-encoded parameter, so an echoed
+// URL carries the escaped spelling. An empty secret means no credential went
+// on the wire, so the text is returned unchanged.
 func redactSecret(text, secret string) string {
 	if secret == "" {
 		return text
 	}
-	return strings.ReplaceAll(text, secret, "[REDACTED]")
+	text = strings.ReplaceAll(text, secret, "[REDACTED]")
+	if esc := url.QueryEscape(secret); esc != secret {
+		text = strings.ReplaceAll(text, esc, "[REDACTED]")
+	}
+	return text
 }
 
 // retrySuffix names the upstream wait in the engine message, so the poll

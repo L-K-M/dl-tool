@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -338,17 +339,22 @@ func TestRetryAfterIsReported(t *testing.T) {
 }
 
 // TestEngineErrorRedactsAPIKey is the credential-hygiene check: an error
-// document echoing the request — api key included — must not put that key
-// into engines[].error or the indexer row's last_error.
+// document echoing the request — api key included, in raw or query-escaped
+// form — must not put that key into engines[].error or the indexer row's
+// last_error.
 func TestEngineErrorRedactsAPIKey(t *testing.T) {
 	db, idx, hc := newSearchFixture(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprintf(w, `<error code="100" description="key %s rejected"/>`, r.URL.Query().Get("apikey"))
+		key := r.URL.Query().Get("apikey")
+		_, _ = fmt.Fprintf(w, `<error code="100" description="raw %s encoded %s"/>`,
+			key, url.QueryEscape(key))
 	}))
 	defer srv.Close()
 
-	const key = "s3cr3t-ap1-k3y"
+	// The key carries characters that query encoding escapes, so the wire
+	// form differs from the stored one.
+	const key = "s3cr3t+ap1/k3y="
 	row := seedSearchIndexerKey(t, idx, "echo", srv.URL+"/api", secure.Secret(key))
 	job, queueRow := newSearchJob(t, db, row.ID)
 	runSearchJob(t, db, idx, hc, queueRow)
@@ -358,13 +364,15 @@ func TestEngineErrorRedactsAPIKey(t *testing.T) {
 	require.Len(t, engines, 1)
 	require.Equal(t, store.EngineError, engines[0].Status)
 	require.NotNil(t, engines[0].Error)
-	assert.NotContains(t, *engines[0].Error, key, "the upstream-echoed key must not reach the poll")
+	assert.NotContains(t, *engines[0].Error, key, "the raw key must not reach the poll")
+	assert.NotContains(t, *engines[0].Error, url.QueryEscape(key), "the escaped key must not reach the poll")
 	assert.Contains(t, *engines[0].Error, "[REDACTED]")
 
 	stored, err := idx.Get(t.Context(), row.ID)
 	require.NoError(t, err)
 	require.NotNil(t, stored.LastError)
-	assert.NotContains(t, *stored.LastError, key, "last_error must not persist the key")
+	assert.NotContains(t, *stored.LastError, key, "last_error must not persist the raw key")
+	assert.NotContains(t, *stored.LastError, url.QueryEscape(key), "last_error must not persist the escaped key")
 }
 
 // TestDuplicateRowsAreRetained: two engines returning the same item keep

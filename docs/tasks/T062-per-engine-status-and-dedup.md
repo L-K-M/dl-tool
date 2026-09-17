@@ -170,9 +170,9 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/jobs/... ./internal/search/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	7.178s
-ok  	github.com/L-K-M/dl-tool/internal/search	7.345s
-ok  	github.com/L-K-M/dl-tool/internal/api	124.296s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	7.025s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.096s
+ok  	github.com/L-K-M/dl-tool/internal/api	123.978s
 SEARCH_STATUS_OK
 ```
 
@@ -224,10 +224,12 @@ Notes on the contract, none widening the Files table:
   screen task.
 - `EngineFailure.Text` is upstream-controlled text: the fan-out scrubs the
   credential the request carried (`searchIndexer` returns it alongside the
-  results) before the message reaches the tracker, `RecordTest` or the log —
-  an error document that echoes the request URL cannot leak the api key.
-  `secure.RedactError` alone cannot cover this: it only rewrites `*url.Error`,
-  and a `*search.TorznabError` is not one.
+  results) — in both its raw and `url.QueryEscape` spellings, since the key
+  travels as an encoded query parameter — before the message reaches the
+  tracker, `RecordTest` or the log. `secure.RedactError` alone cannot cover
+  this: it only rewrites `*url.Error`, and a `*search.TorznabError` is not
+  one. `TestEngineErrorRedactsAPIKey` echoes both forms in a fake error
+  document and asserts neither survives.
 - `EngineFailure.Disable`/`DisableMode` are classification data only: the
   steps persist the message via `Searches.Set` and `idx.RecordTest`, and no
   per-mode disable mechanism exists in this task's Files table.
