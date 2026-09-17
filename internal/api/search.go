@@ -1610,7 +1610,7 @@ func (h *SearchHandlers) GetSearch(ctx context.Context, in *GetSearchInput) (*Se
 	if engines == nil {
 		engines = []store.EngineStatus{}
 	}
-	results := toSearchResultDTOs(rows, names)
+	results := toSearchResultDTOs(dedupResultRows(rows), names)
 	if results == nil {
 		results = []SearchResultDTO{}
 	}
@@ -1707,6 +1707,32 @@ func searchListProblem(ctx context.Context, err error) error {
 		Detail: detail,
 		Errors: []*huma.ErrorDetail{{Message: detail, Location: field}},
 	}
+}
+
+// dedupResultRows collapses the rows several engines returned — infohash
+// first, else (normalised title, size) — through search.Dedup and keeps the
+// surviving store row for each kept result. The collapse happens on read:
+// the losing rows stay in search_results (07-search-and-indexers.md section
+// 5) and total still counts them.
+func dedupResultRows(rows []store.SearchResultRow) []store.SearchResultRow {
+	keys := make([]search.SearchResult, len(rows))
+	byID := make(map[string]store.SearchResultRow, len(rows))
+	for i, r := range rows {
+		keys[i] = search.SearchResult{ID: r.ID, Title: r.Title, Seeders: r.Seeders}
+		if r.InfoHash != nil {
+			keys[i].Infohash = *r.InfoHash
+		}
+		if r.SizeBytes != nil {
+			keys[i].SizeBytes = *r.SizeBytes
+		}
+		byID[r.ID] = r
+	}
+	kept := search.Dedup(keys)
+	out := make([]store.SearchResultRow, 0, len(kept))
+	for _, k := range kept {
+		out = append(out, byID[k.ID])
+	}
+	return out
 }
 
 // toSearchResultDTOs renders one page of stored rows: unix milliseconds to

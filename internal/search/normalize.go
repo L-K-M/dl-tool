@@ -2,7 +2,9 @@ package search
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 // SearchResult is the normalised row every search tier produces, per
@@ -75,6 +77,76 @@ func Finalise(in []SearchResult) (out []SearchResult, dropped int) {
 		out = append(out, r)
 	}
 	return out, dropped
+}
+
+// NormaliseTitle lower-cases s, collapses every run of whitespace, dots and
+// underscores into a single space and trims. It exists for dedup keys only,
+// never for display (07-search-and-indexers.md section 5).
+func NormaliseTitle(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	pending := false
+	for _, r := range strings.ToLower(s) {
+		if r == '.' || r == '_' || unicode.IsSpace(r) {
+			pending = b.Len() > 0
+			continue
+		}
+		if pending {
+			b.WriteByte(' ')
+			pending = false
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// Dedup collapses results that several engines returned: by Infohash when
+// present, otherwise by (NormaliseTitle(Title), SizeBytes). The surviving row
+// is the one with the highest non-nil Seeders; ties keep the first, so the
+// caller's ordering decides. 05-api-contract.md section 9.2 fixes the result
+// object, so the collapsed engines are not named in the response; their rows
+// stay in search_results.
+func Dedup(in []SearchResult) []SearchResult {
+	keyOf := make([]string, len(in))
+	best := make(map[string]int, len(in))
+	for i, r := range in {
+		k := dedupKey(r)
+		keyOf[i] = k
+		if j, ok := best[k]; !ok || seedersWin(r.Seeders, in[j].Seeders) {
+			best[k] = i
+		}
+	}
+	out := make([]SearchResult, 0, len(best))
+	for i, r := range in {
+		if best[keyOf[i]] == i {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// dedupKey is the collapse identity of doc 07 section 5: the infohash when the
+// engine reported one — case-folded so two engines spelling the same swarm
+// differently still merge — else the normalised title paired with the byte
+// size.
+func dedupKey(r SearchResult) string {
+	if r.Infohash != "" {
+		return "h\x00" + strings.ToLower(r.Infohash)
+	}
+	return "t\x00" + NormaliseTitle(r.Title) + "\x00" + strconv.FormatInt(r.SizeBytes, 10)
+}
+
+// seedersWin reports whether candidate outranks the incumbent: a real count
+// always beats an unknown one, and a higher count beats a lower one. Ties —
+// including two unknowns — keep the incumbent, so input order decides.
+func seedersWin(candidate, incumbent *int) bool {
+	if candidate == nil {
+		return false
+	}
+	if incumbent == nil {
+		return true
+	}
+	return *candidate > *incumbent
 }
 
 // MagnetFromInfohash builds magnet:?xt=urn:btih:<infohash>&dn=<title> for an

@@ -1404,3 +1404,221 @@ func TestNoEnabledIndexerIs503(t *testing.T) {
 			env.authz()),
 		http.StatusUnprocessableEntity, SlugValidationFailed)
 }
+
+// ---------------------------------------------------------------------
+// T062: per-engine status reporting and cross-engine dedup.
+// ---------------------------------------------------------------------
+
+// feedItem is one RSS item of the dedup fixtures: infohash may be empty to
+// exercise the (normalised title, size) key instead.
+type feedItem struct {
+	title    string
+	infohash string
+	seeders  int
+	size     int64
+}
+
+// torznabFeedItems renders items with explicit torznab attrs: the dedup cases
+// need a controlled infohash, seeder count and size per row.
+func torznabFeedItems(items ...feedItem) string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0"?><rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>`)
+	for i, it := range items {
+		fmt.Fprintf(&b,
+			`<item><title>%s</title><enclosure url="https://x.test/g%d.torrent" length="%d"/>`,
+			it.title, i, it.size)
+		if it.infohash != "" {
+			fmt.Fprintf(&b, `<torznab:attr name="infohash" value="%s"/>`, it.infohash)
+		}
+		fmt.Fprintf(&b, `<torznab:attr name="seeders" value="%d"/>`, it.seeders)
+		fmt.Fprintf(&b, `<torznab:attr name="size" value="%d"/>`, it.size)
+		b.WriteString(`</item>`)
+	}
+	b.WriteString(`</channel></rss>`)
+	return b.String()
+}
+
+// engineStatusByID finds one engine in a poll's engines array.
+func engineStatusByID(t *testing.T, engines []store.EngineStatus, id string) store.EngineStatus {
+	t.Helper()
+	for _, e := range engines {
+		if e.ID == id {
+			return e
+		}
+	}
+	t.Fatalf("engine %s missing from engines %+v", id, engines)
+	return store.EngineStatus{}
+}
+
+// TestEnginesArrayCarriesErrorAndResults is the FR-055 mixed outcome: one
+// indexer's failure is reported with the upstream status while the other's
+// results are already in the page — and every poll, queued or finished,
+// live or forgotten, emits engines[].
+func TestEnginesArrayCarriesErrorAndResults(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(torznabFeedXML("kept-a", "kept-b")))
+	}))
+	defer good.Close()
+
+	badRow := env.seedSearchIndexer(t, "broken", bad.URL+"/api")
+	goodRow := env.seedSearchIndexer(t, "healthy", good.URL+"/api")
+
+	resp := env.api.Post("/search", map[string]any{
+		"query":       "kept",
+		"indexer_ids": []string{badRow.ID, goodRow.ID},
+	}, env.authz())
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("POST status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+	var started StartedOutput
+	if err := json.Unmarshal(resp.Body.Bytes(), &started.Body); err != nil {
+		t.Fatalf("decode 202 body: %v", err)
+	}
+	id := started.Body.ID
+
+	// A queued job already reports every engine — engines[] is never omitted.
+	pre := env.getSearch(t, id)
+	if len(pre.Body.Engines) != 2 {
+		t.Fatalf("queued engines = %d, want 2", len(pre.Body.Engines))
+	}
+	for _, e := range pre.Body.Engines {
+		if e.Status != store.EngineQueued {
+			t.Errorf("queued engine %s status = %q, want queued", e.ID, e.Status)
+		}
+	}
+
+	if err := env.runSearchJob(t.Context(), env.claimSearchJob(t)); err != nil {
+		t.Fatalf("search handler: %v", err)
+	}
+
+	poll := env.getSearch(t, id)
+	if !poll.Body.Finished {
+		t.Fatal("poll finished = false after the handler returned")
+	}
+	if len(poll.Body.Engines) != 2 {
+		t.Fatalf("engines = %d, want 2", len(poll.Body.Engines))
+	}
+	failed := engineStatusByID(t, poll.Body.Engines, badRow.ID)
+	if failed.Status != store.EngineError {
+		t.Errorf("failing engine status = %q, want error", failed.Status)
+	}
+	if failed.Error == nil || !strings.Contains(*failed.Error, "503") {
+		t.Errorf("failing engine error = %v, want the upstream status 503 named", failed.Error)
+	}
+	healthy := engineStatusByID(t, poll.Body.Engines, goodRow.ID)
+	if healthy.Status != store.EngineDone || healthy.Count != 2 {
+		t.Errorf("healthy engine status/count = %s/%d, want done/2", healthy.Status, healthy.Count)
+	}
+	if len(poll.Body.Results) != 2 {
+		t.Fatalf("results = %d, want the healthy engine's 2", len(poll.Body.Results))
+	}
+	for _, r := range poll.Body.Results {
+		if r.IndexerID != goodRow.ID || r.IndexerName != "healthy" {
+			t.Errorf("result indexer = %s/%q, want %s/healthy", r.IndexerID, r.IndexerName, goodRow.ID)
+		}
+	}
+
+	// The failure also lands on the indexer row, so the settings table
+	// shows the same message the poll did.
+	row, err := env.indexers.Get(t.Context(), badRow.ID)
+	if err != nil {
+		t.Fatalf("get broken indexer: %v", err)
+	}
+	if row.LastError == nil || !strings.Contains(*row.LastError, "503") {
+		t.Errorf("indexer last_error = %v, want the upstream status recorded", row.LastError)
+	}
+
+	// A job the tracker forgot — a restart — still emits engines[],
+	// reconstructed as done with the persisted counts.
+	store.Searches.Forget(id)
+	post := env.getSearch(t, id)
+	if len(post.Body.Engines) != 2 {
+		t.Fatalf("forgotten job's engines = %d, want 2", len(post.Body.Engines))
+	}
+	rebuilt := engineStatusByID(t, post.Body.Engines, goodRow.ID)
+	if rebuilt.Status != store.EngineDone || rebuilt.Count != 2 {
+		t.Errorf("rebuilt engine status/count = %s/%d, want done/2", rebuilt.Status, rebuilt.Count)
+	}
+}
+
+// TestDuplicateAcrossEnginesAppearsOnce covers the read-time collapse: two
+// engines returning one infohash produce one result row — the one with the
+// higher seeder count — and a title/size pair differing only in case and
+// separators collapses the same way. The losing rows stay stored.
+func TestDuplicateAcrossEnginesAppearsOnce(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	one := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(torznabFeedItems(
+			feedItem{title: "Release.One", infohash: hash, seeders: 3, size: 100},
+			feedItem{title: "Other.Release.2026", seeders: 5, size: 200},
+		)))
+	}))
+	defer one.Close()
+	two := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(torznabFeedItems(
+			feedItem{title: "release one", infohash: hash, seeders: 9, size: 100},
+			feedItem{title: "other_release_2026", seeders: 7, size: 200},
+		)))
+	}))
+	defer two.Close()
+
+	lowRow := env.seedSearchIndexer(t, "low", one.URL+"/api")
+	highRow := env.seedSearchIndexer(t, "high", two.URL+"/api")
+
+	resp := env.api.Post("/search", map[string]any{
+		"query":       "release",
+		"indexer_ids": []string{lowRow.ID, highRow.ID},
+	}, env.authz())
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("POST status = %d, want 202: %s", resp.Code, resp.Body.String())
+	}
+	var started StartedOutput
+	if err := json.Unmarshal(resp.Body.Bytes(), &started.Body); err != nil {
+		t.Fatalf("decode 202 body: %v", err)
+	}
+	id := started.Body.ID
+
+	if err := env.runSearchJob(t.Context(), env.claimSearchJob(t)); err != nil {
+		t.Fatalf("search handler: %v", err)
+	}
+
+	// The collapse is on read: both engines' rows persist.
+	if n := env.resultCount(t, id); n != 4 {
+		t.Fatalf("stored results = %d, want 4 — dedup must not delete rows", n)
+	}
+
+	poll := env.getSearch(t, id)
+	if !poll.Body.Finished {
+		t.Fatal("poll finished = false after the handler returned")
+	}
+	if len(poll.Body.Results) != 2 {
+		t.Fatalf("results = %d, want 2 — each duplicate pair must appear once", len(poll.Body.Results))
+	}
+	for _, r := range poll.Body.Results {
+		if r.IndexerID != highRow.ID {
+			t.Errorf("surviving result %q indexer = %s, want %s — the higher seeder count wins",
+				r.Title, r.IndexerID, highRow.ID)
+		}
+	}
+	seeders := map[string]int{}
+	for _, r := range poll.Body.Results {
+		if r.Seeders == nil {
+			t.Fatalf("result %q seeders = null, want the surviving count", r.Title)
+		}
+		seeders[r.Title] = *r.Seeders
+	}
+	if seeders["release one"] != 9 {
+		t.Errorf("infohash pair seeders = %d, want 9 (the higher count)", seeders["release one"])
+	}
+	if seeders["other_release_2026"] != 7 {
+		t.Errorf("title/size pair seeders = %d, want 7 (the higher count)", seeders["other_release_2026"])
+	}
+}
