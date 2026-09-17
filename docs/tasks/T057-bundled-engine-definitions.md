@@ -38,6 +38,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 |---|---|---|
 | `definitions/engines/` | create | `internet-archive.yaml`, `arch-linux.yaml`, `academic-torrents.yaml`, `linux-distributions.yaml`. |
 | `definitions/embed.go` | create | `package definitions` with `//go:embed engines/*.yaml`, because an `internal/` package cannot embed a parent directory. |
+| `internal/api/search.go` | edit | Add `Defs *search.Registry` to `Deps` so the one registry built in `main.go` reaches `NewServer`, and refresh the struct comment that still defers `Defs` to T057. |
 | `internal/search/bundled.go` | create | `Registry`, `Reload`, `SeedIndexers`. |
 | `internal/search/bundled_test.go` | create | The bundled-set assertions and the collision case. |
 | `cmd/dl-tool/main.go` | edit | Build the registry and call `SeedIndexers` in `OnStart`. |
@@ -164,7 +165,8 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: exactly the set of paths in the Files table (order-insensitive — `git status` emits them
+sorted, which differs from the table's display order) and nothing else. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -184,7 +186,13 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Blocked
 
-Step 7 cannot run as written: "put that same registry into the `api.Deps` value handed to
+Resolved by the plan repair: `internal/api/search.go` is now in the `## Files` table with an `edit`
+action, so step 7 can add `Defs *search.Registry` to `Deps` and refresh the struct comment that deferred
+the field to T057. The scope check emits paths sorted, so the diff reads `cmd/dl-tool/main.go`,
+`definitions/embed.go`, `definitions/engines/` (the four YAML files), `internal/api/search.go`,
+`internal/search/bundled.go` and `internal/search/bundled_test.go`. T057 remains unimplemented and still marked `todo`.
+
+Original blocker: step 7 could not run as written: "put that same registry into the `api.Deps` value handed to
 `NewServer`" requires a `Defs *search.Registry` field on `Deps`, and `Deps` is declared in
 `internal/api/search.go` (lines 51-59) — a file the `## Files` table does not admit. There is no
 alternative carrier: `Deps` is a struct, so carrying the registry needs a new field, and no
