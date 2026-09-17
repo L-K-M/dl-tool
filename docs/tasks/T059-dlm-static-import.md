@@ -185,8 +185,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/search	6.050s
-ok  	github.com/L-K-M/dl-tool/internal/api	118.625s
+ok  	github.com/L-K-M/dl-tool/internal/search	6.058s
+ok  	github.com/L-K-M/dl-tool/internal/api	119.863s
 DLM_IMPORT_OK
 ```
 
@@ -203,6 +203,7 @@ The step-10 test set plus the endpoint and regression additions in
     --- PASS: TestRSSModuleNeedsKeywordParam/value-only (0.00s)
     --- PASS: TestRSSModuleNeedsKeywordParam/path-appended (0.01s)
 --- PASS: TestRSSModuleIgnoresCommentURLs (0.01s)
+--- PASS: TestUnterminatedStringLiteralDoesNotPanic (0.00s)
 --- PASS: TestImportDefinitionFileTorznabKind (0.00s)
 --- PASS: TestUnconvertibleModuleImportsDisabledMetadataOnly (0.42s)
 --- PASS: TestRejectsSymlinkMember (0.00s)

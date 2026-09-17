@@ -357,6 +357,9 @@ func stripPHPComments(php []byte) []byte {
 				}
 				j++
 			}
+			// An escape at end-of-input pushes j past the buffer; clamp
+			// before slicing, like the block-comment branch below.
+			j = min(j, len(php))
 			if j < len(php) {
 				j++ // include the closing quote
 			}

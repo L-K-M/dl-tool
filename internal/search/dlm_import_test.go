@@ -232,6 +232,24 @@ func TestRSSModuleIgnoresCommentURLs(t *testing.T) {
 	assert.Equal(t, "http://example.com", res.Definition.Request.BaseURL)
 }
 
+// TestUnterminatedStringLiteralDoesNotPanic: a module ending in an
+// unterminated string with a trailing escape previously sliced one byte
+// past the member buffer in stripPHPComments — a panic whenever the read
+// buffer's capacity equals its length, which a 512-byte member hits
+// exactly. Attacker-reachable via a crafted .dlm upload.
+func TestUnterminatedStringLiteralDoesNotPanic(t *testing.T) {
+	prefix := "<?php $this->addRSSResults($curl, $x); "
+	body := prefix + strings.Repeat("x", 512-len(prefix)-3) + "'a\\"
+	require.Len(t, body, 512)
+	archive := buildDLM(t,
+		dlmMember{name: "INFO", body: testINFO(t, "search.php")},
+		regMember("search.php", body),
+	)
+	res, err := search.ImportDLM(archive, "panic.dlm")
+	require.NoError(t, err)
+	assert.False(t, res.Converted)
+}
+
 // TestImportDefinitionFileTorznabKind: a user-uploaded kind: torznab
 // definition reports Kind "torznab", matching ImportDLM's conversion.
 func TestImportDefinitionFileTorznabKind(t *testing.T) {
