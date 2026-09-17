@@ -27,6 +27,10 @@ const indexerKeyInfo = "dl-tool/indexer-api-key/v1"
 // indexerKeySize is the AES-256 key length derived for the seal.
 const indexerKeySize = 32
 
+// DefaultIndexerPriority is the documented create-time default. The API
+// layer applies it explicitly so an intentional 0 still round-trips verbatim.
+const DefaultIndexerPriority = 50
+
 // Indexer mirrors the indexers DDL of docs/04-data-model.md section 3.4.
 // APIKeyEnc never leaves this package in clear; readers call OpenAPIKey.
 // The allow_private_network column deliberately has no field: the flag

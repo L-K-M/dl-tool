@@ -364,7 +364,7 @@ func (h *SearchHandlers) CreateIndexer(ctx context.Context, in *CreateIndexerInp
 		Kind:         body.Kind,
 		URL:          indexerURL,
 		DefinitionID: body.DefinitionID,
-		Priority:     50,
+		Priority:     store.DefaultIndexerPriority,
 		SettingsJSON: &settingsJSON,
 	}
 	if body.Enabled != nil {
@@ -568,6 +568,10 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 			out.Body.Warnings = append(out.Body.Warnings, entry.Name+": already imported; skipped")
 			continue
 		}
+		if !search.ValidBaseURL(entry.BaseURL) {
+			out.Body.Warnings = append(out.Body.Warnings, entry.Name+": unusable base URL; skipped")
+			continue
+		}
 		row := store.Indexer{
 			Name:             entry.Name,
 			Kind:             indexerKindTorznab,
@@ -576,7 +580,7 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 			DefinitionSource: ptr(indexerImportedSource),
 			Provenance:       ptr(indexerImportedProvenance),
 			LegalTier:        indexerTierUserSupplied,
-			Priority:         50,
+			Priority:         store.DefaultIndexerPriority,
 			SettingsJSON:     &settingsJSON,
 		}
 		created, err := st.Create(ctx, row, apiKey)
@@ -609,7 +613,11 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 	}
 
 	if first == nil {
-		return nil, Problem(SlugConflict, http.StatusConflict, "every indexer from this provider is already imported")
+		detail := "every indexer from this provider was skipped"
+		if len(out.Body.Warnings) > 0 {
+			detail = strings.Join(out.Body.Warnings, "; ")
+		}
+		return nil, Problem(SlugConflict, http.StatusConflict, detail)
 	}
 	// The response reports the probe outcome: re-read the first row so its
 	// categories and last_test_at are the post-probe values.
@@ -621,11 +629,10 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 	return out, nil
 }
 
-// checkIndexerURL rejects a url the torznab client can never fetch: it must
-// be absolute http or https, the same shape NewTorznabClient accepts.
+// checkIndexerURL rejects a url the torznab client can never fetch,
+// deferring to the client's own shape rule so the two can never drift.
 func checkIndexerURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+	if !search.ValidBaseURL(raw) {
 		return Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "url must be an absolute http or https URL")
 	}
 	return nil

@@ -503,6 +503,35 @@ func TestImportProviderCreatesDisabledRows(t *testing.T) {
 	if got := env.indexerCount(t, ""); got != 2 {
 		t.Errorf("indexer rows after re-import = %d, want 2", got)
 	}
+
+	// The mixed run — the provider gained indexers since last import — is
+	// the realistic workflow: delete one row so beta is unknown again, then
+	// re-import expects 201, one skip warning and exactly one new row.
+	if _, err := env.db.ExecContext(
+		t.Context(),
+		"DELETE FROM indexers WHERE url = ?", srv.URL+"/api/v2.0/indexers/beta/results/torznab/api",
+	); err != nil {
+		t.Fatalf("delete beta row: %v", err)
+	}
+	resp = env.api.Do(
+		http.MethodPost, "/indexers/import",
+		"Content-Type: application/json",
+		strings.NewReader(`{"torznab_url":"`+srv.URL+`/api/v2.0/indexers/all/results/torznab/api","api_key":"jackett-key"}`),
+		env.authz(),
+	)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("mixed re-import status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var imported ImportOutput
+	if err := json.Unmarshal(resp.Body.Bytes(), &imported.Body); err != nil {
+		t.Fatalf("decode import body: %v", err)
+	}
+	if len(imported.Body.Warnings) != 1 || !strings.Contains(imported.Body.Warnings[0], "already imported") {
+		t.Errorf("warnings = %v, want exactly one already-imported skip", imported.Body.Warnings)
+	}
+	if got := env.indexerCount(t, ""); got != 2 {
+		t.Errorf("indexer rows after mixed re-import = %d, want 2", got)
+	}
 }
 
 // TestImportProviderSkipsProwlarrIdZero runs the Prowlarr branch: the

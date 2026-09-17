@@ -72,6 +72,15 @@ type TorznabClient struct {
 	limitsMax atomic.Int64
 }
 
+// ValidBaseURL reports whether raw names a fetchable torznab base URL:
+// absolute http or https with a host (07-search-and-indexers.md section 2.6).
+// It is the single copy of the rule, shared by NewTorznabClient and the API
+// layer's create/patch validation so the two can never drift.
+func ValidBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https")
+}
+
 // NewTorznabClient validates base (one of the provider URL shapes of
 // 07-search-and-indexers.md section 2.6: an http or https URL) and stores the
 // client it is given — it never builds one.
@@ -79,8 +88,7 @@ func NewTorznabClient(hc *http.Client, base string, apiKey secure.Secret, engine
 	if hc == nil {
 		return nil, fmt.Errorf("search: torznab client requires an *http.Client from secure.NewClient")
 	}
-	u, err := url.Parse(base)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+	if !ValidBaseURL(base) {
 		return nil, fmt.Errorf("search: invalid torznab base url %q", secure.RedactURL(base))
 	}
 	return &TorznabClient{
