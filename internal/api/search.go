@@ -563,12 +563,14 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 	out := &ImportOutput{}
 	out.Body.Warnings = []string{}
 	var first *store.Indexer
+	var badSkips int
 	for _, entry := range entries {
 		if known[entry.BaseURL] {
 			out.Body.Warnings = append(out.Body.Warnings, entry.Name+": already imported; skipped")
 			continue
 		}
 		if !search.ValidBaseURL(entry.BaseURL) {
+			badSkips++
 			out.Body.Warnings = append(out.Body.Warnings, entry.Name+": unusable base URL; skipped")
 			continue
 		}
@@ -616,6 +618,11 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 		detail := "every indexer from this provider was skipped"
 		if len(out.Body.Warnings) > 0 {
 			detail = strings.Join(out.Body.Warnings, "; ")
+		}
+		// A provider that enumerated but produced no usable row at all is a
+		// validation failure; only pure duplicates are a real conflict.
+		if badSkips > 0 {
+			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, detail)
 		}
 		return nil, Problem(SlugConflict, http.StatusConflict, detail)
 	}
