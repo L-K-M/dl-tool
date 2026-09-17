@@ -247,8 +247,8 @@ ok  	github.com/L-K-M/dl-tool/internal/search	1.063s
 ```
 
 (TestSearchClampsLimitToCaps and TestParseRetryAfter were added in review to
-cover the caps-cached limit clamp and Retry-After parsing; the six named
-tests are all present and passing.)
+cover the caps-cached limit clamp and Retry-After parsing; all six tests
+named in step 9 are present and passing.)
 
 Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
 

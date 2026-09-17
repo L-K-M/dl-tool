@@ -218,6 +218,8 @@ func TestParseRetryAfter(t *testing.T) {
 	assert.Equal(t, 30*time.Second, parseRetryAfter("30"))
 	assert.Equal(t, time.Duration(math.MaxInt64), parseRetryAfter("10000000000"))
 	assert.Equal(t, time.Duration(0), parseRetryAfter("not-a-number"))
+	future := time.Now().UTC().Add(time.Hour).Format(http.TimeFormat)
+	assert.Greater(t, parseRetryAfter(future), 30*time.Minute)
 }
 
 // TestFinaliseDropsUnusableRow covers section 5 rule 5: a row with no
