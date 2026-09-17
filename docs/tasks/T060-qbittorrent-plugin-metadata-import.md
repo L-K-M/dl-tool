@@ -103,7 +103,7 @@ func pyLiterals(src []byte) (name, url string, categories map[string]string, err
 - [ ] `TestPluginMetadataExtracted` asserts `name`, `url` and all nine category keys are read from `legacy_plugin.py`.
 - [ ] `TestHostilePluginIsNotExecuted` asserts no file, process or environment side effect occurs during import.
 - [ ] Every `.py` import produces `enabled = 0`, `provenance = 'imported:qbt-py'` and a warning naming `dlsearch/v1`.
-- [ ] `go list -deps ./internal/search` contains no `os/exec` and no `plugin`.
+- [ ] `TestNoInterpreterIsSpawned` asserts `internal/search` imports no `os/exec`, no `plugin` and no PHP or Python runtime.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
