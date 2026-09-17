@@ -126,11 +126,18 @@ WHERE search_job_id = ?`
 // the timestamps are assigned here. IndexerIDsJSON and CategoriesJSON are the
 // verbatim JSON documents the job fans out over.
 func CreateSearchJob(ctx context.Context, db *sqlx.DB, j SearchJob) (SearchJob, error) {
+	return insertSearchJobRow(ctx, db, j)
+}
+
+// insertSearchJobRow is the search_jobs insert every creation path shares, so
+// the column list is maintained in exactly one place. ext is *sqlx.DB or a
+// *sqlx.Tx, the same contract insertTaskRow has.
+func insertSearchJobRow(ctx context.Context, ext sqlx.ExtContext, j SearchJob) (SearchJob, error) {
 	j.ID = NewID(PrefixSearchJob)
 	now := time.Now().UnixMilli()
 	j.StartedAt = now
 	j.CreatedAt, j.UpdatedAt = now, now
-	if _, err := db.ExecContext(
+	if _, err := ext.ExecContext(
 		ctx, queryCreateSearchJob,
 		j.ID, j.Query, j.IndexerIDsJSON, j.CategoriesJSON, j.Finished,
 		j.Total, j.LastError, j.StartedAt, j.FinishedAt, j.CreatedAt, j.UpdatedAt,
@@ -180,7 +187,13 @@ func FinishSearchJob(ctx context.Context, db *sqlx.DB, id string, total int, las
 // DELETE CASCADE of docs/04-data-model.md section 3.4. ErrNotFound means the
 // id addresses no row.
 func DeleteSearchJob(ctx context.Context, db *sqlx.DB, id string) error {
-	result, err := db.ExecContext(ctx, queryDeleteSearchJob, id)
+	return deleteSearchJobRow(ctx, db, id)
+}
+
+// deleteSearchJobRow is the search_jobs delete both delete paths share. ext
+// is *sqlx.DB or a *sqlx.Tx.
+func deleteSearchJobRow(ctx context.Context, ext sqlx.ExtContext, id string) error {
+	result, err := ext.ExecContext(ctx, queryDeleteSearchJob, id)
 	if err != nil {
 		return fmt.Errorf("store: delete search job %s: %w", id, err)
 	}
@@ -209,6 +222,12 @@ VALUES (?, 'search', NULL, ?, ?, 1, ?, ?)`
 // max_attempts 1 — a search is re-run by the user, not retried. The payload
 // is stored as JSON exactly as EnqueueJob would marshal it.
 func EnqueueSearchJob(ctx context.Context, db *sqlx.DB, payload any, runAfter int64) (string, error) {
+	return insertSearchQueueRow(ctx, db, payload, runAfter)
+}
+
+// insertSearchQueueRow is the jobs insert the standalone enqueue and the
+// combined create share. ext is *sqlx.DB or a *sqlx.Tx.
+func insertSearchQueueRow(ctx context.Context, ext sqlx.ExtContext, payload any, runAfter int64) (string, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("store: marshal search job payload: %w", err)
@@ -216,27 +235,92 @@ func EnqueueSearchJob(ctx context.Context, db *sqlx.DB, payload any, runAfter in
 
 	id := NewID(PrefixJob)
 	now := time.Now().UnixMilli()
-	if _, err := db.ExecContext(ctx, queryEnqueueSearchJob, id, string(data), runAfter, now, now); err != nil {
+	if _, err := ext.ExecContext(ctx, queryEnqueueSearchJob, id, string(data), runAfter, now, now); err != nil {
 		return "", fmt.Errorf("store: enqueue search job: %w", err)
 	}
 
 	return id, nil
 }
 
+// CreateSearchJobAndEnqueue writes the search_jobs row and its queue row in
+// one transaction: a search that exists always has its driver, and a failed
+// enqueue cannot leave an orphaned job that polls queued forever. payloadOf
+// builds the queue payload from the assigned job id — the id only exists
+// inside the transaction, so the payload cannot be marshaled before it.
+func CreateSearchJobAndEnqueue(ctx context.Context, db *sqlx.DB, j SearchJob, payloadOf func(searchJobID string) any, runAfter int64) (SearchJob, error) {
+	tx, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		return SearchJob{}, fmt.Errorf("store: create search job: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "search job create rollback failed", "err", err)
+		}
+	}()
+
+	created, err := insertSearchJobRow(ctx, tx, j)
+	if err != nil {
+		return SearchJob{}, err
+	}
+	if _, err := insertSearchQueueRow(ctx, tx, payloadOf(created.ID), runAfter); err != nil {
+		return SearchJob{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SearchJob{}, fmt.Errorf("store: create search job: commit: %w", err)
+	}
+
+	return created, nil
+}
+
 // queryDeleteSearchQueueRow removes the queue row bound to one search job;
 // DELETE /search/{id} calls it so a still-pending job is never claimed. The
-// payload embeds the search job id as "search_job_id":"<id>" — the id
-// alphabet carries no LIKE wildcards, so the match is exact.
+// payload embeds the search job id under the search_job_id key — the
+// json_extract match is exact and case-sensitive, unlike a LIKE predicate.
 const queryDeleteSearchQueueRow = `DELETE FROM jobs
-WHERE kind = 'search' AND payload_json LIKE '%"search_job_id":"' || ? || '"%'`
+WHERE kind = 'search' AND json_extract(payload_json, '$.search_job_id') = ?`
 
 // DeleteSearchQueueRow drops the queue row of one search job, whichever
 // state it is in: a pending row is never claimed, and a running row's
 // handler exits quietly once the search_jobs row is gone (its first read
 // answers ErrNotFound).
 func DeleteSearchQueueRow(ctx context.Context, db *sqlx.DB, searchJobID string) error {
-	if _, err := db.ExecContext(ctx, queryDeleteSearchQueueRow, searchJobID); err != nil {
+	return deleteSearchQueueRow(ctx, db, searchJobID)
+}
+
+// deleteSearchQueueRow is the jobs delete both delete paths share. ext is
+// *sqlx.DB or a *sqlx.Tx.
+func deleteSearchQueueRow(ctx context.Context, ext sqlx.ExtContext, searchJobID string) error {
+	if _, err := ext.ExecContext(ctx, queryDeleteSearchQueueRow, searchJobID); err != nil {
 		return fmt.Errorf("store: delete queue row of search job %s: %w", searchJobID, err)
+	}
+
+	return nil
+}
+
+// DeleteSearchJobAndQueue removes the search_jobs row and its queue row in
+// one transaction — DELETE /search/{id} either drops both or neither, so a
+// failure cannot strand a claimable queue row or a driverless job. The
+// queue row goes first inside the tx, narrowing the window where a pending
+// job could still be claimed. ErrNotFound means the id addresses no job.
+func DeleteSearchJobAndQueue(ctx context.Context, db *sqlx.DB, searchJobID string) error {
+	tx, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: delete search job %s: %w", searchJobID, err)
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "search job delete rollback failed", "err", err)
+		}
+	}()
+
+	if err := deleteSearchQueueRow(ctx, tx, searchJobID); err != nil {
+		return err
+	}
+	if err := deleteSearchJobRow(ctx, tx, searchJobID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: delete search job %s: commit: %w", searchJobID, err)
 	}
 
 	return nil

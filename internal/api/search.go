@@ -1529,37 +1529,30 @@ func (h *SearchHandlers) StartSearch(ctx context.Context, in *StartSearchInput) 
 		categoriesJSON = ptr(string(raw))
 	}
 
-	job, err := store.CreateSearchJob(ctx, db, store.SearchJob{
+	// One transaction writes the search_jobs row and its queue row —
+	// including max_attempts 1 — so a search that exists always has its
+	// driver and a failed enqueue can never leave an orphaned job polling
+	// queued forever. The payload builder maps the freshly assigned id into
+	// the queue row's search_job_id.
+	job, err := store.CreateSearchJobAndEnqueue(ctx, db, store.SearchJob{
 		Query:          in.Body.Query,
 		IndexerIDsJSON: string(idsJSON),
 		CategoriesJSON: categoriesJSON,
-	})
+	}, func(id string) any {
+		return jobs.SearchPayload{
+			SearchJobID: id,
+			Query:       in.Body.Query,
+			IndexerIDs:  ids,
+			Categories:  in.Body.Categories,
+		}
+	}, time.Now().UnixMilli())
 	if err != nil {
 		return nil, internalFailure(ctx, "create search job", err)
 	}
 
-	// The tracker is seeded before the enqueue so the first poll can never
-	// observe a claimed-but-unknown engine list.
+	// The tracker seeds after the commit; a poll that lands in between gets
+	// the same "queued" engine list from the durable reconstruction path.
 	store.Searches.Start(job.ID, engines)
-
-	payload := jobs.SearchPayload{
-		SearchJobID: job.ID,
-		Query:       in.Body.Query,
-		IndexerIDs:  ids,
-		Categories:  in.Body.Categories,
-	}
-	// One statement carries max_attempts 1: a polling worker can never claim
-	// the row between an insert and a clamp update and read the DDL
-	// default. On failure the search_jobs row and tracker entry roll back —
-	// an enqueue that failed must not leave a job polling queued forever.
-	if _, err := store.EnqueueSearchJob(ctx, db, payload, time.Now().UnixMilli()); err != nil {
-		store.Searches.Forget(job.ID)
-		if derr := store.DeleteSearchJob(context.WithoutCancel(ctx), db, job.ID); derr != nil {
-			h.log.WarnContext(ctx, "search job cleanup after enqueue failure failed",
-				"search_job_id", job.ID, "err", derr)
-		}
-		return nil, internalFailure(ctx, "enqueue search job", err)
-	}
 
 	out := &StartedOutput{Status: http.StatusAccepted}
 	out.Body.ID = job.ID
@@ -1617,8 +1610,12 @@ func (h *SearchHandlers) GetSearch(ctx context.Context, in *GetSearchInput) (*Se
 	if engines == nil {
 		engines = []store.EngineStatus{}
 	}
+	results := toSearchResultDTOs(rows, names)
+	if results == nil {
+		results = []SearchResultDTO{}
+	}
 	out.Body.Engines = engines
-	out.Body.Results = toSearchResultDTOs(rows, names)
+	out.Body.Results = results
 	if nextCursor != "" {
 		out.Body.NextCursor = &nextCursor
 	}
@@ -1632,14 +1629,12 @@ func (h *SearchHandlers) DeleteSearch(ctx context.Context, in *SearchIDInput) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := store.DeleteSearchJob(ctx, db, in.ID); err != nil {
+	// One transaction drops the queue row and the search row, so a
+	// still-pending job can never be claimed for a search that no longer
+	// exists, and a failed delete strands neither half. A row already
+	// running exits quietly once the search_jobs row is gone.
+	if err := store.DeleteSearchJobAndQueue(ctx, db, in.ID); err != nil {
 		return nil, FromStore(err)
-	}
-	// Drop the queue row too, so a still-pending job is never claimed for a
-	// search that no longer exists. Best-effort: a row already running exits
-	// quietly once the search_jobs row is gone.
-	if err := store.DeleteSearchQueueRow(ctx, db, in.ID); err != nil {
-		h.log.WarnContext(ctx, "search queue row delete failed", "search_job_id", in.ID, "err", err)
 	}
 	store.Searches.Forget(in.ID)
 	return nil, nil

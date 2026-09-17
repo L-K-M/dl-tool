@@ -255,23 +255,23 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/... ./internal/jobs/...
-ok  	github.com/L-K-M/dl-tool/internal/api	128.989s
-ok  	github.com/L-K-M/dl-tool/internal/store	77.184s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.882s
+ok  	github.com/L-K-M/dl-tool/internal/api	122.219s
+ok  	github.com/L-K-M/dl-tool/internal/store	75.861s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.835s
 SEARCH_JOB_OK
 ```
 
 The step-10 test set plus the enqueue-rollback regression, run with `-v`:
 
 ```
---- PASS: TestStartSearchReturns202AndID (0.49s)
---- PASS: TestPollShowsPartialThenFinished (0.51s)
---- PASS: TestDeleteRemovesJobAndResults (0.43s)
+--- PASS: TestStartSearchReturns202AndID (0.44s)
+--- PASS: TestPollShowsPartialThenFinished (0.53s)
+--- PASS: TestDeleteRemovesJobAndResults (0.52s)
 --- PASS: TestUnknownJobIs404 (0.41s)
---- PASS: TestEmptyQueryIs422 (0.38s)
---- PASS: TestEnqueueFailureLeavesNoJobRow (0.48s)
---- PASS: TestNoEnabledIndexerIs503 (0.41s)
-ok  	github.com/L-K-M/dl-tool/internal/api	4.260s
+--- PASS: TestEmptyQueryIs422 (0.41s)
+--- PASS: TestEnqueueFailureLeavesNoJobRow (0.42s)
+--- PASS: TestNoEnabledIndexerIs503 (0.43s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.314s
 ```
 
 Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
@@ -294,16 +294,22 @@ Deviations from the interface contract, all forced or noted:
 - `Tracker`/`NewTracker` are `SearchTracker`/`NewSearchTracker`: `internal/store/tasks.go`
   already declares a `Tracker` type (torrent tracker info), so the contract name does not
   compile. The `Searches` variable and the method set are unchanged.
-- `max_attempts = 1` is inserted atomically by `store.EnqueueSearchJob`, a search-kind
-  `INSERT` living in `internal/store/search.go`: `EnqueueJob`'s signature is fixed by
-  T012 and `internal/store/jobs.go` is outside the Files table, and a separate clamp
-  `UPDATE` would race the worker's claim poll.
+- `store.CreateSearchJobAndEnqueue` writes the `search_jobs` row and the `jobs` row —
+  with `max_attempts = 1` — in one transaction: `EnqueueJob`'s signature is fixed by
+  T012 and `internal/store/jobs.go` is outside the Files table, a separate clamp
+  `UPDATE` would race the worker's claim poll, and two independent writes could
+  strand an orphaned job row on a crash between them. The queue payload is built
+  inside the transaction from the freshly assigned `sch_…` id.
 - An explicit `indexer_ids` entry naming a disabled indexer is 422
   (`TestNoEnabledIndexerIs503`): the contract is silent on that case, but `enabled` is
   the operator's off-switch and the fan-out must not contact a disabled indexer.
   Duplicate ids are deduplicated before resolution (`TestPollShowsPartialThenFinished`).
-- `DELETE /search/{id}` also removes the `jobs` row via `store.DeleteSearchQueueRow`,
-  so a still-pending search is never claimed (`TestDeleteRemovesJobAndResults`).
+- `DELETE /search/{id}` removes the `jobs` row and the `search_jobs` row in one
+  transaction via `store.DeleteSearchJobAndQueue`, so a still-pending search is
+  never claimed and a failed delete strands neither half
+  (`TestDeleteRemovesJobAndResults`). The queue-row match uses
+  `json_extract(payload_json, '$.search_job_id')`, not LIKE — exact and
+  case-sensitive.
 - `Deps` carries a `DB` field so `StartSearch` can reach the queue without touching
   `internal/api/server.go` (outside the Files table); the `NewServer` call sites are
   unchanged.
