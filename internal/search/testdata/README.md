@@ -17,3 +17,14 @@ Verbatim quirks kept on purpose: `torznab_tpb.xml` carries upstream's
 misspelled `<lanuage>` element, and its magnet `dn=` parameters still contain
 the original series name — Sonarr's own anonymisation of the fixture was
 incomplete. Neither affects the parser tests.
+
+## `.dlm` fixtures (task T059)
+
+The three `.dlm` files are synthetic gzip-compressed tar archives authored
+for `dlm_import_test.go`; they are not captured modules.
+
+| File | Contents |
+|---|---|
+| `jackett.dlm` | `INFO` (name `jackett`, `accountsupport: true`) plus a `search.php` modelled on the third-party jackett.dlm v1.0.2 — `simplexml_load_string` plus `torznab:attr`, so it converts to `kind: torznab` |
+| `rssmodule.dlm` | `INFO` (the guide's `mininova` example) plus a `search.php` that calls `addRSSResults` with one `http` URL literal ending `?search=`, so it converts to `kind: rss` |
+| `hostile.dlm` | valid `INFO` and `search.php` plus three hostile members: a symlink, a name containing `..`, and a 5 MiB member |

@@ -1,20 +1,26 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/L-K-M/dl-tool/internal/search"
 	"github.com/L-K-M/dl-tool/internal/secure"
@@ -42,13 +48,41 @@ const (
 	indexerSettingAllowPrivate = "allow_private_network"
 	// indexerSettingOrigin records the provider origin (scheme://host:port)
 	// on rows the import wizard discovers, so a later task can rebuild the
-	// ForOrigin guard exemption for that indexer alone.
+	// ForOrigin guard exemption for that indexer alone. On file imports it
+	// carries the uploaded file name (doc 07 section 7 provenance).
 	indexerSettingOrigin = "origin"
+	// indexerSettingModuleSource is the inert original module blob —
+	// base64 so the bytes survive verbatim inside the JSON document. The
+	// "view source" pane renders it read-only; it is never executed.
+	indexerSettingModuleSource = "module_source_b64"
+	// indexerSettingConverted marks whether the import auto-converted the
+	// upload into a dlsearch/v1 draft (doc 07 section 7).
+	indexerSettingConverted = "auto_converted"
+	// indexerSettingDefinition keeps the converted dlsearch/v1 draft on
+	// the row, alongside the inert original — an imported definition has
+	// no file under /config/engines and nothing may be written to disk.
+	indexerSettingDefinition = "definition_yaml"
 
 	indexerImportedSource     = "imported"
 	indexerImportedProvenance = "imported:torznab-provider"
 	indexerTierUserSupplied   = "user-supplied"
+
+	// maxImportFileBytes is the 1 MiB cap on the one "file" part of the
+	// multipart import form (task T059): a .dlm upload is already limited
+	// to 1 MiB compressed and a .dlsearch.yaml to 512 KiB.
+	maxImportFileBytes = 1 << 20
 )
+
+// indexerInternalSettingKeys are the settings_json keys the API owns: a
+// caller's settings map can never write them, and a settings replacement
+// preserves them.
+var indexerInternalSettingKeys = []string{
+	indexerSettingAllowPrivate,
+	indexerSettingOrigin,
+	indexerSettingModuleSource,
+	indexerSettingConverted,
+	indexerSettingDefinition,
+}
 
 // Deps carries the process-wide search collaborators, built exactly once in
 // cmd/dl-tool/main.go and passed into NewServer, so the API and the job
@@ -121,9 +155,9 @@ type IndexerIDInput struct {
 }
 
 // ImportIndexerInput carries both accepted bodies of POST /indexers/import
-// and switches on Content-Type: application/json is the provider wizard
-// implemented here; multipart/form-data is a file upload, implemented by
-// T059 and T060.
+// and switches on Content-Type: application/json is the provider wizard;
+// multipart/form-data is a file upload — .dlm and .dlsearch.yaml land in
+// T059, .py in T060.
 type ImportIndexerInput struct {
 	ContentType string `header:"Content-Type"`
 	RawBody     []byte
@@ -191,7 +225,7 @@ func importRequestBody() *huma.RequestBody {
 			"multipart/form-data": {
 				Schema: &huma.Schema{
 					Type:        "object",
-					Description: "A .dlsearch.yaml, .dlm or .py engine file upload; the file-import branches land with T059 and T060.",
+					Description: "A .dlsearch.yaml or .dlm engine file upload in one file part, at most 1 MiB; .py lands with T060.",
 					Properties: map[string]*huma.Schema{
 						"file": {Type: "string", Format: "binary"},
 					},
@@ -296,13 +330,13 @@ func RegisterSearchRoutes(api huma.API, h *SearchHandlers) {
 		Path:          "/indexers/import",
 		DefaultStatus: http.StatusCreated,
 		Summary:       "Import indexers",
-		Description:   "With an application/json body {torznab_url, api_key} this is the provider wizard: it enumerates a Prowlarr or Jackett instance and creates one disabled row per upstream indexer. multipart/form-data carries a .dlsearch.yaml, .dlm or .py file; those branches land with T059 and T060.",
+		Description:   "With an application/json body {torznab_url, api_key} this is the provider wizard: it enumerates a Prowlarr or Jackett instance and creates one disabled row per upstream indexer. multipart/form-data carries one file part — a .dlsearch.yaml or .dlm import, .py with T060; every row it creates is disabled.",
 		Tags:          []string{"indexers"},
 		Security:      credentialRequired,
 		RequestBody:   importRequestBody(),
-		// The body cap matches the outbound metadata cap; T059 and T060's
-		// multipart branch can raise it when file uploads land.
-		MaxBodyBytes: secure.MetadataFetchCap,
+		// Multipart framing adds bytes around the file part, so the
+		// body cap must clear the 1 MiB part cap, not merely match it.
+		MaxBodyBytes: max(secure.MetadataFetchCap, maxImportFileBytes+4096),
 	}, h.ImportIndexer)
 }
 
@@ -734,18 +768,28 @@ func (h *SearchHandlers) IndexerCategories(ctx context.Context, _ *struct{}) (*C
 }
 
 // ImportIndexer serves POST /indexers/import. application/json runs the
-// provider wizard; every other media type is 415 — the multipart file import
-// belongs to T059 and T060.
+// provider wizard; multipart/form-data carries one "file" part whose name
+// picks the importer — .dlm and .dlsearch.yaml here, .py with T060. Every
+// other media type is 415.
 func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInput) (*ImportOutput, error) {
 	st, err := h.indexerStore(ctx)
 	if err != nil {
 		return nil, err
 	}
-	mediaType, _, err := mime.ParseMediaType(in.ContentType)
-	if err != nil || mediaType != "application/json" {
+	mediaType, params, err := mime.ParseMediaType(in.ContentType)
+	if err != nil {
 		return nil, Problem(
 			SlugUnsupportedMediaType, http.StatusUnsupportedMediaType,
-			"POST /indexers/import accepts application/json {torznab_url, api_key}; the multipart file import lands with T059 and T060",
+			"POST /indexers/import accepts application/json {torznab_url, api_key} or multipart/form-data with one .dlm or .dlsearch.yaml file part",
+		)
+	}
+	if mediaType == "multipart/form-data" {
+		return h.importIndexerFile(ctx, st, in.RawBody, params)
+	}
+	if mediaType != "application/json" {
+		return nil, Problem(
+			SlugUnsupportedMediaType, http.StatusUnsupportedMediaType,
+			"POST /indexers/import accepts application/json {torznab_url, api_key} or multipart/form-data with one .dlm or .dlsearch.yaml file part",
 		)
 	}
 
@@ -884,6 +928,152 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 	return out, nil
 }
 
+// importIndexerFile is the multipart branch of POST /indexers/import: the
+// form carries exactly one "file" part, capped at 1 MiB, and the file name
+// picks the importer — .dlm goes through the static analyser,
+// .dlsearch.yaml through the definition loader. The created row is always
+// disabled and always records where it came from (doc 07 section 7).
+func (h *SearchHandlers) importIndexerFile(ctx context.Context, st *store.IndexerStore, body []byte, params map[string]string) (*ImportOutput, error) {
+	if params["boundary"] == "" {
+		return nil, Problem(
+			SlugValidationFailed, http.StatusUnprocessableEntity,
+			"the multipart content type carries no boundary",
+		)
+	}
+
+	var file UploadedFile
+	seen := false
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, Problem(
+				SlugValidationFailed, http.StatusUnprocessableEntity,
+				"the multipart form is malformed",
+			)
+		}
+		if part.FormName() != filePart {
+			continue
+		}
+		if seen {
+			return nil, Problem(
+				SlugValidationFailed, http.StatusUnprocessableEntity,
+				"the import form carries more than one file part",
+			)
+		}
+		seen = true
+		content, err := readFormPart(part, maxImportFileBytes)
+		if err != nil {
+			if errors.Is(err, ErrPayloadTooLarge) {
+				return nil, Problem(
+					SlugPayloadTooLarge, http.StatusRequestEntityTooLarge,
+					fmt.Sprintf("the uploaded file exceeds the %d-byte import cap", maxImportFileBytes),
+				)
+			}
+			return nil, Problem(
+				SlugValidationFailed, http.StatusUnprocessableEntity,
+				"the file part could not be read",
+			)
+		}
+		file = UploadedFile{Name: part.FileName(), Bytes: content}
+	}
+	if !seen {
+		return nil, Problem(
+			SlugValidationFailed, http.StatusUnprocessableEntity,
+			"the import form carries no file part",
+		)
+	}
+
+	var res search.ImportResult
+	var err error
+	switch name := strings.ToLower(file.Name); {
+	case strings.HasSuffix(name, ".dlm"):
+		res, err = search.ImportDLM(file.Bytes, file.Name)
+	case strings.HasSuffix(name, ".dlsearch.yaml"):
+		res, err = search.ImportDefinitionFile(file.Bytes, file.Name)
+	default:
+		return nil, Problem(
+			SlugValidationFailed, http.StatusUnprocessableEntity,
+			"the file part must be a .dlm or .dlsearch.yaml upload",
+		)
+	}
+	if err != nil {
+		// Importer rejections name the rule they hit; that name is the
+		// detail the 422 contract wants.
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, err.Error())
+	}
+
+	settingsJSON, err := importedIndexerSettings(res)
+	if err != nil {
+		return nil, internalFailure(ctx, "import indexer settings", err)
+	}
+	row := store.Indexer{
+		Name:             res.Name,
+		Kind:             indexerKindDlsearch,
+		Enabled:          false,
+		DefinitionSource: ptr(indexerImportedSource),
+		Provenance:       ptr(res.Provenance),
+		LegalTier:        indexerTierUserSupplied,
+		Priority:         store.DefaultIndexerPriority,
+		// An unconverted import has no engine at all — it cannot report
+		// seeders, which is exactly what the flag means.
+		SeedersUnknown: true,
+		SettingsJSON:   &settingsJSON,
+	}
+	if res.Definition != nil {
+		row.DefinitionID = &res.Definition.ID
+		row.SeedersUnknown = res.Definition.Caps.SeedersUnknown
+	}
+
+	created, err := st.Create(ctx, row, "")
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return nil, Problem(SlugConflict, http.StatusConflict, "an indexer with that definition_id already exists")
+		}
+		return nil, internalFailure(ctx, "import indexer", err)
+	}
+
+	out := &ImportOutput{}
+	out.Body.Warnings = res.Warnings
+	out.Body.Indexer = toIndexerDTO(h.log, created)
+	return out, nil
+}
+
+// importedIndexerSettings renders the settings_json document of a file
+// import: the reserved flag and origin keys, the inert original module as
+// base64, the auto-converted flag, and — when the import produced a
+// definition — the draft YAML the "view source" pane shows. All four keys
+// are API-owned; mergeIndexerSettings never lets a caller write them.
+func importedIndexerSettings(res search.ImportResult) (string, error) {
+	// Origin is the client-supplied file name — basename'd by
+	// mime/multipart already, but still capped before it is stored.
+	origin := strings.ToValidUTF8(res.Origin, "")
+	if len(origin) > 255 {
+		origin = strings.ToValidUTF8(origin[:255], "")
+	}
+	doc := map[string]any{
+		indexerSettingAllowPrivate: false,
+		indexerSettingOrigin:       origin,
+		indexerSettingConverted:    res.Converted,
+		indexerSettingModuleSource: base64.StdEncoding.EncodeToString(res.Source),
+	}
+	if res.Definition != nil {
+		defYAML, err := yaml.Marshal(res.Definition)
+		if err != nil {
+			return "", fmt.Errorf("marshal imported definition: %w", err)
+		}
+		doc[indexerSettingDefinition] = string(defYAML)
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
 // checkIndexerURL rejects a url the torznab client can never fetch,
 // deferring to the client's own shape rule so the two can never drift.
 func checkIndexerURL(raw string) error {
@@ -988,7 +1178,7 @@ func mergeIndexerSettings(log *slog.Logger, existing *string, settings map[strin
 	}
 	if settings != nil {
 		internal := map[string]any{}
-		for _, k := range []string{indexerSettingAllowPrivate, indexerSettingOrigin} {
+		for _, k := range indexerInternalSettingKeys {
 			if v, ok := doc[k]; ok {
 				internal[k] = v
 			}
@@ -997,8 +1187,9 @@ func mergeIndexerSettings(log *slog.Logger, existing *string, settings map[strin
 		for k, v := range settings {
 			// The reserved keys are the API's, never the caller's: a
 			// settings map carrying them cannot forge the private-range
-			// lift or an import origin the row does not have.
-			if k == indexerSettingAllowPrivate || k == indexerSettingOrigin {
+			// lift, an import origin the row does not have, or the inert
+			// module blob and draft an imported row carries.
+			if slices.Contains(indexerInternalSettingKeys, k) {
 				continue
 			}
 			doc[k] = v
