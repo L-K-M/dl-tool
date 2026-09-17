@@ -299,9 +299,9 @@ func deleteSearchQueueRow(ctx context.Context, ext sqlx.ExtContext, searchJobID 
 
 // DeleteSearchJobAndQueue removes the search_jobs row and its queue row in
 // one transaction — DELETE /search/{id} either drops both or neither, so a
-// failure cannot strand a claimable queue row or a driverless job. The
-// queue row goes first inside the tx, narrowing the window where a pending
-// job could still be claimed. ErrNotFound means the id addresses no job.
+// failure cannot strand a claimable queue row or a driverless job. Both
+// deletes become visible together at commit; their order inside the
+// transaction is immaterial. ErrNotFound means the id addresses no job.
 func DeleteSearchJobAndQueue(ctx context.Context, db *sqlx.DB, searchJobID string) error {
 	tx, err := db.BeginTxx(ctx, nil)
 	if err != nil {

@@ -264,14 +264,14 @@ SEARCH_JOB_OK
 The step-10 test set plus the enqueue-rollback regression, run with `-v`:
 
 ```
---- PASS: TestStartSearchReturns202AndID (0.44s)
---- PASS: TestPollShowsPartialThenFinished (0.53s)
---- PASS: TestDeleteRemovesJobAndResults (0.52s)
---- PASS: TestUnknownJobIs404 (0.41s)
---- PASS: TestEmptyQueryIs422 (0.41s)
---- PASS: TestEnqueueFailureLeavesNoJobRow (0.42s)
---- PASS: TestNoEnabledIndexerIs503 (0.43s)
-ok  	github.com/L-K-M/dl-tool/internal/api	4.314s
+--- PASS: TestStartSearchReturns202AndID (0.41s)
+--- PASS: TestPollShowsPartialThenFinished (0.51s)
+--- PASS: TestDeleteRemovesJobAndResults (0.48s)
+--- PASS: TestUnknownJobIs404 (0.39s)
+--- PASS: TestEmptyQueryIs422 (0.40s)
+--- PASS: TestEnqueueFailureLeavesNoJobRow (0.45s)
+--- PASS: TestNoEnabledIndexerIs503 (0.38s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.185s
 ```
 
 Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):

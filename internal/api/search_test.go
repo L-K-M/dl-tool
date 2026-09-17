@@ -1028,7 +1028,7 @@ func (e *searchTestEnv) claimSearchJob(t *testing.T) store.Job {
 // the production SSRF guard, strict mode: the seeded rows lift the
 // private-range denial per origin through allow_private_network, exactly
 // the way a user's loopback indexer would.
-func (e *searchTestEnv) runSearchJob(job store.Job) error {
+func (e *searchTestEnv) runSearchJob(ctx context.Context, job store.Job) error {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	h := jobs.NewSearchHandler(
 		e.db,
@@ -1038,7 +1038,7 @@ func (e *searchTestEnv) runSearchJob(job store.Job) error {
 		secure.NewClient(secure.NewGuard(log, false)),
 		"dl-tool/test",
 	)
-	return h(context.Background(), job)
+	return h(ctx, job)
 }
 
 // getSearch polls GET /search/{id} once and decodes the body.
@@ -1183,7 +1183,7 @@ func TestPollShowsPartialThenFinished(t *testing.T) {
 	job := env.claimSearchJob(t)
 	done := make(chan error, 1)
 	go func() {
-		done <- env.runSearchJob(job)
+		done <- env.runSearchJob(t.Context(), job)
 	}()
 
 	var sawPartial bool
@@ -1223,7 +1223,7 @@ func TestPollShowsPartialThenFinished(t *testing.T) {
 
 	// A re-delivery of the same queue row (at-least-once) replaces each
 	// engine's page instead of doubling it.
-	if err := env.runSearchJob(job); err != nil {
+	if err := env.runSearchJob(t.Context(), job); err != nil {
 		t.Fatalf("second handler run: %v", err)
 	}
 	if n := env.resultCount(t, id); n != 2 {
@@ -1252,7 +1252,7 @@ func TestDeleteRemovesJobAndResults(t *testing.T) {
 	}
 	id := started.Body.ID
 
-	if err := env.runSearchJob(env.claimSearchJob(t)); err != nil {
+	if err := env.runSearchJob(t.Context(), env.claimSearchJob(t)); err != nil {
 		t.Fatalf("search handler: %v", err)
 	}
 	if n := env.resultCount(t, id); n != 1 {
