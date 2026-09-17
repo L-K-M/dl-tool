@@ -133,6 +133,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 
+Run on the review-fix head (1670d0b), after the PR #208 review round:
+
 ```
 $ make lint && make test PKG="./internal/search/... ./internal/api/..." && echo PY_IMPORT_OK
 test -z "$(gofmt -l cmd internal)"
@@ -147,34 +149,35 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/search	6.788s
-ok  	github.com/L-K-M/dl-tool/internal/api	119.074s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.284s
+ok  	github.com/L-K-M/dl-tool/internal/api	118.195s
 PY_IMPORT_OK
 ```
 
-The step-7 test set, run with `-v`:
+The step-7 test set plus the review-round additions, run with `-v`:
 
 ```
 --- PASS: TestPluginVersionRule (0.00s)
-    --- PASS: TestPluginVersionRule/normal (0.00s)
-    --- PASS: TestPluginVersionRule/spaced (0.00s)
-    --- PASS: TestPluginVersionRule/mixed_case (0.00s)
-    --- PASS: TestPluginVersionRule/over_16_bytes (0.00s)
-    --- PASS: TestPluginVersionRule/absent (0.00s)
 --- PASS: TestPluginMetadataExtracted (0.00s)
 --- PASS: TestPluginClassNameMismatchWarns (0.00s)
---- PASS: TestPicturesCategoryWarns (0.00s)
 --- PASS: TestHostilePluginIsNotExecuted (0.00s)
---- PASS: TestPluginImportedDisabled (0.09s)
---- PASS: TestPluginImportRefusals (0.05s)
-ok  	github.com/L-K-M/dl-tool/internal/search	0.185s
+--- PASS: TestPluginImportedDisabled (0.46s)
+--- PASS: TestPluginImportRefusals (0.49s)
+--- PASS: TestPluginBOMPrefixedSource (0.00s)
+--- PASS: TestPluginCategoriesUnreadableWarns (0.00s)
+--- PASS: TestPluginFieldsStayOnTheNovaPath (0.43s)
+ok  	github.com/L-K-M/dl-tool/internal/search	2.437s
 ```
 
-Scope check:
+`make ci` also passes on the same tree: lint, vet, typecheck, the full Go
+and web test suites, compose-check and doclint.
+
+Scope check — the working tree is clean; the branch diff names the files:
 
 ```
-$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+$ git diff --name-only origin/main...HEAD | sort
 api/openapi.json
+docs/tasks/T060-qbittorrent-plugin-metadata-import.md
 internal/api/search.go
 internal/search/dlm_import.go
 internal/search/dlm_import_test.go
