@@ -207,4 +207,71 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+This task cannot run as written: three requirements need files the `## Files` table does not
+admit. Recorded rather than silently widened, matching the record-then-repair workflow of
+T046 (#160/#161), T049 (#167/#168), T050 (#169/#170, #171/#172), T052 (#184/#185) and
+T057 (#201/#202).
+
+1. `cmd/dl-tool/main.go` — the shared `*search.Runner` cannot reach `api.Deps` from a
+   permitted file. T055's merged Files row for `cmd/dl-tool/main.go` says the composition
+   root builds "the guarded client, the indexer store, the definition registry and the
+   runner, and pass them to `NewServer` as one `api.Deps`"; the `Deps` comment
+   (`internal/api/search.go:51-55`) says "Runner (*search.Runner) joins the struct with
+   T058"; the main.go comment (`cmd/dl-tool/main.go:106-113`) names T058 as the task that
+   extends that `Deps`; and T061 step 9 calls `jobs.NewSearchHandler(db, log, deps.Defs,
+   deps.Runner, deps.Indexers, deps.HTTP)`, which needs a non-nil `deps.Runner`. Adding the
+   field to `Deps` is in-table (`internal/api/search.go` admits it), but `NewServer`
+   receives `deps ...Deps` by value, so `NewSearchHandlers` cannot write a runner it builds
+   back into the caller's `Deps` — the population line belongs in main.go's `api.Deps{...}`
+   literal. The in-table alternative, a second `Runner` built inside `NewSearchHandlers`,
+   splits the hand-rolled per-engine token bucket of doc 07 §3.5 across two instances, so
+   the probe path and the search-job path would each get the full rate limit.
+   Remedy: add `cmd/dl-tool/main.go` (action `modify`, "build the one shared
+   `*search.Runner` after the registry and pass it as `Runner` in the `api.Deps` literal").
+
+2. `internal/api/search_test.go` — the acceptance criterion "`POST /indexers/{id}/test`
+   against a stub returning `HTTP 503` responds `200` with `ok:false` and the upstream
+   status in `error`" is an HTTP-level assertion over the registered operation. Its home
+   is the humatest harness beside T055's cases (`newSearchTestEnv`,
+   `internal/api/search_test.go:37`). The only test file the table admits is
+   `internal/search/dlsearch_test.go`: an internal test there sits in package `search` and
+   cannot import `internal/api` (api imports search — a cycle), and a `package search_test`
+   variant could import api only by duplicating the whole humatest-plus-store harness and
+   placing API endpoint coverage in the search package, against doc 13's "test files sit
+   beside their source". Remedy: add `internal/api/search_test.go` (action `modify`, "the
+   test-indexer endpoint cases").
+
+3. `internal/search/definition.go` — step 8 and doc 07 §3.3 require fields to "resolve in
+   declaration order so `{{ .Result.<field> }}` can see earlier ones", but
+   `Response.Fields` is `map[string]Field` (`internal/search/definition.go:76`):
+   `LoadDefinition` discards the YAML mapping order and `Runner.Search` receives only
+   `*Definition`, so declaration order is unrecoverable inside the permitted files.
+   Remedy options for the repair: (a) add `internal/search/definition.go` (action
+   `modify`) so the loader records field order — e.g. an unexported `fieldOrder []string`
+   filled from the `response.fields` mapping node, which `decodeAndValidate` already walks;
+   or (b) amend the requirement to a deterministic order the runner can derive, such as a
+   topological pass over `{{ .Result.<field> }}` references with sorted field names as the
+   tie-break (map iteration alone is nondeterministic) — equivalent for every
+   definition whose references point at already-declared fields, but it also needs a
+   docs edit to doc 07 §3.3, so (a) is the smaller change.
+
+Everything else in the task fits the table, verified against the tree:
+
+- `internal/search/dlsearch.go` compiles against what exists: `secure.NewClient`,
+  `secure.ReadCapped`, `secure.MetadataFetchCap` (8 MiB), `secure.ErrSSRFBlocked`,
+  `secure.RedactError`, `TorznabClient.Caps`, `Finalise`, `SearchResult`, `Query` and the
+  unexported template lexer (`lexTemplate`, `actionEnd`) are all in reach of package
+  `search`.
+- `internal/api/search.go` already owns `Deps`, `SearchHandlers`, `RegisterSearchRoutes`,
+  `IndexerIDInput`, `probeCaps`, `recordProbe` and `indexerUserAgent`; `TestIndexer` can
+  dispatch on `row.Kind` (torznab/newznab → `probeCaps`; dlsearch → `Defs.Get` +
+  `Runner.Probe`), open the key through `IndexerStore.OpenAPIKey` and stamp the outcome
+  with `RecordTest`.
+- `github.com/mmcdole/gofeed` is on T004's pin list and `internal/search` is its first
+  importer, so `go.mod`/`go.sum` ride under the §7.1 standing exception, as do
+  `api/openapi.json` and `web/src/api/schema.d.ts` for the `test-indexer` operation.
+  `kind: html` row extraction is out of scope, so no second new dependency (goquery) is
+  needed.
+- The two fixtures belong in `internal/search/testdata/` (in-table, `modify`), captured
+  per doc 13 §5 with the README updated.
