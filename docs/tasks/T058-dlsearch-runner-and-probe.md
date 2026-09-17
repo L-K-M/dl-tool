@@ -227,7 +227,7 @@ T057 (#201/#202).
    literal. The in-table alternative, a second `Runner` built inside `NewSearchHandlers`,
    splits the hand-rolled per-engine token bucket of doc 07 §3.5 across two instances, so
    the probe path and the search-job path would each get the full rate limit.
-   Remedy: add `cmd/dl-tool/main.go` (action `edit`, "build the one shared
+   Remedy: add `cmd/dl-tool/main.go` (action `modify`, "build the one shared
    `*search.Runner` after the registry and pass it as `Runner` in the `api.Deps` literal").
 
 2. `internal/api/search_test.go` — the acceptance criterion "`POST /indexers/{id}/test`
@@ -251,7 +251,8 @@ T057 (#201/#202).
    `modify`) so the loader records field order — e.g. an unexported `fieldOrder []string`
    filled from the `response.fields` mapping node, which `decodeAndValidate` already walks;
    or (b) amend the requirement to a deterministic order the runner can derive, such as a
-   topological pass over `{{ .Result.<field> }}` references — equivalent for every
+   topological pass over `{{ .Result.<field> }}` references with sorted field names as the
+   tie-break (map iteration alone is nondeterministic) — equivalent for every
    definition whose references point at already-declared fields, but it also needs a
    docs edit to doc 07 §3.3, so (a) is the smaller change.
 
