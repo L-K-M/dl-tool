@@ -28,3 +28,13 @@ for `dlm_import_test.go`; they are not captured modules.
 | `jackett.dlm` | `INFO` (name `jackett`, `accountsupport: true`) plus a `search.php` modelled on the third-party jackett.dlm v1.0.2 — `simplexml_load_string` plus `torznab:attr`, so it converts to `kind: torznab` |
 | `rssmodule.dlm` | `INFO` (the guide's `mininova` example) plus a `search.php` that calls `addRSSResults` with one `http` URL literal ending `?search=`, so it converts to `kind: rss` |
 | `hostile.dlm` | valid `INFO` and `search.php` plus three hostile members: a symlink, a name containing `..`, and a 5 MiB member |
+
+## `.py` fixtures (task T060)
+
+Synthetic nova3 plugins authored for `dlm_import_test.go`; they are not
+captured plugins.
+
+| File | Contents |
+|---|---|
+| `legacy_plugin.py` | `#VERSION: 1.42` header, a `legacy_plugin` class with `name`, `url` and all nine `supported_categories` keys as a multi-line dict literal |
+| `hostile_plugin.py` | `import os`/`import subprocess` plus calls at module scope that would write `PWNED_FROM_PLUGIN.txt` and set `DLTOOL_PWNED` if the file were ever executed — the importer must produce none of those side effects |

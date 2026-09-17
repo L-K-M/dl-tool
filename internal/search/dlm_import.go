@@ -18,6 +18,8 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -33,6 +35,14 @@ type ImportResult struct {
 	Source     []byte // the original module, stored inert for the "view source" pane
 	Converted  bool
 	Warnings   []string
+
+	// The nova3 .py path (T060) never produces a Definition; the
+	// extracted plugin metadata rides these fields into the indexer row
+	// and its settings_json instead.
+	Version        string            // the #VERSION: line, "" when absent
+	URL            string            // the class's url literal
+	SiteCategories map[string]string // supported_categories verbatim: friendly name -> site value
+	Categories     []Category        // SiteCategories mapped through NovaCategories: newznab id -> friendly name
 }
 
 // Archive limits, doc 07 section 4.1. They are stricter than doc 12 section 5.3, so
@@ -568,4 +578,477 @@ func importedDefinitionID(info DLMInfo) string {
 	}
 	sum := sha256.Sum256([]byte(info.Name))
 	return "dlm-" + hex.EncodeToString(sum[:4])
+}
+
+// --- qBittorrent nova3 .py import (doc 07 section 4.3) -------------------
+//
+// A nova3 plugin is procedural Python: nothing in it is converted and none
+// of it ever runs (ADR-0010). The importer is a literal-only reader — it
+// scans the text for class-scope assignments of string, integer and dict
+// literals, records name, url, supported_categories and the #VERSION:
+// header, and produces a disabled indexer row whose settings_json keeps the
+// whole file as an inert blob. Anything that is not a literal assignment is
+// skipped, never evaluated.
+
+// MaxNovaPluginBytes is the upload cap for a nova3 .py plugin.
+const MaxNovaPluginBytes = 512 << 10 // 512 KiB
+
+// ProvenanceQbtPy marks a row created from an uploaded nova3 plugin.
+const ProvenanceQbtPy = "imported:qbt-py"
+
+// novaPluginWarning is the doc 07 section 4.3 message pointing the user at
+// dlsearch/v1 — the only import outcome for a nova3 plugin.
+const novaPluginWarning = "dl-tool does not run Python search plugins. Re-express this plugin as a dl-tool YAML engine (dlsearch/v1)."
+
+// novaPicturesWarning is the mandated warning for the one friendly name
+// that has no documented newznab id.
+const novaPicturesWarning = `category "pictures" has no newznab equivalent and is imported unmapped`
+
+// novaVersionLineBytes is qBittorrent's per-line read cap for the version
+// header; a longer line counts as absent (doc 07 section 4.3).
+const novaVersionLineBytes = 16
+
+// NovaCategories maps the nine friendly names of a supported_categories
+// dict onto newznab ids, exactly as doc 07 section 2.3 gives the jackett.py
+// mapping. "all" means no category filter, and "pictures" has no documented
+// newznab id: it is imported as a declared site value with no mapping and
+// raises a warning.
+var NovaCategories = map[string][]int{
+	"all":      nil,
+	"anime":    {5070},
+	"books":    {8000},
+	"games":    {1000, 4000},
+	"movies":   {2000},
+	"music":    {3000},
+	"pictures": nil,
+	"software": {4000},
+	"tv":       {5000},
+}
+
+// novaCategoryNames is the canonical iteration order of the friendly
+// names, derived from NovaCategories sorted so the two can never drift;
+// warnings and shared-id labels stay deterministic.
+var novaCategoryNames = func() []string {
+	names := make([]string, 0, len(NovaCategories))
+	for name := range NovaCategories {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}()
+
+// ImportNovaPlugin extracts metadata from a qBittorrent nova3 plugin. It
+// never runs the file. The result always has Converted=false and
+// Definition=nil: a nova3 plugin is procedural code and no mechanical
+// conversion to dlsearch/v1 exists.
+//
+// Provenance is "imported:qbt-py"; Origin is the uploaded file name, whose
+// stem must equal the class name qBittorrent would resolve with
+// getattr(module, module_name).
+func ImportNovaPlugin(data []byte, filename string) (ImportResult, error) {
+	if len(data) > MaxNovaPluginBytes {
+		return ImportResult{}, fmt.Errorf(
+			"py: upload is %d bytes, over the %d-byte plugin limit", len(data), MaxNovaPluginBytes)
+	}
+	if !utf8.Valid(data) {
+		return ImportResult{}, errors.New("py: the plugin source is not valid UTF-8")
+	}
+
+	stem := novaStem(filename)
+	if stem == "" {
+		return ImportResult{}, errors.New("py: the file name has no stem; a nova3 plugin is named <class>.py")
+	}
+	// The UTF-8 BOM CPython accepts transparently must not hide a first
+	// line's class definition or #VERSION: header from the reader. Source
+	// keeps the uploaded bytes verbatim; only the parse view is stripped.
+	src := bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+
+	classes := pyClassNames(src)
+	if len(classes) == 0 {
+		return ImportResult{}, errors.New("py: no class definition found; a nova3 plugin defines a class named after its file")
+	}
+
+	name, site, siteCategories, err := pyLiterals(src)
+	if err != nil {
+		return ImportResult{}, err
+	}
+
+	res := ImportResult{
+		Name:           name,
+		Kind:           "dlsearch", // metadata only: Definition stays nil on this path
+		Provenance:     ProvenanceQbtPy,
+		Origin:         filename, // display-only provenance; never used as a path
+		Source:         data,
+		Version:        parsePluginVersion(src),
+		URL:            site,
+		SiteCategories: siteCategories,
+		Warnings:       []string{novaPluginWarning},
+	}
+	if res.Name == "" {
+		res.Name = stem
+	}
+	if !slices.Contains(classes, stem) {
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"class %q does not match the file stem %q; qBittorrent resolves the plugin as getattr(module, %q)",
+			classes[0], stem, stem))
+	}
+	if siteCategories != nil && len(siteCategories) == 0 {
+		res.Warnings = append(res.Warnings,
+			"supported_categories yielded no quoted-string mappings; no categories were imported")
+	}
+	res.Categories = novaCategories(siteCategories, &res.Warnings)
+	return res, nil
+}
+
+// novaStem is the module name qBittorrent derives: the file's base name
+// minus the .py extension the upload was dispatched on.
+func novaStem(filename string) string {
+	base := filename
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	if strings.HasSuffix(strings.ToLower(base), ".py") {
+		base = base[:len(base)-len(".py")]
+	}
+	return base
+}
+
+// novaCategories folds the supported_categories keys through
+// NovaCategories into the flat, sorted newznab list the indexer row
+// caches. "all" declares no filter and contributes nothing; "pictures" has
+// no documented newznab id and lands its mandated warning; a key outside
+// the nine friendly names is imported unmapped with a warning naming it.
+func novaCategories(siteCategories map[string]string, warnings *[]string) []Category {
+	seen := map[int]bool{}
+	out := []Category{}
+	for _, key := range novaCategoryOrder(siteCategories) {
+		mapped, known := NovaCategories[key]
+		switch {
+		case !known:
+			*warnings = append(*warnings, fmt.Sprintf(
+				"category %q is not one of the nine nova3 names and is imported unmapped", key))
+		case key == "all":
+			// no category filter: contributes no ids
+		case key == "pictures":
+			*warnings = append(*warnings, novaPicturesWarning)
+		default:
+			for _, id := range mapped {
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+				out = append(out, Category{ID: id, Name: key})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// novaCategoryOrder lists the declared keys in canonical order first and
+// any unknown keys after, sorted — deterministic warnings and labels.
+func novaCategoryOrder(categories map[string]string) []string {
+	out := make([]string, 0, len(categories))
+	seen := make(map[string]bool, len(categories))
+	for _, key := range novaCategoryNames {
+		if _, ok := categories[key]; ok {
+			out = append(out, key)
+			seen[key] = true
+		}
+	}
+	rest := []string{}
+	for key := range categories {
+		if !seen[key] {
+			rest = append(rest, key)
+		}
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
+}
+
+// pyClassRe matches a top-level class definition; the class name is what
+// qBittorrent resolves with getattr(module, module_name).
+var pyClassRe = regexp.MustCompile(`^class\s+([A-Za-z_][A-Za-z0-9_]*)`)
+
+// pyAssignRe matches `ident = rhs` on a trimmed class-scope line. Only a
+// bare `=` binds: in `==`, `<=` and `>=` the second character lands in the
+// right-hand side, where the literal readers refuse it.
+var pyAssignRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$`)
+
+// parsePluginVersion implements doc 07 section 4.3 exactly: scan every
+// line, strip ALL spaces, take the first line that starts with "#VERSION:"
+// case-insensitively and read the remainder after 9 characters. qBittorrent
+// reads only 16 bytes per line, so a longer line counts as absent and this
+// returns "".
+func parsePluginVersion(src []byte) string {
+	for _, line := range strings.Split(string(src), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if len(line) > novaVersionLineBytes {
+			continue
+		}
+		line = strings.ReplaceAll(line, " ", "")
+		if len(line) >= len("#VERSION:") && strings.EqualFold(line[:len("#VERSION:")], "#VERSION:") {
+			return line[len("#VERSION:"):]
+		}
+	}
+	return ""
+}
+
+// pyClassNames lists the names of the file's top-level class definitions,
+// in source order.
+func pyClassNames(src []byte) []string {
+	names := []string{}
+	for _, line := range strings.Split(string(src), "\n") {
+		if m := pyClassRe.FindStringSubmatch(line); m != nil {
+			names = append(names, m[1])
+		}
+	}
+	return names
+}
+
+// pyLiterals reads class-scope assignments of string, integer and dict
+// literals and nothing else. Any other construct on the right-hand side is
+// ignored, never evaluated. Returns the values of name, url and
+// supported_categories when present; the categories map is non-nil when a
+// supported_categories assignment was seen, even one that did not parse.
+// Assignments nested inside class-body if/try blocks sit below the body
+// indent and are not read, though qBittorrent would see them at runtime.
+func pyLiterals(src []byte) (name, url string, categories map[string]string, err error) {
+	if !utf8.Valid(src) {
+		return "", "", nil, errors.New("py: the plugin source is not valid UTF-8")
+	}
+	lines := strings.Split(string(src), "\n")
+	inClass := false
+	classIndent, bodyIndent := 0, -1
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if pyClassRe.MatchString(line) {
+			// A top-level class opens the scope the reader cares about;
+			// an indented "class" line fails the anchored regexp and is
+			// handled like any other nested statement below.
+			inClass = true
+			classIndent = indent
+			bodyIndent = -1
+			continue
+		}
+		if !inClass || indent <= classIndent {
+			inClass = false
+			continue
+		}
+		if bodyIndent < 0 {
+			bodyIndent = indent
+		}
+		if indent != bodyIndent {
+			continue // inside a method or nested block, not class scope
+		}
+		m := pyAssignRe.FindStringSubmatch(trimmed)
+		if m == nil {
+			continue
+		}
+		switch m[1] {
+		case "name":
+			if v, ok := pyString(m[2]); ok {
+				name = v
+			}
+		case "url":
+			if v, ok := pyString(m[2]); ok {
+				url = v
+			}
+		case "supported_categories":
+			var text strings.Builder
+			var scan pyBraceScan
+			rhs := m[2]
+			// A `= \` line continuation (or a bare `=`) puts the literal
+			// on the next line; follow it before balancing braces.
+			for i+1 < len(lines) &&
+				strings.TrimSuffix(strings.TrimSpace(rhs), "\\") == "" {
+				i++
+				rhs = lines[i]
+			}
+			text.WriteString(rhs)
+			scan.feed(rhs)
+			// The dict literal may span lines; keep consuming until its
+			// braces balance. An unterminated dict is skipped like any
+			// other non-literal construct.
+			for !scan.balanced() && i+1 < len(lines) {
+				i++
+				text.WriteByte('\n')
+				text.WriteString(lines[i])
+				scan.feed(lines[i])
+			}
+			categories = map[string]string{} // the assignment was seen
+			if d, ok := pyStringDict(text.String()); ok {
+				categories = d
+			}
+		default:
+			// Other class attributes — integer literals included — are
+			// recognized as assignments but carry no imported value.
+		}
+	}
+	return name, url, categories, nil
+}
+
+// pyString accepts a single- or double-quoted string literal optionally
+// followed by a comment, and returns its contents. A concatenation, call or
+// any other trailing construct makes the right-hand side a non-literal and
+// the assignment is skipped.
+func pyString(rhs string) (string, bool) {
+	d := &pyDictScanner{s: rhs}
+	v, ok := d.quoted()
+	if !ok {
+		return "", false
+	}
+	d.skipTrivia()
+	if d.pos != len(d.s) {
+		return "", false
+	}
+	return v, true
+}
+
+// pyBraceScan tracks dict-literal depth across the lines a
+// supported_categories value may span, keeping the multi-line consume
+// linear in the input. Quotes are skipped so a "}" inside a string does
+// not close the dict and comments so a "{" inside one does not open it; a
+// quote still open at end of line does not continue — Python's one-line
+// strings cannot either.
+type pyBraceScan struct {
+	depth  int
+	opened bool
+}
+
+// feed scans one line.
+func (s *pyBraceScan) feed(line string) {
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '\'', '"':
+			q := line[i]
+			i++
+			for i < len(line) && line[i] != q {
+				if line[i] == '\\' {
+					i++
+				}
+				i++
+			}
+		case '#':
+			return // the rest of the line is a comment
+		case '{':
+			s.depth++
+			s.opened = true
+		case '}':
+			s.depth--
+		}
+	}
+}
+
+// balanced reports that no dict was opened or every opened brace closed.
+// A negative depth means a stray "}" ended the literal early; the dict
+// reader rejects the text either way, so consuming stops here.
+func (s *pyBraceScan) balanced() bool { return !s.opened || s.depth <= 0 }
+
+// pyDictScanner walks a dict or string literal: it accepts quoted strings,
+// whitespace and comments and nothing else. It never evaluates — a token it
+// does not understand ends the parse, not the input.
+type pyDictScanner struct {
+	s   string
+	pos int
+}
+
+// skipTrivia consumes whitespace and # comments.
+func (d *pyDictScanner) skipTrivia() {
+	for d.pos < len(d.s) {
+		switch d.s[d.pos] {
+		case '#':
+			for d.pos < len(d.s) && d.s[d.pos] != '\n' {
+				d.pos++
+			}
+		case ' ', '\t', '\n', '\r':
+			d.pos++
+		default:
+			return
+		}
+	}
+}
+
+// quoted consumes one single- or double-quoted string literal and returns
+// its contents. Escaped quotes are read verbatim; the contents are never
+// interpreted beyond quote termination.
+func (d *pyDictScanner) quoted() (string, bool) {
+	d.skipTrivia()
+	if d.pos >= len(d.s) || (d.s[d.pos] != '\'' && d.s[d.pos] != '"') {
+		return "", false
+	}
+	q := d.s[d.pos]
+	d.pos++
+	var b strings.Builder
+	for d.pos < len(d.s) && d.s[d.pos] != q {
+		// Only the quote escapes and \\ are honored — in either quote
+		// style, as Python does. Every other sequence (\n included) keeps
+		// its backslash verbatim rather than being interpreted.
+		if d.s[d.pos] == '\\' && d.pos+1 < len(d.s) &&
+			(d.s[d.pos+1] == '\'' || d.s[d.pos+1] == '"' || d.s[d.pos+1] == '\\') {
+			d.pos++
+		}
+		b.WriteByte(d.s[d.pos])
+		d.pos++
+	}
+	if d.pos >= len(d.s) {
+		return "", false // unterminated
+	}
+	d.pos++ // the closing quote
+	return b.String(), true
+}
+
+// pyStringDict parses a `{ 'key': 'value', ... }` literal — the shape
+// supported_categories uses. Only quoted keys and quoted values are
+// accepted; anything else makes the whole right-hand side a non-literal and
+// the assignment is skipped.
+func pyStringDict(s string) (map[string]string, bool) {
+	d := &pyDictScanner{s: s}
+	d.skipTrivia()
+	if d.pos >= len(d.s) || d.s[d.pos] != '{' {
+		return nil, false
+	}
+	d.pos++
+	out := map[string]string{}
+	for {
+		d.skipTrivia()
+		if d.pos < len(d.s) && d.s[d.pos] == '}' {
+			d.pos++
+			break
+		}
+		key, ok := d.quoted()
+		if !ok {
+			return nil, false
+		}
+		d.skipTrivia()
+		if d.pos >= len(d.s) || d.s[d.pos] != ':' {
+			return nil, false
+		}
+		d.pos++
+		value, ok := d.quoted()
+		if !ok {
+			return nil, false
+		}
+		out[key] = value
+		d.skipTrivia()
+		if d.pos < len(d.s) && d.s[d.pos] == ',' {
+			d.pos++
+			continue
+		}
+		if d.pos < len(d.s) && d.s[d.pos] == '}' {
+			d.pos++
+			break
+		}
+		return nil, false
+	}
+	d.skipTrivia()
+	if d.pos != len(d.s) {
+		return nil, false // trailing construct after the closing brace
+	}
+	return out, true
 }
