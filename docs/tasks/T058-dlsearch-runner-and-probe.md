@@ -40,7 +40,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/search/dlsearch_test.go` | create | Expansion, transforms, both fetchers and the limit cases. |
 | `internal/search/definition.go` | modify | Record `response.fields` declaration order so `{{ .Result.<field> }}` resolves in declaration order (doc 07 §3.3). |
 | `internal/api/search.go` | modify | Add the `POST /indexers/{id}/test` handler and the `Runner *search.Runner` field on `Deps`. |
-| `internal/api/search_test.go` | modify | The `test-indexer` endpoint cases. |
+| `internal/api/search_test.go` | modify | The `test-indexer` endpoint cases, constructing the `Runner` the same way `cmd/dl-tool/main.go` does. |
 | `cmd/dl-tool/main.go` | modify | Build the one shared `*search.Runner` after the registry and pass it as `Runner` in the `api.Deps` literal. |
 | `internal/search/testdata/` | modify | Add `archlinux_releases.xml` and `archive_advancedsearch.json`, recorded per doc 13 §5. |
 
@@ -192,7 +192,9 @@ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 Expected: exactly the set of paths in the Files table (order-insensitive — `git status` emits them
 sorted, which differs from the table's display order) plus the doc 13 §7.1 standing-exception paths
 this task's diff legitimately carries — `go.mod`, `go.sum` (gofeed's first import), `api/openapi.json`
-and `web/src/api/schema.d.ts` (the `test-indexer` operation) — and nothing else. Use `git status`, not
+and `web/src/api/schema.d.ts` (the `test-indexer` operation) — and nothing else. For the four exception
+paths, additionally verify with `git diff` that `go.mod`/`go.sum` change only by the gofeed require
+lines and that the openapi/schema diffs add only the `test-indexer` operation. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -215,7 +217,8 @@ and `web/src/api/schema.d.ts` (the `test-indexer` operation) — and nothing els
 ## Blocked
 
 Resolved by the plan repair: the `## Files` table now admits all three files the record
-prescribed — `internal/search/definition.go` (remedy (a): the loader records field order),
+prescribed — `internal/search/definition.go` (remedy (a): the loader records `response.fields`
+declaration order so templates resolve in declaration order, doc 07 §3.3),
 `internal/api/search_test.go` and `cmd/dl-tool/main.go` — and the scope check names the §7.1
 standing-exception paths the diff carries. T058 remains unimplemented and still marked `todo`.
 
