@@ -334,9 +334,9 @@ func RegisterSearchRoutes(api huma.API, h *SearchHandlers) {
 		Tags:          []string{"indexers"},
 		Security:      credentialRequired,
 		RequestBody:   importRequestBody(),
-		// The body cap matches the outbound metadata cap; the multipart
-		// branch enforces its own 1 MiB cap on the file part inside it.
-		MaxBodyBytes: secure.MetadataFetchCap,
+		// Multipart framing adds bytes around the file part, so the
+		// body cap must clear the 1 MiB part cap, not merely match it.
+		MaxBodyBytes: max(secure.MetadataFetchCap, maxImportFileBytes+4096),
 	}, h.ImportIndexer)
 }
 
@@ -970,7 +970,7 @@ func (h *SearchHandlers) importIndexerFile(ctx context.Context, st *store.Indexe
 			if errors.Is(err, ErrPayloadTooLarge) {
 				return nil, Problem(
 					SlugPayloadTooLarge, http.StatusRequestEntityTooLarge,
-					"the uploaded file exceeds the 1048576-byte import cap",
+					fmt.Sprintf("the uploaded file exceeds the %d-byte import cap", maxImportFileBytes),
 				)
 			}
 			return nil, Problem(
@@ -1048,9 +1048,15 @@ func (h *SearchHandlers) importIndexerFile(ctx context.Context, st *store.Indexe
 // definition — the draft YAML the "view source" pane shows. All four keys
 // are API-owned; mergeIndexerSettings never lets a caller write them.
 func importedIndexerSettings(res search.ImportResult) (string, error) {
+	// Origin is the client-supplied file name — basename'd by
+	// mime/multipart already, but still capped before it is stored.
+	origin := res.Origin
+	if len(origin) > 255 {
+		origin = origin[:255]
+	}
 	doc := map[string]any{
 		indexerSettingAllowPrivate: false,
-		indexerSettingOrigin:       res.Origin,
+		indexerSettingOrigin:       origin,
 		indexerSettingConverted:    res.Converted,
 		indexerSettingModuleSource: base64.StdEncoding.EncodeToString(res.Source),
 	}

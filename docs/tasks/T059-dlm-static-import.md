@@ -185,8 +185,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/search	5.341s
-ok  	github.com/L-K-M/dl-tool/internal/api	124.885s
+ok  	github.com/L-K-M/dl-tool/internal/search	5.776s
+ok  	github.com/L-K-M/dl-tool/internal/api	121.275s
 DLM_IMPORT_OK
 ```
 
@@ -196,22 +196,30 @@ The step-10 test set plus the endpoint and regression additions in
 ```
 --- PASS: TestImportJackettDLMBecomesTorznab (0.01s)
 --- PASS: TestImportRSSModuleBecomesRSSDefinition (0.01s)
---- PASS: TestUnconvertibleModuleImportsDisabledMetadataOnly (0.45s)
+--- PASS: TestRSSModuleDecodesStaticQueryPairs (0.01s)
+--- PASS: TestRSSModuleNeedsKeywordParam (0.03s)
+    --- PASS: TestRSSModuleNeedsKeywordParam/no_query (0.01s)
+    --- PASS: TestRSSModuleNeedsKeywordParam/trailing_& (0.01s)
+    --- PASS: TestRSSModuleNeedsKeywordParam/value-only (0.00s)
+    --- PASS: TestRSSModuleNeedsKeywordParam/path-appended (0.01s)
+--- PASS: TestRSSModuleIgnoresCommentURLs (0.01s)
+--- PASS: TestImportDefinitionFileTorznabKind (0.00s)
+--- PASS: TestUnconvertibleModuleImportsDisabledMetadataOnly (0.42s)
 --- PASS: TestRejectsSymlinkMember (0.00s)
 --- PASS: TestRejectsTraversalName (0.00s)
---- PASS: TestRejectsOversizeMember (0.18s)
+--- PASS: TestRejectsOversizeMember (0.19s)
 --- PASS: TestHostileFixtureRejected (0.09s)
+--- PASS: TestRejectsDuplicateMember (0.00s)
 --- PASS: TestRejectsMissingModuleMember (0.00s)
---- PASS: TestRejectsMalformedArchives (0.01s)
---- PASS: TestRSSModuleDecodesStaticQueryPairs (0.00s)
+--- PASS: TestRejectsMalformedArchives (0.03s)
 --- PASS: TestNoInterpreterIsSpawned (0.00s)
---- PASS: TestImportEndpointCreatesDisabledRows (0.83s)
-    --- PASS: TestImportEndpointCreatesDisabledRows/dlm (0.46s)
-    --- PASS: TestImportEndpointCreatesDisabledRows/dlsearch.yaml (0.37s)
---- PASS: TestImportEndpointSettingsJSON (0.40s)
+--- PASS: TestImportEndpointCreatesDisabledRows (0.80s)
+    --- PASS: TestImportEndpointCreatesDisabledRows/dlm (0.42s)
+    --- PASS: TestImportEndpointCreatesDisabledRows/dlsearch.yaml (0.38s)
+--- PASS: TestImportEndpointSettingsJSON (0.38s)
 --- PASS: TestImportEndpointRejections (0.50s)
---- PASS: TestImportEndpointDuplicateConflicts (0.40s)
-ok  	github.com/L-K-M/dl-tool/internal/search	4.006s
+--- PASS: TestImportEndpointDuplicateConflicts (0.38s)
+ok  	github.com/L-K-M/dl-tool/internal/search	3.969s
 ```
 
 Scope check:

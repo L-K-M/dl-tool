@@ -100,7 +100,7 @@ func ImportDLM(data []byte, filename string) (ImportResult, error) {
 	// skipped unread (doc 12 section 5.3: exactly two files are read).
 	tr := tar.NewReader(bytes.NewReader(decompressed))
 	var infoBytes []byte
-	members := 0
+	seen := map[string]bool{}
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -109,13 +109,16 @@ func ImportDLM(data []byte, filename string) (ImportResult, error) {
 		if err != nil {
 			return ImportResult{}, fmt.Errorf("dlm: read tar member: %w", err)
 		}
-		members++
-		if members > MaxDLMMembers {
+		if len(seen) >= MaxDLMMembers {
 			return ImportResult{}, fmt.Errorf("dlm: archive has more than %d members", MaxDLMMembers)
 		}
 		if err := validateDLMMember(hdr); err != nil {
 			return ImportResult{}, err
 		}
+		if seen[hdr.Name] {
+			return ImportResult{}, fmt.Errorf("dlm: the archive contains a duplicate %q member", hdr.Name)
+		}
+		seen[hdr.Name] = true
 		if hdr.Name == "INFO" {
 			if infoBytes, err = readDLMMember(tr); err != nil {
 				return ImportResult{}, err
@@ -163,10 +166,14 @@ func ImportDefinitionFile(data []byte, filename string) (ImportResult, error) {
 	if err != nil {
 		return ImportResult{}, err
 	}
+	kind := "dlsearch"
+	if def.Kind == "torznab" {
+		kind = "torznab"
+	}
 	return ImportResult{
 		Definition: def,
 		Name:       def.Name,
-		Kind:       "dlsearch",
+		Kind:       kind,
 		Provenance: ProvenanceFile,
 		Origin:     filename,
 		Source:     data,
@@ -334,6 +341,49 @@ func analyseModule(php []byte, info DLMInfo) (*Definition, bool, []string) {
 // "http".
 var phpStringLiteralRe = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'`)
 
+// stripPHPComments removes //, # and /* */ comment text outside string
+// literals, so a quoted URL inside a comment cannot be mistaken for the
+// module's endpoint. Quote state is tracked because a naive removal of
+// "//" would corrupt https:// inside literals.
+func stripPHPComments(php []byte) []byte {
+	out := make([]byte, 0, len(php))
+	for i := 0; i < len(php); {
+		switch c := php[i]; {
+		case c == '\'' || c == '"':
+			j := i + 1
+			for j < len(php) && php[j] != c {
+				if php[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j < len(php) {
+				j++ // include the closing quote
+			}
+			out = append(out, php[i:j]...)
+			i = j
+		case c == '/' && i+1 < len(php) && php[i+1] == '/':
+			for i < len(php) && php[i] != '\n' {
+				i++
+			}
+		case c == '#':
+			for i < len(php) && php[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(php) && php[i+1] == '*':
+			i += 2
+			for i+1 < len(php) && (php[i] != '*' || php[i+1] != '/') {
+				i++
+			}
+			i = min(i+2, len(php)) // skip the closing */, if present
+		default:
+			out = append(out, c)
+			i++
+		}
+	}
+	return out
+}
+
 // phpStringLiterals returns the contents of every quoted string literal in
 // the module source.
 func phpStringLiterals(php []byte) []string {
@@ -359,7 +409,7 @@ func convertRSSModule(php []byte, info DLMInfo) (*Definition, []string, bool) {
 	}
 	var literal string
 	count := 0
-	for _, s := range phpStringLiterals(php) {
+	for _, s := range phpStringLiterals(stripPHPComments(php)) {
 		if strings.Contains(s, "http") {
 			literal = s
 			count++
@@ -381,6 +431,7 @@ func convertRSSModule(php []byte, info DLMInfo) (*Definition, []string, bool) {
 		Path:    strings.TrimPrefix(u.EscapedPath(), "/"),
 		Method:  "GET",
 	}
+	hasKeywordParam := false
 	if u.RawQuery != "" {
 		def.Request.Query = map[string]string{}
 		pairs := strings.Split(u.RawQuery, "&")
@@ -396,7 +447,14 @@ func convertRSSModule(php []byte, info DLMInfo) (*Definition, []string, bool) {
 		key, _, _ := strings.Cut(pairs[len(pairs)-1], "=")
 		if key = decodeQueryComponent(key); key != "" {
 			def.Request.Query[key] = "{{ .Keywords }}"
+			hasKeywordParam = true
 		}
+	}
+	if !hasKeywordParam {
+		// No query parameter carries the keywords — a path-appended or
+		// otherwise unmodelled shape. Converted would emit an engine that
+		// ignores the user's search terms; fall back to metadata-only.
+		return nil, nil, false
 	}
 	def.Response = &Response{
 		Rows:   "rss > channel > item",

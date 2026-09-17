@@ -184,11 +184,80 @@ func TestRSSModuleDecodesStaticQueryPairs(t *testing.T) {
 	assert.Equal(t, "{{ .Keywords }}", res.Definition.Request.Query["search"])
 }
 
+// TestRSSModuleNeedsKeywordParam: a literal with no query string, or one
+// whose last pair has no usable key, cannot carry {{ .Keywords }} — the
+// module is not the modelled shape and falls back to metadata-only.
+func TestRSSModuleNeedsKeywordParam(t *testing.T) {
+	for name, url := range map[string]string{
+		"no query":      "http://example.com/feed.php",
+		"trailing &":    "http://example.com/rss.php?search=&",
+		"value-only":    "http://example.com/rss.php?=x",
+		"path-appended": "http://example.com/feed/",
+	} {
+		t.Run(name, func(t *testing.T) {
+			archive := buildDLM(t,
+				dlmMember{name: "INFO", body: testINFO(t, "search.php")},
+				regMember("search.php", `<?php
+					$url = "`+url+`";
+					$this->addRSSResults($curl, $url . urlencode($query));
+				?>`),
+			)
+			res, err := search.ImportDLM(archive, "nokey.dlm")
+			require.NoError(t, err)
+			assert.False(t, res.Converted)
+			assert.Nil(t, res.Definition)
+			require.Len(t, res.Warnings, 1)
+			assert.Contains(t, res.Warnings[0], "dl-tool does not execute")
+		})
+	}
+}
+
+// TestRSSModuleIgnoresCommentURLs: a quoted URL inside a PHP comment is
+// not a literal — it must not count toward, or become, the single http
+// literal the conversion keys on.
+func TestRSSModuleIgnoresCommentURLs(t *testing.T) {
+	archive := buildDLM(t,
+		dlmMember{name: "INFO", body: testINFO(t, "search.php")},
+		regMember("search.php", `<?php
+			// upstream mirror: "https://mirror.example.com/rss.php?search="
+			$url = "http://example.com/rss.php?search=";
+			$this->addRSSResults($curl, $url . urlencode($query));
+		?>`),
+	)
+	res, err := search.ImportDLM(archive, "comment.dlm")
+	require.NoError(t, err)
+	require.True(t, res.Converted)
+	assert.Equal(t, "http://example.com", res.Definition.Request.BaseURL)
+}
+
+// TestImportDefinitionFileTorznabKind: a user-uploaded kind: torznab
+// definition reports Kind "torznab", matching ImportDLM's conversion.
+func TestImportDefinitionFileTorznabKind(t *testing.T) {
+	res, err := search.ImportDefinitionFile([]byte(`dlsearch: 1
+id: imported-torznab
+name: Imported Torznab
+description: test
+homepage: https://example.com/
+version: "1.0"
+legal_tier: user-supplied
+kind: torznab
+caps:
+  modes: {search: [q]}
+  categories: {all: 2000}
+`), "imported-torznab.dlsearch.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "torznab", res.Kind)
+	assert.Equal(t, "imported:file", res.Provenance)
+}
+
 // TestUnconvertibleModuleImportsDisabledMetadataOnly covers the fallback:
 // custom PHP converts to nothing — the row the API creates is disabled and
 // carries the doc 07 section 4.1 message as a warning.
 func TestUnconvertibleModuleImportsDisabledMetadataOnly(t *testing.T) {
 	scratch := t.TempDir()
+	// Chdir so a relative-path write by the import path would land where
+	// the closing empty-dir check can observe it.
+	t.Chdir(scratch)
 	archive := buildDLM(t,
 		dlmMember{name: "INFO", body: testINFO(t, "search.php")},
 		regMember("search.php", `<?php class SynoDLMSearchFixture {
@@ -266,6 +335,21 @@ func TestHostileFixtureRejected(t *testing.T) {
 	_, err := search.ImportDLM(dlmFixture(t, "hostile.dlm"), "hostile.dlm")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "uncompressed archive exceeds")
+}
+
+// TestRejectsDuplicateMember: two members with one name make the archive
+// ambiguous — INFO or the module could differ between the passes — so the
+// first pass rejects duplicates outright.
+func TestRejectsDuplicateMember(t *testing.T) {
+	archive := buildDLM(t,
+		dlmMember{name: "INFO", body: testINFO(t, "search.php")},
+		regMember("search.php", "<?php"),
+		dlmMember{name: "INFO", body: testINFO(t, "other.php")},
+	)
+	_, err := search.ImportDLM(archive, "dup.dlm")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate")
+	assert.Contains(t, err.Error(), "INFO")
 }
 
 // TestRejectsMissingModuleMember: the member INFO.module names must exist.
@@ -427,6 +511,9 @@ func TestImportEndpointCreatesDisabledRows(t *testing.T) {
 		assert.False(t, dto.Enabled)
 		require.NotNil(t, dto.Provenance)
 		assert.Equal(t, "imported:file", *dto.Provenance)
+		require.NotNil(t, dto.DefinitionSource)
+		assert.Equal(t, "imported", *dto.DefinitionSource)
+		assert.Equal(t, "user-supplied", dto.LegalTier)
 		require.NotNil(t, dto.DefinitionID)
 		assert.Equal(t, "arch-linux", *dto.DefinitionID)
 	})
@@ -449,8 +536,12 @@ func TestImportEndpointSettingsJSON(t *testing.T) {
 		api.Deps{Indexers: indexers},
 	)
 
+	// The fixture must be read before chdir: dlmFixture resolves
+	// testdata/ relative to the working directory.
+	fixture := dlmFixture(t, "jackett.dlm")
 	scratch := t.TempDir()
-	_, err = h.ImportIndexer(ctx, importInput(t, "jackett.dlm", dlmFixture(t, "jackett.dlm")))
+	t.Chdir(scratch)
+	_, err = h.ImportIndexer(ctx, importInput(t, "jackett.dlm", fixture))
 	require.NoError(t, err)
 
 	var settingsJSON string
