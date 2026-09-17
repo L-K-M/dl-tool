@@ -896,11 +896,16 @@ func TestPluginCategoriesUnreadableWarns(t *testing.T) {
 func TestPluginQuoteEscapes(t *testing.T) {
 	res, err := search.ImportNovaPlugin(
 		[]byte("class esc(object):\n\tname = 'E'\n"+
-			"\tsupported_categories = {'movies': '20\\'\\\"s', 'tv': \"x\\'y\\tw\"}\n"),
+			"\tsupported_categories = {'movies': '20\\'\\\"s', 'tv': \"x\\'y\\tw\","+
+			" 'end': 'a\\\\', 'after': 'z'}\n"),
 		"esc.py")
 	require.NoError(t, err)
 	assert.Equal(t, `20'"s`, res.SiteCategories["movies"])
 	assert.Equal(t, `x'y\tw`, res.SiteCategories["tv"])
+	// 'a\\' ends in an escaped backslash: a reader that treated the closing
+	// quote as escaped would swallow it and lose 'after' too.
+	assert.Equal(t, `a\`, res.SiteCategories["end"])
+	assert.Equal(t, "z", res.SiteCategories["after"])
 }
 
 // TestPluginFieldsStayOnTheNovaPath pins the provenance gate on the
