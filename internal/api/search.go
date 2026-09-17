@@ -203,8 +203,8 @@ func importRequestBody() *huma.RequestBody {
 
 // SearchHandlers owns the /indexers operations of docs/05-api-contract.md
 // section 9.1. indexers, defs, runner and hc arrive through Deps; nil means
-// the server was built for the OpenAPI document alone and the handlers
-// answer 500.
+// the server was built for the OpenAPI document alone — the store-backed
+// handlers answer 500, while TestIndexer answers 503 engine-unavailable.
 type SearchHandlers struct {
 	log      *slog.Logger
 	indexers *store.IndexerStore
@@ -567,14 +567,17 @@ func (h *SearchHandlers) probeTorznabIndexer(ctx context.Context, st *store.Inde
 	} else {
 		res.Error = probeErr.Error()
 	}
-	if err := h.recordProbe(ctx, row.ID, good, probeErr); err != nil {
-		return res, internalFailure(ctx, "record indexer test", err)
-	}
+	// A guard denial is a policy refusal, not a probe outcome — like
+	// CreateIndexer it stamps nothing on the row, matching the dlsearch
+	// branch which returns before recording.
 	if errors.Is(probeErr, secure.ErrSSRFBlocked) {
 		return res, Problem(
 			SlugSSRFBlocked, http.StatusForbidden,
 			"the caps probe was refused by the SSRF guard; set allow_private_network for an indexer on a private-network address",
 		)
+	}
+	if err := h.recordProbe(ctx, row.ID, good, probeErr); err != nil {
+		return res, internalFailure(ctx, "record indexer test", err)
 	}
 	return res, nil
 }
@@ -612,7 +615,11 @@ func (h *SearchHandlers) probeDlsearchIndexer(ctx context.Context, st *store.Ind
 				"the definition request was refused by the SSRF guard; set allow_private_network for an indexer on a private-network address",
 			)
 		}
-		return res, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the probe could not be attempted: "+err.Error())
+		// The cause may embed the built request URL — including a setting
+		// interpolated into its query — so it goes to the server log, not
+		// the problem detail.
+		h.log.Warn("dlsearch probe could not be attempted", "indexer_id", row.ID, "error", err)
+		return res, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the probe could not be attempted")
 	}
 	if err := h.recordDlsearchProbe(ctx, row.ID, def, res); err != nil {
 		return res, internalFailure(ctx, "record indexer test", err)
@@ -680,7 +687,9 @@ func indexerSettingsMap(log *slog.Logger, row store.Indexer) map[string]string {
 		return out
 	}
 	var doc map[string]any
-	if err := json.Unmarshal([]byte(*row.SettingsJSON), &doc); err != nil {
+	dec := json.NewDecoder(strings.NewReader(*row.SettingsJSON))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
 		log.Warn("indexer settings_json is not valid JSON; probing with empty settings", "indexer_id", row.ID)
 		return out
 	}
@@ -690,6 +699,11 @@ func indexerSettingsMap(log *slog.Logger, row store.Indexer) map[string]string {
 			out[k] = t
 		case bool:
 			out[k] = strconv.FormatBool(t)
+		case json.Number:
+			// verbatim — a float64 would render 1e+06 or lose precision
+			out[k] = t.String()
+		case nil:
+			// JSON null carries no value; the key is dropped.
 		default:
 			out[k] = fmt.Sprint(t)
 		}

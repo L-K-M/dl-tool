@@ -296,6 +296,11 @@ func TestJSONRowExtraction(t *testing.T) {
 	require.NotNil(t, r.PublishedAt)
 	assert.Equal(t, "2017-01-26T01:08:56Z", *r.PublishedAt)
 	assert.Nil(t, r.Seeders)
+
+	// The first row's non-ASCII title is pinned end to end through the
+	// trim + html_decode chain.
+	assert.Equal(t, "ผู้แทนเรื่อง", res[0].Title,
+		"non-ASCII titles must survive the transform chain")
 }
 
 // TestBrowseEngineFiltersByKeyword: an engine whose request.query never
@@ -427,11 +432,30 @@ func TestRateLimitPerEngine(t *testing.T) {
 	require.ErrorIs(t, err, ErrRateLimited)
 	assert.Equal(t, 1, calls, "the refused call must not reach the server")
 
-	// A second engine id has its own bucket.
+	// A second engine id has its own bucket. The fixture sets
+	// rate_limit_per_minute, but pin it explicitly so the isolation check
+	// stays meaningful if the fixture ever changes.
 	other := rssDef(t, srv.URL)
 	other.ID = "other-engine"
+	other.Request.RateLimitPerMinute = 30
 	_, err = r.Search(context.Background(), other, nil, Query{Limit: 1})
 	require.NoError(t, err)
+	assert.Equal(t, 2, calls, "the other engine's request must reach the server")
+}
+
+// TestAdmitClampsNonpositiveRate: a definition that somehow reaches the
+// limiter with a zero or negative per-minute rate must take the default
+// bucket, never divide by zero.
+func TestAdmitClampsNonpositiveRate(t *testing.T) {
+	r := NewRunner(nil, nil, "dl-tool/test")
+	for _, rate := range []int{0, -5} {
+		require.NoError(t, r.admit("e", rate))
+		require.ErrorIs(t, r.admit("e", rate), ErrRateLimited,
+			"rate %d: a bucket was created with the default interval", rate)
+		r.mu.Lock()
+		delete(r.limiter, "e")
+		r.mu.Unlock()
+	}
 }
 
 // TestDeadlineCoversParsing asserts the 15 s ceiling applies to the whole
@@ -439,8 +463,15 @@ func TestRateLimitPerEngine(t *testing.T) {
 // timeout allows it.
 func TestDeadlineCoversParsing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Stall mid-body: the deadline must fire while the client is still
+		// reading, not while the request is in flight — otherwise a read or
+		// parse path that ignored ctx would pass this test.
+		feed := readFixture(t, "archlinux_releases.xml")
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = w.Write(feed[:len(feed)/2])
+		w.(http.Flusher).Flush()
 		time.Sleep(200 * time.Millisecond)
-		_, _ = w.Write(readFixture(t, "archlinux_releases.xml"))
+		_, _ = w.Write(feed[len(feed)/2:])
 	}))
 	defer srv.Close()
 
@@ -500,4 +531,179 @@ func TestExpandBadTemplatePins(t *testing.T) {
 	require.Error(t, err)
 	_, err = Expand("{{ }}", testScope())
 	require.Error(t, err)
+}
+
+// TestTransformOpsArgCounts: ApplyTransforms is exported and reachable
+// without LoadDefinition's arity checks, so a short Args list is an error,
+// never an index-out-of-range panic.
+func TestTransformOpsArgCounts(t *testing.T) {
+	for _, tc := range []struct {
+		op   string
+		args []string
+	}{
+		{"prepend", nil},
+		{"append", nil},
+		{"regex_capture", nil},
+		{"query_param", nil},
+		{"replace", nil},
+		{"replace", []string{"a"}},
+		{"split", nil},
+		{"split", []string{","}},
+	} {
+		_, err := ApplyTransforms("v", []TransformOp{{Op: tc.op, Args: tc.args}}, Scope{})
+		require.Error(t, err, "op %q with %d args must error, not panic", tc.op, len(tc.args))
+	}
+}
+
+// TestRegexCaptureNeedsGroup: a groupless pattern is a load error, and the
+// exported ApplyTransforms returns an error for one rather than panicking
+// on m[1].
+func TestRegexCaptureNeedsGroup(t *testing.T) {
+	_, err := ApplyTransforms("abc123", []TransformOp{{Op: "regex_capture", Args: []string{`[0-9]+`}}}, Scope{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no capture group")
+
+	_, err = LoadDefinition([]byte(`
+dlsearch: 1
+id: groupless
+name: Groupless
+description: "test"
+homepage: https://x.test/
+version: "1.0.0"
+legal_tier: legitimate
+kind: rss
+caps:
+  modes: {search: [q]}
+  categories: {A: 1}
+request:
+  base_url: https://x.test/
+response:
+  rows: "rss > channel > item"
+  fields:
+    title:    {path: "title"}
+    size:     {path: "size", type: bytes}
+    download: {path: "download"}
+    category: {const: "A"}
+  transforms:
+    title:
+      - {op: regex_capture, args: ["[0-9]+"]}
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no capture group")
+}
+
+// TestURLDecodeKeepsPlus: url_decode is data-string percent decoding — a
+// literal '+' survives and %41 decodes.
+func TestURLDecodeKeepsPlus(t *testing.T) {
+	got, err := ApplyTransforms("a+b%41", []TransformOp{{Op: "url_decode"}}, Scope{})
+	require.NoError(t, err)
+	assert.Equal(t, "a+bA", got)
+}
+
+// TestQueryParamBareQuery: a bare query string — no "?", so not a URL —
+// resolves through ParseQuery instead of coming back silently empty.
+func TestQueryParamBareQuery(t *testing.T) {
+	got, err := ApplyTransforms("id=42&x=1", []TransformOp{{Op: "query_param", Args: []string{"id"}}}, Scope{})
+	require.NoError(t, err)
+	assert.Equal(t, "42", got)
+}
+
+// TestOrderedFieldsFallback: the recorded declaration order is trusted only
+// while it covers every decoded field — a partial or foreign order falls
+// back to sorted keys.
+func TestOrderedFieldsFallback(t *testing.T) {
+	f := Field{Path: "p"}
+	decl := &Response{Fields: map[string]Field{"b": f, "a": f}, fieldOrder: []string{"b", "a"}}
+	assert.Equal(t, []string{"b", "a"}, decl.OrderedFields())
+
+	partial := &Response{Fields: map[string]Field{"b": f, "a": f}, fieldOrder: []string{"<<", "a"}}
+	assert.Equal(t, []string{"a", "b"}, partial.OrderedFields())
+
+	empty := &Response{Fields: map[string]Field{"a": f}, fieldOrder: []string{}}
+	assert.Equal(t, []string{"a"}, empty.OrderedFields())
+}
+
+// TestXMLTreeKeepsFirstRoot: a trailing element after the real feed root —
+// appended by a proxy or a concatenated reply — must not replace it.
+func TestXMLTreeKeepsFirstRoot(t *testing.T) {
+	root, err := parseXMLTree([]byte(`<rss><channel><item/></channel></rss><extra/>`))
+	require.NoError(t, err)
+	assert.Equal(t, "rss", root.name)
+}
+
+// TestUpstreamErrorOnLargeErrorBody: a non-2xx reply is an *UpstreamError
+// even when its error page crosses the parsed-document cap, and a Retry-After
+// on it still holds the engine's bucket.
+func TestUpstreamErrorOnLargeErrorBody(t *testing.T) {
+	big := make([]byte, 3<<20)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write(big)
+	}))
+	defer srv.Close()
+
+	r := newTestRunner(srv)
+	def := rssDef(t, srv.URL)
+	_, err := r.Search(context.Background(), def, nil, Query{Limit: 1})
+	var ue *UpstreamError
+	require.ErrorAs(t, err, &ue)
+	assert.Equal(t, http.StatusServiceUnavailable, ue.Status)
+
+	// The Retry-After hold landed: next sits ~30 s out, well past the
+	// fixture's 6-per-minute interval, and the next call is refused before
+	// the wire.
+	r.mu.Lock()
+	next := r.limiter[def.ID].next
+	r.mu.Unlock()
+	assert.Greater(t, time.Until(next), 20*time.Second, "Retry-After must push the bucket past its interval")
+	_, err = r.Search(context.Background(), def, nil, Query{Limit: 1})
+	require.ErrorIs(t, err, ErrRateLimited)
+}
+
+// TestSearchKindHTML: Probe fetches an html definition but Search has no
+// row extraction for it in v1 — the error says so explicitly.
+func TestSearchKindHTML(t *testing.T) {
+	def := rssDef(t, "https://x.test")
+	def.Kind = "html"
+	_, err := NewRunner(nil, nil, "dl-tool/test").Search(context.Background(), def, nil, Query{Limit: 1})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not implemented")
+}
+
+// TestJSONPathStarLastSegment: [*] must close the path — a segment after it
+// is a descriptive error, not silently empty fields.
+func TestJSONPathStarLastSegment(t *testing.T) {
+	doc := map[string]any{"items": []any{map[string]any{"name": "a"}}}
+	_, err := jsonPath(doc, "$.items[*].name")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "last segment")
+
+	v, err := jsonPath(doc, "$.items[*]")
+	require.NoError(t, err)
+	assert.NotNil(t, v)
+}
+
+// TestExtractJSONBadFieldPath: a field path that errors on a row — a type
+// mismatch, not a missing key — skips the row and counts it, rather than
+// surfacing as silently empty fields.
+func TestExtractJSONBadFieldPath(t *testing.T) {
+	def := jsonDef(t, "https://x.test")
+	def.Response.Fields["title"] = Field{Path: "response.oops"}
+
+	rows, skipped, err := extractJSON(context.Background(),
+		[]byte(`{"response": {"docs": [{"identifier": "a", "item_size": 1, "publicdate": "2026-01-01"}]}}`),
+		def, Scope{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, skipped)
+	assert.Empty(t, rows)
+}
+
+// TestMapResultMagnetCase: the magnet: scheme check is case-insensitive per
+// RFC 3986 — an uppercase scheme lands on MagnetURI, not DownloadURL.
+func TestMapResultMagnetCase(t *testing.T) {
+	def := &Definition{ID: "e"}
+	r := mapResult(def, map[string]string{"download": "MAGNET:?xt=urn:btih:abc"})
+	assert.Equal(t, "MAGNET:?xt=urn:btih:abc", r.MagnetURI)
+	assert.Empty(t, r.DownloadURL)
 }

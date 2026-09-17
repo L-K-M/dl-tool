@@ -531,6 +531,19 @@ func ApplyTransforms(v string, ops []TransformOp, s Scope) (string, error) {
 }
 
 func applyOp(v string, op TransformOp, s Scope) (string, error) {
+	// LoadDefinition enforces these arities, but ApplyTransforms is exported
+	// and reachable without the loader — an op missing its argument must be
+	// an error here too, never an index-out-of-range panic.
+	switch op.Op {
+	case "prepend", "append", "regex_capture", "query_param":
+		if len(op.Args) < 1 {
+			return "", fmt.Errorf("search: transform %q needs an argument", op.Op)
+		}
+	case "replace", "split":
+		if len(op.Args) < 2 {
+			return "", fmt.Errorf("search: transform %q needs two arguments", op.Op)
+		}
+	}
 	switch op.Op {
 	case "trim":
 		if len(op.Args) == 1 {
@@ -544,7 +557,10 @@ func applyOp(v string, op TransformOp, s Scope) (string, error) {
 	case "html_decode":
 		return html.UnescapeString(v), nil
 	case "url_decode":
-		out, err := url.QueryUnescape(v)
+		// PathUnescape keeps a literal '+' — the values this op sees come
+		// from path-style percent-encoding, matching Prowlarr/Jackett's
+		// UnescapeDataString semantics.
+		out, err := url.PathUnescape(v)
 		if err != nil {
 			return "", fmt.Errorf("search: url_decode: %w", err)
 		}
@@ -561,13 +577,16 @@ func applyOp(v string, op TransformOp, s Scope) (string, error) {
 	case "replace":
 		return strings.ReplaceAll(v, op.Args[0], op.Args[1]), nil
 	case "regex_capture":
-		re, err := regexp.Compile(op.Args[0])
+		re, err := compilePattern(op.Args[0])
 		if err != nil {
 			return "", fmt.Errorf("search: regex_capture: %w", err)
 		}
 		m := re.FindStringSubmatch(v)
 		if m == nil {
 			return "", nil
+		}
+		if len(m) < 2 {
+			return "", fmt.Errorf("search: regex_capture: pattern %q has no capture group", op.Args[0])
 		}
 		return m[1], nil
 	case "split":
@@ -584,6 +603,15 @@ func applyOp(v string, op TransformOp, s Scope) (string, error) {
 		}
 		return parts[idx], nil
 	case "query_param":
+		// A value without "?" is a bare query string, not a URL — url.Parse
+		// would file it under Path and Query() would come back empty.
+		if !strings.Contains(v, "?") {
+			q, err := url.ParseQuery(v)
+			if err != nil {
+				return "", fmt.Errorf("search: query_param: %w", err)
+			}
+			return q.Get(op.Args[0]), nil
+		}
 		u, err := url.Parse(v)
 		if err != nil {
 			return "", fmt.Errorf("search: query_param: %w", err)
@@ -593,6 +621,23 @@ func applyOp(v string, op TransformOp, s Scope) (string, error) {
 		return stripTags(v), nil
 	}
 	return "", fmt.Errorf("search: unknown transform op %q", op.Op)
+}
+
+// regexCache memoises compiled regex_capture patterns: the op runs per field
+// per row, and the pattern set is bounded by the loaded definitions, each at
+// most MaxPatternBytes.
+var regexCache sync.Map // pattern -> *regexp.Regexp
+
+func compilePattern(pattern string) (*regexp.Regexp, error) {
+	if re, ok := regexCache.Load(pattern); ok {
+		return re.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	regexCache.Store(pattern, re)
+	return re, nil
 }
 
 var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
@@ -882,7 +927,7 @@ func (r *Runner) hold(engineID string, d time.Duration) {
 // definition's allow_private_network flag or the indexer row's setting lifts
 // the private-range denial.
 func (r *Runner) clientFor(def *Definition, cfg map[string]string, origin string) *http.Client {
-	if !def.AllowPrivateNetwork && cfg["allow_private_network"] != "true" {
+	if !def.AllowPrivateNetwork && !isTruthy(cfg["allow_private_network"]) {
 		return r.hc
 	}
 	u, err := url.Parse(origin)
@@ -967,11 +1012,10 @@ func (r *Runner) fetch(ctx context.Context, def *Definition, cfg map[string]stri
 	if err != nil {
 		return fetchOutcome{}, err
 	}
-	if len(body) > maxParsedDoc {
-		return fetchOutcome{}, fmt.Errorf(
-			"search: document is %d bytes, over the %d-byte parsed-document cap", len(body), maxParsedDoc)
-	}
 	out := fetchOutcome{body: body, status: resp.StatusCode, server: resp.Header.Get("Server")}
+	// A non-2xx answer is an *UpstreamError even when its error page crosses
+	// the parsed-document cap — the cap gates parsing, not status handling,
+	// and the 429/503 Retry-After hold must run either way.
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var retryAfter time.Duration
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
@@ -980,6 +1024,10 @@ func (r *Runner) fetch(ctx context.Context, def *Definition, cfg map[string]stri
 		}
 		return out, &UpstreamError{Status: resp.StatusCode, Detail: bodySnippet(body), RetryAfter: retryAfter}
 	}
+	if len(body) > maxParsedDoc {
+		return fetchOutcome{}, fmt.Errorf(
+			"search: document is %d bytes, over the %d-byte parsed-document cap", len(body), maxParsedDoc)
+	}
 	return out, nil
 }
 
@@ -987,8 +1035,8 @@ func (r *Runner) fetch(ctx context.Context, def *Definition, cfg map[string]stri
 // error string, whitespace-collapsed and truncated.
 func bodySnippet(body []byte) string {
 	s := strings.Join(strings.Fields(string(body)), " ")
-	if len(s) > 240 {
-		s = s[:240]
+	if runes := []rune(s); len(runes) > 240 {
+		s = string(runes[:240])
 	}
 	return s
 }
@@ -1031,16 +1079,26 @@ func resolvedSettings(def *Definition, cfg map[string]string) map[string]string 
 			v = s.Default
 		}
 		if s.Type == "checkbox" {
-			switch strings.ToLower(v) {
-			case "true", "1", "yes", "on":
+			if isTruthy(v) {
 				v = "true"
-			default:
+			} else {
 				v = ""
 			}
 		}
 		out[s.Name] = v
 	}
 	return out
+}
+
+// isTruthy is the one checkbox-style truth test, shared by resolvedSettings
+// and the reserved allow_private_network read in clientFor so the two paths
+// cannot drift: true, 1, yes and on, case-insensitive, whitespace-tolerant.
+func isTruthy(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true", "1", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // siteCategories maps the requested newznab ids to the site-side values of
@@ -1079,6 +1137,10 @@ func (r *Runner) Search(ctx context.Context, def *Definition, cfg map[string]str
 		extract = extractRSS
 	case "json":
 		extract = extractJSON
+	case "html":
+		// Probe fetches html, but row extraction is out of scope for v1 —
+		// say so explicitly rather than falling through to the generic error.
+		return nil, fmt.Errorf("search: kind %q row extraction is not implemented yet", def.Kind)
 	default:
 		return nil, fmt.Errorf("search: kind %q has no row extraction", def.Kind)
 	}
@@ -1256,14 +1318,20 @@ func parseXMLTree(doc []byte) (*xmlElement, error) {
 				el.attrs[a.Name.Local] = a.Value
 			}
 			if len(stack) == 0 {
-				root = el
+				// Token() does not enforce a single root: a trailing element
+				// after the real feed root must not replace it.
+				if root == nil {
+					root = el
+				}
 			} else {
 				top := stack[len(stack)-1]
 				top.children = append(top.children, el)
 			}
 			stack = append(stack, el)
 		case xml.EndElement:
-			stack = stack[:len(stack)-1]
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
 		case xml.CharData:
 			if len(stack) > 0 {
 				stack[len(stack)-1].text.Write(t)
@@ -1407,6 +1475,11 @@ func jsonPath(doc any, path string) (any, error) {
 				return nil, fmt.Errorf("search: json path %q: index on a non-array", path)
 			}
 			if inner == "*" {
+				// [*] is the identity on the array; anything after it would
+				// evaluate on the whole list and fail confusingly.
+				if i+j+1 < len(p) {
+					return nil, fmt.Errorf("search: json path %q: [*] must be the last segment", path)
+				}
 				cur = arr
 			} else {
 				n, err := strconv.Atoi(inner)
@@ -1468,7 +1541,11 @@ func extractJSON(ctx context.Context, body []byte, def *Definition, scope Scope)
 		fields, err := resolveFields(def, scope, func(f Field) (string, error) {
 			v, err := jsonPath(item, f.Path)
 			if err != nil {
-				return "", nil
+				// A missing key never reaches this branch — map lookups
+				// yield nil without an error — so an error here is a
+				// malformed path or a type mismatch: a definition bug the
+				// row must fail on, not silently empty data.
+				return "", err
 			}
 			return jsonScalar(v), nil
 		})
@@ -1531,7 +1608,9 @@ func resolveFields(def *Definition, scope Scope, get func(f Field) (string, erro
 // result but remain visible to later fields through .Result.
 func mapResult(def *Definition, fields map[string]string) SearchResult {
 	r := SearchResult{
-		EngineID:             def.ID,
+		EngineID: def.ID,
+		// dlsearch/v1 defines no factor fields; freeleech and multipliers
+		// stay at the documented 1.0 default.
 		DownloadVolumeFactor: 1.0,
 		UploadVolumeFactor:   1.0,
 	}
@@ -1550,7 +1629,9 @@ func mapResult(def *Definition, fields map[string]string) SearchResult {
 		case "details":
 			r.DetailsURL = s
 		case "download":
-			if strings.HasPrefix(s, "magnet:") {
+			// URI schemes are case-insensitive (RFC 3986); some sites emit
+			// MAGNET:?xt=...
+			if len(s) >= len("magnet:") && strings.EqualFold(s[:len("magnet:")], "magnet:") {
 				r.MagnetURI = s
 			} else {
 				r.DownloadURL = s

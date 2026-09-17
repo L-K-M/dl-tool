@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -840,9 +841,9 @@ func TestTestIndexerDlsearchOK(t *testing.T) {
 func TestTestIndexerTorznab(t *testing.T) {
 	env := newSearchTestEnv(t, nil)
 
-	capsCalls := 0
+	var capsCalls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capsCalls++
+		capsCalls.Add(1)
 		if r.URL.Query().Get("t") != "caps" {
 			t.Errorf("probe query = %q, want t=caps", r.URL.RawQuery)
 		}
@@ -862,7 +863,7 @@ func TestTestIndexerTorznab(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create body: %v", err)
 	}
-	capsCalls = 0
+	capsCalls.Store(0)
 
 	resp = env.api.Do(http.MethodPost, "/indexers/"+created.ID+"/test", env.authz())
 	if resp.Code != http.StatusOK {
@@ -875,8 +876,8 @@ func TestTestIndexerTorznab(t *testing.T) {
 	if !out.Body.Ok {
 		t.Fatalf("ok = false for a healthy torznab stub: %v", out.Body.Error)
 	}
-	if capsCalls != 1 {
-		t.Errorf("caps requests = %d, want exactly 1", capsCalls)
+	if got := capsCalls.Load(); got != 1 {
+		t.Errorf("caps requests = %d, want exactly 1", got)
 	}
 	if out.Body.CategoriesFound != 3 {
 		t.Errorf("categories_found = %d, want 3", out.Body.CategoriesFound)
@@ -914,5 +915,21 @@ func TestTestIndexerNotFoundAndUnattempted(t *testing.T) {
 		t.Fatalf("decode create body: %v", err)
 	}
 	resp = env.api.Do(http.MethodPost, "/indexers/"+created.ID+"/test", env.authz())
+	assertProblem(t, resp, http.StatusServiceUnavailable, SlugEngineUnavailable)
+
+	// A server built without defs or runner answers the same 503 — the
+	// probe cannot be attempted because no evaluator exists.
+	bare := newSearchTestEnvDeps(t, nil, nil, nil)
+	resp = bare.createIndexer(t, map[string]any{
+		"name": "no-runner", "kind": "dlsearch", "definition_id": "any",
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", resp.Code, resp.Body.String())
+	}
+	var bareCreated IndexerDTO
+	if err := json.Unmarshal(resp.Body.Bytes(), &bareCreated); err != nil {
+		t.Fatalf("decode create body: %v", err)
+	}
+	resp = bare.api.Do(http.MethodPost, "/indexers/"+bareCreated.ID+"/test", bare.authz())
 	assertProblem(t, resp, http.StatusServiceUnavailable, SlugEngineUnavailable)
 }
