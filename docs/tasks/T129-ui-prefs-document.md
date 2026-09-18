@@ -187,7 +187,8 @@ silently lost.
       before it resolves, advances past the debounce and asserts the PUT body carries the local
       value — a local edit is never clobbered by an in-flight hydrate.
 - [ ] A `useUiPrefs.test.ts` case lets the debounced PUT complete, then resolves the hydrate GET
-      with a pre-PUT snapshot and asserts the store discards it rather than reverting the member.
+      with a pre-PUT snapshot, asserts the store discards it and re-issues the GET once, and lets
+      the retried snapshot land without reverting the member.
 - [ ] A `useUiPrefs.test.ts` case asserts the write still waits out the 500 ms debounce and never
       fires during a drag, now against the PUT rather than `localStorage`.
 - [ ] `storeTheme("dark")` reaches the server document: the re-pinned `theme.test.ts` asserts the

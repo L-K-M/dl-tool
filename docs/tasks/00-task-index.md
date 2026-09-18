@@ -243,9 +243,9 @@ reason and the task that will carry it.
 
 ## A note on identifier order
 
-Task identifiers **T098–T128** are overflow numbers allocated after the original ranges were set. They
+Task identifiers **T098–T129** are overflow numbers allocated after the original ranges were set. They
 belong to earlier milestones than their number suggests — T098, T099 and T126–T128 are M1, T100 and T101 are M2,
-T103 and T104 are M3, T105, T116, T122 and T123 are M4, T106–T111 and T117–T120 are M6,
+T103 and T104 are M3, T105, T116, T122, T123 and T129 are M4, T106–T111 and T117–T120 are M6,
 T113, T115 and T121 are M7, and T124 and T125 are M0. A dependency on a numerically higher identifier is
 therefore usually not a forward reference: work milestones in order and the dependency is already
 satisfied. Do not "fix" these edges.
@@ -260,6 +260,10 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
   SSRF-guarded HTTP client it is built on; T122 depends on T123 for the same reason. Rule 2 handles this
   by itself — T054's dependencies are not `done`, so the next unblocked row is T123 — but do not
   "correct" the edge.
+- **In M4, T129 sits ahead of T064 although its scope is preferences, not search.** T064's merged
+  `## Blocked` record pulled the `/prefs` pair forward out of T107; T064 depends on T129 and the
+  picker takes the topmost eligible `todo` row, so T129's row precedes T064 rather than sitting
+  beside T107 in M6.
 
 ## Roster
 
