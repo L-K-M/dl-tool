@@ -113,7 +113,18 @@ afterEach(() => {
 });
 afterAll(() => server.close());
 
-function mount(props: Partial<{ initialUris: string[] }> = {}) {
+function mount(
+  props: Partial<{
+    initialUris: string[];
+    initialSearchResultIds: string[];
+    onSearchResultOutcome: (
+      ids: string[],
+      createdTaskIds: string[],
+      rejected: { search_result_id?: string; type?: string }[] | null,
+      detail?: string,
+    ) => void;
+  }> = {},
+) {
   const onOpenChange = vi.fn();
   render(
     <QueryClientProvider client={qc}>
@@ -648,4 +659,85 @@ test("TestSelectFilesLaterPageReadOnly", async () => {
       { index: 1, selected: false, priority: "skip" },
     ],
   });
+});
+
+// The search screen's "Download to…" draft: no URL entry or dropzone, the
+// opaque res_ ids post as search_result_ids (doc 09 §7).
+test("TestSearchResultDraftPostsIDs", async () => {
+  let body: Record<string, unknown> | null = null;
+  server.use(
+    http.post("*/api/v1/tasks", async ({ request }) => {
+      body = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json({ created: [], rejected: [] }, { status: 201 });
+    }),
+  );
+  mount({ initialSearchResultIds: ["res_one", "res_two"] });
+
+  await screen.findByRole("dialog");
+  expect(screen.getByText("2 search results selected")).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "Enter URL" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /drop \.torrent/ })).toBeNull();
+  // The file-selection checkbox stays disabled — /tasks/inspect takes no
+  // res_ ids.
+  const selectFiles = screen.getByRole("checkbox", {
+    name: "Show dialog to select files for download",
+  }) as HTMLButtonElement;
+  expect(selectFiles.disabled).toBe(true);
+
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(body).not.toBeNull());
+  // One source family: the uris member is absent entirely, not null.
+  expect(body).toEqual({
+    search_result_ids: ["res_one", "res_two"],
+    paused: false,
+    sequential: false,
+    create_subfolder: false,
+    tags: [],
+  });
+});
+
+// Over-50 res_ ids go out in ≤50-id chunks like every bulk path, and each
+// chunk's outcome is reported so the search screen can mark its rows.
+test("TestSearchResultDraftChunksAt50", async () => {
+  const posted: { search_result_ids: string[] }[] = [];
+  const outcomes: {
+    ids: string[];
+    rejected: { search_result_id?: string }[] | null;
+  }[] = [];
+  server.use(
+    http.post("*/api/v1/tasks", async ({ request }) => {
+      const body = (await request.json()) as {
+        search_result_ids: string[];
+      };
+      posted.push(body);
+      const ids = body.search_result_ids;
+      if (posted.length === 2)
+        return HttpResponse.json(
+          {
+            created: [],
+            rejected: [
+              {
+                search_result_id: ids[0],
+                type: "/problems/not-found",
+                detail: "unknown result",
+              },
+            ],
+          },
+          { status: 201 },
+        );
+      return HttpResponse.json({ created: [], rejected: [] }, { status: 201 });
+    }),
+  );
+  mount({
+    initialSearchResultIds: Array.from({ length: 120 }, (_, i) => `res_${i}`),
+    onSearchResultOutcome: (ids, _created, rejected) =>
+      outcomes.push({ ids, rejected }),
+  });
+
+  await screen.findByRole("dialog");
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(posted).toHaveLength(3));
+  expect(posted.map((b) => b.search_result_ids.length)).toEqual([50, 50, 20]);
+  await waitFor(() => expect(outcomes).toHaveLength(3));
+  expect(outcomes[1].rejected?.[0]?.search_result_id).toBe("res_50");
 });

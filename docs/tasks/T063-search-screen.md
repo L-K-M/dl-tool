@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T063 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T014, T041, T042, T044, T061, T062 |
 | **Blocks** | T064 |
 | **Parallel-safe** | no — replaces the `/search` placeholder in T040's `App.tsx` |
@@ -295,26 +295,26 @@ The three zero states, each its own render: `No results` (every indexer answered
 15. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestPollStopsWhenFinished` asserts no further `GET /search/{id}` request is made after `finished:true`.
-- [ ] `TestPartialResultsRenderBeforeFinish` asserts rows render while one indexer is still `searching`.
-- [ ] `TestThreeZeroStates` asserts three distinct rendered states, each with its documented call to action.
-- [ ] `TestRowDownloadPostsSearchResultID` asserts the body carries `search_result_ids` with the row's
+- [x] `TestPollStopsWhenFinished` asserts no further `GET /search/{id}` request is made after `finished:true`.
+- [x] `TestPartialResultsRenderBeforeFinish` asserts rows render while one indexer is still `searching`.
+- [x] `TestThreeZeroStates` asserts three distinct rendered states, each with its documented call to action.
+- [x] `TestRowDownloadPostsSearchResultID` asserts the body carries `search_result_ids` with the row's
       `res_` id plus the CSRF header, and no provider URL or magnet leaves the client.
-- [ ] `TestCreateTasksSearchResultIDs` seeds a result whose `download_url` embeds `passkey=secret`, posts
+- [x] `TestCreateTasksSearchResultIDs` seeds a result whose `download_url` embeds `passkey=secret`, posts
       its `res_` id and asserts a task was created whose `source_uri` renders `search-result:<res_id>` —
       no response field or `rejected[]` detail carries the passkey or the URL.
-- [ ] A `humatest` case in `internal/api/search_test.go` asserts the seeded result's serialized
+- [x] A `humatest` case in `internal/api/search_test.go` asserts the seeded result's serialized
       `GET /search/{id}` row carries no `download_url`, `magnet_uri` or `details_url` key, so the
       acquisition fields cannot re-enter the wire shape unnoticed.
-- [ ] An unknown or expired `res_` id returns a `rejected[]` entry carrying `search_result_id` and no
+- [x] An unknown or expired `res_` id returns a `rejected[]` entry carrying `search_result_id` and no
       `uri`; a submission whose ids all fail returns `404 /problems/not-found` with a problem detail
       body and no `rejected[]` member.
-- [ ] A body mixing `search_result_ids` with `uris` or `blob` returns `422 /problems/validation-failed`;
+- [x] A body mixing `search_result_ids` with `uris` or `blob` returns `422 /problems/validation-failed`;
       an empty `search_result_ids` array is the existing empty-submission `422`.
-- [ ] The existing all-`uris`-fail `422` is asserted alongside the new all-fail `404` in
+- [x] The existing all-`uris`-fail `422` is asserted alongside the new all-fail `404` in
       `internal/api/tasks_test.go`, so the shared no-`rejected[]` problem shape is pinned, not assumed.
-- [ ] `aria-rowcount` equals the job's `total`, not the number of rows in the DOM.
-- [ ] A case in `internal/sync/delta_test.go` asserts `Project` renders `source_display_uri`
+- [x] `aria-rowcount` equals the job's `total`, not the number of rows in the DOM.
+- [x] A case in `internal/sync/delta_test.go` asserts `Project` renders `source_display_uri`
       verbatim when set, a NULL or empty column falls back to `source_uri` with userinfo
       and query string stripped, a `magnet:` source keeps all of its `urn` `xt`
       parameters (a sibling non-`urn` `xt` is dropped; the `urn` prefix within
@@ -322,11 +322,11 @@ The three zero states, each its own render: `No results` (every indexer answered
       drops out — so neither the SSE snapshot nor a delta can emit a
       query-string secret for any row (the contract treats every `urn` `xt`
       value as non-secret), including ones written before the column existed.
-- [ ] No task-emitting path serialises `source_uri` directly — the PATCH response and
+- [x] No task-emitting path serialises `source_uri` directly — the PATCH response and
       every SSE delta are built through `queryGetTask`/`queryListTasksPage` and rendered
       by the shared `DisplaySourceURI` helper; verified by grep for other task-row
       selectors and DTO constructors before implementation begins.
-- [ ] A `humatest` case in `internal/api/tasks_test.go` pins the REST renderer to the
+- [x] A `humatest` case in `internal/api/tasks_test.go` pins the REST renderer to the
       shared rule: a task row with NULL `source_display_uri` and a `magnet:`
       `source_uri` serialises as `magnet:?xt=urn:…` (the `urn:` `xt` only) in the
       `GET /tasks` body, and a row whose `source_uri` parses with `u.Opaque != ""`
@@ -371,7 +371,90 @@ untracked, and `git diff --name-only` never lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head:
+
+```
+$ make lint && make vet && make typecheck && make test PKG="./internal/api/... ./internal/store/..." && make test-web && echo SEARCH_UI_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go vet ./...
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	124.823s
+ok  	github.com/L-K-M/dl-tool/internal/store	77.090s
+cd web && npx vitest run
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests)
+ ✓ src/components/Search/SearchScreen.test.tsx (8 tests)
+ Test Files  18 passed (18)
+      Tests  233 passed (233)
+SEARCH_UI_OK
+```
+
+The step-14 Vitest cases and the step-4 Go cases, run with the verbose reporters:
+
+```
+ ✓ src/components/Search/SearchScreen.test.tsx > TestPollStopsWhenFinished
+ ✓ src/components/Search/SearchScreen.test.tsx > TestPartialResultsRenderBeforeFinish
+ ✓ src/components/Search/SearchScreen.test.tsx > TestEngineErrorShownInStrip
+ ✓ src/components/Search/SearchScreen.test.tsx > TestThreeZeroStates
+ ✓ src/components/Search/SearchScreen.test.tsx > TestNullCountsRenderEmDash
+ ✓ src/components/Search/SearchScreen.test.tsx > TestRowDownloadPostsSearchResultID
+ ✓ src/components/Search/SearchScreen.test.tsx > TestBulkChunkPartialRejection
+ ✓ src/components/Search/SearchScreen.test.tsx > TestStopDeletesTheJob
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx > TestSearchResultDraftPostsIDs
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx > TestSearchResultDraftChunksAt50
+--- PASS: TestPollResultOmitsAcquisitionKeys (0.45s)
+--- PASS: TestCreateTasksSearchResultIDs (0.47s)
+--- PASS: TestTaskCreateRejectsGoneResult (0.40s)
+--- PASS: TestTaskCreateMixedFamilies422 (0.39s)
+--- PASS: TestTaskCreateResultConflicts (0.41s)
+--- PASS: TestTaskCreateResultUnroutableSource (0.40s)
+--- PASS: TestTaskDisplaySourceRendersSharedRule (0.39s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.064s
+--- PASS: TestGetSearchResultResolvesLiveRow (0.42s)
+--- PASS: TestGetSearchResultGoneJobIsNotFound (0.40s)
+--- PASS: TestGetSearchResultRequiresAcquisitionSource (0.40s)
+ok  	github.com/L-K-M/dl-tool/internal/store	2.257s
+--- PASS: TestProjectDropsUnsanitizableSources (0.00s)
+--- PASS: TestProjectDisplaySourceURIWins (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/sync	1.054s
+```
+
+The existing all-`uris`-fail `422` shares the no-`rejected[]` problem shape with the new
+all-fail `404`: `TestCreateTasksDuplicateTorrent` (tasks_test.go) pins the `uris` side and
+`TestTaskCreateRejectsGoneResult` the `search_result_ids` side.
+
+Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+internal/api/search_test.go
+internal/api/tasks_test.go
+web/src/App.tsx
+web/src/components/AddTask/AddTaskDialog.test.tsx
+web/src/components/AddTask/AddTaskDialog.tsx
+web/src/components/Search/ResultsGrid.tsx
+web/src/components/Search/SearchScreen.test.tsx
+web/src/components/Search/SearchScreen.tsx
+web/src/locales/en/common.json
+```
+
+plus, already committed on this branch, the Files-table backend set
+(`internal/store/models.go`, `internal/store/search.go`, `internal/store/search_test.go`,
+`internal/store/tasks.go`, `internal/store/tasks_list.go`, `internal/api/tasks.go`,
+`internal/sync/delta.go`, `internal/sync/delta_test.go`) and the §7.1 regenerated pair
+`api/openapi.json` and `web/src/api/schema.d.ts`. Their generated diffs carry only the
+`search_result_ids` member on the create-tasks body and `search_result_id` plus the
+`omitempty` `uri` on a rejected entry.
 
 ## Blocked
 Resolved by the follow-up plan repair to #214: the `## Files` table now lists the four rows the

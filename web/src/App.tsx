@@ -47,6 +47,7 @@ import {
   type ShellActions,
 } from "./components/Shell/Toolbar";
 import { SettingsScreen } from "./components/Settings/SettingsScreen";
+import { SearchScreen } from "./components/Search/SearchScreen";
 import { Sidebar } from "./components/Shell/Sidebar";
 import { ReconnectBanner } from "./components/Shell/ReconnectBanner";
 import { StatusBar } from "./components/Shell/StatusBar";
@@ -365,10 +366,7 @@ export default function App() {
                   element={<TasksRoute group="tag" />}
                 />
                 <Route path="/tasks/tag" element={<TasksRoute group="tag" />} />
-                <Route
-                  path="/search"
-                  element={<Placeholder screen="search" />}
-                />
+                <Route path="/search" element={<SearchScreen />} />
                 <Route
                   path="/rss/feeds"
                   element={<Placeholder screen="rss-feeds" />}

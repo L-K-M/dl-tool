@@ -57,6 +57,7 @@ initI18n().addResourceBundle("en", "dialogs", strings);
 export interface AddTaskDraft {
   uris: string[];
   files: File[]; // .torrent and .metalink parts; a .txt is expanded client-side
+  search_result_ids: string[]; // opaque res_ ids; the server resolves their sources
   destination: string;
   category: string | null;
   tags: string[];
@@ -341,6 +342,12 @@ function createBody(
     create_subfolder: draft.create_subfolder,
     tags: draft.tags,
   };
+  if (draft.search_result_ids.length > 0) {
+    body.search_result_ids = draft.search_result_ids;
+    // One source family per request: no uris member rides along, not even
+    // a null one.
+    delete body.uris;
+  }
   if (draft.destination !== "") body.destination = draft.destination;
   if (draft.category !== null) body.category = draft.category;
   if (draft.ftp_credentials !== null)
@@ -362,16 +369,33 @@ function submissionForm(
   return form;
 }
 
+type RejectedURI = components["schemas"]["RejectedURI"];
+
+/** Reported once per ≤50-id chunk of a search-result draft so the caller can
+ *  mark its rows: `rejected` is the chunk's `rejected[]` (possibly empty) or
+ *  `null` when the whole chunk failed — transport error or non-201 — with
+ *  `detail` carrying the problem text. */
+export type SearchResultOutcome = (
+  ids: string[],
+  createdTaskIds: string[],
+  rejected: RejectedURI[] | null,
+  detail?: string,
+) => void;
+
 export function AddTaskDialog({
   open,
   onOpenChange,
   initialUris,
   initialFiles,
+  initialSearchResultIds,
+  onSearchResultOutcome,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   initialUris?: string[];
   initialFiles?: File[];
+  initialSearchResultIds?: string[];
+  onSearchResultOutcome?: SearchResultOutcome;
 }): JSX.Element {
   const { t, i18n } = useTranslation("dialogs");
   const locale = i18n.language;
@@ -379,6 +403,7 @@ export function AddTaskDialog({
 
   const [urisText, setUrisText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [searchIds, setSearchIds] = useState<string[]>([]);
   const [destination, setDestination] = useState("");
   const [category, setCategory] = useState<string | null>(null);
   const [categoryOpen, setCategoryOpen] = useState(false);
@@ -424,8 +449,16 @@ export function AddTaskDialog({
 
   // Seeding reads the props once per open: later initialUris changes belong
   // to the next opening, not to the draft the user is editing.
-  const seed = useRef({ uris: initialUris, files: initialFiles });
-  seed.current = { uris: initialUris, files: initialFiles };
+  const seed = useRef({
+    uris: initialUris,
+    files: initialFiles,
+    searchResultIds: initialSearchResultIds,
+  });
+  seed.current = {
+    uris: initialUris,
+    files: initialFiles,
+    searchResultIds: initialSearchResultIds,
+  };
   useEffect(() => {
     if (!open) return;
     const prefs = useUiPrefs.getState();
@@ -437,6 +470,7 @@ export function AddTaskDialog({
     setSelectDraft(null);
     setUrisText((seed.current.uris ?? []).join("\n"));
     setFiles(seed.current.files ?? []);
+    setSearchIds(seed.current.searchResultIds ?? []);
     setDestination(remember ? (prefs.lastDestination ?? "") : "");
     setCategory(null);
     setCategoryOpen(false);
@@ -534,6 +568,7 @@ export function AddTaskDialog({
     (uris: string[]): AddTaskDraft => ({
       uris,
       files,
+      search_result_ids: searchIds,
       destination,
       category,
       tags,
@@ -550,6 +585,7 @@ export function AddTaskDialog({
     }),
     [
       files,
+      searchIds,
       destination,
       category,
       tags,
@@ -601,10 +637,73 @@ export function AddTaskDialog({
     });
   };
 
+  /** Search-result drafts submit in ≤50-id chunks like every bulk path
+   *  (the body's maxItems:"50" cap) and report each chunk's outcome so the
+   *  search screen can mark its rows resolved or failed. */
+  const createSearchResults = async (
+    draft: AddTaskDraft,
+    selection: SelectionRow[] | null,
+  ) => {
+    onOpenChange(false);
+    for (let i = 0; i < draft.search_result_ids.length; i += MAX_URIS) {
+      const chunk = draft.search_result_ids.slice(i, i + MAX_URIS);
+      const body = createBody(
+        { ...draft, search_result_ids: chunk },
+        selection,
+      );
+      try {
+        const { data, error } = await api.POST("/tasks", { body });
+        if (!data) {
+          const detail = problemDetail(error, t("shell.networkError"));
+          if (onSearchResultOutcome)
+            onSearchResultOutcome(chunk, [], null, detail);
+          else
+            toast.error(
+              t("addTask.submitFailed", { uri: chunk[0] ?? "", detail }),
+            );
+          continue;
+        }
+        const created = data.created ?? [];
+        if (created.length > 0) {
+          useTasks.getState().hydrate(created);
+          void applyLimits(created, draft);
+        }
+        if (onSearchResultOutcome)
+          onSearchResultOutcome(
+            chunk,
+            created.map((task) => task.id),
+            data.rejected ?? [],
+          );
+        else
+          for (const rejected of data.rejected ?? [])
+            toast.error(
+              t("addTask.rejected", {
+                uri: rejected.search_result_id ?? "",
+                detail: rejected.detail,
+              }),
+            );
+      } catch (error) {
+        const detail =
+          error instanceof Error ? error.message : t("shell.networkError");
+        if (onSearchResultOutcome)
+          onSearchResultOutcome(chunk, [], null, detail);
+        else
+          toast.error(
+            t("addTask.submitFailed", { uri: chunk[0] ?? "", detail }),
+          );
+      }
+    }
+    if (draft.destination !== "")
+      useUiPrefs.getState().patch({ lastDestination: draft.destination });
+    void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+  };
+
   const create = async (
     draft: AddTaskDraft,
     selection: SelectionRow[] | null,
   ) => {
+    if (draft.search_result_ids.length > 0)
+      return createSearchResults(draft, selection);
     onOpenChange(false);
     // Doc 09 §4.4 and §10.6: URI submissions are optimistic unless they carry
     // a magnet; uploads and magnets never get placeholder rows.
@@ -632,7 +731,7 @@ export function AddTaskDialog({
       for (const rejected of data.rejected ?? [])
         toast.error(
           t("addTask.rejected", {
-            uri: rejected.uri,
+            uri: rejected.uri ?? rejected.search_result_id ?? "",
             detail: rejected.detail,
           }),
         );
@@ -641,7 +740,11 @@ export function AddTaskDialog({
         removePlaceholderIds(placeholders.map((task) => task.id));
       toast.error(
         t("addTask.submitFailed", {
-          uri: draft.uris[0] ?? draft.files[0]?.name ?? "",
+          uri:
+            draft.uris[0] ??
+            draft.files[0]?.name ??
+            draft.search_result_ids[0] ??
+            "",
           detail:
             error instanceof Error ? error.message : t("shell.networkError"),
         }),
@@ -744,7 +847,8 @@ export function AddTaskDialog({
   };
 
   const submit = () => {
-    if (lines.length === 0 && files.length === 0) return;
+    if (lines.length === 0 && files.length === 0 && searchIds.length === 0)
+      return;
     const draft = draftOf(lines.slice(0, uriCap));
     if (selectFiles && canSelectFiles) void inspect(draft);
     else void create(draft, null);
@@ -826,7 +930,11 @@ export function AddTaskDialog({
     }
   };
 
-  const nothingToSubmit = lines.length === 0 && files.length === 0;
+  const nothingToSubmit =
+    lines.length === 0 && files.length === 0 && searchIds.length === 0;
+  // A res_ draft never touches the URI textarea, the dropzone or the
+  // file-selection path (doc 05 §5.3 inspect takes no res_ ids).
+  const searchMode = searchIds.length > 0;
 
   const gutter = (badge: LineBadge | null, key: number): ReactNode => (
     <span key={key} className="block h-5 text-center leading-5">
@@ -875,140 +983,152 @@ export function AddTaskDialog({
                 </Button>
               </div>
 
-              <div>
-                <Label htmlFor="add-uris">{t("addTask.uriLabel")}</Label>
-                <div className="relative">
-                  <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute top-1 bottom-1 left-1.5 w-4 overflow-hidden font-mono text-sm"
-                  >
-                    <div
-                      style={{ transform: `translateY(${-gutterScroll}px)` }}
-                    >
-                      {rawLines.map((line, index) =>
-                        gutter(
-                          line.trim() === "" ? null : classifyLine(line, known),
-                          index,
-                        ),
-                      )}
+              {searchMode ? (
+                <p className="text-sm text-muted-foreground">
+                  {t("common:search.resultDraft", { count: searchIds.length })}
+                </p>
+              ) : (
+                <>
+                  <div>
+                    <Label htmlFor="add-uris">{t("addTask.uriLabel")}</Label>
+                    <div className="relative">
+                      <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute top-1 bottom-1 left-1.5 w-4 overflow-hidden font-mono text-sm"
+                      >
+                        <div
+                          style={{
+                            transform: `translateY(${-gutterScroll}px)`,
+                          }}
+                        >
+                          {rawLines.map((line, index) =>
+                            gutter(
+                              line.trim() === ""
+                                ? null
+                                : classifyLine(line, known),
+                              index,
+                            ),
+                          )}
+                        </div>
+                      </div>
+                      <textarea
+                        id="add-uris"
+                        rows={6}
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        // Soft wrap would stack a logical line over several visual
+                        // rows and break the one-badge-per-line gutter alignment.
+                        wrap="off"
+                        value={urisText}
+                        onChange={(event) => setUrisText(event.target.value)}
+                        onScroll={(event) =>
+                          setGutterScroll(event.currentTarget.scrollTop)
+                        }
+                        onKeyDown={onUrisKeyDown}
+                        className="w-full rounded-lg border border-input bg-transparent py-1 pr-2 pl-7 font-mono text-sm leading-5 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                      />
+                    </div>
+                    <div className="mt-0.5 flex items-start justify-between gap-2 text-sm text-muted-foreground">
+                      <span>{t("addTask.uriHelp", { max: uriCap })}</span>
+                      <span className="shrink-0 text-right tabular-nums">
+                        {overCap
+                          ? t("addTask.lineCounterOver", {
+                              total: lines.length,
+                              max: uriCap,
+                            })
+                          : t("addTask.lineCounter", {
+                              total: lines.length,
+                              max: uriCap,
+                            })}
+                        {overCap ? (
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="ml-1 h-auto p-0"
+                            onClick={() => void createBatches()}
+                          >
+                            {t("addTask.splitBatches")}
+                          </Button>
+                        ) : null}
+                      </span>
                     </div>
                   </div>
-                  <textarea
-                    id="add-uris"
-                    rows={6}
-                    spellCheck={false}
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    // Soft wrap would stack a logical line over several visual
-                    // rows and break the one-badge-per-line gutter alignment.
-                    wrap="off"
-                    value={urisText}
-                    onChange={(event) => setUrisText(event.target.value)}
-                    onScroll={(event) =>
-                      setGutterScroll(event.currentTarget.scrollTop)
-                    }
-                    onKeyDown={onUrisKeyDown}
-                    className="w-full rounded-lg border border-input bg-transparent py-1 pr-2 pl-7 font-mono text-sm leading-5 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  />
-                </div>
-                <div className="mt-0.5 flex items-start justify-between gap-2 text-sm text-muted-foreground">
-                  <span>{t("addTask.uriHelp", { max: uriCap })}</span>
-                  <span className="shrink-0 text-right tabular-nums">
-                    {overCap
-                      ? t("addTask.lineCounterOver", {
-                          total: lines.length,
-                          max: uriCap,
-                        })
-                      : t("addTask.lineCounter", {
-                          total: lines.length,
-                          max: uriCap,
-                        })}
-                    {overCap ? (
-                      <Button
-                        variant="link"
-                        size="sm"
-                        className="ml-1 h-auto p-0"
-                        onClick={() => void createBatches()}
-                      >
-                        {t("addTask.splitBatches")}
-                      </Button>
-                    ) : null}
-                  </span>
-                </div>
-              </div>
 
-              <div
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => void onDropzoneDrop(event)}
-              >
-                <div
-                  role="button"
-                  tabIndex={0}
-                  aria-label={t("addTask.dropzone")}
-                  onClick={() => fileInput.current?.click()}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      fileInput.current?.click();
-                    }
-                  }}
-                  className="rounded-lg border border-dashed border-input px-3 py-2 text-sm text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                >
-                  <span className="flex items-center gap-2">
-                    <Upload className="size-4" aria-hidden="true" />
-                    {files.length === 0
-                      ? t("addTask.dropzone")
-                      : t("addTask.dropzoneFiles", { total: files.length })}
-                  </span>
-                </div>
-                {files.length > 0 ? (
-                  // Interactive controls never nest inside the role=button
-                  // dropzone; the picked-file list sits beside it.
-                  <ul className="mt-1 flex flex-col gap-1 text-sm">
-                    {files.map((file, index) => (
-                      <li
-                        key={`${file.name}-${index}`}
-                        className="flex items-center gap-2 text-foreground"
-                      >
-                        <span
-                          className="min-w-0 flex-1 truncate"
-                          title={file.name}
-                        >
-                          {file.name}
-                        </span>
-                        <span className="shrink-0 tabular-nums text-muted-foreground">
-                          ({formatBytes(file.size, locale)})
-                        </span>
-                        <button
-                          type="button"
-                          aria-label={t("addTask.removeFile", {
-                            name: file.name,
-                          })}
-                          onClick={() =>
-                            setFiles((previous) =>
-                              previous.filter((_, i) => i !== index),
-                            )
-                          }
-                        >
-                          <X className="size-3.5" aria-hidden="true" />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-              <input
-                ref={fileInput}
-                type="file"
-                multiple
-                hidden
-                accept=".torrent,.txt"
-                aria-label={t("addTask.browse")}
-                onChange={(event) => {
-                  void onFilesPicked(event.target.files);
-                  event.target.value = "";
-                }}
-              />
+                  <div
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => void onDropzoneDrop(event)}
+                  >
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={t("addTask.dropzone")}
+                      onClick={() => fileInput.current?.click()}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          fileInput.current?.click();
+                        }
+                      }}
+                      className="rounded-lg border border-dashed border-input px-3 py-2 text-sm text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Upload className="size-4" aria-hidden="true" />
+                        {files.length === 0
+                          ? t("addTask.dropzone")
+                          : t("addTask.dropzoneFiles", { total: files.length })}
+                      </span>
+                    </div>
+                    {files.length > 0 ? (
+                      // Interactive controls never nest inside the role=button
+                      // dropzone; the picked-file list sits beside it.
+                      <ul className="mt-1 flex flex-col gap-1 text-sm">
+                        {files.map((file, index) => (
+                          <li
+                            key={`${file.name}-${index}`}
+                            className="flex items-center gap-2 text-foreground"
+                          >
+                            <span
+                              className="min-w-0 flex-1 truncate"
+                              title={file.name}
+                            >
+                              {file.name}
+                            </span>
+                            <span className="shrink-0 tabular-nums text-muted-foreground">
+                              ({formatBytes(file.size, locale)})
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={t("addTask.removeFile", {
+                                name: file.name,
+                              })}
+                              onClick={() =>
+                                setFiles((previous) =>
+                                  previous.filter((_, i) => i !== index),
+                                )
+                              }
+                            >
+                              <X className="size-3.5" aria-hidden="true" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                  <input
+                    ref={fileInput}
+                    type="file"
+                    multiple
+                    hidden
+                    accept=".torrent,.txt"
+                    aria-label={t("addTask.browse")}
+                    onChange={(event) => {
+                      void onFilesPicked(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                </>
+              )}
 
               <div>
                 <label
