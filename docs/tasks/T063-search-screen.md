@@ -50,8 +50,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/tasks.go` | modify | `search_result_ids` on `CreateTasksBody`, the one-source-family rule, resolution and the `search-result:<res_id>` display source. |
 | `internal/api/tasks_test.go` | modify | `humatest` cases for the search-result family and its rejections, plus the REST-side pin that the task DTO follows the shared `DisplaySourceURI` rule. |
 | `internal/api/search_test.go` | modify | Asserts a seeded result's serialized `GET /search/{id}` row carries no acquisition key. |
-| `internal/sync/delta.go` | modify | `DisplaySourceURI` — the shared helper `Project` and the REST DTO both call: `SourceDisplayURI` wins; the nil-or-empty fallback strips userinfo and, for non-`magnet:` schemes, `RawQuery` — fail-closed for rows that predate the column. |
-| `internal/sync/delta_test.go` | modify | `DisplaySourceURI` pins: a set `source_display_uri` renders verbatim; NULL and empty fall back to `source_uri` with userinfo and query string stripped, except a `magnet:` source which keeps `xt` only — and one with no `xt` drops out entirely. |
+| `internal/sync/delta.go` | modify | `DisplaySourceURI` — the shared helper `Project` and the REST DTO both call: `SourceDisplayURI` wins; the nil-or-empty fallback strips userinfo and, for non-`magnet:` schemes, `RawQuery`, while a `magnet:` keeps only a `urn:` `xt` and drops out without one — fail-closed for rows that predate the column. |
+| `internal/sync/delta_test.go` | modify | `DisplaySourceURI` pins: a set `source_display_uri` renders verbatim; NULL and empty fall back to `source_uri` with userinfo and query string stripped, a `magnet:` source keeps a `urn:` `xt` only, and one without a `urn:` `xt` drops out entirely. |
 | `web/src/components/Search/SearchScreen.tsx` | create | The screen, the poll loop, the indexer and category pickers, the status strip. |
 | `web/src/components/Search/ResultsGrid.tsx` | create | The virtualised result table and its row actions. |
 | `web/src/components/Search/SearchScreen.test.tsx` | create | Poll lifecycle, status strip, zero states, add-to-queue bodies. |
@@ -186,10 +186,12 @@ SearchResultIDs []string `json:"search_result_ids,omitempty" maxItems:"50"`
   shared helper keeps the stricter behaviour), and strips `RawQuery` for every scheme
   except `magnet:` — a magnet's query is untrusted (`tr`, `xs` and `ws` values
   commonly embed tracker passkeys and indexer API keys), yet stripping it whole
-  would render a bare, useless `magnet:`, so there it keeps only the `xt`
-  parameter — the credential-free content identity — and drops `dn`, `tr`, `xs`
-  and the rest; a magnet with no `xt` at all is dropped like an unparsable
-  source. Rows written before this column existed have it NULL and a stored
+  would render a bare, useless `magnet:`, so there it keeps only an `xt`
+  parameter whose value is a `urn:` — the credential-free content identity; an
+  `xt` is itself an absolute URI, so a non-`urn:` `xt` is discarded with `dn`,
+  `tr`, `xs` and the rest, and a magnet left with no `urn:` `xt` is dropped
+  like an unparsable source. Rows written before this column existed have it
+  NULL and a stored
   `source_uri` may carry a secret in its query string (a Torznab `passkey` rides
   there, not in userinfo), so the fallback is deliberately fail-closed — every
   pre-existing row's emitted non-magnet URI loses its query string, benign or not.
@@ -227,9 +229,10 @@ The three zero states, each its own render: `No results` (every indexer answered
    prefer it when set. The preference and the nil-or-empty fallback live in one shared
    `DisplaySourceURI` helper in `internal/sync/delta.go` that `Project` and the REST
    renderer in `internal/api/tasks.go` both call — the rule is the contract's,
-   including the `magnet:` `xt`-only carve-out. `internal/sync/delta_test.go` pins all
-   five cases — set, NULL, empty, a magnet source keeping only `xt` and a magnet with
-   no `xt` dropping out — beside the existing `TestProjectDropsUnsanitizableSources`.
+   including the `magnet:` `xt` carve-out. `internal/sync/delta_test.go` pins all
+   five cases — set, NULL, empty, a magnet keeping only a `urn:` `xt`, and a magnet
+   with no usable `xt` (absent or non-`urn:`) dropping out — beside the existing
+   `TestProjectDropsUnsanitizableSources`.
 3. In `internal/api/tasks.go`, add `SearchResultIDs` to `CreateTasksBody`; enforce the one-family and
    empty/duplicate rules of the contract above; resolve each id, feed every resolved acquisition URI
    through the existing normalise → route → insert pipeline, store `search-result:<res_id>` as the
@@ -308,19 +311,20 @@ The three zero states, each its own render: `No results` (every indexer answered
 - [ ] `aria-rowcount` equals the job's `total`, not the number of rows in the DOM.
 - [ ] A case in `internal/sync/delta_test.go` asserts `Project` renders `source_display_uri`
       verbatim when set, a NULL or empty column falls back to `source_uri` with userinfo
-      and query string stripped, a `magnet:` source keeps only its `xt` parameter, and a
-      magnet with no `xt` drops out — so neither the SSE snapshot nor a delta can emit a
-      query-string secret for any row, including ones written before the column existed.
+      and query string stripped, a `magnet:` source keeps only a `urn:` `xt` parameter,
+      and a magnet with no `urn:` `xt` (absent or non-URN) drops out — so neither the
+      SSE snapshot nor a delta can emit a query-string secret for any row, including
+      ones written before the column existed.
 - [ ] No task-emitting path serialises `source_uri` directly — the PATCH response and
       every SSE delta are built through `queryGetTask`/`queryListTasksPage` and rendered
       by the shared `DisplaySourceURI` helper; verified by grep for other task-row
       selectors and DTO constructors before implementation begins.
 - [ ] A `humatest` case in `internal/api/tasks_test.go` pins the REST renderer to the
       shared rule: a task row with NULL `source_display_uri` and a `magnet:`
-      `source_uri` serialises as `magnet:?xt=…` (xt only) in the `GET /tasks` body, and
-      a row whose `source_uri` parses with `u.Opaque != ""` (e.g. `user:pass@host`)
-      omits the display source — so a re-duplicated renderer in `internal/api/tasks.go`
-      fails the suite, not a grep.
+      `source_uri` serialises as `magnet:?xt=urn:…` (the `urn:` `xt` only) in the
+      `GET /tasks` body, and a row whose `source_uri` parses with `u.Opaque != ""`
+      (e.g. `user:pass@host`) omits the display source — so a re-duplicated renderer
+      in `internal/api/tasks.go` fails the suite, not a grep.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
