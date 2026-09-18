@@ -99,7 +99,7 @@ export function useSearchJob(): {
     query: string;
     indexer_ids: string[];
     categories: number[];
-  }) => Promise<void>;
+  }) => Promise<string | null>;
   stop: () => Promise<void>;
   jobId: string | null;
   starting: boolean;
@@ -197,7 +197,7 @@ export function useSearchJob(): {
       indexer_ids: string[];
       categories: number[];
     }) => {
-      if (startingRef.current) return;
+      if (startingRef.current) return null;
       startingRef.current = true;
       setStarting(true);
       setStartError(null);
@@ -213,7 +213,7 @@ export function useSearchJob(): {
           setStartError(
             error?.detail ?? error?.title ?? t("shell.networkError"),
           );
-          return;
+          return null;
         }
         setJobId(data.id);
         try {
@@ -221,6 +221,7 @@ export function useSearchJob(): {
         } catch {
           // best-effort; the job still runs without resume
         }
+        return data.id;
       } finally {
         startingRef.current = false;
         setStarting(false);
@@ -344,10 +345,11 @@ export function SearchScreen(): JSX.Element {
   const [flashing, setFlashing] = useState<Set<string>>(new Set());
   const [failed, setFailed] = useState<Set<string>>(new Set());
   const [dialogIds, setDialogIds] = useState<string[] | null>(null);
-  // The saved search whose run is on the wire, with the total it had stored
-  // when the run started — the finish effect diffs the new total against it.
+  // The saved search whose run is on the wire, the job it started, and the
+  // total it had stored — the finish effect diffs the new total against it.
   const [savedRun, setSavedRun] = useState<{
     id: string;
+    jobId: string;
     previousTotal: number;
   } | null>(null);
   // Per-entry count of results a later run added over lastTotal — the "new
@@ -667,7 +669,7 @@ export function SearchScreen(): JSX.Element {
    *  selections, then the job starts with exactly the stored indexerIds and
    *  categories — never the effective defaults (task T064 step 5). */
   const runSavedSearch = useCallback(
-    (s: SavedSearch) => {
+    async (s: SavedSearch) => {
       if (search.starting || (search.jobId !== null && !search.finished))
         return;
       setQueryText(s.query);
@@ -682,17 +684,20 @@ export function SearchScreen(): JSX.Element {
       setSelected(new Set());
       setResolved(new Map());
       setFailed(new Set());
-      setSavedRun({ id: s.id, previousTotal: s.lastTotal });
       setNewSince((prev) => {
         const next = new Map(prev);
         next.delete(s.id);
         return next;
       });
-      void search.start({
+      const jobId = await search.start({
         query: s.query,
         indexer_ids: s.indexerIds,
         categories: s.categories,
       });
+      // A refused start leaves no job to charge the entry with; only a run
+      // that owns a live job may write back to it.
+      if (jobId !== null)
+        setSavedRun({ id: s.id, jobId, previousTotal: s.lastTotal });
     },
     [search],
   );
@@ -701,10 +706,15 @@ export function SearchScreen(): JSX.Element {
   // higher total than the stored one lands in the entry's "new since last
   // view" badge.
   useEffect(() => {
-    // search.starting guards the window where savedRun is set but the new
-    // jobId has not landed yet: finished/total would still describe the
-    // previous job, and consuming them would corrupt lastTotal.
-    if (savedRun === null || !search.finished || search.starting) return;
+    if (savedRun === null) return;
+    // Only the job this run started may write back to its entry: a stop
+    // clears jobId and a superseding search changes it, so a mismatch drops
+    // the run before an unrelated job's totals can reach lastTotal.
+    if (search.jobId !== savedRun.jobId) {
+      setSavedRun(null);
+      return;
+    }
+    if (!search.finished) return;
     const current = useUiPrefs.getState().search;
     const entry = current.saved.find((e) => e.id === savedRun.id);
     if (entry !== undefined && entry.lastTotal !== search.total)
@@ -719,7 +729,7 @@ export function SearchScreen(): JSX.Element {
     const delta = search.total - savedRun.previousTotal;
     if (delta > 0) setNewSince((prev) => new Map(prev).set(savedRun.id, delta));
     setSavedRun(null);
-  }, [savedRun, search.starting, search.finished, search.total]);
+  }, [savedRun, search.jobId, search.finished, search.total]);
 
   const indexersLoaded = indexersQuery.isSuccess;
   const noEnabled = indexersLoaded && enabled.length === 0;

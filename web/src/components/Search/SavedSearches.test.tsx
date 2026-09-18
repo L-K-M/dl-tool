@@ -243,6 +243,67 @@ test("TestRunSavedSearchUsesStoredIndexers", async () => {
   );
 });
 
+test("TestFailedSavedRunChargesNothingToTheEntry", async () => {
+  let posts = 0;
+  let polls = 0;
+  server.use(
+    http.post("*/api/v1/search", () => {
+      posts += 1;
+      // The saved run's start is refused; the follow-up normal search
+      // succeeds and finishes with a higher total than the entry stores.
+      return posts === 1
+        ? HttpResponse.json({ detail: "no indexers" }, { status: 500 })
+        : HttpResponse.json({ id: "sch_normal" }, { status: 202 });
+    }),
+    http.get("*/api/v1/search/sch_normal", () => {
+      polls += 1;
+      return HttpResponse.json(
+        jobBody({ finished: true, total: 9, engines: [engine()] }),
+      );
+    }),
+  );
+  useUiPrefs.setState({
+    hydrated: true,
+    search: {
+      indexerIds: ["ix_a"],
+      categories: [],
+      saved: [entry("weekly", { lastTotal: 1 })],
+    },
+  });
+
+  mountScreen();
+  fireEvent.click(screen.getByRole("button", { name: /^Saved/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "weekly" }));
+  await waitFor(() => expect(posts).toBe(1));
+
+  // An unrelated search finishing next must not be charged to the saved
+  // entry — its lastTotal stays at the stored value.
+  fireEvent.change(screen.getByLabelText("Search query"), {
+    target: { value: "fedora" },
+  });
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "Search" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  await waitFor(() => expect(posts).toBe(2));
+  // Once the poll lands and the finished render commits (Stop disables),
+  // any incorrect write-back to the entry would already have landed.
+  await waitFor(() => expect(polls).toBeGreaterThan(0));
+  await waitFor(() =>
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Stop this search",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true),
+  );
+  expect(useUiPrefs.getState().search.saved[0]?.lastTotal).toBe(1);
+});
+
 test("TestDuplicateNameRefused", async () => {
   const saved = [entry("daily")];
   useUiPrefs.setState({
