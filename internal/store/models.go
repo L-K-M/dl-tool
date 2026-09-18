@@ -45,28 +45,34 @@ func NewID(prefix string) string {
 // DDL defaults on insert and are written by the tasks that own them (T020,
 // T026, T036, T074).
 type Task struct {
-	ID             string  `db:"id" json:"id"`
-	Engine         string  `db:"engine" json:"engine"`
-	EngineRef      *string `db:"engine_ref" json:"engine_ref"`
-	SourceKind     string  `db:"source_kind" json:"source_kind"`
-	SourceURI      *string `db:"source_uri" json:"source_uri"`
-	Name           string  `db:"name" json:"name"`
-	InfohashV1     *string `db:"infohash_v1" json:"infohash_v1"`
-	InfohashV2     *string `db:"infohash_v2" json:"infohash_v2"`
-	State          string  `db:"state" json:"state"`
-	ErrorCode      *string `db:"error_code" json:"error_code"`
-	ErrorMessage   *string `db:"error_message" json:"error_message"`
-	Destination    string  `db:"destination" json:"destination"`
-	ContentPath    *string `db:"content_path" json:"content_path"`
-	CategoryID     *string `db:"category_id" json:"category_id"`
-	TotalBytes     *int64  `db:"total_bytes" json:"total_bytes"`
-	CompletedBytes int64   `db:"completed_bytes" json:"completed_bytes"`
-	UploadedBytes  int64   `db:"uploaded_bytes" json:"uploaded_bytes"`
-	DownloadRate   int64   `db:"download_rate" json:"download_rate"`
-	UploadRate     int64   `db:"upload_rate" json:"upload_rate"`
-	ETASeconds     *int64  `db:"eta_seconds" json:"eta_seconds"`
-	Sequential     int     `db:"sequential" json:"sequential"`
-	QueuePosition  *int64  `db:"queue_position" json:"queue_position"`
+	ID         string  `db:"id" json:"id"`
+	Engine     string  `db:"engine" json:"engine"`
+	EngineRef  *string `db:"engine_ref" json:"engine_ref"`
+	SourceKind string  `db:"source_kind" json:"source_kind"`
+	SourceURI  *string `db:"source_uri" json:"source_uri"`
+	// SourceDisplayURI is the API-safe reference rendered where the API would
+	// otherwise show source_uri — "search-result:<res_id>" for a task created
+	// from a search result, NULL for every other source. It is written at
+	// insert and never re-derived; sync.DisplaySourceURI is the one sanitizing
+	// fallback for rows that predate the column.
+	SourceDisplayURI *string `db:"source_display_uri" json:"source_display_uri"`
+	Name             string  `db:"name" json:"name"`
+	InfohashV1       *string `db:"infohash_v1" json:"infohash_v1"`
+	InfohashV2       *string `db:"infohash_v2" json:"infohash_v2"`
+	State            string  `db:"state" json:"state"`
+	ErrorCode        *string `db:"error_code" json:"error_code"`
+	ErrorMessage     *string `db:"error_message" json:"error_message"`
+	Destination      string  `db:"destination" json:"destination"`
+	ContentPath      *string `db:"content_path" json:"content_path"`
+	CategoryID       *string `db:"category_id" json:"category_id"`
+	TotalBytes       *int64  `db:"total_bytes" json:"total_bytes"`
+	CompletedBytes   int64   `db:"completed_bytes" json:"completed_bytes"`
+	UploadedBytes    int64   `db:"uploaded_bytes" json:"uploaded_bytes"`
+	DownloadRate     int64   `db:"download_rate" json:"download_rate"`
+	UploadRate       int64   `db:"upload_rate" json:"upload_rate"`
+	ETASeconds       *int64  `db:"eta_seconds" json:"eta_seconds"`
+	Sequential       int     `db:"sequential" json:"sequential"`
+	QueuePosition    *int64  `db:"queue_position" json:"queue_position"`
 	// SelectFiles is the persisted create-time file selection of
 	// docs/05-api-contract.md section 5.2, one JSON SelectionIntent — the
 	// selection the admission pass and re-submissions apply to the engine.

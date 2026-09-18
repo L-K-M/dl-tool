@@ -20,6 +20,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/L-K-M/dl-tool/internal/config"
+	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/search"
 	"github.com/L-K-M/dl-tool/internal/secure"
@@ -33,7 +34,10 @@ type searchTestEnv struct {
 	api      humatest.TestAPI
 	db       *sqlx.DB
 	indexers *store.IndexerStore
-	bearer   string
+	// engines is consumed by newResultTaskEnv in tasks_test.go — the res_
+	// resolution cases need the recording engine stand-ins registered.
+	engines *engine.Registry
+	bearer  string
 }
 
 // searchTestKey is the throwaway key the test store seals under; it stands
@@ -53,6 +57,10 @@ func newSearchTestEnvDeps(t *testing.T, hc *http.Client, defs *search.Registry, 
 
 	root := t.TempDir()
 	configDir := filepath.Join(root, "config")
+	dataRoot := filepath.Join(root, "data")
+	if err := os.Mkdir(dataRoot, 0o755); err != nil {
+		t.Fatalf("make data root: %v", err)
+	}
 	db, err := store.Open(
 		t.Context(),
 		filepath.Join(configDir, "dl-tool.db"),
@@ -73,7 +81,7 @@ func newSearchTestEnvDeps(t *testing.T, hc *http.Client, defs *search.Registry, 
 	}
 
 	server, err := NewServer(
-		&config.Config{ConfigDir: configDir, SessionTTL: time.Hour},
+		&config.Config{ConfigDir: configDir, SessionTTL: time.Hour, DataRoots: []string{dataRoot}},
 		db,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: hc, DB: db},
@@ -87,6 +95,7 @@ func newSearchTestEnvDeps(t *testing.T, hc *http.Client, defs *search.Registry, 
 		api:      humatest.Wrap(t, server.API),
 		db:       db,
 		indexers: indexers,
+		engines:  server.Engines,
 	}
 	env.bearer = seedLiveAPIToken(t, db, seedUser(t, db).ID)
 
@@ -1626,5 +1635,66 @@ func TestDuplicateAcrossEnginesAppearsOnce(t *testing.T) {
 	if *poll.Body.Results[0].Seeders != 9 || *poll.Body.Results[1].Seeders != 7 {
 		t.Errorf("result order after dedup = %d then %d, want the page's -seeders order preserved",
 			*poll.Body.Results[0].Seeders, *poll.Body.Results[1].Seeders)
+	}
+}
+
+// --- serialized search results (doc 05 section 9.2) ------------------------
+
+// TestPollResultOmitsAcquisitionKeys pins the wire shape of a serialized
+// result row: download_url, magnet_uri and details_url are server-only
+// acquisition data, so a regression that re-adds one must fail here, not in
+// review. Typed decoding cannot distinguish an absent key, so the row is
+// read as a raw map and the body scanned for the seeded values.
+func TestPollResultOmitsAcquisitionKeys(t *testing.T) {
+	env := newSearchTestEnv(t, nil)
+
+	indexer := env.seedSearchIndexer(t, "ix-"+store.NewID(store.PrefixIndexer), "https://ix.test")
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2"
+	download := "https://provider.example/dl/x.torrent?passkey=k3y"
+	details := "https://provider.example/details/x"
+	job, err := store.CreateSearchJob(t.Context(), env.db, store.SearchJob{
+		Query:          "fixture",
+		IndexerIDsJSON: `["` + indexer.ID + `"]`,
+		Finished:       true,
+	})
+	if err != nil {
+		t.Fatalf("create search job: %v", err)
+	}
+	if _, err := store.InsertResults(t.Context(), env.db, job.ID, indexer.ID, []store.SearchResultRow{
+		{Title: "one", MagnetURI: &magnet, DownloadURL: &download, DetailsURL: &details},
+	}); err != nil {
+		t.Fatalf("insert results: %v", err)
+	}
+
+	resp := env.api.Get("/search/"+job.ID, env.authz())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("GET /search/%s status = %d: %s", job.ID, resp.Code, resp.Body.String())
+	}
+	raw := resp.Body.String()
+	for _, leak := range []string{"provider.example", "passkey", "k3y", "magnet:", "details_url", "download_url", "magnet_uri"} {
+		if strings.Contains(raw, leak) {
+			t.Fatalf("GET /search/{id} leaks acquisition data %q: %s", leak, raw)
+		}
+	}
+
+	var body struct {
+		Results []map[string]any `json:"results"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode search body: %v", err)
+	}
+	if len(body.Results) != 1 {
+		t.Fatalf("results = %d, want 1", len(body.Results))
+	}
+	if !strings.HasPrefix(fmt.Sprint(body.Results[0]["id"]), "res_") {
+		t.Errorf("result id = %v, want an opaque res_ id", body.Results[0]["id"])
+	}
+	// The raw substring scan above cannot see an absent key rendered under
+	// a different shape; the decoded row pins the wire contract
+	// structurally — no acquisition key exists at all.
+	for _, key := range []string{"download_url", "magnet_uri", "details_url"} {
+		if _, ok := body.Results[0][key]; ok {
+			t.Errorf("serialized result carries acquisition key %q: %v", key, body.Results[0])
+		}
 	}
 }

@@ -114,15 +114,17 @@ func transitionLegal(from, next string) bool {
 
 const (
 	queryCreateTask = `INSERT INTO tasks
-(id, engine, engine_ref, source_kind, source_uri, name, infohash_v1, infohash_v2, state,
- error_code, error_message, destination, content_path, category_id, total_bytes, completed_bytes,
- uploaded_bytes, download_rate, upload_rate, eta_seconds, sequential, queue_position,
+(id, engine, engine_ref, source_kind, source_uri, source_display_uri, name,
+ infohash_v1, infohash_v2, state, error_code, error_message, destination,
+ content_path, category_id, total_bytes, completed_bytes, uploaded_bytes,
+ download_rate, upload_rate, eta_seconds, sequential, queue_position,
  select_files, added_at, started_at, completed_at, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	queryGetTask = `SELECT id, engine, engine_ref, source_kind, source_uri, name, infohash_v1, infohash_v2,
- state, error_code, error_message, destination, content_path, category_id, total_bytes, completed_bytes,
- uploaded_bytes, download_rate, upload_rate, eta_seconds, sequential, queue_position,
+	queryGetTask = `SELECT id, engine, engine_ref, source_kind, source_uri, source_display_uri,
+ name, infohash_v1, infohash_v2, state, error_code, error_message, destination,
+ content_path, category_id, total_bytes, completed_bytes, uploaded_bytes,
+ download_rate, upload_rate, eta_seconds, sequential, queue_position,
  select_files, dl_limit, ul_limit, added_at, started_at, completed_at, created_at, updated_at
 FROM tasks
 WHERE id = ?`
@@ -451,8 +453,8 @@ func insertTaskRow(ctx context.Context, ext sqlx.ExtContext, t Task) error {
 	_, err := ext.ExecContext(
 		ctx,
 		queryCreateTask,
-		t.ID, t.Engine, t.EngineRef, t.SourceKind, t.SourceURI, t.Name,
-		t.InfohashV1, t.InfohashV2, t.State, t.ErrorCode, t.ErrorMessage,
+		t.ID, t.Engine, t.EngineRef, t.SourceKind, t.SourceURI, t.SourceDisplayURI,
+		t.Name, t.InfohashV1, t.InfohashV2, t.State, t.ErrorCode, t.ErrorMessage,
 		t.Destination, t.ContentPath, t.CategoryID, t.TotalBytes, t.CompletedBytes,
 		t.UploadedBytes, t.DownloadRate, t.UploadRate, t.ETASeconds,
 		t.Sequential, t.QueuePosition, t.SelectFiles, t.AddedAt, t.StartedAt, t.CompletedAt,

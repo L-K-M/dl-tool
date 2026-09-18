@@ -18,6 +18,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/fsx"
 	"github.com/L-K-M/dl-tool/internal/store"
+	isync "github.com/L-K-M/dl-tool/internal/sync"
 	"github.com/L-K-M/dl-tool/internal/uri"
 )
 
@@ -46,6 +47,16 @@ VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING`
 	emptySubmissionDetail = "the submission holds no uri; send between 1 and 50"
 	tooManyURIsFormat     = "the submission holds %d uris; send between 1 and %d"
 	allRejectedDetail     = "every uri in the submission was rejected; see rejected[] for the per-uri reasons"
+
+	// search_result_ids is its own source family (doc 05 section 9.2): it
+	// never mixes with uris or file parts, and its rejected[] entries name
+	// the res_ id, never the provider source they resolved to.
+	mixedSourceFamiliesDetail = "search_result_ids cannot be combined with uris or file parts"
+	tooManyResultsFormat      = "the submission holds %d search_result_ids; send between 1 and %d"
+	searchResultGoneDetail    = "the search result is unknown or its search job is gone"
+	duplicateResultDetail     = "the same search result id appears twice in this submission"
+	noSearchResultsDetail     = "no search result id resolved to a stored result"
+	searchResultDisplayPrefix = "search-result:"
 
 	selectionNoManifestDetail = "select_files applies to a multi-file manifest; the submission holds none"
 	selectionCapDetailFormat  = "the %s engine does not support selecting files"
@@ -82,6 +93,10 @@ type CreateTasksBody struct {
 	FTPCredentials  *FTPCredentials        `json:"ftp_credentials,omitempty" doc:"Used for this request's ftp, ftps and sftp URIs only; never returned"`
 	ExtractPassword string                 `json:"extract_password,omitempty" doc:"Stored for auto-extract; never returned"`
 	Engine          string                 `json:"engine,omitempty" enum:"aria2,qbittorrent,ytdlp" doc:"Overrides the routing table when that engine accepts the URI"`
+	// SearchResultIDs is the opaque-id source family of doc 05 section 9.2:
+	// res_ ids from a search job, resolved to their stored provider source
+	// server-side. It never combines with uris or file parts.
+	SearchResultIDs []string `json:"search_result_ids,omitempty" maxItems:"50" doc:"Opaque res_ ids from a search job; resolved server-side, never mixed with uris or file parts"`
 }
 
 // CreateTasksInput is the operation input carrying CreateTasksBody.
@@ -99,12 +114,18 @@ type FTPCredentials struct {
 // RejectedURI is one entry of rejected[]; type is a slug from the registry
 // in doc 05 section 1.3.
 type RejectedURI struct {
-	URI    string `json:"uri"`
-	Type   string `json:"type"`
-	Detail string `json:"detail"`
+	URI string `json:"uri,omitempty"`
+	// SearchResultID names a refused search_result_ids element instead of
+	// uri — the resolved provider source never appears in a rejection.
+	SearchResultID string `json:"search_result_id,omitempty"`
+	Type           string `json:"type"`
+	Detail         string `json:"detail"`
 }
 
-// CreateTasksOutput carries HTTP 201 whenever at least one task was created.
+// CreateTasksOutput carries HTTP 201 when at least one task was created —
+// and for a search_result_ids submission whose every id resolved yet was
+// refused (already-committed duplicates): created[] is then empty and
+// rejected[] carries the per-id reasons.
 type CreateTasksOutput struct {
 	Status int `json:"-" enum:"201" doc:"Created"`
 	Body   struct {
@@ -305,6 +326,10 @@ type plannedTask struct {
 	// selection is the create-time select_files intent when this task is
 	// the submission's target; nil for every other planned task.
 	selection *store.SelectionIntent
+	// displaySource is the API-safe reference written to
+	// source_display_uri — "search-result:<res_id>" for a search-result
+	// submission, nil for every other family.
+	displaySource *string
 }
 
 // CreateTasks accepts up to 50 sources — payload uris, the lines of .txt
@@ -326,13 +351,23 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 	uris = append(uris, in.Body.URIs...)
 	uris = append(uris, txtURIs...)
 
+	searchResultIDs := in.Body.SearchResultIDs
+
+	// Exactly one source family per request (doc 05 section 9.2):
+	// search_result_ids never mixes with uris, blob parts or even a
+	// rejected junk part — the form middleware's rejected[] entries count
+	// as the file-part family.
+	if len(searchResultIDs) > 0 && (len(uris) > 0 || len(blobs) > 0 || len(rejected) > 0) {
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, mixedSourceFamiliesDetail)
+	}
+
 	// Shape validation runs before any other work, so a malformed submission
 	// can create no row and touch no engine. The schema's maxItems tag
 	// answers an over-long JSON body first; this branch owns the merged
 	// count of payload uris and .txt lines, and the empty submission —
 	// which a junk-only form is not: it gets the all-rejected answer below,
 	// its rejected[] entry intact.
-	if len(uris) == 0 && len(blobs) == 0 && len(rejected) == 0 {
+	if len(uris) == 0 && len(blobs) == 0 && len(rejected) == 0 && len(searchResultIDs) == 0 {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, emptySubmissionDetail)
 	}
 	if len(uris) > MaxURIs {
@@ -340,6 +375,16 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 			SlugValidationFailed,
 			http.StatusUnprocessableEntity,
 			fmt.Sprintf(tooManyURIsFormat, len(uris), MaxURIs),
+		)
+	}
+	// The schema's maxItems tag answers a JSON body first; this runtime
+	// check is the same defense-in-depth the uris family gets — any path
+	// that bypasses schema validation still faces the cap.
+	if len(searchResultIDs) > MaxURIs {
+		return nil, Problem(
+			SlugValidationFailed,
+			http.StatusUnprocessableEntity,
+			fmt.Sprintf(tooManyResultsFormat, len(searchResultIDs), MaxURIs),
 		)
 	}
 
@@ -361,20 +406,36 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 	// infohashes alike: one submission cannot plan the same torrent twice.
 	seenInfohashes := map[string]bool{}
 
-	blobPlanned, blobRejected, err := h.planBlobParts(ctx, blobs, in.Body.Engine, destination, in.Body.CreateSubfolder, seenInfohashes)
-	if err != nil {
-		return nil, err
-	}
-	rejected = append(rejected, blobRejected...)
+	var planned []plannedTask
+	// searchResultsResolved reports whether any res_ id resolved at all —
+	// the all-fail 404 below is for a submission whose every id is unknown
+	// or expired, distinct from resolved-then-refused ids, which keep the
+	// partial-success 201.
+	searchResultsResolved := false
+	if len(searchResultIDs) > 0 {
+		var resRejected []RejectedURI
+		planned, resRejected, searchResultsResolved, err = h.planSearchResults(
+			ctx, searchResultIDs, in.Body.Engine, destination, seenInfohashes)
+		if err != nil {
+			return nil, err
+		}
+		rejected = append(rejected, resRejected...)
+	} else {
+		blobPlanned, blobRejected, err := h.planBlobParts(ctx, blobs, in.Body.Engine, destination, in.Body.CreateSubfolder, seenInfohashes)
+		if err != nil {
+			return nil, err
+		}
+		rejected = append(rejected, blobRejected...)
 
-	mergedBody := in.Body
-	mergedBody.URIs = uris
-	planned, uriRejected, err := h.planURIs(ctx, mergedBody, destination, seenInfohashes)
-	if err != nil {
-		return nil, err
+		mergedBody := in.Body
+		mergedBody.URIs = uris
+		uriPlanned, uriRejected, err := h.planURIs(ctx, mergedBody, destination, seenInfohashes)
+		if err != nil {
+			return nil, err
+		}
+		rejected = append(rejected, uriRejected...)
+		planned = append(uriPlanned, blobPlanned...)
 	}
-	rejected = append(rejected, uriRejected...)
-	planned = append(planned, blobPlanned...)
 
 	// select_files precedes every insert: a refusal creates nothing. The
 	// resolved intent lands on the one task it addresses, and insertPlanned
@@ -388,6 +449,21 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 	}
 
 	if len(planned) == 0 {
+		if len(searchResultIDs) > 0 {
+			if !searchResultsResolved {
+				// Unknown and expired ids are indistinguishable, and the
+				// answer carries no provider data — 404, no rejected[].
+				return nil, Problem(SlugNotFound, http.StatusNotFound, noSearchResultsDetail)
+			}
+			// Every id resolved but each was refused (a duplicate already
+			// committed is terminal success for the caller): 201 with an
+			// empty created[] and the per-id rejected[] entries.
+			output := &CreateTasksOutput{Status: http.StatusCreated}
+			output.Body.Created = []TaskDTO{}
+			output.Body.Rejected = rejected
+
+			return output, nil
+		}
 		// Every submission refused: the top-level detail carries the first
 		// rejection's reason — for an ed2k-only submission exactly the
 		// message of doc 06 section 2 row 7.
@@ -708,6 +784,125 @@ func (h *TaskHandlers) planURIs(
 	return planned, rejected, nil
 }
 
+// planSearchResults resolves each res_ id to its stored row — while its
+// search job is live — and feeds the preferred acquisition source
+// (magnet_uri first, else download_url) through the same normalise → route →
+// duplicate pipeline the uris family uses. The resolved URI is server-only:
+// it lands in source_uri, while source_display_uri records the opaque
+// search-result:<res_id> reference the API renders, and rejected[] entries
+// carry search_result_id, never the resolved source. The bool reports
+// whether at least one id resolved, which decides the all-fail 404.
+func (h *TaskHandlers) planSearchResults(
+	ctx context.Context,
+	ids []string,
+	engineOverride, destination string,
+	seen map[string]bool,
+) ([]plannedTask, []RejectedURI, bool, error) {
+	planned := make([]plannedTask, 0, len(ids))
+	rejected := []RejectedURI{}
+	resolvedAny := false
+	seenIDs := map[string]bool{}
+
+	for _, id := range ids {
+		// Duplicate detection runs on the raw ids before any resolution: a
+		// repeated id is /problems/conflict even when its first occurrence
+		// is /problems/not-found.
+		if seenIDs[id] {
+			rejected = append(rejected, RejectedURI{
+				SearchResultID: id,
+				Type:           SlugConflict,
+				Detail:         duplicateResultDetail,
+			})
+
+			continue
+		}
+		seenIDs[id] = true
+
+		row, err := store.GetSearchResult(ctx, h.db, id)
+		if errors.Is(err, store.ErrNotFound) {
+			rejected = append(rejected, RejectedURI{
+				SearchResultID: id,
+				Type:           SlugNotFound,
+				Detail:         searchResultGoneDetail,
+			})
+
+			continue
+		}
+		if err != nil {
+			return nil, nil, false, internalFailure(ctx, "resolve search result", err)
+		}
+		resolvedAny = true
+
+		// The magnet is the preferred acquisition source (doc 05 section
+		// 9.2); a result without one falls back to its download URL.
+		raw := ""
+		if row.MagnetURI != nil && *row.MagnetURI != "" {
+			raw = *row.MagnetURI
+		} else if row.DownloadURL != nil {
+			raw = *row.DownloadURL
+		}
+
+		n, err := normaliseSubmission(raw)
+		if err != nil {
+			rejected = append(rejected, rejectSearchResult(id, err))
+
+			continue
+		}
+
+		engineName, err := engine.Route(n, nil)
+		if err != nil {
+			rejected = append(rejected, rejectSearchResult(id, err))
+
+			continue
+		}
+
+		// An explicit engine override is honoured exactly as for a URI
+		// submission: the chosen engine must be registered and accept the
+		// resolved source, else this one result is refused.
+		if engineOverride != "" && engineOverride != engineName {
+			chosen, ok := h.engines.Get(engineOverride)
+			if !ok {
+				return nil, nil, false, engineUnavailable(engineOverride)
+			}
+			if !chosen.Accepts(n.URI) {
+				rejected = append(rejected, RejectedURI{
+					SearchResultID: id,
+					Type:           SlugUnsupportedScheme,
+					Detail:         fmt.Sprintf(engineRefusesURIFmt, engineOverride),
+				})
+
+				continue
+			}
+			engineName = engineOverride
+		}
+		if _, ok := h.engines.Get(engineName); !ok {
+			return nil, nil, false, engineUnavailable(engineName)
+		}
+
+		duplicate, err := h.duplicateRejection(ctx, n, seen, "")
+		if err != nil {
+			return nil, nil, false, err
+		}
+		if duplicate != nil {
+			duplicate.SearchResultID = id
+			rejected = append(rejected, *duplicate)
+
+			continue
+		}
+		markPlanned(seen, n)
+
+		display := searchResultDisplayPrefix + id
+		planned = append(planned, plannedTask{
+			normalized:    n,
+			engine:        engineName,
+			destination:   destination,
+			displaySource: &display,
+		})
+	}
+
+	return planned, rejected, resolvedAny, nil
+}
+
 // insertPlanned persists one planned task, links its tags, records the
 // requested-destination echo, seeds its create-time file selection and
 // renders the response DTO.
@@ -765,18 +960,19 @@ func (h *TaskHandlers) insertPlanned(
 	// transaction (FR-150): a task can never persist without the first
 	// entry of its event log.
 	task, err := h.tasks.CreateLogged(ctx, store.Task{
-		Engine:      p.engine,
-		SourceKind:  string(n.Kind),
-		SourceURI:   stringOrNil(source),
-		Name:        name,
-		InfohashV1:  stringOrNil(n.InfohashV1),
-		InfohashV2:  stringOrNil(n.InfohashV2),
-		State:       state,
-		Destination: p.destination,
-		CategoryID:  categoryID,
-		Sequential:  boolToInt(body.Sequential),
-		TotalBytes:  totalBytes,
-		SelectFiles: selectFiles,
+		Engine:           p.engine,
+		SourceKind:       string(n.Kind),
+		SourceURI:        stringOrNil(source),
+		SourceDisplayURI: p.displaySource,
+		Name:             name,
+		InfohashV1:       stringOrNil(n.InfohashV1),
+		InfohashV2:       stringOrNil(n.InfohashV2),
+		State:            state,
+		Destination:      p.destination,
+		CategoryID:       categoryID,
+		Sequential:       boolToInt(body.Sequential),
+		TotalBytes:       totalBytes,
+		SelectFiles:      selectFiles,
 		// extract_password and create_subfolder have no store.Task field yet:
 		// their columns are owned by the auto-extract and upload tasks, which
 		// extend the store with them.
@@ -807,11 +1003,12 @@ func (h *TaskHandlers) insertPlanned(
 		category = &body.Category
 	}
 
-	dto := newTaskDTO(task, n.URI, category, body.Tags)
-	if n.URI == "" {
-		// A metalink part has no URI identity to display.
-		dto.SourceURI = nil
-	}
+	dto := newTaskDTO(task, "", category, body.Tags)
+	// The response source is the shared rule every task-emitting path uses:
+	// a search-result task renders its opaque search-result:<res_id>, a
+	// metalink part — stored without any URI — renders null, and every
+	// other source is the stored URI with credentials and query stripped.
+	dto.SourceURI = isync.DisplaySourceURI(task)
 	dto.RequestedDestination = requested
 
 	return dto, nil
@@ -1027,6 +1224,18 @@ func rejectURI(raw string, err error) RejectedURI {
 	return RejectedURI{URI: raw, Type: SlugUnsupportedScheme, Detail: detail}
 }
 
+// rejectSearchResult renders one rejected[] entry for a search result whose
+// resolved source normalising or routing refused. The entry names the res_
+// id, never the provider source — the resolved URI is server-only.
+func rejectSearchResult(id string, err error) RejectedURI {
+	detail := uriRejectedDetail
+	if reason, ok := strings.CutPrefix(err.Error(), uri.ErrUnsupportedScheme.Error()+": "); ok {
+		detail = reason
+	}
+
+	return RejectedURI{SearchResultID: id, Type: SlugUnsupportedScheme, Detail: detail}
+}
+
 // destinationRejected renders the 403 of doc 05 section 1.3's example: the
 // requested destination echoed in detail, plus the field-level error.
 func destinationRejected(requested string) error {
@@ -1201,7 +1410,7 @@ func (h *TaskHandlers) renderTasks(ctx context.Context, rows []store.Task) ([]Ta
 		}
 
 		dto := newTaskDTO(row, "", category, tags[row.ID])
-		dto.SourceURI = displaySourceURI(row)
+		dto.SourceURI = isync.DisplaySourceURI(row)
 		dto.Progress = taskProgress(row)
 		items = append(items, dto)
 	}
@@ -1271,25 +1480,6 @@ func (h *TaskHandlers) tagNamesByTask(ctx context.Context, rows []store.Task) (m
 	}
 
 	return tags, nil
-}
-
-// displaySourceURI renders the API-safe source reference. The stored
-// source_uri is the server-only engine source and may embed FTP
-// credentials, so userinfo is stripped before a row ever reaches a
-// response; a source that cannot be parsed is never echoed back.
-func displaySourceURI(t store.Task) *string {
-	if t.SourceURI == nil {
-		return nil
-	}
-
-	u, err := url.Parse(*t.SourceURI)
-	if err != nil {
-		return nil
-	}
-	u.User = nil
-	display := u.String()
-
-	return &display
 }
 
 // taskProgress derives progress as completed_bytes / total_bytes, 0.0

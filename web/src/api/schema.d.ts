@@ -781,6 +781,8 @@ export interface components {
       ftp_credentials?: components["schemas"]["FTPCredentials"];
       /** @description Create in paused instead of queued */
       paused?: boolean;
+      /** @description Opaque res_ ids from a search job; resolved server-side, never mixed with uris or file parts */
+      search_result_ids?: string[] | null;
       /** @description Applied to the first multi-file manifest; 422 when the routed engine lacks per_file_select */
       select_files?: components["schemas"]["FileSelectionRequest"][] | null;
       sequential?: boolean;
@@ -1150,8 +1152,9 @@ export interface components {
     };
     RejectedURI: {
       detail: string;
+      search_result_id?: string;
       type: string;
-      uri: string;
+      uri?: string;
     };
     RootsOutputBody: {
       roots: components["schemas"]["FSRoot"][] | null;

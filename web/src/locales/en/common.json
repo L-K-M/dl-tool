@@ -32,7 +32,11 @@
     "settings": "Settings",
     "logs": "Logs"
   },
-  "theme": { "system": "System", "light": "Light", "dark": "Dark" },
+  "theme": {
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark"
+  },
   "empty": {
     "tasks": "No downloads yet — paste a link or drop a .torrent file to start.",
     "filteredTasks": "No tasks are downloading right now.",
@@ -279,5 +283,48 @@
       "code": "Code",
       "message": "Message"
     }
+  },
+  "search": {
+    "queryLabel": "Search query",
+    "queryPlaceholder": "Search indexers…",
+    "indexerCount": "Indexers: {{selected}} of {{total}}",
+    "all": "All",
+    "none": "None",
+    "configure": "Settings",
+    "configureIndexer": "Open indexer settings for {{name}}",
+    "category": "Category",
+    "categoryAll": "All",
+    "submit": "Search",
+    "stop": "Stop",
+    "stopAriaLabel": "Stop this search",
+    "statusStrip": "Per-indexer search status",
+    "engineFailed": "Indexer failed",
+    "allFailed": "All indexers failed.",
+    "noIndexers": "No indexers are enabled.",
+    "noIndexersCta": "Configure indexers",
+    "resultsRegion": "Search results",
+    "colName": "Name",
+    "colSize": "Size",
+    "colSeeders": "Seeders",
+    "colLeechers": "Leechers",
+    "colAge": "Age",
+    "colIndexer": "Indexer",
+    "colActions": "Actions",
+    "selectAll": "Select all results",
+    "selectRow": "Select {{title}}",
+    "downloadOne": "Download {{title}}",
+    "downloadedTask": "{{title}} added — view task",
+    "selectedCount_one": "{{count}} selected",
+    "selectedCount_other": "{{count}} selected",
+    "downloadSelected": "Download selected",
+    "downloadNow": "Download immediately",
+    "downloadTo": "Download to…",
+    "downloadFailed": "Could not add {{title}}: {{detail}}",
+    "downloadRetry": "Download failed — try again",
+    "bulkRejected_one": "{{count}} selected result could not be added — first: {{title}}",
+    "bulkRejected_other": "{{count}} selected results could not be added — first: {{title}}",
+    "chunkFailed": "{{count}} selected results failed to submit: {{detail}}",
+    "resultDraft_one": "{{count}} search result selected",
+    "resultDraft_other": "{{count}} search results selected"
   }
 }

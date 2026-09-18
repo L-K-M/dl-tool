@@ -1602,3 +1602,467 @@ func TestLateDuplicatePausesTask(t *testing.T) {
 		t.Errorf("winner = %s/%v, want live and unflagged", winner.State, winner.ErrorCode)
 	}
 }
+
+// --- opaque search-result task creation (doc 05 section 9.2) --------------
+
+// newResultTaskEnv is a search env with the recording engine stand-ins the
+// create path's routing needs — a search result resolves to a real source
+// URI, which must route to a registered engine.
+func newResultTaskEnv(t *testing.T) *searchTestEnv {
+	t.Helper()
+	env := newSearchTestEnv(t, nil)
+	env.engines.Register(newRecordingEngine(engine.NameAria2, acceptsAria2Lanes))
+	env.engines.Register(newRecordingEngine(engine.NameQBittorrent, acceptsBitTorrent))
+	return env
+}
+
+// seedResultJob inserts one indexer, one finished search job and the given
+// result rows through the store, returning the res_ ids keyed by title — the
+// generated ids are random ULIDs, not insert-ordered.
+func (e *searchTestEnv) seedResultJob(t *testing.T, rows []store.SearchResultRow) (string, map[string]string) {
+	t.Helper()
+
+	indexer := e.seedSearchIndexer(t, "ix-"+store.NewID(store.PrefixIndexer), "https://ix.test")
+	job, err := store.CreateSearchJob(t.Context(), e.db, store.SearchJob{
+		Query:          "fixture",
+		IndexerIDsJSON: `["` + indexer.ID + `"]`,
+		Finished:       true,
+	})
+	if err != nil {
+		t.Fatalf("create search job: %v", err)
+	}
+	if _, err := store.InsertResults(t.Context(), e.db, job.ID, indexer.ID, rows); err != nil {
+		t.Fatalf("insert results: %v", err)
+	}
+
+	var pairs []struct {
+		ID    string `db:"id"`
+		Title string `db:"title"`
+	}
+	if err := e.db.SelectContext(t.Context(), &pairs,
+		`SELECT id, title FROM search_results WHERE search_job_id = ?`, job.ID); err != nil {
+		t.Fatalf("read result ids: %v", err)
+	}
+	ids := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		ids[p.Title] = p.ID
+	}
+	return job.ID, ids
+}
+
+// taskCount counts the tasks rows of the env's store.
+func (e *searchTestEnv) taskCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := e.db.GetContext(t.Context(), &n, `SELECT COUNT(*) FROM tasks`); err != nil {
+		t.Fatalf("count tasks: %v", err)
+	}
+	return n
+}
+
+// TestCreateTasksSearchResultIDs pins the opaque-id contract: each res_ id
+// resolves to its stored provider source server-side, the task's stored
+// source_uri keeps it, and every API rendering shows search-result:<res_id> —
+// the response, GET /tasks/{id} and the list. Provider URLs and magnets never
+// leave the server.
+func TestCreateTasksSearchResultIDs(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2&dn=Show&tr=https%3A%2F%2Ft.example%2Fann%3Fpk%3Dk"
+	download := "https://provider.example/dl/x.torrent?passkey=k3y"
+	_, ids := env.seedResultJob(t, []store.SearchResultRow{
+		{Title: "magnet one", MagnetURI: &magnet},
+		{Title: "file two", DownloadURL: &download},
+	})
+
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["magnet one"], ids["file two"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	raw := resp.Body.String()
+	for _, leak := range []string{"provider.example", "passkey", "k3y", "dn=", "tr=", "magnet:"} {
+		if strings.Contains(raw, leak) {
+			t.Fatalf("response leaks provider data %q: %s", leak, raw)
+		}
+	}
+
+	body := decodeCreateBody(t, resp)
+	if len(body.Created) != 2 {
+		t.Fatalf("created = %d, want 2: %+v", len(body.Created), body.Created)
+	}
+	displayByID := map[string]string{}
+	seenDisplays := map[string]bool{}
+	for _, task := range body.Created {
+		if task.SourceURI == nil {
+			t.Fatalf("task %s source_uri is nil, want search-result:<res_id>", task.ID)
+		}
+		if *task.SourceURI != "search-result:"+ids["magnet one"] &&
+			*task.SourceURI != "search-result:"+ids["file two"] {
+			t.Errorf("task %s source_uri = %v, want search-result:<res_id>", task.ID, *task.SourceURI)
+		}
+		seenDisplays[*task.SourceURI] = true
+		displayByID[task.ID] = ""
+		if task.Engine != engine.NameQBittorrent {
+			t.Errorf("task %s engine = %q, want qbittorrent (magnet and .torrent lanes)",
+				task.ID, task.Engine)
+		}
+	}
+	if len(seenDisplays) != 2 {
+		t.Errorf("created displays = %v, want one search-result: reference per submitted id", seenDisplays)
+	}
+
+	// The stored rows keep the server-only source; source_display_uri is the
+	// opaque reference the API renders.
+	var stored []struct {
+		TaskID           string `db:"id"`
+		SourceURI        string `db:"source_uri"`
+		SourceDisplayURI string `db:"source_display_uri"`
+	}
+	if err := env.db.SelectContext(t.Context(), &stored,
+		`SELECT id, source_uri, source_display_uri FROM tasks ORDER BY source_uri`); err != nil {
+		t.Fatalf("read stored sources: %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored %d tasks, want 2", len(stored))
+	}
+	if stored[0].SourceURI != download {
+		t.Errorf("stored source = %q, want the verbatim provider URL", stored[0].SourceURI)
+	}
+	if stored[1].SourceURI != magnet {
+		t.Errorf("stored source = %q, want the verbatim magnet", stored[1].SourceURI)
+	}
+	for _, row := range stored {
+		if _, ok := displayByID[row.TaskID]; !ok {
+			t.Errorf("stored task %s was not in the response", row.TaskID)
+		}
+		// Each row's display reference names the res_ id of the result its
+		// own source_uri resolved from — a swapped pairing fails here.
+		want := ids["magnet one"]
+		if row.SourceURI == download {
+			want = ids["file two"]
+		}
+		if resID := strings.TrimPrefix(row.SourceDisplayURI, "search-result:"); resID != want {
+			t.Errorf("source_display_uri = %q, want search-result:%s", row.SourceDisplayURI, want)
+		}
+	}
+
+	// Every read path renders the same opaque reference.
+	for _, task := range body.Created {
+		got := env.api.Get("/tasks/"+task.ID, env.authz())
+		var one TaskDTO
+		if err := json.Unmarshal(got.Body.Bytes(), &one); err != nil {
+			t.Fatalf("decode task: %v", err)
+		}
+		if one.SourceURI == nil || *one.SourceURI != *task.SourceURI {
+			t.Errorf("GET /tasks/%s source_uri = %v, want %v", task.ID, one.SourceURI, *task.SourceURI)
+		}
+		if strings.Contains(got.Body.String(), "provider.example") || strings.Contains(got.Body.String(), "magnet:") {
+			t.Errorf("GET /tasks/%s leaks provider data: %s", task.ID, got.Body.String())
+		}
+	}
+	list := env.api.Get("/tasks?state=all", env.authz())
+	if strings.Contains(list.Body.String(), "provider.example") ||
+		strings.Contains(list.Body.String(), "passkey") ||
+		strings.Contains(list.Body.String(), "magnet:") {
+		t.Errorf("task list leaks provider data: %s", list.Body.String())
+	}
+	if strings.Count(list.Body.String(), "search-result:res_") != 2 {
+		t.Errorf("list shows %d opaque references, want 2", strings.Count(list.Body.String(), "search-result:res_"))
+	}
+}
+
+// TestTaskCreateRejectsGoneResult pins the gone-id semantics: a res_ id whose
+// job was deleted (or that never existed) is /problems/not-found per entry,
+// naming only the id. Every id unavailable is a whole-request 404; a live id
+// beside a gone one stays a 201 partial success.
+func TestTaskCreateRejectsGoneResult(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2"
+	goneJob, goneIDs := env.seedResultJob(t, []store.SearchResultRow{{Title: "gone", MagnetURI: &magnet}})
+	live := "magnet:?xt=urn:btih:1111222233334444555566667777888899990000"
+	_, liveIDs := env.seedResultJob(t, []store.SearchResultRow{{Title: "live", MagnetURI: &live}})
+
+	if err := store.DeleteSearchJob(t.Context(), env.db, goneJob); err != nil {
+		t.Fatalf("delete search job: %v", err)
+	}
+
+	// All ids unavailable: 404, and no rejected[] payload at all.
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{goneIDs["gone"], "res_00000000000000000000000000"},
+	}, env.authz())
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", resp.Code, resp.Body.String())
+	}
+	problem := assertProblem(t, resp, http.StatusNotFound, SlugNotFound)
+	if strings.Contains(problem.Detail, "8f9c3a2b") || strings.Contains(problem.Detail, "magnet") {
+		t.Errorf("404 detail leaks provider data: %q", problem.Detail)
+	}
+	if env.taskCount(t) != 0 {
+		t.Errorf("all-gone submission created tasks, want none")
+	}
+
+	// Partial success: the live id creates; the gone id is rejected with the
+	// res_ id and no provider data anywhere in the entry.
+	resp = env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{liveIDs["live"], goneIDs["gone"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	body := decodeCreateBody(t, resp)
+	if len(body.Created) != 1 {
+		t.Fatalf("created = %d, want 1", len(body.Created))
+	}
+	if len(body.Rejected) != 1 {
+		t.Fatalf("rejected = %d, want 1: %+v", len(body.Rejected), body.Rejected)
+	}
+	entry := body.Rejected[0]
+	if entry.SearchResultID != goneIDs["gone"] {
+		t.Errorf("rejected search_result_id = %q, want %q", entry.SearchResultID, goneIDs["gone"])
+	}
+	if entry.URI != "" {
+		t.Errorf("rejected uri = %q, want empty — never the provider source", entry.URI)
+	}
+	if entry.Type != SlugNotFound {
+		t.Errorf("rejected type = %q, want %q", entry.Type, SlugNotFound)
+	}
+}
+
+// TestTaskCreateMixedFamilies422 pins the one-family rule: search_result_ids
+// never combines with uris, a file part or even a rejected junk part.
+func TestTaskCreateMixedFamilies422(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2"
+	_, ids := env.seedResultJob(t, []store.SearchResultRow{{Title: "one", MagnetURI: &magnet}})
+
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["one"]},
+		"uris":              []string{"https://releases.example.com/x.iso"},
+	}, env.authz())
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body %s", resp.Code, resp.Body.String())
+	}
+	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	// The file-part family trips the same rule: a multipart form whose
+	// payload carries search_result_ids beside a torrent part — or even a
+	// part the middleware rejects — is the same 422, its rejected[] entry
+	// counting as the file-part family.
+	payload := []byte(fmt.Sprintf(`{"search_result_ids":[%q]}`, ids["one"]))
+	for _, part := range []UploadedFile{
+		{Name: "hello.torrent", Bytes: []byte(uploadSingleFileTorrent)},
+		{Name: "photo.jpg", Bytes: []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}},
+	} {
+		form, contentType := multipartForm(t, payload, part)
+		got := env.api.Do(http.MethodPost, "/tasks", form,
+			"Content-Type: "+contentType, "Authorization: Bearer "+env.bearer)
+		if got.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("multipart with %s: status = %d, want 422; body %s",
+				part.Name, got.Code, got.Body.String())
+		}
+		assertProblem(t, got, http.StatusUnprocessableEntity, SlugValidationFailed)
+	}
+
+	if env.taskCount(t) != 0 {
+		t.Errorf("mixed submission created tasks, want none")
+	}
+}
+
+// TestTaskCreateTooManySearchResults pins the over-cap answer on the
+// multipart payload path: whether the schema's maxItems or the runtime
+// MaxURIs check in the handler fires first, an oversized search_result_ids
+// submission is a 422 /problems/validation-failed and creates nothing.
+// Either check fires before any res_ id resolves, so synthetic ids
+// suffice — nothing has to seed a search job.
+func TestTaskCreateTooManySearchResults(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	ids := make([]string, MaxURIs+1)
+	for i := range ids {
+		ids[i] = store.NewID(store.PrefixSearchResult)
+	}
+	payload, err := json.Marshal(map[string]any{"search_result_ids": ids})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	form, contentType := multipartForm(t, payload)
+	resp := env.api.Do(http.MethodPost, "/tasks", form,
+		"Content-Type: "+contentType, "Authorization: Bearer "+env.bearer)
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body %s", resp.Code, resp.Body.String())
+	}
+	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if env.taskCount(t) != 0 {
+		t.Errorf("oversized submission created tasks, want none")
+	}
+}
+
+// TestTaskCreateResultConflicts pins the conflict semantics: a resubmit of a
+// result the server already committed and a repeated id within one submission
+// are both /problems/conflict naming the res_ id — terminal successes for the
+// caller, never errors.
+func TestTaskCreateResultConflicts(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2"
+	_, ids := env.seedResultJob(t, []store.SearchResultRow{{Title: "one", MagnetURI: &magnet}})
+
+	first := decodeCreateBody(t, env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["one"]},
+	}, env.authz()))
+	if len(first.Created) != 1 {
+		t.Fatalf("first submit created = %d, want 1", len(first.Created))
+	}
+
+	// Resubmit the same result: a conflict rejection naming the existing
+	// task — and the response still carries no provider data.
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["one"], ids["one"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), "magnet:") {
+		t.Errorf("conflict response leaks the magnet: %s", resp.Body.String())
+	}
+	body := decodeCreateBody(t, resp)
+	if len(body.Created) != 0 || len(body.Rejected) != 2 {
+		t.Fatalf("created = %d rejected = %d, want 0 created and 2 conflicts",
+			len(body.Created), len(body.Rejected))
+	}
+	for _, entry := range body.Rejected {
+		if entry.Type != SlugConflict {
+			t.Errorf("rejected type = %q, want %q", entry.Type, SlugConflict)
+		}
+		if entry.SearchResultID != ids["one"] || entry.URI != "" {
+			t.Errorf("entry = %+v, want search_result_id %q and no uri", entry, ids["one"])
+		}
+	}
+	if env.taskCount(t) != 1 {
+		t.Errorf("%d tasks after resubmission, want 1", env.taskCount(t))
+	}
+
+	// A repeated id within one submission is the same conflict, decided on
+	// the raw ids before any resolution — pinned in isolation on a fresh
+	// result so the already-committed rule cannot explain it.
+	magnet2 := "magnet:?xt=urn:btih:0000111122223333444455556666777788889999"
+	_, fresh := env.seedResultJob(t, []store.SearchResultRow{{Title: "two", MagnetURI: &magnet2}})
+
+	resp = env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{fresh["two"], fresh["two"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	body = decodeCreateBody(t, resp)
+	if len(body.Created) != 1 || len(body.Rejected) != 1 {
+		t.Fatalf("created = %d rejected = %d, want 1 created and 1 conflict",
+			len(body.Created), len(body.Rejected))
+	}
+	entry := body.Rejected[0]
+	if entry.Type != SlugConflict || entry.SearchResultID != fresh["two"] || entry.URI != "" {
+		t.Errorf("entry = %+v, want a conflict naming search_result_id %q and no uri",
+			entry, fresh["two"])
+	}
+}
+
+// TestTaskCreateResultUnroutableSource: a result whose stored source no
+// engine accepts is a per-entry refusal naming only the res_ id — the
+// resolved URI never reaches the rejection.
+func TestTaskCreateResultUnroutableSource(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	ed2k := "ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/"
+	_, ids := env.seedResultJob(t, []store.SearchResultRow{{Title: "bad", DownloadURL: &ed2k}})
+
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["bad"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), "ed2k://") {
+		t.Errorf("rejection leaks the resolved source: %s", resp.Body.String())
+	}
+	body := decodeCreateBody(t, resp)
+	if len(body.Created) != 0 || len(body.Rejected) != 1 {
+		t.Fatalf("created = %d rejected = %d, want 0 and 1", len(body.Created), len(body.Rejected))
+	}
+	if body.Rejected[0].SearchResultID != ids["bad"] || body.Rejected[0].URI != "" {
+		t.Errorf("entry = %+v, want search_result_id %q and no uri", body.Rejected[0], ids["bad"])
+	}
+}
+
+// TestTaskDisplaySourceRendersSharedRule pins the REST renderer to
+// sync.DisplaySourceURI: a row with NULL source_display_uri and a magnet
+// source_uri serialises keeping only its urn xt, and a row whose source_uri
+// parses with u.Opaque != "" omits the source entirely — the fail-closed rule
+// the SSE projector and the REST DTO must share, so a re-duplicated renderer
+// fails this test rather than a grep.
+func TestTaskDisplaySourceRendersSharedRule(t *testing.T) {
+	env := newTasksTestEnv(t)
+	now := time.Now().UnixMilli()
+
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2&dn=Show&tr=https%3A%2F%2Ft.example%2Fann%3Fpk%3Dk"
+	opaque := "user:pass@host"
+	// The authority form of the same credentials: u.Opaque is empty and the
+	// secret sits in u.User — the branch the magnet and opaque rows leave
+	// unpinned.
+	creds := "http://user:pass@credshost.example/dl.torrent"
+	seed := func(id, kind, uri string) {
+		t.Helper()
+		if _, err := env.db.ExecContext(t.Context(),
+			`INSERT INTO tasks (id, engine, source_kind, source_uri, name, state, destination,
+				added_at, created_at, updated_at)
+			 VALUES (?, 'aria2', ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+			id, kind, uri, "pin "+kind, env.dataRoot, now, now, now); err != nil {
+			t.Fatalf("seed task: %v", err)
+		}
+	}
+	magnetID := store.NewID(store.PrefixTask)
+	opaqueID := store.NewID(store.PrefixTask)
+	credsID := store.NewID(store.PrefixTask)
+	seed(magnetID, "magnet", magnet)
+	seed(opaqueID, "http", opaque)
+	seed(credsID, "http", creds)
+
+	resp := env.listTasks(t, "?state=all")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", resp.Code, resp.Body.String())
+	}
+	raw := resp.Body.String()
+	// "user:pass" guards both credential shapes the seeded rows carry —
+	// opaque ("user:pass@host") and authority ("http://user:pass@host/…").
+	for _, leak := range []string{"dn=", "tr=", "pk%3Dk", "user:pass"} {
+		if strings.Contains(raw, leak) {
+			t.Fatalf("list leaks unstripped source data %q: %s", leak, raw)
+		}
+	}
+	if !strings.Contains(raw, `magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2`) {
+		t.Errorf("list lost the magnet's urn xt: %s", raw)
+	}
+
+	body := decodeListBody(t, resp)
+	byID := map[string]TaskDTO{}
+	for _, item := range body.Items {
+		byID[item.ID] = item
+	}
+	magnetTask := byID[magnetID]
+	if magnetTask.SourceURI == nil ||
+		*magnetTask.SourceURI != "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2" {
+		t.Errorf("magnet source_uri = %v, want the urn xt only", magnetTask.SourceURI)
+	}
+	if opaqueTask := byID[opaqueID]; opaqueTask.SourceURI != nil {
+		t.Errorf("opaque source_uri = %v, want omitted — u.Opaque credentials fail closed",
+			*opaqueTask.SourceURI)
+	}
+	credsTask := byID[credsID]
+	if credsTask.SourceURI == nil ||
+		*credsTask.SourceURI != "http://credshost.example/dl.torrent" {
+		t.Errorf("authority-credentials source_uri = %v, want the host-only render", credsTask.SourceURI)
+	}
+}
