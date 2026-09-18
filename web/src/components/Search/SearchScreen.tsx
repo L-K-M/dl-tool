@@ -397,8 +397,7 @@ export function SearchScreen(): JSX.Element {
     setPicked((prev) => {
       const echo =
         prev !== null
-          ? stored.length === prev.size &&
-            stored.every((id) => prev.has(id))
+          ? stored.length === prev.size && stored.every((id) => prev.has(id))
           : stored.length === 0;
       if (echo) return prev;
       return stored.length === 0 ? null : new Set(stored);
@@ -716,8 +715,7 @@ export function SearchScreen(): JSX.Element {
         },
       });
     const delta = search.total - savedRun.previousTotal;
-    if (delta > 0)
-      setNewSince((prev) => new Map(prev).set(savedRun.id, delta));
+    if (delta > 0) setNewSince((prev) => new Map(prev).set(savedRun.id, delta));
     setSavedRun(null);
   }, [savedRun, search.finished, search.total]);
 

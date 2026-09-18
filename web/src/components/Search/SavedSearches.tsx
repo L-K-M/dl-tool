@@ -121,11 +121,7 @@ export function SaveSearchButton(props: {
         }
       }}
     >
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => setOpen(true)}
-      >
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
         {t("search.save", { defaultValue: "Save…" })}
       </Button>
       <DialogContent className="sm:max-w-sm">
@@ -200,9 +196,7 @@ export function SavedSearchesMenu(props: {
       return;
     }
     patchSaved(
-      saved.map((e) =>
-        e.id === s.id ? { ...e, name: renameText.trim() } : e,
-      ),
+      saved.map((e) => (e.id === s.id ? { ...e, name: renameText.trim() } : e)),
     );
     setRenamingId(null);
     setRenameRefusal(null);

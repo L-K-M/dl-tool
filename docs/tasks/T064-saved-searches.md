@@ -155,6 +155,65 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
+Stopped mid-implementation (2026-09-18): the `## Files` table has no locale
+catalogue row, but the two controls need new user-visible strings and every
+shipped string must resolve through `t()` against a catalogue key.
+
+The store member, both controls and the `SearchScreen` wiring are implemented
+and typecheck-clean on branch `task/T064-saved-searches` (commits `4d42caf`,
+`6cce22e`), along with `SavedSearches.test.tsx`, the `SearchScreen.test.tsx`
+re-pin and `web/e2e/search.spec.ts`; only the string catalogue blocks the
+Verification run. [T063](T063-search-screen.md)'s own `## Files` table carries
+`web/src/locales/en/common.json` for the same reason — this task's table was
+written without one, although the `Save…` dialog, the `Saved ▾` popover, its
+empty state, four inline refusal reasons, the 50-entry cap toast, the
+rename/delete aria labels and the "new since last view" badge all introduce
+text no existing key covers.
+
+The catalogue requirement is not stylistic. `web/eslint.config.js` rejects
+literal JSX text ("add the key to a locale catalogue"), `initI18n` installs a
+`parseMissingKeyHandler` that returns the key verbatim — so a missing key
+renders `search.savedMenu`, not a label — and `i18n.test.ts`'s
+`TestMissingKeyThrowsInTests` keeps a strict mode that treats a missing key
+as a thrown error. Verified on this tree:
+
+```text
+$ node -e 'i18next.init({resources:{en:{common:{}}}, parseMissingKeyHandler:(k)=>k, interpolation:{escapeValue:false}}).then(()=>{console.log(i18next.t("search.savedMenu",{defaultValue:"Saved"}));console.log(i18next.t("Added {{title}}",{title:"x"}))})'
+search.savedMenu        # defaultValue is overridden by the missing-key handler
+Added {{title}}         # handler output is not interpolated, so natural
+                        # language keys cannot carry placeholders either
+```
+
+The same fallback is what the new tests trip over — all five
+`SavedSearches.test.tsx` cases fail at `getByRole("button", { name: /^Saved/ })`
+because the rendered label is the literal text `search.savedMenu`. The unit
+tests cannot pass until the keys exist in a catalogue, which makes the
+missing table row load-bearing rather than cosmetic.
+
+Every permitted path is therefore forbidden:
+
+- Literal JSX text — banned by the `no-restricted-syntax` rule
+  (`JSXText[value=/[A-Za-z]{2,}/]`).
+- `t()` with a catalogue-missing key, `defaultValue` or a natural-language
+  key — renders the key string in production and throws under strict mode;
+  `TestNoEmptyCatalogueValues` and `TestM3CataloguesExist` pin en as the
+  complete shipped catalogue ([`09-web-ui-spec.md` §10.2](../09-web-ui-spec.md#102-i18n)).
+- Reusing existing keys — the closest candidates
+  (`shell.sidebar.savedSearches`, `settings.dirty.save`,
+  `errors.problem.conflict`) cover at most three of the strings; "Save…",
+  the empty-name/too-long/empty-query refusals, the cap toast, the added
+  toast and the badge have no plausible key, and cross-namespace reuse
+  (`settings:`, `errors:`) for a search-screen control is itself a drift
+  hazard the catalogue organisation exists to prevent.
+
+Which file should answer it: `web/src/locales/en/common.json`, the file
+T063's `## Files` table listed for the same component family. The repair is
+one row in this task's `## Files` table (plus the `search.*` keys for the
+strings above); the staged branch then resumes with a mechanical
+`defaultValue`-to-catalogue swap. The alternative — a documented exemption
+letting this component embed English text — weakens the i18n convention for
+every later task and should be an ADR, not an inline choice.
+
 Resolved by the plan repair that created [T129](T129-ui-prefs-document.md): the `## Blocked` record
 below named two repairs, and the repair took the first — the prefs slice of T107 moved forward into a
 new earlier task rather than into this one's `## Files` table. T129 owns `GET`/`PUT /prefs`, the
