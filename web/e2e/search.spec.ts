@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { stubTasks } from "./fixtures";
 
 const RESULT_TITLE = "ubuntu-26.04-desktop-amd64.iso";
@@ -109,10 +109,12 @@ const SEARCH_JOB = {
 /**
  * Stubs the session, the preference document (held in page-side memory so a
  * PUT round-trips through a later GET), the indexer lists, POST/GET/DELETE
- * /search and POST /tasks. Returns every body POST /search received.
+ * /search and POST /tasks. Returns every body POST /search received, plus a
+ * flag the PUT handler sets once a document with a saved entry lands.
  */
-async function stubSearchScreen(page) {
-  const searchPosts = [];
+async function stubSearchScreen(page: Page) {
+  const searchPosts: { indexer_ids?: string[]; query?: string }[] = [];
+  const savedWritten = { value: false };
   await stubTasks(page, 0);
   await page.route("**/api/v1/auth/me", (route) =>
     route.fulfill({ json: AUTHENTICATED }),
@@ -136,6 +138,9 @@ async function stubSearchScreen(page) {
   await page.route("**/api/v1/prefs", async (route) => {
     if (route.request().method() === "PUT") {
       prefsDoc = route.request().postDataJSON();
+      const saved = (prefsDoc as { search?: { saved?: unknown[] } }).search
+        ?.saved;
+      if (Array.isArray(saved) && saved.length > 0) savedWritten.value = true;
       return route.fulfill({ json: prefsDoc });
     }
     return route.fulfill({ json: prefsDoc });
@@ -166,7 +171,7 @@ async function stubSearchScreen(page) {
       },
     });
   });
-  return searchPosts;
+  return { searchPosts, savedWritten };
 }
 
 test("a search result adds a task in one click", async ({ page }) => {
@@ -190,35 +195,55 @@ test("a search result adds a task in one click", async ({ page }) => {
 });
 
 test("a saved search re-runs with the stored selection", async ({ page }) => {
-  const searchPosts = await stubSearchScreen(page);
+  const { searchPosts, savedWritten } = await stubSearchScreen(page);
   await page.goto("/search");
 
   await page.getByLabel("Search query").fill("ubuntu");
+  // Narrow the live selection so the stored indexer_ids differ from the
+  // untouched default: a restore that fell back to defaults would post both
+  // indexers and fail the stored-selection assertion below.
+  await page.getByRole("button", { name: /^Indexers:/ }).click();
+  await page.getByRole("checkbox", { name: "Indexer B", exact: true }).click();
+  await page.getByRole("button", { name: /^Indexers:/ }).click();
   await page.getByRole("button", { name: "Search", exact: true }).click();
   const strip = page.getByLabel("Per-indexer search status");
   await expect(strip).toContainText("●");
 
-  // Save the search, then wait for the debounced PUT so the document is on
-  // the server before the reload. The shell's name filter shares the label
-  // text, so the dialog field is matched exactly.
+  // Save the search, then wait until a document carrying the saved entry has
+  // been PUT — an earlier selection-write PUT must not end the wait. The
+  // shell's name filter shares the label text, so the dialog field is
+  // matched exactly.
   await page.getByRole("button", { name: "Save…" }).click();
   await page.getByRole("textbox", { name: "Name", exact: true }).fill("weekly");
-  const putDone = page.waitForResponse(
-    (response) =>
-      response.url().includes("/api/v1/prefs") &&
-      response.request().method() === "PUT",
-  );
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await putDone;
+  await expect.poll(() => savedWritten.value).toBe(true);
 
-  // A reload restores the document through GET /prefs; re-running posts the
-  // same indexer_ids the live selection sent.
+  // A sessionStorage decoy in the shape T063 wrote: a reload that restored
+  // through sessionStorage would pick up its all-indexer selection instead
+  // of the document's narrowed one.
+  await page.evaluate(() =>
+    sessionStorage.setItem(
+      "dl.search.v1",
+      JSON.stringify({
+        indexer_ids: ["internet-archive", "ix_b"],
+        category: 9999,
+        query: "decoy",
+      }),
+    ),
+  );
   await page.reload();
+
+  // The restored selection comes from GET /prefs — one of two indexers, not
+  // the decoy's all-indexer state — and the saved entry survived the round
+  // trip.
+  await expect(page.getByRole("button", { name: /^Indexers:/ })).toHaveText(
+    /Indexers: 1 of 2/,
+  );
   await page.getByRole("button", { name: /^Saved/ }).click();
   await page.getByRole("button", { name: "weekly", exact: true }).click();
 
   await expect.poll(() => searchPosts.length).toBe(2);
-  expect(searchPosts[0].indexer_ids.length).toBeGreaterThan(0);
-  expect(searchPosts[1].indexer_ids).toEqual(searchPosts[0].indexer_ids);
+  expect(searchPosts[0].indexer_ids).toEqual(["internet-archive"]);
+  expect(searchPosts[1].indexer_ids).toEqual(["internet-archive"]);
   expect(searchPosts[1].query).toBe("ubuntu");
 });

@@ -344,6 +344,7 @@
     "savedRenameConfirm": "Confirm rename",
     "savedRenameCancel": "Cancel rename",
     "savedDelete": "Delete {{name}}",
-    "savedNew": "{{count}} new since last view"
+    "savedNew_one": "{{count}} new since last view",
+    "savedNew_other": "{{count}} new since last view"
   }
 }

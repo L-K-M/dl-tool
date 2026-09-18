@@ -4,6 +4,11 @@ import { api } from "../api/client";
 
 const WRITE_DEBOUNCE_MS = 500;
 
+/** The saved-search cap the document enforces at both the write path
+ *  (SavedSearches refuses the 51st) and the sanitize boundary. */
+export const MAX_SAVED_SEARCHES = 50;
+export const MAX_SAVED_NAME_LENGTH = 64;
+
 export interface SavedSearch {
   id: string; // crypto.randomUUID()
   name: string; // 1..64 characters, unique within the document
@@ -175,19 +180,23 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
   )
     search.categories = [];
   search.saved = Array.isArray(search.saved)
-    ? search.saved.filter(
-        (entry): entry is SavedSearch =>
-          isObject(entry) &&
-          typeof entry.id === "string" &&
-          typeof entry.name === "string" &&
-          typeof entry.query === "string" &&
-          Array.isArray(entry.indexerIds) &&
-          entry.indexerIds.every((id) => typeof id === "string") &&
-          Array.isArray(entry.categories) &&
-          entry.categories.every((id) => typeof id === "number") &&
-          typeof entry.createdAt === "string" &&
-          typeof entry.lastTotal === "number",
-      )
+    ? search.saved
+        .filter(
+          (entry): entry is SavedSearch =>
+            isObject(entry) &&
+            typeof entry.id === "string" &&
+            typeof entry.name === "string" &&
+            entry.name.length >= 1 &&
+            entry.name.length <= MAX_SAVED_NAME_LENGTH &&
+            typeof entry.query === "string" &&
+            Array.isArray(entry.indexerIds) &&
+            entry.indexerIds.every((id) => typeof id === "string") &&
+            Array.isArray(entry.categories) &&
+            entry.categories.every((id) => typeof id === "number") &&
+            typeof entry.createdAt === "string" &&
+            typeof entry.lastTotal === "number",
+        )
+        .slice(0, MAX_SAVED_SEARCHES)
     : [];
   return merged;
 }

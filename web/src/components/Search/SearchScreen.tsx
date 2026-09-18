@@ -701,7 +701,10 @@ export function SearchScreen(): JSX.Element {
   // higher total than the stored one lands in the entry's "new since last
   // view" badge.
   useEffect(() => {
-    if (savedRun === null || !search.finished) return;
+    // search.starting guards the window where savedRun is set but the new
+    // jobId has not landed yet: finished/total would still describe the
+    // previous job, and consuming them would corrupt lastTotal.
+    if (savedRun === null || !search.finished || search.starting) return;
     const current = useUiPrefs.getState().search;
     const entry = current.saved.find((e) => e.id === savedRun.id);
     if (entry !== undefined && entry.lastTotal !== search.total)
@@ -716,7 +719,7 @@ export function SearchScreen(): JSX.Element {
     const delta = search.total - savedRun.previousTotal;
     if (delta > 0) setNewSince((prev) => new Map(prev).set(savedRun.id, delta));
     setSavedRun(null);
-  }, [savedRun, search.finished, search.total]);
+  }, [savedRun, search.starting, search.finished, search.total]);
 
   const indexersLoaded = indexersQuery.isSuccess;
   const noEnabled = indexersLoaded && enabled.length === 0;

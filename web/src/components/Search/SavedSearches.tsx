@@ -3,7 +3,12 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Check, ChevronDown, Pencil, Trash2, X } from "lucide-react";
 
-import { useUiPrefs, type SavedSearch } from "../../store/useUiPrefs";
+import {
+  MAX_SAVED_NAME_LENGTH,
+  MAX_SAVED_SEARCHES,
+  useUiPrefs,
+  type SavedSearch,
+} from "../../store/useUiPrefs";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -12,13 +17,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-
-const MAX_SAVED = 50;
-const MAX_NAME_LENGTH = 64;
 
 /** Stable refusal codes; the dialog maps each to its inline reason. */
 export function validateSavedName(
@@ -27,7 +30,7 @@ export function validateSavedName(
 ): string | null {
   const trimmed = name.trim();
   if (trimmed === "") return "empty";
-  if (trimmed.length > MAX_NAME_LENGTH) return "tooLong";
+  if (trimmed.length > MAX_SAVED_NAME_LENGTH) return "tooLong";
   if (existing.some((s) => s.name === trimmed)) return "duplicate";
   return null;
 }
@@ -60,9 +63,9 @@ export function SaveSearchButton(props: {
           : t("search.savedErrEmpty");
 
   const submit = () => {
-    if (saved.length >= MAX_SAVED) {
+    if (saved.length >= MAX_SAVED_SEARCHES) {
       setOpen(false);
-      toast.error(t("search.savedCap", { count: MAX_SAVED }));
+      toast.error(t("search.savedCap", { count: MAX_SAVED_SEARCHES }));
       return;
     }
     const code = validateSavedName(name, saved);
@@ -78,7 +81,14 @@ export function SaveSearchButton(props: {
     patchSaved([
       ...saved,
       {
-        id: crypto.randomUUID(),
+        // crypto.randomUUID needs a secure context; a self-hosted instance
+        // reached over plain HTTP on a LAN falls back to a timestamped id.
+        id:
+          typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `sv_${Date.now().toString(36)}-${Math.random()
+                .toString(36)
+                .slice(2)}`,
         name: name.trim(),
         query,
         indexerIds: props.indexerIds,
@@ -104,9 +114,11 @@ export function SaveSearchButton(props: {
         }
       }}
     >
-      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-        {t("search.save")}
-      </Button>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline" type="button">
+          {t("search.save")}
+        </Button>
+      </DialogTrigger>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>{t("search.savedDialogTitle")}</DialogTitle>
@@ -180,9 +192,16 @@ export function SavedSearchesMenu(props: {
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        // A half-finished rename must not greet the next open.
+        if (!next) setRenamingId(null);
+      }}
+    >
       <PopoverTrigger asChild>
-        <Button size="sm" variant="outline">
+        <Button size="sm" variant="outline" type="button">
           {t("search.savedMenu")} <ChevronDown aria-hidden="true" />
         </Button>
       </PopoverTrigger>
@@ -211,7 +230,12 @@ export function SavedSearchesMenu(props: {
                         }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") commitRename(s);
-                          if (e.key === "Escape") setRenamingId(null);
+                          if (e.key === "Escape") {
+                            // Keep Radix's dismiss layer from closing the
+                            // whole popover on a rename cancel.
+                            e.stopPropagation();
+                            setRenamingId(null);
+                          }
                         }}
                       />
                       <Button
