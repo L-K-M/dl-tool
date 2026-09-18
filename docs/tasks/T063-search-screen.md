@@ -204,11 +204,14 @@ on a fact the whole task turns on — how a search result becomes a task.
   `api/openapi.json` and `web/src/api/schema.d.ts` have none, and no `res_` id resolves through
   `uris` (`normaliseSubmission` rejects it). No task file owns adding it.
 
-Evidence (run from the repo root at `aed413f`):
+Evidence for the absence claims above (run from the repo root at `aed413f`):
 
 ```
 $ grep -rn "search_result_ids" internal/api/tasks.go api/openapi.json web/src/api/schema.d.ts
 (exit 1 — no matches)
+$ grep -rn "res_" internal/api/tasks.go
+(exit 1 — no matches; every uris entry goes through normaliseSubmission → uri.Normalize,
+internal/api/tasks.go:983-994, so a res_ id is an unsupported-scheme rejection)
 $ grep -n "download_url\|magnet_uri\|details_url" internal/api/search.go
 272:// metadata and the opaque res_ id only: download_url, magnet_uri and
 273:// details_url are server-only acquisition data and have no field here
