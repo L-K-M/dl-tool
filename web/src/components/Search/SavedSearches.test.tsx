@@ -428,7 +428,11 @@ test("TestSanitizeDropsDuplicateSavedIds", async () => {
           indexerIds: ["ix_a", "ix_a", "ix_b"],
           categories: [2000, 2000],
           saved: [
-            entry("weekly"),
+            {
+              ...entry("weekly"),
+              indexerIds: ["ix_a", "ix_a"],
+              categories: [2000, 2000],
+            },
             { ...entry("nightly"), id: "sv_weekly" },
             entry("daily"),
           ],
@@ -442,6 +446,10 @@ test("TestSanitizeDropsDuplicateSavedIds", async () => {
   expect(search.indexerIds).toEqual(["ix_a", "ix_b"]);
   expect(search.categories).toEqual([2000]);
   expect(search.saved.map((s) => s.id)).toEqual(["sv_weekly", "sv_daily"]);
+  // The nested selections inside a surviving entry are deduped too — a
+  // re-run posts them verbatim without re-sanitizing.
+  expect(search.saved[0]?.indexerIds).toEqual(["ix_a"]);
+  expect(search.saved[0]?.categories).toEqual([2000]);
 });
 
 test("TestRenameAndDeleteUpdateTheDocument", async () => {

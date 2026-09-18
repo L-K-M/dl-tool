@@ -206,6 +206,13 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
           seenSavedIds.add(entry.id);
           return true;
         })
+        // The same corruption vector hits the per-entry selections, which a
+        // re-run posts verbatim without passing back through this boundary.
+        .map((entry) => ({
+          ...entry,
+          indexerIds: [...new Set(entry.indexerIds)],
+          categories: [...new Set(entry.categories)],
+        }))
         .slice(0, MAX_SAVED_SEARCHES)
     : [];
   return merged;
