@@ -123,6 +123,7 @@
       "invalidField": "Invalid {{field}}: {{detail}}",
       "invalidFieldGeneric": "The indexer was rejected: {{detail}}",
       "ssrfBlocked": "The address {{url}} is blocked: {{detail}}",
+      "ssrfBlockedFile": "An address inside {{file}} is blocked: {{detail}}",
       "saveFailed": "Could not save the indexer: {{detail}}",
       "importFailed": "Import failed: {{detail}}",
       "importNeedsInput": "Choose a definition file or enter the instance URL and API key."

@@ -43,14 +43,23 @@ function reportIndexerError(
   t: TFunction,
   ct: TFunction,
   error: Problem | undefined,
-  opts: { blocked: string; fallback: "saveFailed" | "importFailed" },
+  opts: {
+    blocked: string;
+    blockedFile?: string;
+    fallback: "saveFailed" | "importFailed";
+  },
 ): void {
   const detail = problemDetail(error) ?? ct("shell.networkError");
   if (error?.status === 409 || error?.type === "/problems/conflict") {
     toast.error(t("indexers.dialog.conflict"));
   } else if (error?.type === "/problems/ssrf-blocked") {
     toast.error(
-      t("indexers.dialog.ssrfBlocked", { url: opts.blocked, detail }),
+      opts.blockedFile === undefined
+        ? t("indexers.dialog.ssrfBlocked", { url: opts.blocked, detail })
+        : t("indexers.dialog.ssrfBlockedFile", {
+            file: opts.blockedFile,
+            detail,
+          }),
     );
   } else if (error?.status === 422) {
     const field = error.errors?.[0]?.location;
@@ -322,7 +331,8 @@ function ImportForm({
   const report = (error: Problem | undefined) =>
     reportIndexerError(t, ct, error, {
       // A file import's blocked target is inside the file, not the URL field.
-      blocked: file?.name ?? torznabUrl.trim(),
+      blocked: torznabUrl.trim(),
+      blockedFile: file?.name,
       fallback: "importFailed",
     });
 

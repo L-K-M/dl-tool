@@ -380,6 +380,32 @@ test("TestImportedIndexerRendersDisabledWithProvenance", async () => {
       .getByRole("checkbox", { name: "Enable Imported One" })
       .getAttribute("aria-checked"),
   ).toBe("false");
+
+  // A file import blocked by SSRF names the file, not an empty address.
+  const toastError = vi.spyOn(toast, "error");
+  server.use(
+    http.post("*/api/v1/indexers/import", () =>
+      HttpResponse.json(
+        {
+          type: "/problems/ssrf-blocked",
+          title: "Forbidden",
+          detail: "the indexer's fetch_url is a private address",
+          status: 403,
+        },
+        { status: 403 },
+      ),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Import" }));
+  const retry = await screen.findByRole("dialog");
+  fireEvent.change(within(retry).getByLabelText("Definition file"), {
+    target: { files: [new File(["%YAML%"], "blocked.dlm")] },
+  });
+  fireEvent.click(within(retry).getByRole("button", { name: "Import" }));
+  await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+  expect(JSON.stringify(toastError.mock.calls)).toContain(
+    "An address inside blocked.dlm is blocked",
+  );
 });
 
 test("TestApiKeyNeverRendered", async () => {
