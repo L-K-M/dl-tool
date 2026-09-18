@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T105 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T056, T057, T058, T062 |
 | **Blocks** | — |
 | **Parallel-safe** | no — extends T058's `internal/search/dlsearch.go` |
@@ -98,11 +98,11 @@ definition:
 8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestStaticSearchMakesNoRequest` asserts results are returned with a client that cannot dial.
-- [ ] `TestStaticSeedersAlwaysNull` asserts `Seeders` and `Leechers` are nil for every static row.
-- [ ] `TestLinuxDistributionsDefinitionIsWellFormed` passes against the refreshed file, and the file's `version` is higher than the one T057 shipped.
-- [ ] `TestStaticProbeReportsDeadURL` asserts `ok:false` with the failing URL and its status in `error`.
-- [ ] The definition still declares `kind: static` with a `refresh_note`, and contains no `request` or `response` block.
+- [x] `TestStaticSearchMakesNoRequest` asserts results are returned with a client that cannot dial.
+- [x] `TestStaticSeedersAlwaysNull` asserts `Seeders` and `Leechers` are nil for every static row.
+- [x] `TestLinuxDistributionsDefinitionIsWellFormed` passes against the refreshed file, and the file's `version` is higher than the one T057 shipped.
+- [x] `TestStaticProbeReportsDeadURL` asserts `ok:false` with the failing URL and its status in `error`.
+- [x] The definition still declares `kind: static` with a `refresh_note`, and contains no `request` or `response` block.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -134,7 +134,90 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Re-probe of the two directory indexes of doc 07 §6.2 (step 1), 2026-09-18:
+
+```text
+$ curl -sS 'https://releases.ubuntu.com/24.04/' | grep -o '[^"]*\.iso\.torrent' | sort -u
+>ubuntu-24.04.3-desktop-amd64.iso.torrent
+>ubuntu-24.04.3-live-server-amd64.iso.torrent
+>ubuntu-24.04.4-desktop-amd64.iso.torrent
+>ubuntu-24.04.4-live-server-amd64.iso.torrent
+>ubuntu-24.04.5-live-server-amd64.iso.torrent
+>ubuntu-24.04.5.1-desktop-amd64.iso.torrent
+ubuntu-24.04.3-desktop-amd64.iso.torrent
+ubuntu-24.04.3-live-server-amd64.iso.torrent
+ubuntu-24.04.4-desktop-amd64.iso.torrent
+ubuntu-24.04.4-live-server-amd64.iso.torrent
+ubuntu-24.04.5-live-server-amd64.iso.torrent
+ubuntu-24.04.5.1-desktop-amd64.iso.torrent
+
+$ curl -sS 'https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/' | grep -o '[^"]*\.iso\.torrent' | sort -u
+>debian-13.7.0-amd64-netinst.iso.torrent
+>debian-edu-13.7.0-amd64-netinst.iso.torrent
+>debian-mac-13.7.0-amd64-netinst.iso.torrent
+debian-13.7.0-amd64-netinst.iso.torrent
+debian-edu-13.7.0-amd64-netinst.iso.torrent
+debian-mac-13.7.0-amd64-netinst.iso.torrent
+```
+
+`curl -sI` of each candidate (step 2) — all three answer 200 with
+`content-type: application/x-bittorrent`:
+
+```text
+== https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso.torrent
+HTTP/1.1 200 OK
+Content-Type: application/x-bittorrent
+== https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso.torrent
+HTTP/1.1 200 OK
+Content-Type: application/x-bittorrent
+== https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.7.0-amd64-netinst.iso.torrent
+HTTP/1.1 200 OK
+Content-Type: application/x-bittorrent
+```
+
+`version` bumped 1.0.0 → 1.1.0 (one semver minor, per doc 07 §3.9 step 2).
+
+Verification command on the final tree:
+
+```text
+$ make lint && make test PKG=./internal/search/... && echo STATIC_ENGINE_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/search/...
+ok  	github.com/L-K-M/dl-tool/internal/search	7.182s
+STATIC_ENGINE_OK
+```
+
+The five step-7 tests, `-v` run on the same tree:
+
+```text
+--- PASS: TestStaticSearchMakesNoRequest (0.00s)
+--- PASS: TestStaticKeywordFilterIsCaseInsensitive (0.00s)
+--- PASS: TestStaticSeedersAlwaysNull (0.00s)
+--- PASS: TestStaticProbeReportsDeadURL (0.00s)
+--- PASS: TestLinuxDistributionsDefinitionIsWellFormed (0.01s)
+```
+
+Scope check on the working tree before the task commit:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+definitions/engines/linux-distributions.yaml
+internal/search/dlsearch.go
+internal/search/dlsearch_test.go
+```
+
+Exactly the Files table and nothing else.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
