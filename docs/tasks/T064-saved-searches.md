@@ -211,3 +211,11 @@ until T107 wires the transport — rewriting the goal, the `PUT /prefs` contract
 `GET /prefs` acceptance criterion and the localStorage prohibition, which weakens FR-057's "every
 browser agrees" until M6. Re-sequencing T064 behind T107 would invert the milestone order: T107
 sits in M6 behind T083/T084, so M4 could not close.
+
+Separately — a pre-existing main defect this task's Verification now exposes: `make e2e` fails in
+`web/e2e/pwa.spec.ts` "api requests bypass the cache" because the spec still polls the literal
+cache name `"dl-tool-assets-v1"` (line 143) while `web/public/sw.js` since `e07b159` (#195) writes
+`dl-tool@<scope>:assets-v1` and deletes the legacy name on activation. The failure is deterministic
+(`Received array: []` after the 5 s poll) on two consecutive `Task verification` runs of this
+docs-only branch — the first `make e2e`-running task branch since #195 merged. The repair is a
+spec update, a file outside this task's Files table.
