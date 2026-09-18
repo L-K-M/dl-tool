@@ -121,9 +121,10 @@ written through `patch` under a cast (the General section's extras today, `searc
 round-trip verbatim with no dedicated write path. A failed PUT leaves the in-memory document in
 place, matching the tolerance the `localStorage` writer already had. `App.tsx` calls `hydrate()`
 when `SessionState` reaches `authenticated`; before it resolves the store renders `defaultPrefs`.
-A `patch()` that lands while hydration is in flight or a debounced write is pending wins: `hydrate`
-merges the server document beneath pending local edits rather than replacing state, so no write is
-silently lost.
+The store tracks which members `patch` or `resetGrid` has touched since the last write completed —
+a dirty-member set the debounced PUT clears. `hydrate` merges the server document beneath that set:
+every server member lands, including over a member still holding its `defaultPrefs` value, while a
+member with a pending local edit keeps the local value, so no write is silently lost.
 
 ## Steps
 1. Add `Prefs` and `PutPrefs` to `internal/store/settings.go`: `Prefs` selects `key, value_json` for
@@ -174,6 +175,9 @@ silently lost.
 - [ ] A `useUiPrefs.test.ts` case asserts `hydrate()` lands a server-only member in state and a
       `patch()` write PUTs the whole document — every non-function, non-transient member, unknown
       ones included.
+- [ ] A `useUiPrefs.test.ts` case stubs `GET /prefs` with a known member holding a value that
+      differs from `defaultPrefs`, calls `hydrate()` with no `patch()` pending and asserts state
+      ends with the server value — the merge applies the whole document, not only unknown keys.
 - [ ] A `useUiPrefs.test.ts` case stubs `GET /prefs` to resolve after a delay, patches a member
       before it resolves, advances past the debounce and asserts the PUT body carries the local
       value — a local edit is never clobbered by an in-flight hydrate.

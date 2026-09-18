@@ -6,7 +6,7 @@
 | **Milestone** | M3 |
 | **Status** | done |
 | **Depends on** | T042, T044 |
-| **Blocks** | T053, T064, T104 |
+| **Blocks** | T053, T064, T104, T129 |
 | **Parallel-safe** | no — extends T042's `TaskGrid.tsx`/`TaskGrid.test.tsx` and T044's `Toolbar.tsx` |
 | **Implements** | — (the provisional localStorage document; [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences) is covered by [T129](T129-ui-prefs-document.md)) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
