@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -343,4 +344,78 @@ func (s *SettingsStore) DefaultDestination(ctx context.Context) (string, error) 
 	}
 
 	return value, nil
+}
+
+// queryPrefs reads every ui_prefs row of one account: one row per top-level
+// member of the preference document (docs/04-data-model.md section 3.6).
+const queryPrefs = `SELECT key, value_json FROM ui_prefs WHERE user_id = ?`
+
+// Prefs returns the account's ui_prefs rows assembled into one document, or
+// an empty document when the account has never stored one — the SPA owns the
+// defaults (docs/09-web-ui-spec.md section 3.3). Members the server does not
+// model come back verbatim, which is what lets the SPA add a preference
+// without a server change.
+func (s *SettingsStore) Prefs(ctx context.Context, userID string) (map[string]any, error) {
+	var rows []struct {
+		Key       string `db:"key"`
+		ValueJSON string `db:"value_json"`
+	}
+	if err := s.db.SelectContext(ctx, &rows, queryPrefs, userID); err != nil {
+		return nil, fmt.Errorf("store: list ui_prefs for user %s: %w", userID, err)
+	}
+
+	doc := make(map[string]any, len(rows))
+	for _, row := range rows {
+		var value any
+		if err := json.Unmarshal([]byte(row.ValueJSON), &value); err != nil {
+			return nil, fmt.Errorf("store: decode ui_prefs key %s: %w", row.Key, err)
+		}
+		doc[row.Key] = value
+	}
+
+	return doc, nil
+}
+
+const queryDeletePrefs = `DELETE FROM ui_prefs WHERE user_id = ?`
+
+const queryInsertPref = `INSERT INTO ui_prefs (id, user_id, key, value_json, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)`
+
+// PutPrefs replaces the document wholesale in one transaction: the account's
+// existing rows are deleted and one row per top-level member is inserted,
+// each value_json holding the member's JSON. Members the server does not
+// model are stored verbatim (docs/05-api-contract.md section 11.4).
+func (s *SettingsStore) PutPrefs(ctx context.Context, userID string, doc map[string]any) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: replace ui_prefs for user %s: %w", userID, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of ui_prefs replace failed", "user_id", userID, "error", err)
+		}
+	}()
+
+	if _, err := tx.ExecContext(ctx, queryDeletePrefs, userID); err != nil {
+		return fmt.Errorf("store: replace ui_prefs for user %s: %w", userID, err)
+	}
+
+	now := time.Now().UnixMilli()
+	for key, value := range doc {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Errorf("store: encode ui_prefs key %s: %w", key, err)
+		}
+		if _, err := tx.ExecContext(ctx, queryInsertPref, NewID(PrefixUIPref), userID, key, string(encoded), now, now); err != nil {
+			return fmt.Errorf("store: replace ui_prefs for user %s: %w", userID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: replace ui_prefs for user %s: commit: %w", userID, err)
+	}
+
+	return nil
 }

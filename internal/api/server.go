@@ -464,6 +464,7 @@ func (s *Server) registerOperations() {
 	s.auth.registerOperations(s.API)
 	s.tasks.registerOperations(s.API)
 	s.settings.registerOperations(s.API)
+	s.registerPrefsOperations()
 	s.categories.Register(s.API)
 	s.fs.Register(s.API)
 	RegisterSearchRoutes(s.API, s.search)
