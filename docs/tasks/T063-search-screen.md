@@ -156,8 +156,8 @@ SearchResultIDs []string `json:"search_result_ids,omitempty" maxItems:"50"`
 - Exactly one source family per request: a body mixing `search_result_ids` with `uris`,
   `blob` or file parts is `422 /problems/validation-failed`. An empty `search_result_ids`
   array counts as no family at all, so the existing empty-submission `422` applies; a
-  repeated id is a duplicate `rejected[]` entry, matching the `uris` family's
-  duplicate-in-submission convention.
+  repeated id is a duplicate `rejected[]` entry of type `/problems/conflict`, the type the
+  `uris` family already uses for a duplicate in one submission.
 - Per id, `GetSearchResult` resolves the row; `ErrNotFound` produces a `rejected[]` entry
   of type `/problems/not-found`. A rejected search source carries only
   `search_result_id`: `RejectedURI` gains ``SearchResultID string `json:"search_result_id,omitempty"``
@@ -167,9 +167,10 @@ SearchResultIDs []string `json:"search_result_ids,omitempty" maxItems:"50"`
   the server-only `source_uri` and `search-result:<res_id>` in `source_display_uri`; the
   task DTO renders `source_display_uri` when it is set, so no response ever carries the
   acquisition source.
-- `201` with per-id `rejected[]` entries while at least one id resolves; when every
-  submitted id is unavailable the response is `404 /problems/not-found` — a problem
-  detail body with no `rejected[]` member, mirroring the all-`uris`-fail `422`.
+- `201` with per-id `rejected[]` entries while at least one id resolves — duplicates of a
+  resolved id included; the `404` applies only when no submitted id resolves. The
+  all-unavailable `404 /problems/not-found` is a problem detail body with no `rejected[]`
+  member, the same shape the all-`uris`-fail `422` already returns.
 
 ```tsx
 // web/src/components/AddTask/AddTaskDialog.tsx — extended signature:
@@ -223,13 +224,17 @@ The three zero states, each its own render: `No results` (every indexer answered
 12. Wire the footer: the selected count and summed size (a null `size_bytes` contributes 0), and
     `Download selected ▾` with exactly two items — *Download immediately* and *Download to…*, the latter
     opening T049's add dialog through its new `initialSearchResultIds` prop; extend `AddTaskDialog` per
-    the contract above. Both bulk paths submit in chunks of at most 50 ids — the body's `maxItems:"50"`
-    cap — with one toast per failed chunk.
+    the contract above. Both bulk paths submit in chunks of at most 50 ids — the body's
+    `maxItems:"50"` cap. A chunk-level toast fires only for a transport error, `404` or `422`;
+    a `201` whose `rejected[]` is non-empty marks each rejected `search_result_id`'s row failed
+    with a toast naming its title, mirroring the per-row path, and only resolved ids get the
+    `✓` link.
 13. Edit `App.tsx` to route `/search` to `<SearchScreen />`, and add every string to
     `web/src/locales/en/common.json` under a `search` key; no literal user-facing text in the components.
 14. Create `SearchScreen.test.tsx` with `msw` handlers: `TestPollStopsWhenFinished`,
     `TestPartialResultsRenderBeforeFinish`, `TestEngineErrorShownInStrip`, `TestThreeZeroStates`,
-    `TestNullCountsRenderEmDash`, `TestRowDownloadPostsSearchResultID` and `TestStopDeletesTheJob`; add the
+    `TestNullCountsRenderEmDash`, `TestRowDownloadPostsSearchResultID`,
+    `TestBulkChunkPartialRejection` and `TestStopDeletesTheJob`; add the
     search-result draft case to `AddTaskDialog.test.tsx`.
 15. Run the verification command and paste its output under `## Evidence`.
 
@@ -250,6 +255,8 @@ The three zero states, each its own render: `No results` (every indexer answered
       body and no `rejected[]` member.
 - [ ] A body mixing `search_result_ids` with `uris` or `blob` returns `422 /problems/validation-failed`;
       an empty `search_result_ids` array is the existing empty-submission `422`.
+- [ ] The existing all-`uris`-fail `422` is asserted alongside the new all-fail `404` in
+      `internal/api/tasks_test.go`, so the shared no-`rejected[]` problem shape is pinned, not assumed.
 - [ ] `aria-rowcount` equals the job's `total`, not the number of rows in the DOM.
 
 ## Verification
