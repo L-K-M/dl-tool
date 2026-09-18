@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T062 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T054, T058, T061 |
 | **Blocks** | T063, T105 |
 | **Parallel-safe** | no — extends T061's `internal/jobs/handlers_search.go` |
@@ -118,11 +118,11 @@ type SearchResultDTO struct {
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestOneEngineFailsOthersSucceed` asserts the failing indexer has `status:"error"` with the upstream status in `error`, while the other indexer's results are present.
-- [ ] `TestAllEnginesFailFinishesWithErrors` asserts `finished:true`, `total:0` and a non-empty `engines[]`.
-- [ ] `TestTorznabErrorCodeClassification` covers every row of doc 07 §2.5 and asserts code `300` is not a failure.
-- [ ] `TestDuplicateAcrossEnginesAppearsOnce` asserts two engines returning one infohash produce one result row, keeping the higher seeder count.
-- [ ] No response omits `engines[]`, including for a job whose tracker entry was forgotten.
+- [x] `TestOneEngineFailsOthersSucceed` asserts the failing indexer has `status:"error"` with the upstream status in `error`, while the other indexer's results are present.
+- [x] `TestAllEnginesFailFinishesWithErrors` asserts `finished:true`, `total:0` and a non-empty `engines[]`.
+- [x] `TestTorznabErrorCodeClassification` covers every row of doc 07 §2.5 and asserts code `300` is not a failure.
+- [x] `TestDuplicateAcrossEnginesAppearsOnce` asserts two engines returning one infohash produce one result row, keeping the higher seeder count.
+- [x] No response omits `engines[]`, including for a job whose tracker entry was forgotten.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -153,7 +153,88 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head:
+
+```
+$ make lint && make test PKG="./internal/jobs/... ./internal/search/... ./internal/api/..." && echo SEARCH_STATUS_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/jobs/... ./internal/search/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	7.025s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.096s
+ok  	github.com/L-K-M/dl-tool/internal/api	123.978s
+SEARCH_STATUS_OK
+```
+
+The step-7 and step-8 test set plus the review-added tests, run with `-v`:
+
+```
+--- PASS: TestFanOutWritesPerEngine (0.04s)
+--- PASS: TestOneEngineFailsOthersSucceed (0.04s)
+--- PASS: TestAllEnginesFailFinishesWithErrors (0.04s)
+--- PASS: TestTorznabErrorCodeClassification (0.00s) — 15 subcases incl. 300 → nil
+--- PASS: TestRetryAfterIsReported (0.04s)
+--- PASS: TestEngineErrorRedactsAPIKey (0.03s)
+--- PASS: TestDuplicateRowsAreRetained (0.03s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	0.226s
+--- PASS: TestEnginesArrayCarriesErrorAndResults (0.08s)
+--- PASS: TestDuplicateAcrossEnginesAppearsOnce (0.04s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.137s
+```
+
+Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+internal/api/search.go
+internal/api/search_test.go
+internal/jobs/handlers_search.go
+internal/jobs/handlers_search_test.go
+internal/search/normalize.go
+```
+
+Notes on the contract, none widening the Files table:
+
+- `classify`'s `status` parameter is the out-of-band HTTP status, used when
+  the error does not encode one; the fan-out passes 0 because every typed
+  error it can receive (`*search.TorznabError`, `*search.UpstreamError`)
+  carries its own. The bare-status branch is exercised in
+  `TestTorznabErrorCodeClassification`.
+- `Retry-After` is honoured wherever the upstream stack surfaces it:
+  `*search.TorznabError` on a 429 error document and `*search.UpstreamError`
+  on 429 or 503. A bare non-2xx torznab answer carries no parsed wait — the
+  client of T056 does not capture the header on that path — and reports the
+  redacted transport message instead.
+- `Dedup` runs over the page `ListResults` returns, so `total` still counts
+  the stored rows — the collapse is on read and the losing rows stay in
+  `search_results`, per the out-of-scope rules. Known limit of the specified
+  design: a duplicate pair straddling a page boundary can appear once per
+  page, and `total`/`limit` arithmetic over-counts collapsed pages. A fix
+  would need a dedup-stable `ORDER BY` in `internal/store`, which is outside
+  this task's Files table; surfaced by review as a follow-up for the search
+  screen task.
+- `EngineFailure.Text` is upstream-controlled text: the fan-out scrubs the
+  credential the request carried (`searchIndexer` returns it alongside the
+  results) — in both its raw and `url.QueryEscape` spellings, since the key
+  travels as an encoded query parameter — before the message reaches the
+  tracker, `RecordTest` or the log. `secure.RedactError` alone cannot cover
+  this: it only rewrites `*url.Error`, and a `*search.TorznabError` is not
+  one. `TestEngineErrorRedactsAPIKey` echoes both forms in a fake error
+  document and asserts neither survives.
+- `EngineFailure.Disable`/`DisableMode` are classification data only: the
+  steps persist the message via `Searches.Set` and `idx.RecordTest`, and no
+  per-mode disable mechanism exists in this task's Files table.
+- `api/openapi.json` and `web/src/api/schema.d.ts` are unchanged: no Huma
+  operation or wire struct changed.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

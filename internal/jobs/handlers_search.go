@@ -35,6 +35,160 @@ type SearchPayload struct {
 	Categories  []int    `json:"categories"`
 }
 
+// EngineFailure classifies what an engine did, so the tracker can carry a
+// message a user can act on. Text is what reaches EngineStatus.Error
+// verbatim.
+type EngineFailure struct {
+	Text        string        // e.g. "HTTP 503 from https://academictorrents.com/rss.xml"
+	Disable     bool          // codes 100, 101, 102, 910: credentials or API disabled
+	DisableMode string        // codes 202, 203: this t= mode only
+	RetryAfter  time.Duration // honoured from the Retry-After header on 429
+}
+
+// classify maps a transport error, a *search.TorznabError or an HTTP status
+// onto an EngineFailure, following docs/07-search-and-indexers.md section 2.5
+// row for row, including Prowlarr's non-spec 400, 410 Gone and 429 answers.
+// Code 300 is not a failure: it is an empty result set, and nil means the
+// engine answered "done, zero rows". status is the HTTP status the caller
+// observed out of band — 0 for the fan-out, whose errors carry their own —
+// used when the error does not encode one.
+func classify(err error, status int, rawURL string) *EngineFailure {
+	if err == nil {
+		return nil
+	}
+	var te *search.TorznabError
+	if errors.As(err, &te) {
+		return classifyTorznab(te, rawURL)
+	}
+	var ue *search.UpstreamError
+	if errors.As(err, &ue) {
+		return classifyUpstream(ue, rawURL)
+	}
+	if status >= http.StatusBadRequest {
+		return &EngineFailure{Text: httpStatusText(status, rawURL)}
+	}
+	// A transport failure: the wire message is the redacted upstream one —
+	// a fetch error can embed the request URL, api key included
+	// (docs/05-api-contract.md section 9.2).
+	return &EngineFailure{Text: secure.RedactError(err).Error()}
+}
+
+// classifyTorznab maps a Torznab error document's code onto the failure
+// vocabulary of doc 07 section 2.5.
+func classifyTorznab(te *search.TorznabError, rawURL string) *EngineFailure {
+	switch te.Code {
+	case 100, 101, 102, 910:
+		// Incorrect credentials, account suspended, insufficient
+		// privileges or a disabled API: the engine is unusable until the
+		// operator fixes the key, and the message says so.
+		return &EngineFailure{Text: "check API key" + descSuffix(te.Description), Disable: true}
+	case 202, 203:
+		// No such function / function not available: the engine does not
+		// offer the requested t= mode — the fan-out only ever issues
+		// t=search, so that is the mode to name.
+		return &EngineFailure{
+			Text:        "the engine does not support t=search" + descSuffix(te.Description),
+			DisableMode: "search",
+		}
+	case 300:
+		// "No such item" is an empty result set, not an error.
+		return nil
+	case 410:
+		// Prowlarr's non-spec "Indexer is disabled": engine disabled
+		// upstream, not a transport failure.
+		return &EngineFailure{Text: "the engine is disabled upstream" + descSuffix(te.Description), Disable: true}
+	case 429:
+		// Prowlarr answers 429 with a non-spec error document and a
+		// Retry-After header for indexer backoff and query limits.
+		return &EngineFailure{
+			Text:       httpStatusText(http.StatusTooManyRequests, rawURL) + retrySuffix(te.RetryAfter),
+			RetryAfter: te.RetryAfter,
+		}
+	default:
+		// 200, 201, 900 and everything else fail this engine only; the
+		// error's own rendering names code, HTTP status and description.
+		return &EngineFailure{Text: te.Error()}
+	}
+}
+
+// classifyUpstream maps a dlsearch runner failure: a non-2xx answer becomes
+// the documented "HTTP <status> from <url>" message and carries the
+// Retry-After hold the runner recorded for 429 and 503; a status-0 error is
+// a transport failure whose Detail is already redacted.
+func classifyUpstream(ue *search.UpstreamError, rawURL string) *EngineFailure {
+	if ue.Status > 0 {
+		return &EngineFailure{
+			Text:       httpStatusText(ue.Status, rawURL) + retrySuffix(ue.RetryAfter),
+			RetryAfter: ue.RetryAfter,
+		}
+	}
+	if ue.Detail == "" {
+		return &EngineFailure{Text: "the engine did not answer"}
+	}
+	return &EngineFailure{Text: ue.Detail}
+}
+
+// httpStatusText renders the doc 05 section 9.2 engine-error shape:
+// "HTTP 503 from https://academictorrents.com/rss.xml". The URL is redacted
+// so a base carrying userinfo or a query cannot leak a key.
+func httpStatusText(status int, rawURL string) string {
+	if rawURL == "" {
+		return fmt.Sprintf("HTTP %d", status)
+	}
+	return fmt.Sprintf("HTTP %d from %s", status, secure.RedactURL(rawURL))
+}
+
+// descSuffix appends the upstream description to a classified message, or
+// nothing when the server sent none.
+func descSuffix(desc string) string {
+	if desc == "" {
+		return ""
+	}
+	return ": " + desc
+}
+
+// redactSecret removes the indexer's credential wherever the upstream echoed
+// it: a torznab error document or an error page can embed the request URL,
+// api key included, and the classified text is persisted to the tracker, the
+// indexer row and the log. Both the raw and the query-escaped forms are
+// replaced — the key travels as a url.Values-encoded parameter, so an echoed
+// URL carries the escaped spelling. An empty secret means no credential went
+// on the wire, so the text is returned unchanged.
+func redactSecret(text, secret string) string {
+	if secret == "" {
+		return text
+	}
+	text = strings.ReplaceAll(text, secret, "[REDACTED]")
+	if esc := url.QueryEscape(secret); esc != secret {
+		text = strings.ReplaceAll(text, esc, "[REDACTED]")
+	}
+	return text
+}
+
+// retrySuffix names the upstream wait in the engine message, so the poll
+// shows why the engine stopped and when to try again. The engine still ends
+// now — nothing sleeps past the per-engine deadline waiting it out.
+func retrySuffix(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("; retry after %s", d.Round(time.Second))
+}
+
+// engineURL is the endpoint an engine failure message names: the torznab
+// row's base URL, or the definition's request base for a dlsearch engine.
+func engineURL(row store.Indexer, reg *search.Registry) string {
+	if row.URL != nil && *row.URL != "" {
+		return *row.URL
+	}
+	if reg != nil && row.DefinitionID != nil {
+		if def, ok := reg.Get(*row.DefinitionID); ok && def.Request != nil {
+			return def.Request.BaseURL
+		}
+	}
+	return ""
+}
+
 // NewSearchHandler returns the handler for jobs.kind "search". It marks every
 // selected indexer "searching", runs one goroutine per indexer with the
 // per-engine 15 s deadline, writes each engine's rows as they arrive, and
@@ -124,16 +278,34 @@ func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *
 				engineCtx, cancel := context.WithTimeout(ctx, engineSearchDeadline)
 				defer cancel()
 
-				results, err := searchIndexer(engineCtx, row, p, reg, run, idx, hc, ua, log)
+				results, apiKey, err := searchIndexer(engineCtx, row, p, reg, run, idx, hc, ua, log)
 				if err != nil {
-					// The wire message is the redacted upstream one: a
-					// torznab error can embed the request URL, api key
-					// included (docs/05-api-contract.md section 9.2).
-					msg := secure.RedactError(err).Error()
-					store.Searches.Set(p.SearchJobID, id, store.EngineError, 0, &msg)
+					f := classify(err, 0, engineURL(row, reg))
+					if f == nil {
+						// Torznab 300 "no such item": the engine answered
+						// and the result set is empty — done, not error.
+						store.Searches.Set(p.SearchJobID, id, store.EngineDone, 0, nil)
+						return
+					}
+					// The classified text is upstream-controlled: an error
+					// document can echo the request URL back, api key
+					// included, so the credential this call carried is
+					// scrubbed before the message reaches the tracker, the
+					// indexer row or the log.
+					f.Text = redactSecret(f.Text, apiKey.Reveal())
+					store.Searches.Set(p.SearchJobID, id, store.EngineError, 0, &f.Text)
 					failedEngines.Add(1)
+					// The indexer's settings row shows the same message
+					// the poll does. The write runs on the job context,
+					// not the engine's: a slow engine's own deadline must
+					// not lose it, and a deleted row is already gone.
+					if rerr := idx.RecordTest(ctx, id, time.Now().UnixMilli(), &f.Text); rerr != nil &&
+						!errors.Is(rerr, store.ErrNotFound) {
+						log.WarnContext(ctx, "search engine failure record failed",
+							"search_job_id", p.SearchJobID, "indexer_id", id, "err", rerr)
+					}
 					log.WarnContext(ctx, "search engine failed",
-						"search_job_id", p.SearchJobID, "indexer_id", id, "err", msg)
+						"search_job_id", p.SearchJobID, "indexer_id", id, "err", f.Text)
 					return
 				}
 
@@ -173,47 +345,51 @@ func NewSearchHandler(db *sqlx.DB, log *slog.Logger, reg *search.Registry, run *
 }
 
 // searchIndexer runs one engine of the fan-out: the Torznab client for a
-// torznab/newznab row, the dlsearch runner for a definition-backed one.
-func searchIndexer(ctx context.Context, row store.Indexer, p SearchPayload, reg *search.Registry, run *search.Runner, idx *store.IndexerStore, hc *http.Client, ua string, log *slog.Logger) ([]search.SearchResult, error) {
+// torznab/newznab row, the dlsearch runner for a definition-backed one. The
+// credential the request carried comes back too, so the caller can scrub it
+// out of upstream-controlled error text.
+func searchIndexer(ctx context.Context, row store.Indexer, p SearchPayload, reg *search.Registry, run *search.Runner, idx *store.IndexerStore, hc *http.Client, ua string, log *slog.Logger) ([]search.SearchResult, secure.Secret, error) {
 	cfg := store.IndexerSettingsMap(log, row)
 
 	switch row.Kind {
 	case "torznab", "newznab":
 		if row.URL == nil || *row.URL == "" {
-			return nil, errors.New("the indexer has no url")
+			return nil, "", errors.New("the indexer has no url")
 		}
 		apiKey, err := idx.OpenAPIKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("open indexer key: %w", err)
+			return nil, "", fmt.Errorf("open indexer key: %w", err)
 		}
 		client, err := search.NewTorznabClient(
 			searchHTTPClient(hc, cfg, *row.URL, log), *row.URL, apiKey, row.ID, ua,
 		)
 		if err != nil {
-			return nil, err
+			return nil, apiKey, err
 		}
-		return client.Search(ctx, search.Query{T: "search", Q: p.Query, Categories: p.Categories})
+		results, err := client.Search(ctx, search.Query{T: "search", Q: p.Query, Categories: p.Categories})
+		return results, apiKey, err
 	case "dlsearch":
 		if reg == nil || run == nil {
-			return nil, errors.New("the search runner is not configured")
+			return nil, "", errors.New("the search runner is not configured")
 		}
 		if row.DefinitionID == nil || *row.DefinitionID == "" {
-			return nil, errors.New("the indexer has no definition_id")
+			return nil, "", errors.New("the indexer has no definition_id")
 		}
 		def, ok := reg.Get(*row.DefinitionID)
 		if !ok {
-			return nil, fmt.Errorf("the indexer's definition %q is not loaded", *row.DefinitionID)
+			return nil, "", fmt.Errorf("the indexer's definition %q is not loaded", *row.DefinitionID)
 		}
 		apiKey, err := idx.OpenAPIKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("open indexer key: %w", err)
+			return nil, "", fmt.Errorf("open indexer key: %w", err)
 		}
 		if apiKey.Reveal() != "" {
 			cfg["api_key"] = apiKey.Reveal()
 		}
-		return run.Search(ctx, def, cfg, search.Query{Q: p.Query, Categories: p.Categories})
+		results, err := run.Search(ctx, def, cfg, search.Query{Q: p.Query, Categories: p.Categories})
+		return results, apiKey, err
 	default:
-		return nil, fmt.Errorf("unknown indexer kind %q", row.Kind)
+		return nil, "", fmt.Errorf("unknown indexer kind %q", row.Kind)
 	}
 }
 
