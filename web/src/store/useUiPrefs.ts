@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
-export const PREFS_KEY = "dl.ui.prefs.v1";
+import { api } from "../api/client";
+
 const WRITE_DEBOUNCE_MS = 500;
 
 export interface UiPrefs {
@@ -55,6 +56,14 @@ export const defaultPrefs: UiPrefs = {
 };
 
 export interface UiPrefsState extends UiPrefs {
+  // The document is open (doc 05 §11.4): members the typed surface does not
+  // declare land here verbatim on hydrate and ride the PUT body unchanged.
+  [member: string]: unknown;
+  /** GET /prefs once the session is authenticated; declared members are
+   *  shape-checked as loadInitial did, unknown members land in state
+   *  verbatim, and a failed or absent document leaves the built-in defaults
+   *  in place (doc 09 §3.3's accepted flash). */
+  hydrate: () => Promise<void>;
   /** Deep-merges a patch, then schedules one write 500 ms later. */
   patch: (p: Omit<Partial<UiPrefs>, "version">) => void;
   /** Called by the grid on gesture end; a write is never scheduled during a drag. */
@@ -79,25 +88,22 @@ function deepMerge<T>(base: T, patch: unknown): T {
   return merged as T;
 }
 
-/** The stored document, or null when absent or unparseable. */
-function readStored(): Record<string, unknown> | null {
-  try {
-    const value: unknown = JSON.parse(
-      localStorage.getItem(PREFS_KEY) ?? "null",
-    );
-    return isObject(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function loadInitial(): UiPrefs {
-  const stored = readStored();
-  if (!stored || stored.version !== 1) return clone(defaultPrefs);
-  const merged = deepMerge(clone(defaultPrefs), stored);
+/** The known members of a stored document, shape-checked against the
+ *  defaults member by member; unknown members pass through verbatim. A
+ *  document whose version the SPA does not own is ignored whole, the rule
+ *  loadInitial applied to the persisted copy. */
+function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
+  // JSON round-trip: the typed defaults become the open record the document
+  // is stored as.
+  const base = JSON.parse(JSON.stringify(defaultPrefs)) as Record<
+    string,
+    unknown
+  >;
+  if (doc.version !== defaultPrefs.version) return base;
+  const merged = deepMerge(base, doc);
   // Members with the wrong shape fall back to their default individually.
   if (!isObject(merged.grid)) merged.grid = clone(defaultPrefs.grid);
-  const grid = merged.grid;
+  const grid = merged.grid as UiPrefs["grid"];
   if (
     !Array.isArray(grid.order) ||
     grid.order.some((id) => typeof id !== "string")
@@ -133,22 +139,28 @@ function loadInitial(): UiPrefs {
   return merged;
 }
 
-/** The document members, without the store's own functions. */
-function documentOf(state: UiPrefs): UiPrefs {
-  return {
-    version: state.version,
-    grid: state.grid,
-    sidebarWidth: state.sidebarWidth,
-    sidebarCollapsed: state.sidebarCollapsed,
-    detailHeight: state.detailHeight,
-    detailTab: state.detailTab,
-    theme: state.theme,
-    lastDestination: state.lastDestination,
-  };
+/** The PUT body: every state member that is not a function. Transient
+ *  bookkeeping never enters the state object, so nothing else is excluded —
+ *  unknown members hydrated from the server or written through patch under a
+ *  cast round-trip verbatim (doc 05 §11.4). */
+function documentOf(state: UiPrefsState): Record<string, unknown> {
+  const doc: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(state)) {
+    if (typeof value !== "function") doc[key] = value;
+  }
+  return doc;
 }
 
 let dragging = false;
 let writeTimer: ReturnType<typeof setTimeout> | null = null;
+// Top-level members patch or resetGrid touched since the last completed
+// write; hydrate merges the server document beneath it, so a local edit made
+// while the GET is in flight is never clobbered (doc 09 §3.3).
+const dirty = new Set<string>();
+// Completed PUTs, monotonic. A hydrate response that lands after a write it
+// predates is discarded and re-issued once, so a stale server snapshot cannot
+// revert a member the PUT already wrote.
+let writeSerial = 0;
 
 export const useUiPrefs = create<UiPrefsState>()((set, get) => {
   const scheduleWrite = () => {
@@ -159,35 +171,54 @@ export const useUiPrefs = create<UiPrefsState>()((set, get) => {
       // A gesture can start after this write was armed; doc 09 §3.3 forbids
       // writing mid-gesture. The gesture end reschedules with the final state.
       if (dragging) return;
-      try {
-        // Re-read at write time so members written by other owners since load
-        // and unknown members survive verbatim. This store is the sole owner
-        // of `grid`, so its known members replace storage (a resetGrid must
-        // not resurrect stale sizing keys); nested members it does not define
-        // survive. lib/theme.ts owns `theme`: a stored value wins.
-        const stored = readStored() ?? {};
-        const doc = documentOf(get());
-        const merged: Record<string, unknown> = { ...stored, ...doc };
-        merged.grid = {
-          ...(isObject(stored.grid) ? stored.grid : {}),
-          ...doc.grid,
-        };
-        const storedTheme = stored.theme;
-        if (
-          storedTheme === "system" ||
-          storedTheme === "light" ||
-          storedTheme === "dark"
-        )
-          merged.theme = storedTheme;
-        localStorage.setItem(PREFS_KEY, JSON.stringify(merged));
-      } catch {
-        // Storage can be full or unavailable; the in-memory document still works.
-      }
+      // Snapshot the dirty set so a patch landing mid-request stays dirty
+      // and is not cleared by this write's completion.
+      const written = new Set(dirty);
+      const body = documentOf(get());
+      void api
+        .PUT("/prefs", { body })
+        .then(({ error }) => {
+          if (error) return;
+          writeSerial += 1;
+          for (const key of written) dirty.delete(key);
+        })
+        .catch(() => {
+          // A failed PUT leaves the in-memory document in place and its
+          // members dirty; the next patch's write carries them.
+        });
     }, WRITE_DEBOUNCE_MS);
   };
+
+  const fetchAndMerge = async (retried: boolean): Promise<void> => {
+    const stamped = writeSerial;
+    let data: unknown;
+    try {
+      ({ data } = await api.GET("/prefs"));
+    } catch {
+      // A failed or absent document leaves the built-in defaults in place.
+      return;
+    }
+    if (!isObject(data)) return;
+    if (writeSerial !== stamped) {
+      // The snapshot can predate a completed PUT; discard it and re-issue
+      // the GET once. A second race leaves the local document — it is what
+      // the last PUT wrote, so it is already the server's truth.
+      if (!retried) await fetchAndMerge(true);
+      return;
+    }
+    const merged = sanitizeDoc(data);
+    const applied: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(merged)) {
+      if (!dirty.has(key)) applied[key] = value;
+    }
+    set(applied);
+  };
+
   return {
-    ...loadInitial(),
+    ...clone(defaultPrefs),
+    hydrate: () => fetchAndMerge(false),
     patch: (p) => {
+      for (const key of Object.keys(p)) dirty.add(key);
       // Clone so the store never shares a mutable reference with the caller.
       set((state) => deepMerge(state, clone(p)));
       scheduleWrite();
@@ -207,6 +238,7 @@ export const useUiPrefs = create<UiPrefsState>()((set, get) => {
       }
     },
     resetGrid: () => {
+      dirty.add("grid");
       // Replace, not deep-merge: a sizing key removed by the reset must not
       // survive as a stale member of the merged map.
       set({ grid: clone(defaultPrefs.grid) });

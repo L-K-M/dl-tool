@@ -4,7 +4,7 @@ import { initI18n } from "../../i18n";
 import { applyTheme, storeTheme, type ThemeChoice } from "../../lib/theme";
 import settingsStrings from "../../locales/en/settings.json";
 import type { SidebarFilter } from "../../store/useTasks";
-import { PREFS_KEY, useUiPrefs, type UiPrefs } from "../../store/useUiPrefs";
+import { useUiPrefs, type UiPrefs } from "../../store/useUiPrefs";
 import { Checkbox } from "../ui/checkbox";
 import { Label } from "../ui/label";
 import { useSettingsDirty } from "./SettingsScreen";
@@ -52,26 +52,6 @@ const FIELD_KEYS: (keyof GeneralValues)[] = [
 
 const DEFAULT_STARTUP_FILTER: SidebarFilter = "all";
 const DEFAULT_DOUBLE_CLICK: DoubleClickAction = "open-detail";
-
-/** Merge members into the stored preference document, preserving everything
- *  else verbatim — the same direct write lib/theme.ts performs for `theme`.
- *  The store's debounced writer serializes only declared UiPrefs members, so
- *  unknown members need this path to survive a reload. */
-function writePrefsDocument(members: Record<string, unknown>): void {
-  let doc: Record<string, unknown> = {};
-  try {
-    const raw: unknown = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "null");
-    if (raw !== null && typeof raw === "object" && !Array.isArray(raw))
-      doc = raw as Record<string, unknown>;
-  } catch {
-    // A corrupt document is replaced; the store's own writer does the same.
-  }
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...doc, ...members }));
-  } catch {
-    // Storage can be full or blocked; the in-memory store still applies.
-  }
-}
 
 const selectClass =
   "h-8 w-56 rounded-lg border border-input bg-transparent px-2 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none";
@@ -132,21 +112,22 @@ export function GeneralSection(): JSX.Element {
       verbatim.doubleClickDownloading = next.doubleClickDownloading;
     if (next.doubleClickCompleted !== undefined)
       verbatim.doubleClickCompleted = next.doubleClickCompleted;
-    if (Object.keys(verbatim).length > 0) {
-      writePrefsDocument(verbatim);
+    // Unknown members go through patch alone: the debounced writer now
+    // serializes every non-function state member, so they reach the document
+    // verbatim (doc 05 §11.4).
+    if (Object.keys(verbatim).length > 0)
       state.patch(verbatim as Omit<Partial<UiPrefs>, "version">);
-    }
 
     const known: Omit<Partial<UiPrefs>, "version"> = {};
     if (next.density !== undefined)
       known.grid = { ...state.grid, density: next.density };
+    if (Object.keys(known).length > 0) state.patch(known);
+
     if (next.theme !== undefined) {
       // lib/theme.ts owns the class and the stored member, per T045.
       storeTheme(next.theme);
       applyTheme(next.theme);
-      known.theme = next.theme;
     }
-    if (Object.keys(known).length > 0) state.patch(known);
   }, []);
 
   const save = useCallback(() => setBaseline(valuesRef.current), []);

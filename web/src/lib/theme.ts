@@ -1,33 +1,22 @@
+import { useUiPrefs } from "../store/useUiPrefs";
+
 export type ThemeChoice = "system" | "light" | "dark";
 
-const PREFS_KEY = "dl.ui.prefs.v1";
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
-function readPreferences(): Record<string, unknown> {
-  try {
-    const value: unknown = JSON.parse(
-      localStorage.getItem(PREFS_KEY) ?? "null",
-    );
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
-    }
-  } catch {
-    // Storage can be unavailable or corrupt; boot with system defaults.
-  }
-  return {};
-}
-
 export function readStoredTheme(): ThemeChoice {
-  const { theme } = readPreferences();
-  return theme === "light" || theme === "dark" ? theme : "system";
+  // The store renders defaultPrefs until hydrate lands (doc 09 §3.3), so the
+  // pre-paint call in main.tsx reads "system" until the GET resolves. The
+  // store is touched lazily inside the function body: useUiPrefs never
+  // imports this file, so the one-way import initializes cleanly under any
+  // module order.
+  return useUiPrefs.getState().theme;
 }
 
 export function storeTheme(choice: ThemeChoice): void {
-  // Preserve preferences owned by other UI features. Write failures reach the caller.
-  localStorage.setItem(
-    PREFS_KEY,
-    JSON.stringify({ ...readPreferences(), theme: choice }),
-  );
+  // The server document is the sole store; the debounced writer carries the
+  // member with the next PUT (doc 09 §3.3).
+  useUiPrefs.getState().patch({ theme: choice });
 }
 
 export function resolveTheme(choice: ThemeChoice): "light" | "dark" {

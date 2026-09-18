@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T129 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T007, T008, T014, T040, T044, T045, T053 |
 | **Blocks** | T064 |
 | **Parallel-safe** | no — edits the shared files `internal/api/server.go`, `internal/store/settings.go`, `web/src/App.tsx` and `web/src/store/useUiPrefs.ts` |
@@ -172,28 +172,28 @@ silently lost.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestPrefsRoundTripPerUser` asserts a document PUT and then GET returns identical members.
-- [ ] `TestPrefsUnknownMemberPreserved` asserts a member the server does not model survives a
+- [x] `TestPrefsRoundTripPerUser` asserts a document PUT and then GET returns identical members.
+- [x] `TestPrefsUnknownMemberPreserved` asserts a member the server does not model survives a
       round trip verbatim — the rule `search` and the General extras rely on.
-- [ ] `TestPrefsTooLarge` asserts a body above 64 KiB is `413 /problems/payload-too-large` and
+- [x] `TestPrefsTooLarge` asserts a body above 64 KiB is `413 /problems/payload-too-large` and
       `TestPrefsRejectsNonObject` asserts a non-object body is `422 /problems/validation-failed`.
-- [ ] A `useUiPrefs.test.ts` case asserts `hydrate()` lands a server-only member in state and a
+- [x] A `useUiPrefs.test.ts` case asserts `hydrate()` lands a server-only member in state and a
       `patch()` write PUTs the whole document — every non-function, non-transient member, unknown
       ones included.
-- [ ] A `useUiPrefs.test.ts` case stubs `GET /prefs` with a known member holding a value that
+- [x] A `useUiPrefs.test.ts` case stubs `GET /prefs` with a known member holding a value that
       differs from `defaultPrefs`, calls `hydrate()` with no `patch()` pending and asserts state
       ends with the server value — the merge applies the whole document, not only unknown keys.
-- [ ] A `useUiPrefs.test.ts` case stubs `GET /prefs` to resolve after a delay, patches a member
+- [x] A `useUiPrefs.test.ts` case stubs `GET /prefs` to resolve after a delay, patches a member
       before it resolves, advances past the debounce and asserts the PUT body carries the local
       value — a local edit is never clobbered by an in-flight hydrate.
-- [ ] A `useUiPrefs.test.ts` case lets the debounced PUT complete, then resolves the hydrate GET
+- [x] A `useUiPrefs.test.ts` case lets the debounced PUT complete, then resolves the hydrate GET
       with a pre-PUT snapshot, asserts the store discards it and re-issues the GET once, and lets
       the retried snapshot land without reverting the member.
-- [ ] A `useUiPrefs.test.ts` case asserts the write still waits out the 500 ms debounce and never
+- [x] A `useUiPrefs.test.ts` case asserts the write still waits out the 500 ms debounce and never
       fires during a drag, now against the PUT rather than `localStorage`.
-- [ ] `storeTheme("dark")` reaches the server document: the re-pinned `theme.test.ts` asserts the
+- [x] `storeTheme("dark")` reaches the server document: the re-pinned `theme.test.ts` asserts the
       `theme` member in the PUT body, and `Toolbar` shows the hydrated choice without a remount.
-- [ ] No `localStorage` reference remains in `web/src/store/useUiPrefs.ts`, `web/src/lib/theme.ts`
+- [x] No `localStorage` reference remains in `web/src/store/useUiPrefs.ts`, `web/src/lib/theme.ts`
       or `web/src/components/Settings/GeneralSection.tsx`; Evidence includes the empty `grep` that
       proves it.
 
@@ -234,7 +234,76 @@ creates is untracked, and `git diff --name-only` never lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+Verification run on the final tree (lint → typecheck → test-web → test → e2e), trimmed to the
+load-bearing lines:
+
+```
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+...
+ Test Files  18 passed (18)
+      Tests  237 passed (237)
+...
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	129.165s
+ok  	github.com/L-K-M/dl-tool/internal/store	77.514s
+cd web && npx playwright test
+...
+  21 passed (40.1s)
+PREFS_DOC_OK
+```
+
+The four pinned handler tests, run verbosely on the same tree:
+
+```
+=== RUN   TestPrefsRoundTripPerUser
+--- PASS: TestPrefsRoundTripPerUser (0.42s)
+=== RUN   TestPrefsUnknownMemberPreserved
+--- PASS: TestPrefsUnknownMemberPreserved (0.42s)
+=== RUN   TestPrefsTooLarge
+--- PASS: TestPrefsTooLarge (0.45s)
+=== RUN   TestPrefsRejectsNonObject
+--- PASS: TestPrefsRejectsNonObject (0.45s)
+ok  	github.com/L-K-M/dl-tool/internal/api	2.813s
+```
+
+No `localStorage` remains in the three files the task pins:
+
+```
+$ grep -rn "localStorage" web/src/store/useUiPrefs.ts web/src/lib/theme.ts web/src/components/Settings/GeneralSection.tsx
+(exit 1, no output)
+```
+
+Scope check — uncommitted paths (`git status --porcelain=v1 -uall -- . ':(exclude)docs'`) plus the
+already-committed diff against `origin/main`; the union is exactly the Files table and the two
+generated artifacts:
+
+```
+web/src/App.test.tsx
+web/src/App.tsx
+web/src/components/DetailPane/DetailPane.test.tsx
+web/src/components/Settings/GeneralSection.tsx
+web/src/components/Settings/SettingsScreen.test.tsx
+web/src/components/Shell/Shell.test.tsx
+web/src/components/Shell/Toolbar.tsx
+web/src/components/TaskGrid/TaskGrid.test.tsx
+web/src/lib/theme.test.ts
+web/src/lib/theme.ts
+web/src/store/useUiPrefs.test.ts
+web/src/store/useUiPrefs.ts
+=== committed vs main ===
+api/openapi.json
+internal/api/prefs.go
+internal/api/prefs_test.go
+internal/api/server.go
+internal/store/settings.go
+web/src/api/schema.d.ts
+```
 
 ## Blocked
 Created by the T064 blocker repair (the prefs slice of T107 moved forward per the repair options in

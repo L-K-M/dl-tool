@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -52,6 +53,7 @@ import { Sidebar } from "./components/Shell/Sidebar";
 import { ReconnectBanner } from "./components/Shell/ReconnectBanner";
 import { StatusBar } from "./components/Shell/StatusBar";
 import { useTasks, type SidebarFilter } from "./store/useTasks";
+import { useUiPrefs } from "./store/useUiPrefs";
 
 type AuthEnvelope = components["schemas"]["AuthEnvelope"];
 export type SessionState =
@@ -96,6 +98,12 @@ function SessionProvider({ children }: { children: ReactNode }) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
+  // Doc 09 §3.3: every authenticated boot, login and setup completion
+  // re-runs hydrate; the store renders its defaults until the GET resolves.
+  useEffect(() => {
+    if (query.data?.status === "authenticated")
+      void useUiPrefs.getState().hydrate();
+  }, [query.data?.status]);
   if (query.isError)
     return (
       <div role="alert">

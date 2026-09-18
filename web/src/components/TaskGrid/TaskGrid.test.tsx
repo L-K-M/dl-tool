@@ -26,7 +26,11 @@ import {
   invalidateTaskList,
 } from "./TaskGrid";
 import { useTasks, type Task } from "../../store/useTasks";
-import { PREFS_KEY, defaultPrefs, useUiPrefs } from "../../store/useUiPrefs";
+import {
+  defaultPrefs,
+  useUiPrefs,
+  type UiPrefsState,
+} from "../../store/useUiPrefs";
 import { useShellUi } from "../Shell/Toolbar";
 import { ColumnsMenu, moveGridColumn, useGridTable } from "./ColumnsMenu";
 import { formatBytes } from "../../lib/format";
@@ -77,6 +81,7 @@ let qc: QueryClient;
 let tasks: Task[];
 let reportedTotal: number;
 let requests: URL[];
+let putBodies: Record<string, unknown>[];
 let mobile = false;
 let changeMedia: () => void;
 const viewportHeight = 320;
@@ -90,9 +95,9 @@ beforeEach(() => {
     pending: new Set(),
     filterInput: null,
   });
-  useUiPrefs.setState(structuredClone(defaultPrefs));
+  useUiPrefs.setState(structuredClone(defaultPrefs) as Partial<UiPrefsState>);
   useGridTable.setState({ table: null });
-  localStorage.clear();
+  putBodies = [];
   tasks = [task("one"), task("two"), task("three")];
   reportedTotal = tasks.length;
   requests = [];
@@ -160,6 +165,11 @@ beforeEach(() => {
         next_cursor: end < tasks.length ? String(end) : null,
       });
     }),
+    http.get("*/api/v1/prefs", () => HttpResponse.json({})),
+    http.put("*/api/v1/prefs", async ({ request }) => {
+      putBodies.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json({});
+    }),
   );
 });
 afterEach(() => {
@@ -167,7 +177,6 @@ afterEach(() => {
   qc.clear();
   server.resetHandlers();
   vi.restoreAllMocks();
-  localStorage.clear();
 });
 afterAll(() => server.close());
 
@@ -601,12 +610,13 @@ test("TestDetailShortcutDispatchesFocusedId", async () => {
 });
 
 test("TestDensityIsControlledNotCached", async () => {
-  localStorage.setItem(
-    "dl.ui.prefs.v1",
-    JSON.stringify({ grid: { density: "compact" } }),
-  );
+  // The store's grid member controls the row height; seed it through the
+  // store the way a hydrated document would land it.
+  useUiPrefs.setState((state) => ({
+    grid: { ...state.grid, density: "compact" },
+  }));
   await mount();
-  expect(row("one").style.height).toBe("32px");
+  expect(row("one").style.height).toBe("26px");
 });
 
 test("TestRowHeightTracksLayoutAndDensity", async () => {
@@ -866,9 +876,14 @@ test("TestColumnPrefsSurviveRemount", async () => {
     "completedOn",
   ];
   expect(columnIds()).toEqual(expected);
-  // The debounced write lands the whole document in localStorage.
+  // The debounced write PUTs the whole document.
   await waitFor(() =>
-    expect(localStorage.getItem(PREFS_KEY)).toContain('"size":140'),
+    expect(
+      (
+        putBodies.at(-1)?.grid as
+          { sizing?: Record<string, number> } | undefined
+      )?.sizing?.size,
+    ).toBe(140),
   );
   first.unmount();
   await mount();
@@ -957,7 +972,7 @@ test("TestUnmountMidResizeStillPersists", async () => {
   first.unmount();
   useUiPrefs.getState().patch({ lastDestination: "/data/z" });
   await waitFor(() =>
-    expect(localStorage.getItem(PREFS_KEY)).toContain("/data/z"),
+    expect(putBodies.at(-1)?.lastDestination).toBe("/data/z"),
   );
 });
 

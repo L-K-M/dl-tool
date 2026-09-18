@@ -155,6 +155,10 @@ beforeEach(() => {
         next_cursor: null,
       }),
     ),
+    // A mounted App hydrates, and drag- or toggle-driven patch() writes
+    // PUT the document; both verbs stay handled under the strict suite.
+    http.get("*/api/v1/prefs", () => HttpResponse.json({})),
+    http.put("*/api/v1/prefs", () => HttpResponse.json({})),
   );
 });
 afterEach(() => {
