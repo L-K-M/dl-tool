@@ -315,7 +315,70 @@ untracked, and `git diff --name-only` never lists an untracked file.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-Resolved by the plan repair: the `## Files` table now admits the server half the record prescribed —
+Stopped before implementing (2026-09-18, second blocker): the repaired `## Files` table still
+does not admit the files the prescribed `source_display_uri` change lives in. Step 2 and the
+store row's purpose presume `internal/store/tasks.go` holds both the `Task` struct and every
+read that feeds the task DTO; it holds neither in full.
+
+Three required files are missing from the table, and a fourth is the natural pin:
+
+1. `internal/store/models.go` — `Task` is defined there (models.go:47), not in `tasks.go`.
+   `SourceDisplayURI *string` (`db:"source_display_uri"`) cannot be added to `store.Task`
+   from a permitted file; Go requires the field inside the struct's definition block. The
+   plan already treats the file as distinct: T017's Files table lists
+   `internal/store/models.go` for "Add the `Task` and `TaskEvent` row structs", and the T022
+   and T050 task files both call out "models.go is outside this task's Files table".
+2. `internal/store/tasks_list.go` — `queryListTasksPage` (tasks_list.go:115) is a read that
+   feeds the task DTO twice over: `GET /tasks` directly, and `GET /events` through
+   `SSEHandlers.Snapshot` (`internal/api/sse.go`:151-160, `ListTasks` → `sync.Project`).
+   Without the column the list path falls back to userinfo-stripping the stored
+   `source_uri` — which for a search-result task is the provider `download_url`, passkey
+   and all — contradicting the contract line this file quotes: "no response ever carries
+   the acquisition source". `queryGetTask` (tasks.go:123) is the only DTO-feeding read the
+   table admits.
+3. `internal/sync/delta.go` — `Project`'s `displaySourceURI` (delta.go:83-95) renders
+   `t.SourceURI` with only userinfo stripped. A passkey rides in the query string, not
+   userinfo, so unless the projection prefers `SourceDisplayURI` every `sync` delta leaks
+   the acquisition URL to every connected client.
+4. `internal/sync/delta_test.go` — the pin for (3): a row carrying `source_display_uri`
+   projects it instead of the stripped `source_uri`. `TestProjectDropsUnsanitizableSources`
+   is the sibling precedent.
+
+Not required: `internal/store/tasks_infohash.go` — `queryFindTaskByInfohash` scans into
+`store.Task` but never feeds a DTO or snapshot, and sqlx tolerates a struct field with no
+matching column, so the select needs no change.
+
+Evidence (run from the repo root at `a852ca1`):
+
+```
+$ grep -n "^type Task struct" internal/store/*.go
+internal/store/models.go:47:type Task struct {
+$ grep -rn "source_display_uri" internal/
+internal/store/migrations/00001_init.sql:79:  source_display_uri TEXT,  -- the only hit: DDL, no Go code
+$ grep -rn "SELECT id, engine, engine_ref, source_kind, source_uri" internal/store/*.go
+internal/store/tasks.go:123:          queryGetTask — in the Files table
+internal/store/tasks_infohash.go:80:  queryFindTaskByInfohash — not DTO-feeding, needs no column
+internal/store/tasks_list.go:115:   queryListTasksPage — feeds GET /tasks and the SSE snapshot
+$ grep -n "ListTasks\|sync.Project" internal/api/sse.go
+154:		rows, cursor, _, err := h.tasks.ListTasks(ctx, filter)
+159:			snap[row.ID] = sync.Project(row)
+$ grep -n "t.SourceURI\|func displaySourceURI" internal/sync/delta.go
+83:func displaySourceURI(t store.Task) any {
+84:	if t.SourceURI == nil {
+88:	u, err := url.Parse(*t.SourceURI)
+```
+
+Which file should answer it: this file's `## Files` table — the repair needs four rows
+(`internal/store/models.go` for the `SourceDisplayURI` field on `Task`,
+`internal/store/tasks_list.go` for `queryListTasksPage` selecting the column,
+`internal/sync/delta.go` for `Project` preferring it, and `internal/sync/delta_test.go` for
+the preference pin), and the `internal/store/tasks.go` row's purpose should drop the claim
+that the field lives there. No compliant implementation exists without them: the scope
+check of the Verification block would list all four outside the table.
+
+---
+
+Resolved by the earlier plan repair (#212/#213): the `## Files` table now admits the server half the record prescribed —
 `internal/api/tasks.go`, `internal/store/search.go` and `internal/store/tasks.go` for the
 `search_result_ids` family, its resolution and the `search-result:<res_id>` display source — plus
 `web/src/components/AddTask/` so *Download to…* can pre-fill the dialog with `res_` ids. The contract
