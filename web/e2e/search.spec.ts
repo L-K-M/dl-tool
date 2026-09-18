@@ -252,6 +252,12 @@ test("a saved search re-runs with the stored selection", async ({ page }) => {
   await expect(page.getByRole("button", { name: /^Indexers:/ })).toHaveText(
     /Indexers: 1 of 2/,
   );
+  // Diverge the live selection from the stored one so the re-run body proves
+  // the stored indexer_ids are posted, not the restored live selection —
+  // a regression posting live state would carry both ids and fail below.
+  await page.getByRole("button", { name: /^Indexers:/ }).click();
+  await page.getByRole("checkbox", { name: "Indexer B", exact: true }).click();
+  await page.getByRole("button", { name: /^Indexers:/ }).click();
   await page.getByRole("button", { name: /^Saved/ }).click();
   await page.getByRole("button", { name: "weekly", exact: true }).click();
 
