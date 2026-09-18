@@ -193,15 +193,26 @@ on a fact the whole task turns on — how a search result becomes a task.
   request body carries `magnet_uri`/`download_url`.
 - The merged server never returns those fields. `SearchResultDTO` in
   `internal/api/search.go` deliberately omits all three ("server-only acquisition data"),
-  matching `docs/05-api-contract.md` §9.2, `docs/07-search-and-indexers.md` §5 rule 6 and the
-  2026-09-01 security review ("replaced client-visible search acquisition URLs with opaque
-  result ids"). `GET /search/{id}` returns opaque `res_` ids and metadata only.
+  matching `docs/05-api-contract.md` §9.2 and `docs/07-search-and-indexers.md` §5 rule 6
+  (added in that file's 2026-09-01 change-log entry: Torznab download URLs embed the
+  operator's per-user tracker passkey, so acquisition URLs are server-only). `GET /search/{id}`
+  returns opaque `res_` ids and metadata only.
 - The documented replacement — `POST /tasks` accepting `search_result_ids` (doc 05 §5.2 and
   §9.2; the `search-result:<res_id>` rendering already anticipated by
   `tasks.source_display_uri` and `InspectTasksOutputBody.source_uri`) — is specified but not
   implemented: `CreateTasksBody` in `internal/api/tasks.go` has no `search_result_ids` field,
   `api/openapi.json` and `web/src/api/schema.d.ts` have none, and no `res_` id resolves through
   `uris` (`normaliseSubmission` rejects it). No task file owns adding it.
+
+Evidence (run from the repo root at `aed413f`):
+
+```
+$ grep -rn "search_result_ids" internal/api/tasks.go api/openapi.json web/src/api/schema.d.ts
+(exit 1 — no matches)
+$ grep -n "download_url\|magnet_uri\|details_url" internal/api/search.go
+272:// metadata and the opaque res_ id only: download_url, magnet_uri and
+273:// details_url are server-only acquisition data and have no field here
+```
 
 Either direction fails a hard rule. Implementing this file's contract ships a dead `⬇`:
 the generated client type has no `magnet_uri`/`download_url`, so every click posts
