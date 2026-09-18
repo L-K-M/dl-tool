@@ -433,6 +433,16 @@ func TestProjectDropsUnsanitizableSources(t *testing.T) {
 		{"magnet:?xt=urn:btih:abcdef", "magnet:?xt=urn:btih:abcdef"},
 		{"/data/watch/file.torrent", "/data/watch/file.torrent"},
 		{"mailto:admin@example.org", nil}, // opaque without credentials: dropped too
+		// A magnet keeps only its urn xt params — dn, tr and non-urn xt are
+		// untrusted and commonly carry passkeys.
+		{"magnet:?xt=urn:btih:abcdef&dn=Track%20One&tr=http%3A%2F%2Ft%2Fannounce%3Fpasskey%3Dk", "magnet:?xt=urn:btih:abcdef"},
+		{"magnet:?xt=http%3A%2F%2Fevil.example%2Ft.torrent", nil},
+		{"magnet:?xt=urn:btih:abc?x=1", nil}, // an xt carrying a ? of its own is not content identity
+		// A non-magnet query string is untrusted too — a Torznab passkey
+		// rides there — so the stripped display drops it.
+		{"https://user:pass@tracker.example/dl?apikey=K", "https://tracker.example/dl"},
+		// Both xt identities of a hybrid survive, verbatim.
+		{"magnet:?xt=urn:btih:abcdef&xt=urn:btmh:1220beef", "magnet:?xt=urn:btih:abcdef&xt=urn:btmh:1220beef"},
 	}
 
 	for _, tc := range cases {
@@ -442,6 +452,29 @@ func TestProjectDropsUnsanitizableSources(t *testing.T) {
 		if got := isync.Project(row)["source_uri"]; got != tc.want {
 			t.Fatalf("stored %q projects to %v, want %v", tc.stored, got, tc.want)
 		}
+	}
+}
+
+// A non-empty source_display_uri wins verbatim — it is written at insert and
+// already API-safe — over every fallback rule, including a stored source that
+// would otherwise be dropped or stripped.
+func TestProjectDisplaySourceURIWins(t *testing.T) {
+	row := taskFixture("tsk_a")
+	row.SourceURI = strPtr("https://provider.example/dl?passkey=k3y")
+	row.SourceDisplayURI = strPtr("search-result:res_01")
+
+	if got := isync.Project(row)["source_uri"]; got != "search-result:res_01" {
+		t.Fatalf("display column wins verbatim, got %v", got)
+	}
+
+	// The fallback still applies when the column is NULL or empty.
+	row.SourceDisplayURI = nil
+	if got := isync.Project(row)["source_uri"]; got != "https://provider.example/dl" {
+		t.Fatalf("nil column falls back to the sanitized source, got %v", got)
+	}
+	row.SourceDisplayURI = strPtr("")
+	if got := isync.Project(row)["source_uri"]; got != "https://provider.example/dl" {
+		t.Fatalf("empty column falls back to the sanitized source, got %v", got)
 	}
 }
 

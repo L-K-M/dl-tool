@@ -112,9 +112,10 @@ type taskListRow struct {
 	Ratio float64 `db:"ratio"`
 }
 
-const queryListTasksPage = `SELECT id, engine, engine_ref, source_kind, source_uri, name, infohash_v1, infohash_v2,
- state, error_code, error_message, destination, content_path, category_id, total_bytes, completed_bytes,
- uploaded_bytes, download_rate, upload_rate, eta_seconds, sequential, queue_position,
+const queryListTasksPage = `SELECT id, engine, engine_ref, source_kind, source_uri, source_display_uri,
+ name, infohash_v1, infohash_v2, state, error_code, error_message, destination,
+ content_path, category_id, total_bytes, completed_bytes, uploaded_bytes,
+ download_rate, upload_rate, eta_seconds, sequential, queue_position,
  added_at, started_at, completed_at, created_at, updated_at, ratio
 FROM tasks
 WHERE `

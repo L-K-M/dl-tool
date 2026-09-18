@@ -20,6 +20,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/L-K-M/dl-tool/internal/config"
+	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/search"
 	"github.com/L-K-M/dl-tool/internal/secure"
@@ -33,6 +34,7 @@ type searchTestEnv struct {
 	api      humatest.TestAPI
 	db       *sqlx.DB
 	indexers *store.IndexerStore
+	engines  *engine.Registry
 	bearer   string
 }
 
@@ -53,6 +55,10 @@ func newSearchTestEnvDeps(t *testing.T, hc *http.Client, defs *search.Registry, 
 
 	root := t.TempDir()
 	configDir := filepath.Join(root, "config")
+	dataRoot := filepath.Join(root, "data")
+	if err := os.Mkdir(dataRoot, 0o755); err != nil {
+		t.Fatalf("make data root: %v", err)
+	}
 	db, err := store.Open(
 		t.Context(),
 		filepath.Join(configDir, "dl-tool.db"),
@@ -73,7 +79,7 @@ func newSearchTestEnvDeps(t *testing.T, hc *http.Client, defs *search.Registry, 
 	}
 
 	server, err := NewServer(
-		&config.Config{ConfigDir: configDir, SessionTTL: time.Hour},
+		&config.Config{ConfigDir: configDir, SessionTTL: time.Hour, DataRoots: []string{dataRoot}},
 		db,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: hc, DB: db},
@@ -87,6 +93,7 @@ func newSearchTestEnvDeps(t *testing.T, hc *http.Client, defs *search.Registry, 
 		api:      humatest.Wrap(t, server.API),
 		db:       db,
 		indexers: indexers,
+		engines:  server.Engines,
 	}
 	env.bearer = seedLiveAPIToken(t, db, seedUser(t, db).ID)
 
@@ -1626,5 +1633,313 @@ func TestDuplicateAcrossEnginesAppearsOnce(t *testing.T) {
 	if *poll.Body.Results[0].Seeders != 9 || *poll.Body.Results[1].Seeders != 7 {
 		t.Errorf("result order after dedup = %d then %d, want the page's -seeders order preserved",
 			*poll.Body.Results[0].Seeders, *poll.Body.Results[1].Seeders)
+	}
+}
+
+// --- opaque search-result task creation (doc 05 section 9.2) --------------
+
+// newResultTaskEnv is a search env with the recording engine stand-ins the
+// create path's routing needs — a search result resolves to a real source
+// URI, which must route to a registered engine.
+func newResultTaskEnv(t *testing.T) *searchTestEnv {
+	t.Helper()
+	env := newSearchTestEnv(t, nil)
+	env.engines.Register(newRecordingEngine(engine.NameAria2, acceptsAria2Lanes))
+	env.engines.Register(newRecordingEngine(engine.NameQBittorrent, acceptsBitTorrent))
+	return env
+}
+
+// seedResultJob inserts one indexer, one finished search job and the given
+// result rows through the store, returning the res_ ids keyed by title — the
+// generated ids are random ULIDs, not insert-ordered.
+func (e *searchTestEnv) seedResultJob(t *testing.T, rows []store.SearchResultRow) (string, map[string]string) {
+	t.Helper()
+
+	indexer := e.seedSearchIndexer(t, "ix-"+store.NewID(store.PrefixIndexer), "https://ix.test")
+	job, err := store.CreateSearchJob(t.Context(), e.db, store.SearchJob{
+		Query:          "fixture",
+		IndexerIDsJSON: `["` + indexer.ID + `"]`,
+		Finished:       true,
+	})
+	if err != nil {
+		t.Fatalf("create search job: %v", err)
+	}
+	if _, err := store.InsertResults(t.Context(), e.db, job.ID, indexer.ID, rows); err != nil {
+		t.Fatalf("insert results: %v", err)
+	}
+
+	var pairs []struct {
+		ID    string `db:"id"`
+		Title string `db:"title"`
+	}
+	if err := e.db.SelectContext(t.Context(), &pairs,
+		`SELECT id, title FROM search_results WHERE search_job_id = ?`, job.ID); err != nil {
+		t.Fatalf("read result ids: %v", err)
+	}
+	ids := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		ids[p.Title] = p.ID
+	}
+	return job.ID, ids
+}
+
+// taskCount counts the tasks rows of the env's store.
+func (e *searchTestEnv) taskCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := e.db.GetContext(t.Context(), &n, `SELECT COUNT(*) FROM tasks`); err != nil {
+		t.Fatalf("count tasks: %v", err)
+	}
+	return n
+}
+
+// TestTaskCreateFromResultIDs pins the opaque-id contract: each res_ id
+// resolves to its stored provider source server-side, the task's stored
+// source_uri keeps it, and every API rendering shows search-result:<res_id> —
+// the response, GET /tasks/{id} and the list. Provider URLs and magnets never
+// leave the server.
+func TestTaskCreateFromResultIDs(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2&dn=Show&tr=https%3A%2F%2Ft.example%2Fann%3Fpk%3Dk"
+	download := "https://provider.example/dl/x.torrent?passkey=k3y"
+	_, ids := env.seedResultJob(t, []store.SearchResultRow{
+		{Title: "magnet one", MagnetURI: &magnet},
+		{Title: "file two", DownloadURL: &download},
+	})
+
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["magnet one"], ids["file two"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	raw := resp.Body.String()
+	for _, leak := range []string{"provider.example", "passkey", "k3y", "dn=", "tr=", "magnet:"} {
+		if strings.Contains(raw, leak) {
+			t.Fatalf("response leaks provider data %q: %s", leak, raw)
+		}
+	}
+
+	body := decodeCreateBody(t, resp)
+	if len(body.Created) != 2 {
+		t.Fatalf("created = %d, want 2: %+v", len(body.Created), body.Created)
+	}
+	displayByID := map[string]string{}
+	for _, task := range body.Created {
+		if task.SourceURI == nil || !strings.HasPrefix(*task.SourceURI, "search-result:res_") {
+			t.Errorf("task %s source_uri = %v, want search-result:<res_id>", task.ID, task.SourceURI)
+		}
+		displayByID[task.ID] = ""
+		if task.Engine != engine.NameQBittorrent {
+			t.Errorf("task %s engine = %q, want qbittorrent (magnet and .torrent lanes)",
+				task.ID, task.Engine)
+		}
+	}
+
+	// The stored rows keep the server-only source; source_display_uri is the
+	// opaque reference the API renders.
+	var stored []struct {
+		TaskID           string `db:"id"`
+		SourceURI        string `db:"source_uri"`
+		SourceDisplayURI string `db:"source_display_uri"`
+	}
+	if err := env.db.SelectContext(t.Context(), &stored,
+		`SELECT id, source_uri, source_display_uri FROM tasks ORDER BY source_uri`); err != nil {
+		t.Fatalf("read stored sources: %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored %d tasks, want 2", len(stored))
+	}
+	if stored[0].SourceURI != download {
+		t.Errorf("stored source = %q, want the verbatim provider URL", stored[0].SourceURI)
+	}
+	if stored[1].SourceURI != magnet {
+		t.Errorf("stored source = %q, want the verbatim magnet", stored[1].SourceURI)
+	}
+	for _, row := range stored {
+		if _, ok := displayByID[row.TaskID]; !ok {
+			t.Errorf("stored task %s was not in the response", row.TaskID)
+		}
+		resID := strings.TrimPrefix(row.SourceDisplayURI, "search-result:")
+		if resID != ids["magnet one"] && resID != ids["file two"] {
+			t.Errorf("source_display_uri = %q, want search-result:<res_id>", row.SourceDisplayURI)
+		}
+	}
+
+	// Every read path renders the same opaque reference.
+	for _, task := range body.Created {
+		got := env.api.Get("/tasks/"+task.ID, env.authz())
+		var one TaskDTO
+		if err := json.Unmarshal(got.Body.Bytes(), &one); err != nil {
+			t.Fatalf("decode task: %v", err)
+		}
+		if one.SourceURI == nil || *one.SourceURI != *task.SourceURI {
+			t.Errorf("GET /tasks/%s source_uri = %v, want %v", task.ID, one.SourceURI, *task.SourceURI)
+		}
+		if strings.Contains(got.Body.String(), "provider.example") || strings.Contains(got.Body.String(), "magnet:") {
+			t.Errorf("GET /tasks/%s leaks provider data: %s", task.ID, got.Body.String())
+		}
+	}
+	list := env.api.Get("/tasks?state=all", env.authz())
+	if strings.Contains(list.Body.String(), "provider.example") ||
+		strings.Contains(list.Body.String(), "passkey") ||
+		strings.Contains(list.Body.String(), "magnet:") {
+		t.Errorf("task list leaks provider data: %s", list.Body.String())
+	}
+	if strings.Count(list.Body.String(), "search-result:res_") != 2 {
+		t.Errorf("list shows %d opaque references, want 2", strings.Count(list.Body.String(), "search-result:res_"))
+	}
+}
+
+// TestTaskCreateRejectsGoneResult pins the gone-id semantics: a res_ id whose
+// job was deleted (or that never existed) is /problems/not-found per entry,
+// naming only the id. Every id unavailable is a whole-request 404; a live id
+// beside a gone one stays a 201 partial success.
+func TestTaskCreateRejectsGoneResult(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2"
+	goneJob, goneIDs := env.seedResultJob(t, []store.SearchResultRow{{Title: "gone", MagnetURI: &magnet}})
+	live := "magnet:?xt=urn:btih:1111222233334444555566667777888899990000"
+	_, liveIDs := env.seedResultJob(t, []store.SearchResultRow{{Title: "live", MagnetURI: &live}})
+
+	if err := store.DeleteSearchJob(t.Context(), env.db, goneJob); err != nil {
+		t.Fatalf("delete search job: %v", err)
+	}
+
+	// All ids unavailable: 404, and no rejected[] payload at all.
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{goneIDs["gone"], "res_00000000000000000000000000"},
+	}, env.authz())
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", resp.Code, resp.Body.String())
+	}
+	problem := assertProblem(t, resp, http.StatusNotFound, SlugNotFound)
+	if strings.Contains(problem.Detail, "8f9c3a2b") || strings.Contains(problem.Detail, "magnet") {
+		t.Errorf("404 detail leaks provider data: %q", problem.Detail)
+	}
+	if env.taskCount(t) != 0 {
+		t.Errorf("all-gone submission created tasks, want none")
+	}
+
+	// Partial success: the live id creates; the gone id is rejected with the
+	// res_ id and no provider data anywhere in the entry.
+	resp = env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{liveIDs["live"], goneIDs["gone"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	body := decodeCreateBody(t, resp)
+	if len(body.Created) != 1 {
+		t.Fatalf("created = %d, want 1", len(body.Created))
+	}
+	if len(body.Rejected) != 1 {
+		t.Fatalf("rejected = %d, want 1: %+v", len(body.Rejected), body.Rejected)
+	}
+	entry := body.Rejected[0]
+	if entry.SearchResultID != goneIDs["gone"] {
+		t.Errorf("rejected search_result_id = %q, want %q", entry.SearchResultID, goneIDs["gone"])
+	}
+	if entry.URI != "" {
+		t.Errorf("rejected uri = %q, want empty — never the provider source", entry.URI)
+	}
+	if entry.Type != SlugNotFound {
+		t.Errorf("rejected type = %q, want %q", entry.Type, SlugNotFound)
+	}
+}
+
+// TestTaskCreateMixedFamilies422 pins the one-family rule: search_result_ids
+// never combines with uris, a file part or even a rejected junk part.
+func TestTaskCreateMixedFamilies422(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2"
+	_, ids := env.seedResultJob(t, []store.SearchResultRow{{Title: "one", MagnetURI: &magnet}})
+
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["one"]},
+		"uris":              []string{"https://releases.example.com/x.iso"},
+	}, env.authz())
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body %s", resp.Code, resp.Body.String())
+	}
+	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if env.taskCount(t) != 0 {
+		t.Errorf("mixed submission created tasks, want none")
+	}
+}
+
+// TestTaskCreateResultConflicts pins the conflict semantics: a resubmit of a
+// result the server already committed and a repeated id within one submission
+// are both /problems/conflict naming the res_ id — terminal successes for the
+// caller, never errors.
+func TestTaskCreateResultConflicts(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2"
+	_, ids := env.seedResultJob(t, []store.SearchResultRow{{Title: "one", MagnetURI: &magnet}})
+
+	first := decodeCreateBody(t, env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["one"]},
+	}, env.authz()))
+	if len(first.Created) != 1 {
+		t.Fatalf("first submit created = %d, want 1", len(first.Created))
+	}
+
+	// Resubmit the same result: a conflict rejection naming the existing
+	// task — and the response still carries no provider data.
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["one"], ids["one"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), "magnet:") {
+		t.Errorf("conflict response leaks the magnet: %s", resp.Body.String())
+	}
+	body := decodeCreateBody(t, resp)
+	if len(body.Created) != 0 || len(body.Rejected) != 2 {
+		t.Fatalf("created = %d rejected = %d, want 0 created and 2 conflicts",
+			len(body.Created), len(body.Rejected))
+	}
+	for _, entry := range body.Rejected {
+		if entry.Type != SlugConflict {
+			t.Errorf("rejected type = %q, want %q", entry.Type, SlugConflict)
+		}
+		if entry.SearchResultID != ids["one"] || entry.URI != "" {
+			t.Errorf("entry = %+v, want search_result_id %q and no uri", entry, ids["one"])
+		}
+	}
+	if env.taskCount(t) != 1 {
+		t.Errorf("%d tasks after resubmission, want 1", env.taskCount(t))
+	}
+}
+
+// TestTaskCreateResultUnroutableSource: a result whose stored source no
+// engine accepts is a per-entry refusal naming only the res_ id — the
+// resolved URI never reaches the rejection.
+func TestTaskCreateResultUnroutableSource(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	ed2k := "ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/"
+	_, ids := env.seedResultJob(t, []store.SearchResultRow{{Title: "bad", DownloadURL: &ed2k}})
+
+	resp := env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{ids["bad"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), "ed2k://") {
+		t.Errorf("rejection leaks the resolved source: %s", resp.Body.String())
+	}
+	body := decodeCreateBody(t, resp)
+	if len(body.Created) != 0 || len(body.Rejected) != 1 {
+		t.Fatalf("created = %d rejected = %d, want 0 and 1", len(body.Created), len(body.Rejected))
+	}
+	if body.Rejected[0].SearchResultID != ids["bad"] || body.Rejected[0].URI != "" {
+		t.Errorf("entry = %+v, want search_result_id %q and no uri", body.Rejected[0], ids["bad"])
 	}
 }

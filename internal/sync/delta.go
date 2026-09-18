@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -44,7 +45,7 @@ func Project(t store.Task) map[string]any {
 		"id":              t.ID,
 		"engine":          t.Engine,
 		"source_kind":     t.SourceKind,
-		"source_uri":      displaySourceURI(t),
+		"source_uri":      nilOrValue(DisplaySourceURI(t)),
 		"infohash_v1":     nilOrValue(t.InfohashV1),
 		"infohash_v2":     nilOrValue(t.InfohashV2),
 		"name":            t.Name,
@@ -69,18 +70,31 @@ func Project(t store.Task) map[string]any {
 	}
 }
 
-// displaySourceURI renders the API-safe source reference. The stored
-// source_uri is the server-only engine source and may embed FTP credentials,
-// so userinfo is stripped before a row ever reaches a snapshot; a source
-// that cannot be parsed is never echoed back.
+// DisplaySourceURI renders the API-safe source reference every task-emitting
+// path shares — the SSE projection and the REST DTO both call it, so the
+// sanitizing rule exists exactly once.
 //
-// An opaque-form source ("user:pass@host") is dropped whole: url.Parse
-// reads it as scheme "user" plus opaque data, so there is no authority,
-// u.User is nil, and the credentials ride in u.Opaque where they cannot
-// be stripped. Dropping beats echoing what cannot be sanitized; authority
-// forms ("ftp://user:pass@host/...") and magnet links (empty Opaque)
-// still pass through.
-func displaySourceURI(t store.Task) any {
+// A non-empty source_display_uri wins verbatim: it is written at insert and
+// is already API-safe (search-result:<res_id> carries no provider data). A
+// NULL or empty column falls back to the server-only source_uri, sanitized
+// fail-closed: userinfo is stripped, and a source that cannot be parsed or
+// whose credentials ride in opaque form ("user:pass@host", where u.User is
+// nil and the secret sits in u.Opaque) is dropped whole. For every scheme
+// except magnet: the raw query goes too — a Torznab passkey rides there, not
+// in userinfo — so a row written before the column existed can never leak a
+// query-string secret.
+//
+// A magnet's query is untrusted but load-bearing: dn, tr, xs and ws values
+// commonly embed tracker passkeys and indexer API keys, yet stripping the
+// query whole would render a bare, useless magnet:. Only xt parameters whose
+// value parses as a URI with scheme urn — compared case-insensitively — and
+// carries no ? or # of its own are kept; an RFC 8141 q-/f-component is not
+// part of the content identity. A magnet left with no surviving xt is dropped
+// like an unparsable source.
+func DisplaySourceURI(t store.Task) *string {
+	if t.SourceDisplayURI != nil && *t.SourceDisplayURI != "" {
+		return t.SourceDisplayURI
+	}
 	if t.SourceURI == nil {
 		return nil
 	}
@@ -91,7 +105,47 @@ func displaySourceURI(t store.Task) any {
 	}
 	u.User = nil
 
-	return u.String()
+	if !strings.EqualFold(u.Scheme, "magnet") {
+		u.RawQuery = ""
+		display := u.String()
+
+		return &display
+	}
+
+	kept := keepURNextParams(u.RawQuery)
+	if len(kept) == 0 {
+		return nil
+	}
+	u.RawQuery = strings.Join(kept, "&")
+	u.Fragment = ""
+	display := u.String()
+
+	return &display
+}
+
+// keepURNextParams filters one magnet query to its xt pairs whose decoded
+// value is a content URN: a URI whose scheme is urn, compared
+// case-insensitively, and that carries no ? or # of its own. The surviving
+// pairs are re-emitted verbatim, so a valid xt keeps its original encoding.
+func keepURNextParams(rawQuery string) []string {
+	var kept []string
+	for _, pair := range strings.Split(rawQuery, "&") {
+		name, rawValue, _ := strings.Cut(pair, "=")
+		if name != "xt" {
+			continue
+		}
+		value, err := url.QueryUnescape(rawValue)
+		if err != nil || strings.ContainsAny(value, "?#") {
+			continue
+		}
+		xt, err := url.Parse(value)
+		if err != nil || !strings.EqualFold(xt.Scheme, "urn") {
+			continue
+		}
+		kept = append(kept, pair)
+	}
+
+	return kept
 }
 
 // progress derives progress as completed_bytes / total_bytes, clamped to 1.0

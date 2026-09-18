@@ -77,9 +77,10 @@ const (
 	// holding its hashes hostage: its row stays for history, its identity
 	// is free again. engine_ref is deliberately absent: identity is the
 	// infohash pair, never the engine handle.
-	queryFindTaskByInfohash = `SELECT id, engine, engine_ref, source_kind, source_uri, name, infohash_v1, infohash_v2,
- state, error_code, error_message, destination, content_path, category_id, total_bytes, completed_bytes,
- uploaded_bytes, download_rate, upload_rate, eta_seconds, sequential, queue_position,
+	queryFindTaskByInfohash = `SELECT id, engine, engine_ref, source_kind, source_uri, source_display_uri,
+ name, infohash_v1, infohash_v2, state, error_code, error_message, destination,
+ content_path, category_id, total_bytes, completed_bytes, uploaded_bytes,
+ download_rate, upload_rate, eta_seconds, sequential, queue_position,
  added_at, started_at, completed_at, created_at, updated_at
 FROM tasks
 WHERE ((infohash_v1 = ? AND ? <> '') OR (infohash_v2 = ? AND ? <> '')) AND state <> 'removed'
