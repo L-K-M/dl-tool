@@ -218,4 +218,7 @@ cache name `"dl-tool-assets-v1"` (line 143) while `web/public/sw.js` since `e07b
 `dl-tool@<scope>:assets-v1` and deletes the legacy name on activation. The failure is deterministic
 (`Received array: []` after the 5 s poll) on two consecutive `Task verification` runs of this
 docs-only branch — the first `make e2e`-running task branch since #195 merged. The repair is a
-spec update, a file outside this task's Files table.
+spec update, a file outside this task's Files table and owned by no open task (T103 is done), so
+it needs a dedicated fix PR in the #191/#195 pattern. Until that lands, this task's `make e2e`
+step is expected to fail on exactly "api requests bypass the cache"; that red is the pre-existing
+defect, not a T064 regression.
