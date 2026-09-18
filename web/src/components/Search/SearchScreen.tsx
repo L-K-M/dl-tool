@@ -670,8 +670,13 @@ export function SearchScreen(): JSX.Element {
    *  categories — never the effective defaults (task T064 step 5). */
   const runSavedSearch = useCallback(
     async (s: SavedSearch) => {
-      if (search.starting || (search.jobId !== null && !search.finished))
+      // A click while a job is on the wire must not die silently — the
+      // guard mirrors the Search button's disabled state but the menu is
+      // always clickable, so say why nothing happened.
+      if (search.starting || (search.jobId !== null && !search.finished)) {
+        toast.error(t("search.savedBusy"));
         return;
+      }
       setQueryText(s.query);
       const current = useUiPrefs.getState().search;
       useUiPrefs.getState().patch({

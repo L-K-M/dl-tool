@@ -335,7 +335,7 @@
     "savedConfirm": "Save",
     "savedEmpty": "No saved searches yet.",
     "savedErrEmpty": "Enter a name.",
-    "savedErrTooLong": "Keep the name under 64 characters.",
+    "savedErrTooLong": "Keep the name to 64 characters or fewer.",
     "savedErrDuplicate": "A saved search with that name already exists.",
     "savedErrNoQuery": "Run a search first — there is nothing to save.",
     "savedCap": "Saved searches are capped at {{count}} — delete one first.",
@@ -344,6 +344,7 @@
     "savedRenameConfirm": "Confirm rename",
     "savedRenameCancel": "Cancel rename",
     "savedDelete": "Delete {{name}}",
+    "savedBusy": "A search is already running. Stop it or wait for it to finish.",
     "savedNew_one": "{{count}} new since last view",
     "savedNew_other": "{{count}} new since last view"
   }
