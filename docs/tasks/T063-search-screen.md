@@ -157,7 +157,9 @@ SearchResultIDs []string `json:"search_result_ids,omitempty" maxItems:"50"`
   `blob` or file parts is `422 /problems/validation-failed`. An empty `search_result_ids`
   array counts as no family at all, so the existing empty-submission `422` applies; a
   repeated id is a duplicate `rejected[]` entry of type `/problems/conflict`, the type the
-  `uris` family already uses for a duplicate in one submission.
+  `uris` family already uses for a duplicate in one submission. Duplicate detection runs on
+  the raw ids before any resolution: a repeated occurrence is `/problems/conflict` even when
+  the id's first occurrence is `/problems/not-found`.
 - Per id, `GetSearchResult` resolves the row; `ErrNotFound` produces a `rejected[]` entry
   of type `/problems/not-found`. A rejected search source carries only
   `search_result_id`: `RejectedURI` gains ``SearchResultID string `json:"search_result_id,omitempty"``
@@ -225,10 +227,13 @@ The three zero states, each its own render: `No results` (every indexer answered
     `Download selected ▾` with exactly two items — *Download immediately* and *Download to…*, the latter
     opening T049's add dialog through its new `initialSearchResultIds` prop; extend `AddTaskDialog` per
     the contract above. Both bulk paths submit in chunks of at most 50 ids — the body's
-    `maxItems:"50"` cap. A chunk-level toast fires only for a transport error, `404` or `422`;
-    a `201` whose `rejected[]` is non-empty marks each rejected `search_result_id`'s row failed
-    with a toast naming its title, mirroring the per-row path, and only resolved ids get the
-    `✓` link.
+    `maxItems:"50"` cap. A `201` whose `rejected[]` is non-empty marks each rejected
+    `search_result_id`'s row failed and fires one summary toast per chunk reporting the
+    rejected count and naming the first rejected title; only resolved ids get the `✓` link.
+    A chunk-level failure — transport error or any non-`201` status — marks every id that
+    chunk submitted failed (the ids are known client-side), so no row is left without a
+    terminal state; `TestBulkChunkPartialRejection` covers one all-fail `404` chunk alongside
+    a succeeding chunk.
 13. Edit `App.tsx` to route `/search` to `<SearchScreen />`, and add every string to
     `web/src/locales/en/common.json` under a `search` key; no literal user-facing text in the components.
 14. Create `SearchScreen.test.tsx` with `msw` handlers: `TestPollStopsWhenFinished`,
