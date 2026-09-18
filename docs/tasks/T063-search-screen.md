@@ -372,18 +372,25 @@ $ grep -n "t.SourceURI\|func displaySourceURI" internal/sync/delta.go
 Reading the hits: the `source_display_uri` match is the DDL alone — no Go code references the
 column. Of the three full-row selects, `queryGetTask` is in the Files table,
 `queryFindTaskByInfohash` never feeds a DTO, and `queryListTasksPage` feeds `GET /tasks`
-and the SSE snapshot. Note that the delta.go leak the third item describes is not
-contingent on this task: any stored `source_uri` carrying a query-string secret is already
-broadcast over `GET /events` today, so the repair's `delta.go` row closes an existing hole
-as well as the new search-result path.
+and the SSE snapshot.
+
+Note that the delta.go leak the third item describes is not contingent on this task:
+`displaySourceURI` clears `u.User` and returns `u.String()` with `RawQuery` intact
+(delta.go:92-94), so any stored `source_uri` carrying a query-string secret is already
+broadcast over `GET /events` today. And since nothing writes the column yet, every
+existing row has `source_display_uri` NULL: the repair's `delta.go` row closes that
+existing hole only if its prescription reads "prefer `SourceDisplayURI`, and when it is
+NULL strip `RawQuery` as well as userinfo from `source_uri`" — a sanitizing fallback, not
+a backfill, so no migration row is needed.
 
 Which file should answer it: this file's `## Files` table — the repair needs four rows
 (`internal/store/models.go` for the `SourceDisplayURI` field on `Task`,
 `internal/store/tasks_list.go` for `queryListTasksPage` selecting the column,
-`internal/sync/delta.go` for `Project` preferring it, and `internal/sync/delta_test.go` for
-the preference pin), and the `internal/store/tasks.go` row's purpose should drop the claim
-that the field lives there. No compliant implementation exists without them: the scope
-check of the Verification block would list all four outside the table.
+`internal/sync/delta.go` for `Project` preferring it and clearing `RawQuery` on the
+NULL fallback, and `internal/sync/delta_test.go` for both pins), and the
+`internal/store/tasks.go` row's purpose should drop the claim that the field lives there.
+No compliant implementation exists without them: the scope check of the Verification
+block would list all four outside the table.
 
 ---
 
