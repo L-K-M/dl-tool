@@ -323,6 +323,42 @@ test("TestSecondPutWaitsForInFlight", async () => {
   expect(putBodies[1]!.detailHeight).toBe(111);
 });
 
+test("TestFailedPutRetryWaitsForInFlight", async () => {
+  vi.useFakeTimers();
+  let putCalls = 0;
+  const putResponders: (() => void)[] = [];
+  server.use(
+    http.put("*/api/v1/prefs", async ({ request }) => {
+      putCalls += 1;
+      if (putCalls === 1) return HttpResponse.error();
+      putBodies.push((await request.json()) as Record<string, unknown>);
+      return new Promise<Response>((resolve) => {
+        putResponders.push(() => resolve(HttpResponse.json({})));
+      });
+    }),
+  );
+  const { useUiPrefs } = await freshStore();
+  await hydrateNow(useUiPrefs, { version: 1 });
+  useUiPrefs.getState().patch({ sidebarWidth: 280 });
+  await vi.advanceTimersByTimeAsync(600);
+  expect(putCalls).toBe(1);
+  // The failed write arms a retry at +2 s; a second patch's PUT is on the
+  // wire when it fires, and the retry must wait behind it like any write.
+  useUiPrefs.getState().patch({ detailHeight: 111 });
+  await vi.advanceTimersByTimeAsync(600);
+  expect(putCalls).toBe(2);
+  // The retry timer fires mid-flight but no concurrent PUT is issued.
+  await vi.advanceTimersByTimeAsync(2600);
+  expect(putCalls).toBe(2);
+  // The in-flight write's body already carried every dirty member, so the
+  // settle arms nothing further — no duplicate, no out-of-order retry.
+  putResponders.shift()!();
+  await vi.advanceTimersByTimeAsync(600);
+  expect(putCalls).toBe(2);
+  expect(putBodies.at(-1)!.sidebarWidth).toBe(280);
+  expect(putBodies.at(-1)!.detailHeight).toBe(111);
+});
+
 test("TestNoWriteDuringDrag", async () => {
   vi.useFakeTimers();
   const { useUiPrefs } = await freshStore();
