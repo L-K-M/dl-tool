@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T116 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T053, T055, T058 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `web/src/components/Settings/SettingsScreen.tsx` and `web/src/locales/en/settings.json` |
@@ -146,13 +146,13 @@ POST  /indexers/import {"torznab_url":"https://prowlarr.example","api_key":"…"
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestRowsRenderInServerOrder`, `TestProbeFailureRendersAsData` and `TestTestAllRunsEveryRow` pass.
-- [ ] `TestMoveUpSwapsPriorities` asserts exactly two `PATCH` requests and the swapped values.
-- [ ] `TestImportedIndexerRendersDisabledWithProvenance` passes and asserts the warnings list.
-- [ ] `TestApiKeyNeverRendered` asserts no DOM text node contains the stubbed key, in any of the three
+- [x] `TestRowsRenderInServerOrder`, `TestProbeFailureRendersAsData` and `TestTestAllRunsEveryRow` pass.
+- [x] `TestMoveUpSwapsPriorities` asserts exactly two `PATCH` requests and the swapped values.
+- [x] `TestImportedIndexerRendersDisabledWithProvenance` passes and asserts the warnings list.
+- [x] `TestApiKeyNeverRendered` asserts no DOM text node contains the stubbed key, in any of the three
       dialog modes.
-- [ ] The section renders the seven columns of doc 09 §9 under those names, in that order.
-- [ ] Enabling a row is optimistic and rolls back on a `403`.
+- [x] The section renders the seven columns of doc 09 §9 under those names, in that order.
+- [x] Enabling a row is optimistic and rolls back on a `403`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -187,7 +187,70 @@ files this task creates are untracked, and `git diff --name-only` never lists an
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test-web && echo INDEXERS_OK` on the task branch (the MSW
+`onUnhandledRequest` and React `flushSync` stderr lines are pre-existing test noise — the new
+`GET /api/v1/indexers` lines under `TestAuthenticatedRouteUnderBase /settings/indexers` are the same
+pattern `/settings/connection` already produces for `/engines`; only the per-file results and the
+summary are reproduced):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ ✓ src/components/Settings/IndexersSection.test.tsx (6 tests)
+   ✓ TestRowsRenderInServerOrder
+   ✓ TestProbeFailureRendersAsData
+   ✓ TestTestAllRunsEveryRow
+   ✓ TestMoveUpSwapsPriorities
+   ✓ TestImportedIndexerRendersDisabledWithProvenance
+   ✓ TestApiKeyNeverRendered
+ ... (14 other files omitted) ...
+ ✓ src/App.test.tsx (55 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests)
+
+ Test Files  20 passed (20)
+      Tests  260 passed (260)
+
+INDEXERS_OK
+```
+
+Scope check — `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```text
+web/src/components/Settings/IndexerDialog.tsx
+web/src/components/Settings/IndexersSection.test.tsx
+web/src/components/Settings/IndexersSection.tsx
+web/src/components/Settings/SettingsScreen.tsx
+web/src/locales/en/settings.json
+```
+
+Exactly the `## Files` table and nothing else.
+
+`make ci` on the same tree: `lint`, `vet`, `typecheck`, `test` (Go `ok` for every package under
+`internal/`; Vitest `Test Files  20 passed (20)`, `Tests  260 passed (260)`), `compose-check`
+(`docker compose config -q` clean for `compose.yaml` and `compose.dev.yaml`) and `doclint`
+(`2492 Total, 577 Unique, 2464 OK, 0 Errors`) all pass.
+
+Notes on choices the task left open:
+
+- The seven named columns render first, in order; per-row actions (Test, Edit, Move up/down) live in a
+  trailing eighth "Actions" column, the same place ConnectionSection puts its Test button.
+- `TestApiKeyNeverRendered` walks every DOM text node but not attribute serialization: happy-dom
+  reflects an input's `value` *property* into the attribute list, which no real DOM does.
+- The optimistic-enable 403 rollback is asserted inside `TestRowsRenderInServerOrder` (the acceptance
+  list names six tests and the Verification expects exactly that count).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

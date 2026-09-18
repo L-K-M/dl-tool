@@ -7,6 +7,7 @@ import settingsStrings from "../../locales/en/settings.json";
 import { Button } from "../ui/button";
 import { ConnectionSection } from "./ConnectionSection";
 import { GeneralSection } from "./GeneralSection";
+import { IndexersSection } from "./IndexersSection";
 
 initI18n().addResourceBundle("en", "settings", settingsStrings);
 
@@ -30,6 +31,7 @@ export type Section = (typeof SECTIONS)[number];
 const SECTION_FORMS = {
   general: GeneralSection,
   connection: ConnectionSection,
+  indexers: IndexersSection,
 } satisfies Partial<Record<Section, () => JSX.Element>>;
 
 /** Sections whose endpoints exist at M3. Every other section renders the one-line note
@@ -38,15 +40,14 @@ export const IMPLEMENTED: Section[] = Object.keys(SECTION_FORMS) as Section[];
 
 const KNOWN_SECTIONS: ReadonlySet<string> = new Set(SECTIONS);
 
-/** The milestone that ships each section's backing endpoints; indexers land in
- *  M4, advanced in M7, the rest in M6 (docs/tasks/00-task-index.md). The record
+/** The milestone that ships each section's backing endpoints; advanced lands in
+ *  M7, the rest in M6 (docs/tasks/00-task-index.md). The record
  *  is exhaustive: adding a section without an entry is a type error, not a
  *  silently wrong milestone. */
 export const ARRIVAL: Record<
   Exclude<Section, keyof typeof SECTION_FORMS>,
   string
 > = {
-  indexers: "M4",
   bandwidth: "M6",
   bittorrent: "M6",
   downloads: "M6",
