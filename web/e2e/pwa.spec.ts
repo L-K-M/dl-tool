@@ -136,14 +136,15 @@ test("api requests bypass the cache", async ({ page }) => {
 
   // The worker's cache.put is fire-and-forget inside respondWith, so poll
   // for the asset entry instead of racing it. The 401 API response above
-  // must never appear.
+  // must never appear. Discover the worker's assets cache by suffix so the
+  // test stays decoupled from sw.js's scope-based naming scheme.
   const readKeys = () =>
-    page.evaluate(() =>
-      caches
-        .open("dl-tool-assets-v1")
-        .then((c) => c.keys())
-        .then((keys) => keys.map((r) => r.url)),
-    );
+    page.evaluate(async () => {
+      const name = (await caches.keys()).find((n) => n.endsWith(":assets-v1"));
+      if (!name) return [];
+      const cache = await caches.open(name);
+      return (await cache.keys()).map((r) => r.url);
+    });
   await expect.poll(readKeys).toContain(result.asset);
   expect((await readKeys()).filter((url) => url.includes("/api/"))).toEqual([]);
 });
