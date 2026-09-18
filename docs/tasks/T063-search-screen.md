@@ -50,8 +50,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/tasks.go` | modify | `search_result_ids` on `CreateTasksBody`, the one-source-family rule, resolution and the `search-result:<res_id>` display source. |
 | `internal/api/tasks_test.go` | modify | `humatest` cases for the search-result family and its rejections. |
 | `internal/api/search_test.go` | modify | Asserts a seeded result's serialized `GET /search/{id}` row carries no acquisition key. |
-| `internal/sync/delta.go` | modify | `Project`'s `displaySourceURI` prefers `SourceDisplayURI`; the nil-or-empty fallback strips `RawQuery` as well as userinfo — fail-closed for rows that predate the column. |
-| `internal/sync/delta_test.go` | modify | `Project` pins: a set `source_display_uri` renders verbatim; NULL and empty fall back to `source_uri` with userinfo and query string stripped. |
+| `internal/sync/delta.go` | modify | `DisplaySourceURI` — the shared helper `Project` and the REST DTO both call: `SourceDisplayURI` wins; the nil-or-empty fallback strips userinfo and, for non-`magnet:` schemes, `RawQuery` — fail-closed for rows that predate the column. |
+| `internal/sync/delta_test.go` | modify | `DisplaySourceURI` pins: a set `source_display_uri` renders verbatim; NULL and empty fall back to `source_uri` with userinfo and query string stripped, except a `magnet:` source which keeps `xt` only. |
 | `web/src/components/Search/SearchScreen.tsx` | create | The screen, the poll loop, the indexer and category pickers, the status strip. |
 | `web/src/components/Search/ResultsGrid.tsx` | create | The virtualised result table and its row actions. |
 | `web/src/components/Search/SearchScreen.test.tsx` | create | Poll lifecycle, status strip, zero states, add-to-queue bodies. |
@@ -175,13 +175,21 @@ SearchResultIDs []string `json:"search_result_ids,omitempty" maxItems:"50"`
   acquisition source. That rendering must hold on every path that emits a task —
   `GET /tasks`, `GET /tasks/{id}`, the PATCH response and the SSE snapshot/deltas —
   so `queryListTasksPage` selects the column too and `sync.Project` prefers the field.
-- Both `displaySourceURI` renderers (`internal/api/tasks.go` and `internal/sync/delta.go`)
-  share one rule: `source_display_uri` set wins; a NULL or empty column falls back to
-  `source_uri` with userinfo **and** `RawQuery` stripped. Rows written before this column
-  existed have it NULL and a stored `source_uri` may carry a secret in its query string
-  (a Torznab `passkey` rides there, not in userinfo), so the fallback is deliberately
-  fail-closed — every pre-existing row's emitted URI loses its query string, benign or
-  not. No backfill: the column is written at insert only.
+- Both renderers route through one shared helper — `DisplaySourceURI`, exported from
+  `internal/sync/delta.go` and called by `Project` and by the REST DTO in
+  `internal/api/tasks.go` (the api package already imports `internal/sync` for
+  `Project`) — never two copies of a security-sensitive rule that can drift. The rule:
+  `source_display_uri` set wins; a NULL or empty column falls back to `source_uri`
+  sanitized fail-closed. The sanitizer strips userinfo always, drops a source that
+  cannot be parsed or whose credentials ride in opaque form (`user:pass@host` —
+  today's sync renderer already nils `u.Opaque != ""`, the REST one does not and the
+  shared helper keeps the stricter behaviour), and strips `RawQuery` for every scheme
+  except `magnet:` — a magnet's query carries identity, not credentials, so there it
+  keeps only the `xt` parameter and drops `dn`, `tr`, `xs` and the rest. Rows written before this column existed have it NULL and a stored
+  `source_uri` may carry a secret in its query string (a Torznab `passkey` rides
+  there, not in userinfo), so the fallback is deliberately fail-closed — every
+  pre-existing row's emitted non-magnet URI loses its query string, benign or not.
+  No backfill: the column is written at insert only.
 - `201` with per-id `rejected[]` entries while at least one id resolves — duplicates of a
   resolved id included; the `404` applies only when no submitted id resolves. The
   all-unavailable `404 /problems/not-found` is a problem detail body with no `rejected[]`
@@ -212,9 +220,12 @@ The three zero states, each its own render: `No results` (every indexer answered
    `queryGetTask` (`internal/store/tasks.go`) and `queryListTasksPage`
    (`internal/store/tasks_list.go`, which also feeds the SSE snapshot via
    `SSEHandlers.Snapshot` → `sync.Project`) — and let both `displaySourceURI` renderers
-   prefer it when set, with the shared nil-or-empty fallback described in the contract
-   above. `internal/sync/delta_test.go` pins all three cases — set, NULL and empty —
-   beside the existing `TestProjectDropsUnsanitizableSources`.
+   prefer it when set. The preference and the nil-or-empty fallback live in one shared
+   `DisplaySourceURI` helper in `internal/sync/delta.go` that `Project` and the REST
+   renderer in `internal/api/tasks.go` both call — the rule is the contract's,
+   including the `magnet:` `xt`-only carve-out. `internal/sync/delta_test.go` pins all
+   four cases — set, NULL, empty and a magnet source keeping only `xt` — beside the
+   existing `TestProjectDropsUnsanitizableSources`.
 3. In `internal/api/tasks.go`, add `SearchResultIDs` to `CreateTasksBody`; enforce the one-family and
    empty/duplicate rules of the contract above; resolve each id, feed every resolved acquisition URI
    through the existing normalise → route → insert pipeline, store `search-result:<res_id>` as the
@@ -292,9 +303,14 @@ The three zero states, each its own render: `No results` (every indexer answered
       `internal/api/tasks_test.go`, so the shared no-`rejected[]` problem shape is pinned, not assumed.
 - [ ] `aria-rowcount` equals the job's `total`, not the number of rows in the DOM.
 - [ ] A case in `internal/sync/delta_test.go` asserts `Project` renders `source_display_uri`
-      verbatim when set, and a NULL or empty column falls back to `source_uri` with userinfo
-      and query string stripped — so neither the SSE snapshot nor a delta can emit a
-      query-string secret for any row, including ones written before the column existed.
+      verbatim when set, a NULL or empty column falls back to `source_uri` with userinfo
+      and query string stripped, and a `magnet:` source keeps only its `xt` parameter —
+      so neither the SSE snapshot nor a delta can emit a query-string secret for any row,
+      including ones written before the column existed.
+- [ ] No task-emitting path serialises `source_uri` directly — the PATCH response and
+      every SSE delta are built through `queryGetTask`/`queryListTasksPage` and rendered
+      by the shared `DisplaySourceURI` helper; verified by grep for other task-row
+      selectors and DTO constructors before implementation begins.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
