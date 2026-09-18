@@ -436,6 +436,7 @@ test("TestSanitizeDropsDuplicateSavedIds", async () => {
             },
             { ...entry("nightly"), id: "sv_weekly" },
             { ...entry("weekly"), id: "sv_again" },
+            { ...entry("monthly"), id: "sv_again" },
             entry("daily"),
           ],
         },
@@ -447,7 +448,18 @@ test("TestSanitizeDropsDuplicateSavedIds", async () => {
   const search = useUiPrefs.getState().search;
   expect(search.indexerIds).toEqual(["ix_a", "ix_b"]);
   expect(search.categories).toEqual([2000]);
-  expect(search.saved.map((s) => s.id)).toEqual(["sv_weekly", "sv_daily"]);
+  // sv_again's first entry falls to the duplicate name, but the id itself is
+  // not spent — a later entry reusing it under a unique name survives.
+  expect(search.saved.map((s) => s.id)).toEqual([
+    "sv_weekly",
+    "sv_again",
+    "sv_daily",
+  ]);
+  expect(search.saved.map((s) => s.name)).toEqual([
+    "weekly",
+    "monthly",
+    "daily",
+  ]);
   // The nested selections inside a surviving entry are deduped too — a
   // re-run posts them verbatim without re-sanitizing.
   expect(search.saved[0]?.indexerIds).toEqual(["ix_a"]);

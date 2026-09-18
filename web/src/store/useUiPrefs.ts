@@ -205,8 +205,8 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
         )
         .filter((entry) => {
           if (seenSavedIds.has(entry.id)) return false;
-          seenSavedIds.add(entry.id);
           if (seenSavedNames.has(entry.name)) return false;
+          seenSavedIds.add(entry.id);
           seenSavedNames.add(entry.name);
           return true;
         })
