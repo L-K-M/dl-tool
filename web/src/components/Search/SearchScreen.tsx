@@ -16,7 +16,7 @@ import { ChevronDown } from "lucide-react";
 import { api } from "../../api/client";
 import type { components } from "../../api/schema";
 import { formatBytes, formatInteger } from "../../lib/format";
-import { useUiPrefs } from "../../store/useUiPrefs";
+import { useUiPrefs, type SavedSearch } from "../../store/useUiPrefs";
 import {
   AddTaskDialog,
   type SearchResultOutcome,
@@ -45,6 +45,7 @@ import {
   type ResultRowState,
   type SearchResultView,
 } from "./ResultsGrid";
+import { SaveSearchButton, SavedSearchesMenu } from "./SavedSearches";
 
 export interface EngineStatusView {
   id: string;
@@ -74,29 +75,6 @@ const menuContentClass =
   "z-50 min-w-36 rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10";
 const menuItemClass =
   "flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 outline-none select-none focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50";
-
-interface SearchState {
-  indexer_ids?: string[] | null;
-  category?: number | null;
-  query?: string;
-}
-
-function loadSearchState(): SearchState | null {
-  try {
-    const raw = sessionStorage.getItem(SEARCH_STATE_KEY);
-    return raw === null ? null : (JSON.parse(raw) as SearchState);
-  } catch {
-    return null;
-  }
-}
-
-function saveSearchState(state: SearchState): void {
-  try {
-    sessionStorage.setItem(SEARCH_STATE_KEY, JSON.stringify(state));
-  } catch {
-    // sessionStorage can be unavailable; the pickers simply won't persist.
-  }
-}
 
 class HttpError extends Error {
   constructor(
@@ -343,16 +321,21 @@ export function SearchScreen(): JSX.Element {
     },
   });
 
-  const [queryText, setQueryText] = useState(
-    () => loadSearchState()?.query ?? "",
+  const [queryText, setQueryText] = useState("");
+  const searchPrefs = useUiPrefs((s) => s.search);
+  // null = "every enabled indexer" (untouched); a Set pins the user's picks
+  // (doc 09 §7). The document's empty array is the untouched state, so an
+  // explicit empty pick exists only in local state — a reload reads [] as
+  // untouched again.
+  const [picked, setPicked] = useState<Set<string> | null>(() =>
+    searchPrefs.indexerIds.length === 0
+      ? null
+      : new Set(searchPrefs.indexerIds),
   );
-  // null = "every enabled indexer" (untouched); a Set pins the user's picks.
-  const [picked, setPicked] = useState<Set<string> | null>(() => {
-    const saved = loadSearchState()?.indexer_ids;
-    return saved ? new Set(saved) : null;
-  });
+  // The picker is single-select; the document member is a list so a saved
+  // search can carry several.
   const [category, setCategory] = useState<number | null>(
-    () => loadSearchState()?.category ?? null,
+    () => searchPrefs.categories[0] ?? null,
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [resolved, setResolved] = useState<Map<string, string | null>>(
@@ -361,6 +344,15 @@ export function SearchScreen(): JSX.Element {
   const [flashing, setFlashing] = useState<Set<string>>(new Set());
   const [failed, setFailed] = useState<Set<string>>(new Set());
   const [dialogIds, setDialogIds] = useState<string[] | null>(null);
+  // The saved search whose run is on the wire, with the total it had stored
+  // when the run started — the finish effect diffs the new total against it.
+  const [savedRun, setSavedRun] = useState<{
+    id: string;
+    previousTotal: number;
+  } | null>(null);
+  // Per-entry count of results a later run added over lastTotal — the "new
+  // since last view" badge on the Saved menu.
+  const [newSince, setNewSince] = useState<Map<string, number>>(new Map());
 
   const indexers = useMemo(
     () => indexersQuery.data ?? [],
@@ -379,25 +371,64 @@ export function SearchScreen(): JSX.Element {
     [indexers],
   );
 
+  // Selection writes go through the prefs document (doc 09 §7): the store
+  // marks the member dirty and the debounced writer PUTs it whole.
+  const writeIndexerIds = useCallback((next: Set<string> | null) => {
+    setPicked(next);
+    const current = useUiPrefs.getState().search;
+    useUiPrefs.getState().patch({
+      search: { ...current, indexerIds: next === null ? [] : [...next] },
+    });
+  }, []);
+
+  const writeCategory = useCallback((next: number | null) => {
+    setCategory(next);
+    const current = useUiPrefs.getState().search;
+    useUiPrefs.getState().patch({
+      search: { ...current, categories: next === null ? [] : [next] },
+    });
+  }, []);
+
+  // The document's selection lands here when hydrate or another writer
+  // changes it. An echo of this screen's own write is skipped, so an
+  // explicit empty pick is not flattened back into "all".
+  useEffect(() => {
+    const stored = searchPrefs.indexerIds;
+    setPicked((prev) => {
+      const echo =
+        prev !== null
+          ? stored.length === prev.size &&
+            stored.every((id) => prev.has(id))
+          : stored.length === 0;
+      if (echo) return prev;
+      return stored.length === 0 ? null : new Set(stored);
+    });
+  }, [searchPrefs.indexerIds]);
+
+  useEffect(() => {
+    const stored = searchPrefs.categories[0] ?? null;
+    setCategory((prev) => (prev === stored ? prev : stored));
+  }, [searchPrefs.categories]);
+
+  // One-time migration: the selection lives in the prefs document now, so
+  // the sessionStorage copy T063 wrote must not outlive it.
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem(SEARCH_STATE_KEY);
+    } catch {
+      // sessionStorage can be unavailable; a stale key is harmless.
+    }
+  }, []);
+
   // A stored pick of an indexer that no longer exists is pruned once the
   // list lands (doc 09 §7: the selection is sent only after the
   // server-derived effective list).
   useEffect(() => {
     if (!indexersQuery.data) return;
-    setPicked((prev) => {
-      if (prev === null) return prev;
-      const next = new Set([...prev].filter((id) => allIds.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [indexersQuery.data, allIds]);
-
-  useEffect(() => {
-    saveSearchState({
-      indexer_ids: picked === null ? null : [...picked],
-      category,
-      query: queryText,
-    });
-  }, [picked, category, queryText]);
+    const pruned = searchPrefs.indexerIds.filter((id) => allIds.has(id));
+    if (pruned.length !== searchPrefs.indexerIds.length)
+      writeIndexerIds(new Set(pruned));
+  }, [indexersQuery.data, allIds, searchPrefs.indexerIds, writeIndexerIds]);
 
   const effectiveIndexerIds = useMemo(() => {
     if (picked === null) return enabled.map((ix) => ix.id);
@@ -557,6 +588,19 @@ export function SearchScreen(): JSX.Element {
                     title: first?.title ?? failures[0].search_result_id,
                   }),
             );
+          } else if (singleTitle !== undefined) {
+            // One-click add resolved: the toast names the created task, the
+            // row's ✓ links to it.
+            const createdName = (data.created ?? []).find(
+              (task) =>
+                task.source_uri === `${RESULT_DISPLAY_PREFIX}${chunk[0]}`,
+            )?.name;
+            toast.success(
+              t("search.addedToQueue", {
+                defaultValue: "Added {{title}}",
+                title: createdName ?? singleTitle,
+              }),
+            );
           }
         } else {
           // Transport error or non-201: every id in the chunk is failed.
@@ -621,6 +665,62 @@ export function SearchScreen(): JSX.Element {
     });
   }, [queryText, effectiveIndexerIds, category, search]);
 
+  /** Re-runs a saved search: the screen picks up the stored query and both
+   *  selections, then the job starts with exactly the stored indexerIds and
+   *  categories — never the effective defaults (task T064 step 5). */
+  const runSavedSearch = useCallback(
+    (s: SavedSearch) => {
+      if (search.starting || (search.jobId !== null && !search.finished))
+        return;
+      setQueryText(s.query);
+      const current = useUiPrefs.getState().search;
+      useUiPrefs.getState().patch({
+        search: {
+          ...current,
+          indexerIds: s.indexerIds,
+          categories: s.categories,
+        },
+      });
+      setSelected(new Set());
+      setResolved(new Map());
+      setFailed(new Set());
+      setSavedRun({ id: s.id, previousTotal: s.lastTotal });
+      setNewSince((prev) => {
+        const next = new Map(prev);
+        next.delete(s.id);
+        return next;
+      });
+      void search.start({
+        query: s.query,
+        indexer_ids: s.indexerIds,
+        categories: s.categories,
+      });
+    },
+    [search],
+  );
+
+  // A saved search's finished run writes lastTotal back to its entry; a
+  // higher total than the stored one lands in the entry's "new since last
+  // view" badge.
+  useEffect(() => {
+    if (savedRun === null || !search.finished) return;
+    const current = useUiPrefs.getState().search;
+    const entry = current.saved.find((e) => e.id === savedRun.id);
+    if (entry !== undefined && entry.lastTotal !== search.total)
+      useUiPrefs.getState().patch({
+        search: {
+          ...current,
+          saved: current.saved.map((e) =>
+            e.id === savedRun.id ? { ...e, lastTotal: search.total } : e,
+          ),
+        },
+      });
+    const delta = search.total - savedRun.previousTotal;
+    if (delta > 0)
+      setNewSince((prev) => new Map(prev).set(savedRun.id, delta));
+    setSavedRun(null);
+  }, [savedRun, search.finished, search.total]);
+
   const indexersLoaded = indexersQuery.isSuccess;
   const noEnabled = indexersLoaded && enabled.length === 0;
   const allFailed =
@@ -641,13 +741,11 @@ export function SearchScreen(): JSX.Element {
   }, [selected, byId]);
 
   const toggleIndexer = (id: string, on: boolean) => {
-    setPicked((prev) => {
-      const base =
-        prev === null ? new Set(enabled.map((ix) => ix.id)) : new Set(prev);
-      if (on) base.add(id);
-      else base.delete(id);
-      return base;
-    });
+    const base =
+      picked === null ? new Set(enabled.map((ix) => ix.id)) : new Set(picked);
+    if (on) base.add(id);
+    else base.delete(id);
+    writeIndexerIds(base);
   };
 
   return (
@@ -685,14 +783,14 @@ export function SearchScreen(): JSX.Element {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setPicked(null)}
+                  onClick={() => writeIndexerIds(null)}
                 >
                   {t("search.all")}
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setPicked(new Set())}
+                  onClick={() => writeIndexerIds(new Set())}
                 >
                   {t("search.none")}
                 </Button>
@@ -755,7 +853,7 @@ export function SearchScreen(): JSX.Element {
           <Select
             value={category === null ? "__all__" : String(category)}
             onValueChange={(v) =>
-              setCategory(v === "__all__" ? null : Number(v))
+              writeCategory(v === "__all__" ? null : Number(v))
             }
           >
             <SelectTrigger
@@ -795,6 +893,12 @@ export function SearchScreen(): JSX.Element {
           >
             {t("search.stop")}
           </Button>
+          <SaveSearchButton
+            query={queryText}
+            indexerIds={effectiveIndexerIds}
+            categories={category === null ? [] : [category]}
+          />
+          <SavedSearchesMenu onRun={runSavedSearch} newSince={newSince} />
         </div>
 
         {search.jobId !== null && (
