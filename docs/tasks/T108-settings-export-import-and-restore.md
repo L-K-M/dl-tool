@@ -170,6 +170,8 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   no adopt-in-place and no `rules.json` importer. This task is dl-tool's own backup and restore, nothing else.
 - Do NOT include the account row, sessions, password hashes, API tokens or any secret in an export, under any flag.
 - Do NOT export `tasks` or any task-derived table; a portable settings document is not a database copy.
+- Do NOT include the `ui_prefs` document in the export; doc 05 §11.4 keeps it out and
+  [T129](T129-ui-prefs-document.md) owns it.
 - Do NOT add `POST /system/backup` or the nightly `VACUUM INTO` job; T091 owns both.
 - Do NOT restore while the server is running, or skip any of the three gates.
 

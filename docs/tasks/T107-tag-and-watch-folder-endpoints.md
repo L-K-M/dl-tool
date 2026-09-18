@@ -13,9 +13,9 @@
 | **Est. size** | 3 new files, ~330 LOC |
 
 ## Goal
-Every table in the data model is reachable: `PATCH`/`DELETE /tags/{name}` rename and detach a tag without
-deleting a task, and `/watch-folders` plus `/watch-folders/{id}/scan` manage and trigger the loader
-built in T083. The `GET`/`PUT /prefs` pair moved forward to [T129](T129-ui-prefs-document.md), which
+The tag and watch-folder tables become reachable: `PATCH`/`DELETE /tags/{name}` rename and detach a
+tag without deleting a task, and `/watch-folders` plus `/watch-folders/{id}/scan` manage and trigger
+the loader built in T083. The `GET`/`PUT /prefs` pair moved forward to [T129](T129-ui-prefs-document.md), which
 M4 needed for the saved-search document — this task keeps the tag and watch-folder operations.
 
 ## Context you need

@@ -8,7 +8,7 @@
 | **Depends on** | T042, T044 |
 | **Blocks** | T053, T064, T104 |
 | **Parallel-safe** | no — extends T042's `TaskGrid.tsx`/`TaskGrid.test.tsx` and T044's `Toolbar.tsx` |
-| **Implements** | — (client half of [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences), covered by T107) |
+| **Implements** | — (the provisional localStorage document; [FR-144](../02-requirements.md#fr-144-persist-server-side-ui-preferences) is covered by [T129](T129-ui-prefs-document.md)) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 3 new files, ~330 LOC |
 
@@ -153,8 +153,8 @@ Expected: exactly the paths in the Files table and nothing else. Use `git status
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
-- Do NOT call `GET /prefs` or `PUT /prefs`; the endpoints arrive with M6's preferences task (T107) and this
-  task persists to `localStorage` only, exactly as doc 09 `## Open questions` states.
+- Do NOT call `GET /prefs` or `PUT /prefs`; the endpoints arrive with [T129](T129-ui-prefs-document.md)
+  and this task persists to `localStorage` only, exactly as doc 09 `## Open questions` states.
 - Do NOT add column virtualisation, and do NOT change the fixed row heights.
 - Do NOT persist the selection, the current filter or any task data.
 - Do NOT move the theme member's owner: T039 applies the class, this store only records the choice.

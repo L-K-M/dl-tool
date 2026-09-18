@@ -73,6 +73,11 @@ type PrefsBody map[string]any
 type PrefsOutput struct{ Body PrefsBody }
 type PutPrefsInput struct{ Body PrefsBody }
 
+// PrefsHandlers serves the ui_prefs document; built in server.go over the shared SettingsStore
+// and registered through a Register(hapi huma.API) method, the sibling-handler pattern
+// CategoryHandlers already uses.
+type PrefsHandlers struct{ Store *store.SettingsStore }
+
 func (h *PrefsHandlers) Get(ctx context.Context, in *struct{}) (*PrefsOutput, error)
 func (h *PrefsHandlers) Put(ctx context.Context, in *PutPrefsInput) (*PrefsOutput, error)
 ```
@@ -90,9 +95,12 @@ func (s *SettingsStore) PutPrefs(ctx context.Context, userID string, doc map[str
 ```
 
 Both verbs return `200` with the stored document and take the caller's `userID` from
-`IdentityFrom(ctx).User.ID`. Statuses: `401` · `413` `/problems/payload-too-large` above 64 KiB,
-checked on the raw body before decoding · `422` `/problems/validation-failed` when the body decodes
-to a JSON array or scalar.
+`IdentityFrom(ctx).User.ID`. Statuses: `401` · `413` `/problems/payload-too-large` above 64 KiB ·
+`422` `/problems/validation-failed` when the body's top level is not a JSON object. Huma hands the
+handler a decoded `PrefsBody`, so both rejections happen in a middleware the `PUT` operation carries
+(`huma.Middlewares`, the mechanism `acceptSubmissionForm` already uses): it bounds the raw body to
+64 KiB — `http.MaxBytesReader` is the sibling precedent in `submission.go` — and requires the top
+level to decode as a JSON object before re-attaching it for huma.
 
 ```ts
 // web/src/store/useUiPrefs.ts
@@ -107,11 +115,15 @@ export interface UiPrefsState extends UiPrefs {
 }
 ```
 
-The PUT body is every state member that is not a function — so members hydrated from the server and
-members written through `patch` under a cast (the General section's extras today, `search` under
-T064) round-trip verbatim with no dedicated write path. A failed PUT leaves the in-memory document
-in place, matching the tolerance the `localStorage` writer already had. `App.tsx` calls `hydrate()`
+The PUT body is every state member that is not a function and not transient bookkeeping
+(`dragging`, hydration or pending-write flags) — so members hydrated from the server and members
+written through `patch` under a cast (the General section's extras today, `search` under T064)
+round-trip verbatim with no dedicated write path. A failed PUT leaves the in-memory document in
+place, matching the tolerance the `localStorage` writer already had. `App.tsx` calls `hydrate()`
 when `SessionState` reaches `authenticated`; before it resolves the store renders `defaultPrefs`.
+A `patch()` that lands while hydration is in flight or a debounced write is pending wins: `hydrate`
+merges the server document beneath pending local edits rather than replacing state, so no write is
+silently lost.
 
 ## Steps
 1. Add `Prefs` and `PutPrefs` to `internal/store/settings.go`: `Prefs` selects `key, value_json` for
@@ -119,17 +131,24 @@ when `SessionState` reaches `authenticated`; before it resolves the store render
    and inserts one row per top-level member in the same `sqlx.Tx`, each with a fresh `uip_` id.
    Explicit column lists, errors wrapped with `%w`.
 2. Create `internal/api/prefs.go`: `Get` resolves `IdentityFrom(ctx)` and returns the document;
-   `Put` rejects a raw body over 64 KiB with `413`, a non-object body with `422`, stores through
-   `PutPrefs` and returns `200` with the stored document.
-3. Register both operations in `internal/api/server.go` and run `make gen`; the regenerated
-   `api/openapi.json` and `web/src/api/schema.d.ts` carry only the `/prefs` pair.
+   `Put` stores through `PutPrefs` and returns `200` with the stored document. Huma decodes and
+   validates the body before `Put` runs, so the `PUT` operation carries a middleware
+   (`huma.Middlewares`, the `acceptSubmissionForm` precedent) that bounds the raw body to 64 KiB —
+   `413 /problems/payload-too-large` above it — and rejects a body whose top level is not a JSON
+   object with `422 /problems/validation-failed`, before re-attaching it for huma to decode.
+3. Register both operations in `internal/api/server.go` — `PrefsHandlers` follows the sibling
+   `Register(hapi huma.API)` pattern `CategoryHandlers` uses, and the server wiring is the same
+   one-line call — then run `make gen`; the regenerated `api/openapi.json` and
+   `web/src/api/schema.d.ts` carry only the `/prefs` pair.
 4. Migrate `web/src/store/useUiPrefs.ts`: add `hydrate`, point the debounced writer at
    `api.PUT("/prefs", …)` with the CSRF header, and delete `PREFS_KEY`, `readStored` and every
    `localStorage` access. The merge rules in `loadInitial` keep their shape checks, now applied to
    the GET response.
 5. Reroute `web/src/lib/theme.ts`: `readStoredTheme` reads `useUiPrefs.getState().theme` and
    `storeTheme` calls `patch({ theme })`. `main.tsx`'s pre-paint call keeps working — it returns
-   `system` until hydration lands.
+   `system` until hydration lands. The import is one-way: `theme.ts` touches the store lazily
+   inside function bodies and `useUiPrefs` never imports `theme.ts`, so the pre-paint path
+   initializes cleanly under any module order.
 6. Edit `web/src/components/Settings/GeneralSection.tsx`: drop `writePrefsDocument` and the
    `PREFS_KEY` import; unknown members go through `patch` only, since the serializer now emits every
    non-function state member.
@@ -153,7 +172,11 @@ when `SessionState` reaches `authenticated`; before it resolves the store render
 - [ ] `TestPrefsTooLarge` asserts a body above 64 KiB is `413 /problems/payload-too-large` and
       `TestPrefsRejectsNonObject` asserts a non-object body is `422 /problems/validation-failed`.
 - [ ] A `useUiPrefs.test.ts` case asserts `hydrate()` lands a server-only member in state and a
-      `patch()` write PUTs the whole document — every non-function member, unknown ones included.
+      `patch()` write PUTs the whole document — every non-function, non-transient member, unknown
+      ones included.
+- [ ] A `useUiPrefs.test.ts` case stubs `GET /prefs` to resolve after a delay, patches a member
+      before it resolves, advances past the debounce and asserts the PUT body carries the local
+      value — a local edit is never clobbered by an in-flight hydrate.
 - [ ] A `useUiPrefs.test.ts` case asserts the write still waits out the 500 ms debounce and never
       fires during a drag, now against the PUT rather than `localStorage`.
 - [ ] `storeTheme("dark")` reaches the server document: the re-pinned `theme.test.ts` asserts the
