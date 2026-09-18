@@ -43,6 +43,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/e2e/search.spec.ts` | create | The browser proof of search → one-click add, and of re-running a saved search. |
 | `web/src/components/Search/SearchScreen.tsx` | edit | Mount the two controls; read the selection from prefs instead of `sessionStorage`. |
 | `web/src/components/Search/SearchScreen.test.tsx` | edit | Re-pin the cases the prefs-document selection source touches. |
+| `web/src/locales/en/common.json` | edit | The `search.*` keys the new controls' labels, refusals, toasts and badge resolve through `t()`. |
 | `web/src/store/useUiPrefs.ts` | edit | Add the `search` member to the preference document. |
 
 No other file may be modified.
