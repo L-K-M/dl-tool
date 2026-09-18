@@ -830,11 +830,11 @@ The dl-tool engines endpoint shall list each configured engine with its declared
 ### FR-144 Persist server-side UI preferences
 The dl-tool preferences API shall read and replace the operator's preference document holding the task-grid column layout and the UI preferences listed in [`09-web-ui-spec.md`](09-web-ui-spec.md), so one account sees the same grid in every browser.
 
-**Verify:** T107 stores a column order, width set and visibility set, reads it back from a second client authenticated as the same user and asserts equality under `go-cmp`, and asserts a second user's document is unaffected.
+**Verify:** T129 stores a column order, width set and visibility set, reads it back from a second client authenticated as the same user and asserts equality under `go-cmp`, and asserts a second user's document is unaffected.
 
 | Covered by | Priority |
 |---|---|
-| T107 | must |
+| T129 | must |
 
 ### FR-145 Export and import portable settings
 The dl-tool settings API shall export a versioned document containing settings, categories, indexers, feeds, rules, watch folders and the schedule, shall import such a document, and shall exclude sessions, password hashes and API tokens from the export.

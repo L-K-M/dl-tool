@@ -155,7 +155,8 @@ The Torznab client, `dlsearch/v1` engines, `.dlm` import and the search screen. 
 | [T061](T061-async-search-jobs.md) | Run a search as an asynchronous job | T012, T055, T058 | done |
 | [T062](T062-per-engine-status-and-dedup.md) | Report per-engine status and collapse duplicate results | T054, T058, T061 | done |
 | [T063](T063-search-screen.md) | Build the search screen | T014, T041, T042, T044, T061, T062 | done |
-| [T064](T064-saved-searches.md) | Save and re-run a search | T043, T045, T061, T063 | todo |
+| [T129](T129-ui-prefs-document.md) | Serve the UI preference document and persist web prefs through it | T007, T008, T014, T040, T044, T045, T053 | todo |
+| [T064](T064-saved-searches.md) | Save and re-run a search | T043, T045, T061, T063, T129 | todo |
 | [T105](T105-static-linux-distributions-engine.md) | Ship the curated static `linux-distributions` engine | T056, T057, T058, T062 | todo |
 | [T116](T116-indexers-settings-section.md) | Build the Indexers settings section | T053, T055, T058 | todo |
 | [T122](T122-apply-ssrf-guard-to-user-uris.md) | Apply the SSRF guard to user-submitted URIs | T020, T031, T123 | todo |
@@ -197,7 +198,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T091](T091-database-backup-and-retention.md) | Back up the database on demand and prune on a schedule | T006, T012, T066 | todo |
 | [T092](T092-settings-and-system-info.md) | Serve settings and system info without leaking secrets | T005, T027, T091 | todo |
 | [T106](T106-notification-channel-endpoints.md) | Manage notification channels and test one | T077, T084 | todo |
-| [T107](T107-tag-prefs-and-watch-folder-endpoints.md) | Reach the tag, preference and watch-folder tables over HTTP | T050, T083, T084 | todo |
+| [T107](T107-tag-and-watch-folder-endpoints.md) | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | todo |
 | [T108](T108-settings-export-import-and-restore.md) | Export and import portable settings, and restore from the CLI | T080, T106, T107 | todo |
 | [T110](T110-bandwidth-precedence-and-dst.md) | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | todo |
 | [T111](T111-delete-data-and-hardlink-safety.md) | Delete downloaded data safely and prove hardlink survival | T023, T076 | todo |
@@ -242,14 +243,14 @@ reason and the task that will carry it.
 
 ## A note on identifier order
 
-Task identifiers **T098–T128** are overflow numbers allocated after the original ranges were set. They
+Task identifiers **T098–T129** are overflow numbers allocated after the original ranges were set. They
 belong to earlier milestones than their number suggests — T098, T099 and T126–T128 are M1, T100 and T101 are M2,
-T103 and T104 are M3, T105, T116, T122 and T123 are M4, T106–T111 and T117–T120 are M6,
+T103 and T104 are M3, T105, T116, T122, T123 and T129 are M4, T106–T111 and T117–T120 are M6,
 T113, T115 and T121 are M7, and T124 and T125 are M0. A dependency on a numerically higher identifier is
 therefore usually not a forward reference: work milestones in order and the dependency is already
 satisfied. Do not "fix" these edges.
 
-Two consequences of that overflow numbering are recorded rather than "fixed":
+The consequences of that overflow numbering are recorded rather than "fixed":
 
 - **T091 and T092 sit in M6, not M7.** The settings sections T117, T118 and T119 need
   `GET`/`PATCH /settings`, so the settings and system-info endpoints — and the backup handler whose file
@@ -259,6 +260,10 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
   SSRF-guarded HTTP client it is built on; T122 depends on T123 for the same reason. Rule 2 handles this
   by itself — T054's dependencies are not `done`, so the next unblocked row is T123 — but do not
   "correct" the edge.
+- **In M4, T129 sits ahead of T064 although its scope is preferences, not search.** T064's merged
+  `## Blocked` record pulled the `/prefs` pair forward out of T107; T064 depends on T129 and the
+  picker takes the topmost eligible `todo` row, so T129's row precedes T064 rather than sitting
+  beside T107 in M6.
 
 ## Roster
 
@@ -360,7 +365,8 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T061 | Run a search as an asynchronous job | T012, T055, T058 | no | done | [T061](T061-async-search-jobs.md) |
 | T062 | Report per-engine status and collapse duplicate results | T054, T058, T061 | no | done | [T062](T062-per-engine-status-and-dedup.md) |
 | T063 | Build the search screen | T014, T041, T042, T044, T061, T062 | no | done | [T063](T063-search-screen.md) |
-| T064 | Save and re-run a search | T043, T045, T061, T063 | no | todo | [T064](T064-saved-searches.md) |
+| T129 | Serve the UI preference document and persist web prefs through it | T007, T008, T014, T040, T044, T045, T053 | no | todo | [T129](T129-ui-prefs-document.md) |
+| T064 | Save and re-run a search | T043, T045, T061, T063, T129 | no | todo | [T064](T064-saved-searches.md) |
 | T105 | Ship the curated static `linux-distributions` engine | T056, T057, T058, T062 | no | todo | [T105](T105-static-linux-distributions-engine.md) |
 | T116 | Build the Indexers settings section | T053, T055, T058 | no | todo | [T116](T116-indexers-settings-section.md) |
 | T122 | Apply the SSRF guard to user-submitted URIs | T020, T031, T123 | no | todo | [T122](T122-apply-ssrf-guard-to-user-uris.md) |
@@ -398,7 +404,7 @@ Two consequences of that overflow numbering are recorded rather than "fixed":
 | T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | todo | [T091](T091-database-backup-and-retention.md) |
 | T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | todo | [T092](T092-settings-and-system-info.md) |
 | T106 | Manage notification channels and test one | T077, T084 | yes | todo | [T106](T106-notification-channel-endpoints.md) |
-| T107 | Reach the tag, preference and watch-folder tables over HTTP | T050, T083, T084 | yes | todo | [T107](T107-tag-prefs-and-watch-folder-endpoints.md) |
+| T107 | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | yes | todo | [T107](T107-tag-and-watch-folder-endpoints.md) |
 | T108 | Export and import portable settings, and restore from the CLI | T080, T106, T107 | yes | todo | [T108](T108-settings-export-import-and-restore.md) |
 | T110 | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | no | todo | [T110](T110-bandwidth-precedence-and-dst.md) |
 | T111 | Delete downloaded data safely and prove hardlink survival | T023, T076 | no | todo | [T111](T111-delete-data-and-hardlink-safety.md) |

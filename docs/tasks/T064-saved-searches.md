@@ -5,12 +5,12 @@
 | **ID** | T064 |
 | **Milestone** | M4 |
 | **Status** | todo |
-| **Depends on** | T043, T045, T061, T063 |
+| **Depends on** | T043, T045, T061, T063, T129 |
 | **Blocks** | — |
-| **Parallel-safe** | no — extends T063's `SearchScreen.tsx` and T045's `useUiPrefs.ts` |
+| **Parallel-safe** | no — extends T063's `SearchScreen.tsx` and [T129](T129-ui-prefs-document.md)'s `useUiPrefs.ts` |
 | **Implements** | [FR-057](../02-requirements.md#fr-057-save-and-re-run-a-search), [FR-058](../02-requirements.md#fr-058-create-a-task-from-a-search-result-in-one-click) (its end-to-end proof) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
-| **Est. size** | 3 new files, ~330 LOC |
+| **Est. size** | 3 new files, ~360 LOC |
 
 ## Goal
 `Save…` captures the current name, query, indexer selection and category selection into the server-side
@@ -31,6 +31,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    `sessionStorage` selection this task replaces.
 6. [`docs/tasks/T043-playwright-harness-and-grid-performance.md`](T043-playwright-harness-and-grid-performance.md)
    — `web/e2e/fixtures.ts`, `loginAsAdmin` and the throwaway state directory.
+7. [`docs/tasks/T129-ui-prefs-document.md`](T129-ui-prefs-document.md) — the server transport `useUiPrefs`
+   now implements: `hydrate`, the whole-document PUT and the verbatim unknown-member rule the `search`
+   member rides.
 
 ## Files
 | Path | Action | Purpose |
@@ -39,6 +42,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/Search/SavedSearches.test.tsx` | create | Save, re-run, rename, delete and the 50-entry cap. |
 | `web/e2e/search.spec.ts` | create | The browser proof of search → one-click add, and of re-running a saved search. |
 | `web/src/components/Search/SearchScreen.tsx` | edit | Mount the two controls; read the selection from prefs instead of `sessionStorage`. |
+| `web/src/components/Search/SearchScreen.test.tsx` | edit | Re-pin the cases the prefs-document selection source touches. |
 | `web/src/store/useUiPrefs.ts` | edit | Add the `search` member to the preference document. |
 
 No other file may be modified.
@@ -151,6 +155,16 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
+Resolved by the plan repair that created [T129](T129-ui-prefs-document.md): the `## Blocked` record
+below named two repairs, and the repair took the first — the prefs slice of T107 moved forward into a
+new earlier task rather than into this one's `## Files` table. T129 owns `GET`/`PUT /prefs`, the
+`Prefs`/`PutPrefs` store accessors, the `useUiPrefs` transport switch off `localStorage`, and the
+client call sites and re-pinned tests the switch drags with it (`theme.ts`, `GeneralSection.tsx`,
+hydration in `App.tsx`). This task's table gained only a `SearchScreen.test.tsx` row for the
+selection-source change; its goal, contract and criteria now read as written because the document
+exists when it runs. T107 narrowed to the tag and watch-folder operations and dropped FR-144. T064
+remains unimplemented and still marked `todo`, now depending on T129.
+
 Stopped before implementing (2026-09-18): the task assumes the server-side preference document
 exists; it does not, and building it needs files outside the `## Files` table.
 
@@ -162,7 +176,7 @@ no `/prefs` route is registered, the `ui_prefs` table has no reader or writer, a
 the only persistence file this task may edit — reads and writes `localStorage` exclusively.
 [T045](T045-column-management-and-ui-prefs.md) built it that way deliberately ("the endpoints
 arrive with M6's preferences task (T107) and this task persists to `localStorage` only"), and
-[T107](T107-tag-prefs-and-watch-folder-endpoints.md) (M6, `todo`) owns `internal/api/prefs.go`,
+[T107](T107-tag-and-watch-folder-endpoints.md) (M6, `todo`) owns `internal/api/prefs.go`,
 `Prefs`/`PutPrefs` in `internal/store/settings.go`, the `internal/api/server.go` registration and
 `internal/api/prefs_test.go`.
 
@@ -203,7 +217,7 @@ $ grep -n "localStorage\|api\.\|fetch" web/src/store/useUiPrefs.ts
 ```
 
 Which file should answer it: this task's `## Files` table together with
-[T107](T107-tag-prefs-and-watch-folder-endpoints.md)'s. The repair choices are (a) pull the prefs
+[T107](T107-tag-and-watch-folder-endpoints.md)'s. The repair choices are (a) pull the prefs
 slice of T107 forward into this task or a new earlier task — `internal/api/prefs.go` (the prefs
 pair only), `Prefs`/`PutPrefs` in `internal/store/settings.go`, two registrations in
 `internal/api/server.go`, `internal/api/prefs_test.go` (the prefs pins), the §7.1 generated pair,
