@@ -381,11 +381,16 @@ broadcast over `GET /events` today. And since nothing writes the column yet, eve
 existing row has `source_display_uri` NULL: the repair's `delta.go` row closes that
 existing hole only if its prescription reads "prefer `SourceDisplayURI`, and when it is
 NULL strip `RawQuery` as well as userinfo from `source_uri`" — a sanitizing fallback, not
-a backfill, so no migration row is needed.
+a backfill, so no migration row is needed. The accepted cost: every pre-existing row's
+emitted URI loses its query string (benign or not) until a writer populates the column —
+that is deliberate fail-closed behavior, and a later backfill is the only way such rows
+regain benign parameters.
 
 Which file should answer it: this file's `## Files` table — the repair needs four rows
 (`internal/store/models.go` for the `SourceDisplayURI` field on `Task`,
-`internal/store/tasks_list.go` for `queryListTasksPage` selecting the column,
+`internal/store/tasks_list.go` for `queryListTasksPage` selecting the column — scanned
+into the pinned `*string` field, so NULL arrives as nil and needs no `COALESCE`; nil
+selects the sanitized `source_uri` fallback,
 `internal/sync/delta.go` for `Project` preferring it and clearing `RawQuery` on the
 NULL fallback, and `internal/sync/delta_test.go` for both pins), and the
 `internal/store/tasks.go` row's purpose should drop the claim that the field lives there.
