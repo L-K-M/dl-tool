@@ -348,18 +348,19 @@ Not required: `internal/store/tasks_infohash.go` — `queryFindTaskByInfohash` s
 `store.Task` but never feeds a DTO or snapshot, and sqlx tolerates a struct field with no
 matching column, so the select needs no change.
 
-Evidence (run from the repo root at `a852ca1`):
+Evidence (run from the repo root at `a852ca1`, verbatim):
 
 ```
 $ grep -n "^type Task struct" internal/store/*.go
 internal/store/models.go:47:type Task struct {
 $ grep -rn "source_display_uri" internal/
-internal/store/migrations/00001_init.sql:79:  source_display_uri TEXT,  -- the only hit: DDL, no Go code
+internal/store/migrations/00001_init.sql:79:  source_display_uri TEXT,               -- API-safe; search-result:<res_id> for a grabbed result
 $ grep -rn "SELECT id, engine, engine_ref, source_kind, source_uri" internal/store/*.go
-internal/store/tasks.go:123:          queryGetTask — in the Files table
-internal/store/tasks_infohash.go:80:  queryFindTaskByInfohash — not DTO-feeding, needs no column
-internal/store/tasks_list.go:115:   queryListTasksPage — feeds GET /tasks and the SSE snapshot
+internal/store/tasks.go:123:	queryGetTask = `SELECT id, engine, engine_ref, source_kind, source_uri, name, infohash_v1, infohash_v2,
+internal/store/tasks_infohash.go:80:	queryFindTaskByInfohash = `SELECT id, engine, engine_ref, source_kind, source_uri, name, infohash_v1, infohash_v2,
+internal/store/tasks_list.go:115:const queryListTasksPage = `SELECT id, engine, engine_ref, source_kind, source_uri, name, infohash_v1, infohash_v2,
 $ grep -n "ListTasks\|sync.Project" internal/api/sse.go
+39:	// snapshotPageSize is the largest page TaskStore.ListTasks accepts; the
 154:		rows, cursor, _, err := h.tasks.ListTasks(ctx, filter)
 159:			snap[row.ID] = sync.Project(row)
 $ grep -n "t.SourceURI\|func displaySourceURI" internal/sync/delta.go
@@ -367,6 +368,14 @@ $ grep -n "t.SourceURI\|func displaySourceURI" internal/sync/delta.go
 84:	if t.SourceURI == nil {
 88:	u, err := url.Parse(*t.SourceURI)
 ```
+
+Reading the hits: the `source_display_uri` match is the DDL alone — no Go code references the
+column. Of the three full-row selects, `queryGetTask` is in the Files table,
+`queryFindTaskByInfohash` never feeds a DTO, and `queryListTasksPage` feeds `GET /tasks`
+and the SSE snapshot. Note that the delta.go leak the third item describes is not
+contingent on this task: any stored `source_uri` carrying a query-string secret is already
+broadcast over `GET /events` today, so the repair's `delta.go` row closes an existing hole
+as well as the new search-result path.
 
 Which file should answer it: this file's `## Files` table — the repair needs four rows
 (`internal/store/models.go` for the `SourceDisplayURI` field on `Task`,
