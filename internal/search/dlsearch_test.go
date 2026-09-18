@@ -846,6 +846,9 @@ func TestLinuxDistributionsDefinitionIsWellFormed(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "static", def.Kind)
+	// Sscanf stops at the first non-numeric byte, so pin the exact x.y.z
+	// shape first — "1.1.0-rc1" must not satisfy the bump guard.
+	require.Regexp(t, `^\d+\.\d+\.\d+$`, def.Version)
 	var vmajor, vminor, vpatch int
 	_, err = fmt.Sscanf(def.Version, "%d.%d.%d", &vmajor, &vminor, &vpatch)
 	require.NoError(t, err, "version %q must be x.y.z", def.Version)
