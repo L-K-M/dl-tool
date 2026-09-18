@@ -186,6 +186,18 @@ export function IndexersSection(): JSX.Element {
           body: { priority: patch.priority },
         });
         if (error) {
+          if (patch !== patches[0]) {
+            // The first PATCH already applied; undo it so the pair doesn't
+            // end up sharing a priority the UI can no longer swap.
+            const original = rows.find((r) => r.id === patches[0].id);
+            if (original !== undefined)
+              await api
+                .PATCH("/indexers/{id}", {
+                  params: { path: { id: original.id } },
+                  body: { priority: original.priority },
+                })
+                .catch(() => undefined);
+          }
           toast.error(
             t("indexers.moveFailed", {
               detail: problemDetail(error) ?? ct("shell.networkError"),

@@ -225,8 +225,10 @@ test("TestRowsRenderInServerOrder", async () => {
   // The PATCH carried only the toggle, and the toast surfaces the 403 detail.
   expect(patchCalls).toEqual([{ id: "idx_academic", body: { enabled: true } }]);
   expect(toastError).toHaveBeenCalledTimes(1);
-  expect(JSON.stringify(toastError.mock.calls)).toContain(
-    "private-network indexers need allow_private_network",
+  expect(toastError).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "private-network indexers need allow_private_network",
+    ),
   );
 
   // Clearing a stored URL in Edit is sent to the server (which 422s naming
@@ -314,6 +316,38 @@ test("TestMoveUpSwapsPriorities", async () => {
   expect(swapPriority(tied, "idx_arch", 1)).toEqual([
     { id: "idx_arch", priority: 30 },
     { id: "idx_academic", priority: 10 },
+  ]);
+
+  // If the second swap PATCH fails, the already-applied first PATCH is
+  // undone so the pair never shares a priority the UI cannot reorder.
+  patchCalls.length = 0;
+  server.use(
+    http.patch("*/api/v1/indexers/idx_archive", async ({ request }) => {
+      patchCalls.push({
+        id: "idx_archive",
+        body: (await request.json()) as Record<string, unknown>,
+      });
+      return HttpResponse.json(
+        {
+          type: "/problems/conflict",
+          title: "Conflict",
+          detail: "priority changed by another client",
+          status: 409,
+        },
+        { status: 409 },
+      );
+    }),
+  );
+  fireEvent.click(
+    within(rowOf("Arch Linux")).getByRole("button", {
+      name: "Move Arch Linux up",
+    }),
+  );
+  await waitFor(() => expect(patchCalls.length).toBe(3));
+  expect(patchCalls).toEqual([
+    { id: "idx_arch", body: { priority: 10 } },
+    { id: "idx_archive", body: { priority: 20 } },
+    { id: "idx_arch", body: { priority: 20 } },
   ]);
 });
 
@@ -403,8 +437,8 @@ test("TestImportedIndexerRendersDisabledWithProvenance", async () => {
   });
   fireEvent.click(within(retry).getByRole("button", { name: "Import" }));
   await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
-  expect(JSON.stringify(toastError.mock.calls)).toContain(
-    "An address inside blocked.dlm is blocked",
+  expect(toastError).toHaveBeenCalledWith(
+    expect.stringContaining("An address inside blocked.dlm is blocked"),
   );
 });
 
