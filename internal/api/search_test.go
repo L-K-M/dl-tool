@@ -34,8 +34,10 @@ type searchTestEnv struct {
 	api      humatest.TestAPI
 	db       *sqlx.DB
 	indexers *store.IndexerStore
-	engines  *engine.Registry
-	bearer   string
+	// engines is consumed by newResultTaskEnv in tasks_test.go — the res_
+	// resolution cases need the recording engine stand-ins registered.
+	engines *engine.Registry
+	bearer  string
 }
 
 // searchTestKey is the throwaway key the test store seals under; it stands
@@ -1686,5 +1688,13 @@ func TestPollResultOmitsAcquisitionKeys(t *testing.T) {
 	}
 	if !strings.HasPrefix(fmt.Sprint(body.Results[0]["id"]), "res_") {
 		t.Errorf("result id = %v, want an opaque res_ id", body.Results[0]["id"])
+	}
+	// The raw substring scan above cannot see an absent key rendered under
+	// a different shape; the decoded row pins the wire contract
+	// structurally — no acquisition key exists at all.
+	for _, key := range []string{"download_url", "magnet_uri", "details_url"} {
+		if _, ok := body.Results[0][key]; ok {
+			t.Errorf("serialized result carries acquisition key %q: %v", key, body.Results[0])
+		}
 	}
 }

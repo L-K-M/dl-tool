@@ -372,7 +372,8 @@ untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Evidence
 
-Run on the task-branch head:
+Run on the task-branch head (re-run after the review-fix commit — the
+counts grew by the new cases it adds):
 
 ```
 $ make lint && make vet && make typecheck && make test PKG="./internal/api/... ./internal/store/..." && make test-web && echo SEARCH_UI_OK
@@ -380,23 +381,21 @@ test -z "$(gofmt -l cmd internal)"
 golangci-lint run ./...
 0 issues.
 cd web && npm run lint
-
 > lint
 > eslint .
-
 cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go vet ./...
 cd web && npx tsc --noEmit -p tsconfig.json
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	124.823s
-ok  	github.com/L-K-M/dl-tool/internal/store	77.090s
+ok  	github.com/L-K-M/dl-tool/internal/api	125.804s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.987s
 cd web && npx vitest run
  ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests)
- ✓ src/components/Search/SearchScreen.test.tsx (8 tests)
+ ✓ src/components/Search/SearchScreen.test.tsx (9 tests)
  Test Files  18 passed (18)
-      Tests  233 passed (233)
+      Tests  234 passed (234)
 SEARCH_UI_OK
 ```
 
@@ -413,22 +412,30 @@ The step-14 Vitest cases and the step-4 Go cases, run with the verbose reporters
  ✓ src/components/Search/SearchScreen.test.tsx > TestStopDeletesTheJob
  ✓ src/components/AddTask/AddTaskDialog.test.tsx > TestSearchResultDraftPostsIDs
  ✓ src/components/AddTask/AddTaskDialog.test.tsx > TestSearchResultDraftChunksAt50
---- PASS: TestPollResultOmitsAcquisitionKeys (0.45s)
---- PASS: TestCreateTasksSearchResultIDs (0.47s)
---- PASS: TestTaskCreateRejectsGoneResult (0.40s)
---- PASS: TestTaskCreateMixedFamilies422 (0.39s)
---- PASS: TestTaskCreateResultConflicts (0.41s)
---- PASS: TestTaskCreateResultUnroutableSource (0.40s)
+--- PASS: TestPollResultOmitsAcquisitionKeys (0.08s)
+--- PASS: TestCreateTasksSearchResultIDs (0.04s)
+--- PASS: TestTaskCreateRejectsGoneResult (0.03s)
+--- PASS: TestTaskCreateMixedFamilies422 (0.07s)
+--- PASS: TestTaskCreateResultConflicts (0.03s)
+--- PASS: TestTaskCreateResultUnroutableSource (0.03s)
 --- PASS: TestTaskDisplaySourceRendersSharedRule (0.39s)
-ok  	github.com/L-K-M/dl-tool/internal/api	4.064s
+ok  	github.com/L-K-M/dl-tool/internal/api	4.055s
 --- PASS: TestGetSearchResultResolvesLiveRow (0.42s)
 --- PASS: TestGetSearchResultGoneJobIsNotFound (0.40s)
 --- PASS: TestGetSearchResultRequiresAcquisitionSource (0.40s)
-ok  	github.com/L-K-M/dl-tool/internal/store	2.257s
+ok  	github.com/L-K-M/dl-tool/internal/store	2.275s
 --- PASS: TestProjectDropsUnsanitizableSources (0.00s)
 --- PASS: TestProjectDisplaySourceURIWins (0.00s)
 ok  	github.com/L-K-M/dl-tool/internal/sync	1.054s
 ```
+
+The review-fix commit also adds `TestEnterKeyDoesNotStartSecondJob` (the
+Enter-during-search guard) and strengthens `TestStopDeletesTheJob` (poll
+count stable after DELETE), `TestEngineErrorShownInStrip` (focus and hover
+each open the tooltip), `TestTaskCreateResultConflicts` (an isolated
+within-submission duplicate), `TestTaskDisplaySourceRendersSharedRule`
+(authority-form credentials) and `TestTaskCreateMixedFamilies422`
+(multipart file and junk parts).
 
 The existing all-`uris`-fail `422` shares the no-`rejected[]` problem shape with the new
 all-fail `404`: `TestCreateTasksDuplicateTorrent` (tasks_test.go) pins the `uris` side and

@@ -372,12 +372,14 @@ function submissionForm(
 type RejectedURI = components["schemas"]["RejectedURI"];
 
 /** Reported once per ≤50-id chunk of a search-result draft so the caller can
- *  mark its rows: `rejected` is the chunk's `rejected[]` (possibly empty) or
- *  `null` when the whole chunk failed — transport error or non-201 — with
- *  `detail` carrying the problem text. */
+ *  mark its rows: `created` is the chunk's created task DTOs (each rendered
+ *  source_uri keys it back to its res_ id as "search-result:<res_id>") and
+ *  `rejected` the chunk's `rejected[]` (possibly empty) — `null` when the
+ *  whole chunk failed, transport error or non-201, with `detail` carrying
+ *  the problem text. */
 export type SearchResultOutcome = (
   ids: string[],
-  createdTaskIds: string[],
+  created: TaskDTO[],
   rejected: RejectedURI[] | null,
   detail?: string,
 ) => void;
@@ -468,9 +470,15 @@ export function AddTaskDialog({
     setStep("add");
     setManifests([]);
     setSelectDraft(null);
-    setUrisText((seed.current.uris ?? []).join("\n"));
-    setFiles(seed.current.files ?? []);
-    setSearchIds(seed.current.searchResultIds ?? []);
+    const seededSearchIds = seed.current.searchResultIds ?? [];
+    // One source family per draft: a res_ draft hides the URI textarea and
+    // dropzone, so seeded uris/files it cannot show must not ride along —
+    // they would be silently dropped on submit.
+    setUrisText(
+      seededSearchIds.length > 0 ? "" : (seed.current.uris ?? []).join("\n"),
+    );
+    setFiles(seededSearchIds.length > 0 ? [] : (seed.current.files ?? []));
+    setSearchIds(seededSearchIds);
     setDestination(remember ? (prefs.lastDestination ?? "") : "");
     setCategory(null);
     setCategoryOpen(false);
@@ -669,11 +677,7 @@ export function AddTaskDialog({
           void applyLimits(created, draft);
         }
         if (onSearchResultOutcome)
-          onSearchResultOutcome(
-            chunk,
-            created.map((task) => task.id),
-            data.rejected ?? [],
-          );
+          onSearchResultOutcome(chunk, created, data.rejected ?? []);
         else
           for (const rejected of data.rejected ?? [])
             toast.error(

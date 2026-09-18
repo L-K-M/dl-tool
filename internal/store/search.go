@@ -124,12 +124,13 @@ WHERE search_job_id = ?`
 	// queryGetSearchResult resolves a res_ id only while its search job row
 	// still exists: a deleted or purged job cascades its results, and the IN
 	// guard keeps a result orphaned by a missing-cascade write from resolving.
-	// A row with neither acquisition source can never become a task.
+	// A row with no non-empty acquisition source can never become a task —
+	// a present-but-empty magnet_uri or download_url is no source at all.
 	queryGetSearchResult = `SELECT ` + searchResultColumns + `
 FROM search_results
 WHERE id = ?
   AND search_job_id IN (SELECT id FROM search_jobs)
-  AND (magnet_uri IS NOT NULL OR download_url IS NOT NULL)`
+  AND (COALESCE(magnet_uri, '') <> '' OR COALESCE(download_url, '') <> '')`
 )
 
 // CreateSearchJob inserts one running job row; the id (sch_…), started_at and
@@ -175,8 +176,9 @@ func GetSearchJob(ctx context.Context, db *sqlx.DB, id string) (SearchJob, error
 
 // GetSearchResult resolves an opaque res_ id to its stored row — including
 // the server-only acquisition fields — while its search job is live. An id
-// whose job was deleted or purged, or whose row carries neither magnet_uri
-// nor download_url, is indistinguishable from an unknown id: ErrNotFound.
+// whose job was deleted or purged, or whose row carries no non-empty
+// magnet_uri or download_url, is indistinguishable from an unknown id:
+// ErrNotFound.
 // dl-tool is single-user (ADR-0019), so "authorise each result through its
 // own search job" (docs/05 section 9.2) means the id resolves only while its
 // search_jobs row exists; there is no per-user owner column to check.

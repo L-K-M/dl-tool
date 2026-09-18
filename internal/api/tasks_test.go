@@ -1693,15 +1693,24 @@ func TestCreateTasksSearchResultIDs(t *testing.T) {
 		t.Fatalf("created = %d, want 2: %+v", len(body.Created), body.Created)
 	}
 	displayByID := map[string]string{}
+	seenDisplays := map[string]bool{}
 	for _, task := range body.Created {
-		if task.SourceURI == nil || !strings.HasPrefix(*task.SourceURI, "search-result:res_") {
-			t.Errorf("task %s source_uri = %v, want search-result:<res_id>", task.ID, task.SourceURI)
+		if task.SourceURI == nil {
+			t.Fatalf("task %s source_uri is nil, want search-result:<res_id>", task.ID)
 		}
+		if *task.SourceURI != "search-result:"+ids["magnet one"] &&
+			*task.SourceURI != "search-result:"+ids["file two"] {
+			t.Errorf("task %s source_uri = %v, want search-result:<res_id>", task.ID, *task.SourceURI)
+		}
+		seenDisplays[*task.SourceURI] = true
 		displayByID[task.ID] = ""
 		if task.Engine != engine.NameQBittorrent {
 			t.Errorf("task %s engine = %q, want qbittorrent (magnet and .torrent lanes)",
 				task.ID, task.Engine)
 		}
+	}
+	if len(seenDisplays) != 2 {
+		t.Errorf("created displays = %v, want one search-result: reference per submitted id", seenDisplays)
 	}
 
 	// The stored rows keep the server-only source; source_display_uri is the
@@ -1728,9 +1737,14 @@ func TestCreateTasksSearchResultIDs(t *testing.T) {
 		if _, ok := displayByID[row.TaskID]; !ok {
 			t.Errorf("stored task %s was not in the response", row.TaskID)
 		}
-		resID := strings.TrimPrefix(row.SourceDisplayURI, "search-result:")
-		if resID != ids["magnet one"] && resID != ids["file two"] {
-			t.Errorf("source_display_uri = %q, want search-result:<res_id>", row.SourceDisplayURI)
+		// Each row's display reference names the res_ id of the result its
+		// own source_uri resolved from — a swapped pairing fails here.
+		want := ids["magnet one"]
+		if row.SourceURI == download {
+			want = ids["file two"]
+		}
+		if resID := strings.TrimPrefix(row.SourceDisplayURI, "search-result:"); resID != want {
+			t.Errorf("source_display_uri = %q, want search-result:%s", row.SourceDisplayURI, want)
 		}
 	}
 
@@ -1833,6 +1847,26 @@ func TestTaskCreateMixedFamilies422(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body %s", resp.Code, resp.Body.String())
 	}
 	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	// The file-part family trips the same rule: a multipart form whose
+	// payload carries search_result_ids beside a torrent part — or even a
+	// part the middleware rejects — is the same 422, its rejected[] entry
+	// counting as the file-part family.
+	payload := []byte(fmt.Sprintf(`{"search_result_ids":[%q]}`, ids["one"]))
+	for _, part := range []UploadedFile{
+		{Name: "hello.torrent", Bytes: []byte(uploadSingleFileTorrent)},
+		{Name: "photo.jpg", Bytes: []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}},
+	} {
+		form, contentType := multipartForm(t, payload, part)
+		got := env.api.Do(http.MethodPost, "/tasks", form,
+			"Content-Type: "+contentType, "Authorization: Bearer "+env.bearer)
+		if got.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("multipart with %s: status = %d, want 422; body %s",
+				part.Name, got.Code, got.Body.String())
+		}
+		assertProblem(t, got, http.StatusUnprocessableEntity, SlugValidationFailed)
+	}
+
 	if env.taskCount(t) != 0 {
 		t.Errorf("mixed submission created tasks, want none")
 	}
@@ -1882,6 +1916,29 @@ func TestTaskCreateResultConflicts(t *testing.T) {
 	if env.taskCount(t) != 1 {
 		t.Errorf("%d tasks after resubmission, want 1", env.taskCount(t))
 	}
+
+	// A repeated id within one submission is the same conflict, decided on
+	// the raw ids before any resolution — pinned in isolation on a fresh
+	// result so the already-committed rule cannot explain it.
+	magnet2 := "magnet:?xt=urn:btih:0000111122223333444455556666777788889999"
+	_, fresh := env.seedResultJob(t, []store.SearchResultRow{{Title: "two", MagnetURI: &magnet2}})
+
+	resp = env.api.Post("/tasks", map[string]any{
+		"search_result_ids": []string{fresh["two"], fresh["two"]},
+	}, env.authz())
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", resp.Code, resp.Body.String())
+	}
+	body = decodeCreateBody(t, resp)
+	if len(body.Created) != 1 || len(body.Rejected) != 1 {
+		t.Fatalf("created = %d rejected = %d, want 1 created and 1 conflict",
+			len(body.Created), len(body.Rejected))
+	}
+	entry := body.Rejected[0]
+	if entry.Type != SlugConflict || entry.SearchResultID != fresh["two"] || entry.URI != "" {
+		t.Errorf("entry = %+v, want a conflict naming search_result_id %q and no uri",
+			entry, fresh["two"])
+	}
 }
 
 // TestTaskCreateResultUnroutableSource: a result whose stored source no
@@ -1923,6 +1980,10 @@ func TestTaskDisplaySourceRendersSharedRule(t *testing.T) {
 
 	magnet := "magnet:?xt=urn:btih:8f9c3a2b1d4e5f60718293a4b5c6d7e8f9a0b1c2&dn=Show&tr=https%3A%2F%2Ft.example%2Fann%3Fpk%3Dk"
 	opaque := "user:pass@host"
+	// The authority form of the same credentials: u.Opaque is empty and the
+	// secret sits in u.User — the branch the magnet and opaque rows leave
+	// unpinned.
+	creds := "http://user:pass@credshost.example/dl.torrent"
 	seed := func(id, kind, uri string) {
 		t.Helper()
 		if _, err := env.db.ExecContext(t.Context(),
@@ -1935,15 +1996,19 @@ func TestTaskDisplaySourceRendersSharedRule(t *testing.T) {
 	}
 	magnetID := store.NewID(store.PrefixTask)
 	opaqueID := store.NewID(store.PrefixTask)
+	credsID := store.NewID(store.PrefixTask)
 	seed(magnetID, "magnet", magnet)
 	seed(opaqueID, "http", opaque)
+	seed(credsID, "http", creds)
 
 	resp := env.listTasks(t, "?state=all")
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", resp.Code, resp.Body.String())
 	}
 	raw := resp.Body.String()
-	for _, leak := range []string{"dn=", "tr=", "pk%3Dk", "user:pass", "opaque.example"} {
+	// "user:pass" guards both credential shapes the seeded rows carry —
+	// opaque ("user:pass@host") and authority ("http://user:pass@host/…").
+	for _, leak := range []string{"dn=", "tr=", "pk%3Dk", "user:pass"} {
 		if strings.Contains(raw, leak) {
 			t.Fatalf("list leaks unstripped source data %q: %s", leak, raw)
 		}
@@ -1965,5 +2030,10 @@ func TestTaskDisplaySourceRendersSharedRule(t *testing.T) {
 	if opaqueTask := byID[opaqueID]; opaqueTask.SourceURI != nil {
 		t.Errorf("opaque source_uri = %v, want omitted — u.Opaque credentials fail closed",
 			*opaqueTask.SourceURI)
+	}
+	credsTask := byID[credsID]
+	if credsTask.SourceURI == nil ||
+		*credsTask.SourceURI != "http://credshost.example/dl.torrent" {
+		t.Errorf("authority-credentials source_uri = %v, want the host-only render", credsTask.SourceURI)
 	}
 }

@@ -91,9 +91,18 @@ func TestGetSearchResultGoneJobIsNotFound(t *testing.T) {
 func TestGetSearchResultRequiresAcquisitionSource(t *testing.T) {
 	db, _, _ := openTestStore(t)
 
-	_, ids := seedSearchFixture(t, db, []SearchResultRow{{Title: "metadata only"}})
+	empty := ""
+	_, ids := seedSearchFixture(t, db, []SearchResultRow{
+		{Title: "metadata only"},
+		{Title: "empty sources", MagnetURI: &empty, DownloadURL: &empty},
+	})
 
 	_, err := GetSearchResult(t.Context(), db, ids["metadata only"])
+	require.ErrorIs(t, err, ErrNotFound)
+
+	// Present-but-empty acquisition fields are no source at all — the row
+	// resolves exactly like one holding neither.
+	_, err = GetSearchResult(t.Context(), db, ids["empty sources"])
 	require.ErrorIs(t, err, ErrNotFound)
 
 	// And a second job whose result does carry a source resolves, proving

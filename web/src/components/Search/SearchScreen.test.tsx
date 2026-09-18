@@ -127,6 +127,9 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   sessionStorage.clear();
+  // A full reset, not a merge — prefs a test writes must not leak into the
+  // next one.
+  useUiPrefs.setState(useUiPrefs.getInitialState(), true);
   useUiPrefs.setState({ lastDestination: "/data" });
   // jsdom reports zero boxes; the virtualiser needs a viewport to mount rows.
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(4000);
@@ -244,12 +247,21 @@ test("TestEngineErrorShownInStrip", async () => {
   mount();
   await startSearch();
   const chip = await screen.findByRole("button", { name: /Indexer A/ });
-  // Hover exposes the engine's error text…
-  fireEvent.pointerMove(chip, { pointerType: "mouse" });
-  await screen.findByText("connection timed out");
-  // …and so does taking keyboard focus (what a click produces).
+  const describedError = async () => {
+    const id = chip.getAttribute("aria-describedby");
+    expect(id).toBeTruthy();
+    expect(document.getElementById(id as string)?.textContent).toContain(
+      "connection timed out",
+    );
+  };
+  // Keyboard focus (what a click produces) opens the error tooltip…
   chip.focus();
-  await screen.findAllByText("connection timed out");
+  await waitFor(describedError);
+  // …and once blur closes it, hover opens it again.
+  fireEvent.blur(chip);
+  await waitFor(() => expect(chip.getAttribute("aria-describedby")).toBeNull());
+  fireEvent.pointerMove(chip, { pointerType: "mouse" });
+  await waitFor(describedError);
 });
 
 test("TestThreeZeroStates", async () => {
@@ -540,12 +552,13 @@ test("TestBulkChunkPartialRejection", async () => {
   ).toBe("⟲");
 });
 
-test("TestStopDeletesTheJob", async () => {
-  let deleted = false;
+test("TestEnterKeyDoesNotStartSecondJob", async () => {
+  let posts = 0;
   server.use(
-    http.post("*/api/v1/search", () =>
-      HttpResponse.json({ id: "sch_test" }, { status: 202 }),
-    ),
+    http.post("*/api/v1/search", () => {
+      posts += 1;
+      return HttpResponse.json({ id: "sch_test" }, { status: 202 });
+    }),
     http.get("*/api/v1/search/:id", () =>
       HttpResponse.json(
         jobBody({
@@ -554,6 +567,45 @@ test("TestStopDeletesTheJob", async () => {
         }),
       ),
     ),
+  );
+
+  mount();
+  const input = screen.getByLabelText("Search query");
+  fireEvent.change(input, { target: { value: "ubuntu" } });
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "Search" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  // Enter starts the job…
+  fireEvent.keyDown(input, { key: "Enter" });
+  await screen.findByText("Indexer A");
+  expect(posts).toBe(1);
+  // …and a second Enter while it runs must not post again — the disabled
+  // submit button guards the click path only, runSearch owns the keyboard
+  // path.
+  fireEvent.keyDown(input, { key: "Enter" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(posts).toBe(1);
+});
+
+test("TestStopDeletesTheJob", async () => {
+  let deleted = false;
+  let polls = 0;
+  server.use(
+    http.post("*/api/v1/search", () =>
+      HttpResponse.json({ id: "sch_test" }, { status: 202 }),
+    ),
+    http.get("*/api/v1/search/:id", () => {
+      polls += 1;
+      return HttpResponse.json(
+        jobBody({
+          finished: false,
+          engines: [engine({ status: "searching" })],
+        }),
+      );
+    }),
     http.delete("*/api/v1/search/:id", () => {
       deleted = true;
       return new HttpResponse(null, { status: 204 });
@@ -567,4 +619,10 @@ test("TestStopDeletesTheJob", async () => {
   await waitFor(() => expect(deleted).toBe(true));
   // The job is gone: the screen returns to its never-run state.
   await screen.findByText("Pick your indexers and search.");
+  // And the poll loop really stops — a client polling a deleted job every
+  // second would keep counting. Requests already issued are counted the
+  // moment the handler runs, so the snapshot is stable.
+  const count = polls;
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  expect(polls).toBe(count);
 });

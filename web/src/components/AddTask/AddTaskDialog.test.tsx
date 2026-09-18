@@ -21,7 +21,12 @@ import {
 
 import { initI18n } from "../../i18n";
 import { useTasks, type Task } from "../../store/useTasks";
-import { AddTaskDialog, classifyLine, isDroppableText } from "./AddTaskDialog";
+import {
+  AddTaskDialog,
+  classifyLine,
+  isDroppableText,
+  type SearchResultOutcome,
+} from "./AddTaskDialog";
 import { Toaster } from "../ui/sonner";
 
 const task = (id: string, patch: Partial<Task> = {}): Task => ({
@@ -117,12 +122,7 @@ function mount(
   props: Partial<{
     initialUris: string[];
     initialSearchResultIds: string[];
-    onSearchResultOutcome: (
-      ids: string[],
-      createdTaskIds: string[],
-      rejected: { search_result_id?: string; type?: string }[] | null,
-      detail?: string,
-    ) => void;
+    onSearchResultOutcome: SearchResultOutcome;
   }> = {},
 ) {
   const onOpenChange = vi.fn();

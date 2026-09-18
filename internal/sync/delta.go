@@ -106,7 +106,10 @@ func DisplaySourceURI(t store.Task) *string {
 	u.User = nil
 
 	if !strings.EqualFold(u.Scheme, "magnet") {
+		// ForceQuery rides with RawQuery — a bare trailing "?" would
+		// otherwise survive the strip.
 		u.RawQuery = ""
+		u.ForceQuery = false
 		display := u.String()
 
 		return &display
@@ -117,7 +120,11 @@ func DisplaySourceURI(t store.Task) *string {
 		return nil
 	}
 	u.RawQuery = strings.Join(kept, "&")
+	u.ForceQuery = false
+	// RawFragment rides with Fragment — clearing Fragment alone leaves a
+	// dangling "#" in the rendered string.
 	u.Fragment = ""
+	u.RawFragment = ""
 	display := u.String()
 
 	return &display

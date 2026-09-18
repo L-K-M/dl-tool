@@ -58,6 +58,10 @@ const FLASH_MS = 1200;
 const SEARCH_STATE_KEY = "dl.search.v1";
 const SEARCH_JOB_KEY = "dl.search.job";
 const CONFLICT_TYPE = "/problems/conflict";
+// A created task's rendered source_uri is the opaque display reference —
+// search-result:<res_id> — which keys each created task back to the result
+// row it came from, whatever order created[] arrives in.
+const RESULT_DISPLAY_PREFIX = "search-result:";
 
 const menuContentClass =
   "z-50 min-w-36 rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10";
@@ -134,6 +138,8 @@ export function useSearchJob(): {
 
   const clearJob = useCallback(() => {
     setJobId(null);
+    // A stale start/stop error must not survive the job it belonged to.
+    setStartError(null);
     try {
       sessionStorage.removeItem(SEARCH_JOB_KEY);
     } catch {
@@ -142,13 +148,15 @@ export function useSearchJob(): {
     queryClient.removeQueries({ queryKey: ["search-job"] });
   }, [queryClient]);
 
-  const poll = useQuery({
+  const poll = useQuery<SearchJobPage>({
     queryKey: ["search-job", jobId],
     enabled: jobId !== null,
     refetchInterval: (query) => (query.state.data?.finished ? false : POLL_MS),
-    queryFn: async (): Promise<SearchJobPage> => {
+    queryFn: async ({ signal }): Promise<SearchJobPage> => {
       // A page covers `limit` rows; each poll walks every page so the grid
-      // sees the whole job, not just its first 500 rows.
+      // sees the whole job, not just its first 500 rows. The walk honours
+      // the query's abort signal, so a superseded or deleted job leaves no
+      // in-flight page requests behind.
       const results: SearchResultView[] = [];
       let cursor: string | null = null;
       let last: SearchJobPage | null = null;
@@ -162,6 +170,7 @@ export function useSearchJob(): {
               cursor: cursor ?? undefined,
             },
           },
+          signal,
         });
         if (!page.data)
           throw new HttpError(
@@ -408,8 +417,17 @@ export function SearchScreen(): JSX.Element {
         for (const id of ids) next.delete(id);
         return next;
       });
-      setFlashing(new Set(ids));
-      window.setTimeout(() => setFlashing(new Set()), FLASH_MS);
+      // Flash merges into any set already running — a second chunk landing
+      // inside FLASH_MS must not clobber the first, and each timer drops
+      // only its own ids.
+      setFlashing((prev) => new Set([...prev, ...ids]));
+      window.setTimeout(() => {
+        setFlashing((prev) => {
+          const next = new Set(prev);
+          for (const id of ids) next.delete(id);
+          return next;
+        });
+      }, FLASH_MS);
     },
     [],
   );
@@ -434,7 +452,7 @@ export function SearchScreen(): JSX.Element {
   const applyChunkOutcome = useCallback(
     (
       chunk: string[],
-      createdTaskIds: string[],
+      created: NonNullable<CreateOutput["created"]>,
       rejected: RejectedURI[],
     ): RejectedURI[] => {
       const rejectedIds = new Set(
@@ -446,11 +464,20 @@ export function SearchScreen(): JSX.Element {
           .map((r) => r.search_result_id)
           .filter(Boolean) as string[],
       );
+      // Created tasks key back to their res_ id through the rendered
+      // display reference — never by position, so a reordered created[]
+      // cannot label a row with another row's task.
+      const taskByRes = new Map<string, string>();
+      for (const task of created) {
+        const src = task.source_uri;
+        if (typeof src === "string" && src.startsWith(RESULT_DISPLAY_PREFIX))
+          taskByRes.set(src.slice(RESULT_DISPLAY_PREFIX.length), task.id);
+      }
       const resolvedIds = chunk.filter((id) => !rejectedIds.has(id));
       markResolved(
         [...resolvedIds, ...conflicts],
         [
-          ...resolvedIds.map((_, i) => createdTaskIds[i] ?? null),
+          ...resolvedIds.map((id) => taskByRes.get(id) ?? null),
           ...[...conflicts].map(() => null),
         ],
       );
@@ -489,7 +516,7 @@ export function SearchScreen(): JSX.Element {
         if (data) {
           const failures = applyChunkOutcome(
             chunk,
-            (data.created ?? []).map((task) => task.id),
+            data.created ?? [],
             data.rejected ?? [],
           );
           if (failures.length > 0) {
@@ -523,7 +550,7 @@ export function SearchScreen(): JSX.Element {
   /** The "Download to…" dialog reports each chunk's outcome here so its rows
    *  reach the same terminal states the immediate path produces. */
   const onSearchResultOutcome = useCallback<SearchResultOutcome>(
-    (ids, createdTaskIds, rejected, detail) => {
+    (ids, created, rejected, detail) => {
       if (rejected === null) {
         markFailed(ids);
         toast.error(
@@ -534,7 +561,7 @@ export function SearchScreen(): JSX.Element {
         );
         return;
       }
-      const failures = applyChunkOutcome(ids, createdTaskIds, rejected);
+      const failures = applyChunkOutcome(ids, created, rejected);
       if (failures.length > 0) {
         const first = byId.get(failures[0].search_result_id ?? "");
         toast.error(
@@ -550,7 +577,10 @@ export function SearchScreen(): JSX.Element {
 
   const runSearch = useCallback(() => {
     const query = queryText.trim();
-    if (query === "") return;
+    // The submit button's disabled state guards the click path; the guard
+    // lives here too so the input's Enter key cannot start a second job
+    // while one runs — an orphaned job is never DELETE'd.
+    if (query === "" || (search.jobId !== null && !search.finished)) return;
     setSelected(new Set());
     setResolved(new Map());
     setFailed(new Set());
@@ -764,7 +794,7 @@ export function SearchScreen(): JSX.Element {
             <ul className="text-muted-foreground">
               {search.engines.map((e) => (
                 <li key={e.id}>
-                  {e.name}: {e.error}
+                  {e.name}: {e.error ?? t("search.engineFailed")}
                 </li>
               ))}
             </ul>

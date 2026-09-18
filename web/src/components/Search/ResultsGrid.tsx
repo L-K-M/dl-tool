@@ -1,4 +1,11 @@
-import { createContext, useContext, useMemo, useRef, type JSX } from "react";
+import {
+  createContext,
+  useContext,
+  useId,
+  useMemo,
+  useRef,
+  type JSX,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
@@ -69,6 +76,9 @@ export function ResultsGrid(props: {
     ResultRowStateContext,
   );
   const scroll = useRef<HTMLDivElement>(null);
+  // aria-owns wires the virtualised body into the grid across the generic
+  // scroll and sizer wrappers — the same ownership idiom the task grid uses.
+  const bodyId = useId();
 
   // The server already answers -seeders; the client sort keeps that order
   // stable across incremental polls, nulls last (doc 09 §7 default sort).
@@ -108,20 +118,23 @@ export function ResultsGrid(props: {
     props.onSelectedChange(next);
   };
 
-  const headers = [
-    t("search.colName"),
-    t("search.colSize"),
-    t("search.colSeeders"),
-    t("search.colLeechers"),
-    t("search.colAge"),
-    t("search.colIndexer"),
-    t("search.colActions"),
+  // Seeders descending is the grid's only sort (doc 09 §7): its header
+  // alone carries aria-sort.
+  const headers: { label: string; sort?: "descending" }[] = [
+    { label: t("search.colName") },
+    { label: t("search.colSize") },
+    { label: t("search.colSeeders"), sort: "descending" },
+    { label: t("search.colLeechers") },
+    { label: t("search.colAge") },
+    { label: t("search.colIndexer") },
+    { label: t("search.colActions") },
   ];
 
   return (
     <div
       role="grid"
       aria-label={t("search.resultsRegion")}
+      aria-owns={bodyId}
       // aria-rowcount is the job's total, not the rendered row count
       // (doc 09 §10.4): the virtualiser mounts only the visible window.
       aria-rowcount={props.total}
@@ -141,14 +154,21 @@ export function ResultsGrid(props: {
             onCheckedChange={(checked) => toggleAll(checked === true)}
           />
         </span>
-        {headers.map((label) => (
-          <span key={label} role="columnheader" className="truncate">
+        {headers.map(({ label, sort }) => (
+          <span
+            key={label}
+            role="columnheader"
+            aria-sort={sort}
+            className="truncate"
+          >
             {label}
           </span>
         ))}
       </div>
       <div ref={scroll} className="min-h-0 flex-1 overflow-auto">
         <div
+          id={bodyId}
+          role="rowgroup"
           style={{ height: virtualizer.getTotalSize(), position: "relative" }}
         >
           {virtualizer.getVirtualItems().map((item) => {

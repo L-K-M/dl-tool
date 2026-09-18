@@ -443,6 +443,10 @@ func TestProjectDropsUnsanitizableSources(t *testing.T) {
 		{"https://user:pass@tracker.example/dl?apikey=K", "https://tracker.example/dl"},
 		// Both xt identities of a hybrid survive, verbatim.
 		{"magnet:?xt=urn:btih:abcdef&xt=urn:btmh:1220beef", "magnet:?xt=urn:btih:abcdef&xt=urn:btmh:1220beef"},
+		// Clearing Fragment/RawQuery must not leave a dangling "#" or "?"
+		// behind — RawFragment and ForceQuery ride with them.
+		{"magnet:?xt=urn:btih:abcdef#frag%2Fy", "magnet:?xt=urn:btih:abcdef"},
+		{"https://user:pass@tracker.example/dl?", "https://tracker.example/dl"},
 	}
 
 	for _, tc := range cases {

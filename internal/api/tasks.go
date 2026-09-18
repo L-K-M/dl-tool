@@ -52,6 +52,7 @@ VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING`
 	// never mixes with uris or file parts, and its rejected[] entries name
 	// the res_ id, never the provider source they resolved to.
 	mixedSourceFamiliesDetail = "search_result_ids cannot be combined with uris or file parts"
+	tooManyResultsFormat      = "the submission holds %d search_result_ids; send between 1 and %d"
 	searchResultGoneDetail    = "the search result is unknown or its search job is gone"
 	duplicateResultDetail     = "the same search result id appears twice in this submission"
 	noSearchResultsDetail     = "no search result id resolved to a stored result"
@@ -371,6 +372,16 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 			SlugValidationFailed,
 			http.StatusUnprocessableEntity,
 			fmt.Sprintf(tooManyURIsFormat, len(uris), MaxURIs),
+		)
+	}
+	// The schema's maxItems tag answers a JSON body first; this runtime
+	// check is the same defense-in-depth the uris family gets — any path
+	// that bypasses schema validation still faces the cap.
+	if len(searchResultIDs) > MaxURIs {
+		return nil, Problem(
+			SlugValidationFailed,
+			http.StatusUnprocessableEntity,
+			fmt.Sprintf(tooManyResultsFormat, len(searchResultIDs), MaxURIs),
 		)
 	}
 
