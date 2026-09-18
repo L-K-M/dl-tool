@@ -817,10 +817,14 @@ func TestStaticProbeReportsDeadURL(t *testing.T) {
 	dead := srv.URL + "/gone.torrent"
 	live := srv.URL + "/dup.torrent"
 	// Entries may share a URL; the probe de-duplicates before issuing HEADs.
+	// The control-character URL cannot even form a request — it is reported
+	// per-URL like a dial failure, not as a probe-level error.
+	unbuildable := "https://exa\x7fmple.test/bad.torrent"
 	def.Entries = []Entry{
 		{Title: "dead", Download: dead, Category: "iso"},
 		{Title: "dup a", Download: live, Category: "iso"},
 		{Title: "dup b", Download: live, Category: "iso"},
+		{Title: "unbuildable", Download: unbuildable, Category: "iso"},
 	}
 
 	res, err := newTestRunner(srv).Probe(context.Background(), def, nil)
@@ -828,6 +832,7 @@ func TestStaticProbeReportsDeadURL(t *testing.T) {
 	assert.False(t, res.Ok)
 	assert.Contains(t, res.Error, dead)
 	assert.Contains(t, res.Error, "404")
+	assert.Contains(t, res.Error, unbuildable)
 	assert.Equal(t, 2, hits, "the duplicated URL must be probed once")
 }
 
@@ -841,6 +846,11 @@ func TestLinuxDistributionsDefinitionIsWellFormed(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "static", def.Kind)
+	var vmajor, vminor, vpatch int
+	_, err = fmt.Sscanf(def.Version, "%d.%d.%d", &vmajor, &vminor, &vpatch)
+	require.NoError(t, err, "version %q must be x.y.z", def.Version)
+	assert.True(t, vmajor > 1 || (vmajor == 1 && (vminor > 0 || vpatch > 0)),
+		"a refresh must bump the version above the 1.0.0 T057 shipped, got %s", def.Version)
 	assert.NotEmpty(t, def.RefreshNote)
 	assert.Nil(t, def.Request, "a static definition carries no request block")
 	assert.Nil(t, def.Response, "a static definition carries no response block")

@@ -1134,7 +1134,7 @@ func siteCategories(def *Definition, ids []int) []string {
 // limit, and a 15 s total deadline covering redirects and parsing.
 func (r *Runner) Search(ctx context.Context, def *Definition, cfg map[string]string, q Query) ([]SearchResult, error) {
 	if def == nil {
-		return nil, errors.New("search: definition has no request/response block")
+		return nil, errors.New("search: nil definition")
 	}
 	// A static engine answers from def.Entries; dispatch before any request
 	// is built so it never opens a socket during a search (doc 07 §3.8).
@@ -1379,7 +1379,10 @@ func (r *Runner) probeStatic(ctx context.Context, def *Definition) (ProbeResult,
 	for _, raw := range urls {
 		req, err := http.NewRequestWithContext(ctx, http.MethodHead, raw, nil)
 		if err != nil {
-			return res, fmt.Errorf("search: build probe request: %w", secure.RedactError(err))
+			// A URL that cannot even form a request is reported per-URL,
+			// like a dial failure, not as a probe-level error.
+			failures = append(failures, fmt.Sprintf("%s: %s", raw, secure.RedactError(err)))
+			continue
 		}
 		req.Header.Set("User-Agent", r.userAgent)
 		resp, err := r.clientFor(def, nil, raw).Do(req)

@@ -178,7 +178,8 @@ Content-Type: application/x-bittorrent
 
 `version` bumped 1.0.0 → 1.1.0 (one semver minor, per doc 07 §3.9 step 2).
 
-Verification command on the final tree:
+Verification command on the final tree (re-run after the review-fix commit
+added the version-bump assertion and the per-URL request-build failure path):
 
 ```text
 $ make lint && make test PKG=./internal/search/... && echo STATIC_ENGINE_OK
@@ -194,7 +195,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/search/...
-ok  	github.com/L-K-M/dl-tool/internal/search	7.182s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.121s
 STATIC_ENGINE_OK
 ```
 
