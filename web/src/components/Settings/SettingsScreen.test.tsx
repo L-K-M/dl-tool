@@ -22,7 +22,6 @@ import {
 } from "vitest";
 import { initI18n } from "../../i18n";
 import {
-  PREFS_KEY,
   defaultPrefs,
   useUiPrefs,
   type UiPrefsState,
@@ -65,6 +64,7 @@ const engines = [
 const server = setupServer();
 let qc: QueryClient;
 let settingsApiCalls: string[];
+let putBodies: Record<string, unknown>[];
 
 function PathProbe() {
   const location = useLocation();
@@ -101,9 +101,11 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   settingsApiCalls = [];
-  localStorage.clear();
+  putBodies = [];
   useUiPrefs.setState({
     ...structuredClone(defaultPrefs),
+    // The document is already hydrated in these cases; writes must fire.
+    hydrated: true,
     startupFilter: undefined,
     rememberLastDestination: undefined,
     confirmOnDelete: undefined,
@@ -113,6 +115,10 @@ beforeEach(() => {
   useSettingsDirty.setState({ report: null });
   server.use(
     http.get("*/api/v1/engines", () => HttpResponse.json({ engines })),
+    http.put("*/api/v1/prefs", async ({ request }) => {
+      putBodies.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json({});
+    }),
     http.all("*/api/v1/settings", ({ request }) => {
       settingsApiCalls.push(request.url);
       return HttpResponse.json({});
@@ -167,7 +173,9 @@ test("TestGeneralWritesPrefs", async () => {
   });
   expect(useUiPrefs.getState().grid.density).toBe("compact");
   await waitFor(() =>
-    expect(localStorage.getItem(PREFS_KEY) ?? "").toContain("compact"),
+    expect(
+      (putBodies.at(-1)?.grid as Record<string, unknown> | undefined)?.density,
+    ).toBe("compact"),
   );
 
   fireEvent.change(screen.getByLabelText("Default sidebar filter on startup"), {
@@ -176,27 +184,16 @@ test("TestGeneralWritesPrefs", async () => {
   const extra = useUiPrefs.getState() as { startupFilter?: string };
   expect(extra.startupFilter).toBe("completed");
   // Unknown members land in the stored document verbatim (doc 05 §11.4).
-  await waitFor(() => {
-    const stored: unknown = JSON.parse(localStorage.getItem(PREFS_KEY)!);
-    expect((stored as { startupFilter?: string }).startupFilter).toBe(
-      "completed",
-    );
-  });
-  // The unknown member must also survive the store's debounced writer, which
-  // re-reads the document and merges declared members over it. Patching a
-  // declared member arms another write; once its result is visible in the
-  // stored document, a flush has provably run — no fixed sleep.
-  useUiPrefs.getState().patch({ sidebarCollapsed: true });
-  await waitFor(() => {
-    const flushed: unknown = JSON.parse(localStorage.getItem(PREFS_KEY)!);
-    expect((flushed as { sidebarCollapsed?: boolean }).sidebarCollapsed).toBe(
-      true,
-    );
-  });
-  const afterFlush: unknown = JSON.parse(localStorage.getItem(PREFS_KEY)!);
-  expect((afterFlush as { startupFilter?: string }).startupFilter).toBe(
-    "completed",
+  await waitFor(() =>
+    expect(putBodies.at(-1)?.startupFilter).toBe("completed"),
   );
+  // The unknown member must also survive the store's debounced writer, which
+  // serializes every non-function state member. Patching a declared member
+  // arms another write; once its result is visible in the PUT body, a flush
+  // has provably run — no fixed sleep.
+  useUiPrefs.getState().patch({ sidebarCollapsed: true });
+  await waitFor(() => expect(putBodies.at(-1)?.sidebarCollapsed).toBe(true));
+  expect(putBodies.at(-1)?.startupFilter).toBe("completed");
 });
 
 test("TestDirtyBarAppearsAndAnnounces", async () => {
@@ -359,14 +356,6 @@ test("TestScreenMakesNoSettingsApiCalls", async () => {
   // store's debounced flush — the same no-sleep pattern as
   // TestGeneralWritesPrefs — so a late settings call is still recorded.
   useUiPrefs.getState().patch({ sidebarCollapsed: true });
-  await waitFor(() =>
-    expect(
-      (
-        JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as {
-          sidebarCollapsed?: boolean;
-        }
-      ).sidebarCollapsed,
-    ).toBe(true),
-  );
+  await waitFor(() => expect(putBodies.at(-1)?.sidebarCollapsed).toBe(true));
   expect(settingsApiCalls).toEqual([]);
 });

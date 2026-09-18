@@ -3,7 +3,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createElement, type ReactElement } from "react";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
+import { HttpResponse, http } from "msw";
+import { setupServer } from "msw/node";
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -13,9 +15,18 @@ import {
 } from "lucide-react";
 import type { ToasterProps } from "sonner";
 import ts from "typescript";
-import { afterEach, expect, test, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  test,
+  vi,
+} from "vitest";
 import { Toaster } from "../components/ui/sonner";
 import { initI18n, NAMESPACES } from "../i18n";
+import { defaultPrefs, useUiPrefs } from "../store/useUiPrefs";
 import { applyTheme, readStoredTheme, resolveTheme, storeTheme } from "./theme";
 import { cn } from "./utils";
 
@@ -28,18 +39,39 @@ vi.mock("sonner", () => ({
 }));
 
 const webRoot = process.cwd();
-const prefsKey = "dl.ui.prefs.v1";
 const read = (path: string) => readFileSync(resolve(webRoot, path), "utf8");
 const choices = ["light", "dark", "system"] as const;
 
+const server = setupServer();
+const putBodies: Record<string, unknown>[] = [];
+
+beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+beforeEach(() => {
+  putBodies.length = 0;
+  // The store is the document's only reader and writer now; reset its
+  // members rather than a persisted row. Writes are gated on an applied
+  // hydrate, so the seeded store is already hydrated.
+  useUiPrefs.setState({
+    ...JSON.parse(JSON.stringify(defaultPrefs)),
+    hydrated: true,
+  });
+  server.use(
+    http.get("*/api/v1/prefs", () => HttpResponse.json({})),
+    http.put("*/api/v1/prefs", async ({ request }) => {
+      putBodies.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json({});
+    }),
+  );
+});
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  localStorage.clear();
+  server.resetHandlers();
   document.documentElement.className = "";
   captureToast.mockClear();
 });
+afterAll(() => server.close());
 
 test("TestResolveThemeFollowsSystem", () => {
   const media = vi.fn().mockReturnValue({ matches: true });
@@ -64,53 +96,34 @@ test("TestApplyThemeTogglesClass", () => {
   }
 });
 
-test("TestReadStoredThemeFallsBackToSystem", () => {
+test("TestReadStoredThemeReadsStore", () => {
+  // The store renders defaultPrefs until a hydrate lands (doc 09 §3.3), so
+  // the pre-paint read is "system" until the document arrives.
   expect(readStoredTheme()).toBe("system");
-  for (const value of [
-    "{",
-    "null",
-    "[]",
-    '"dark"',
-    "{}",
-    '{"theme":"invalid"}',
-  ]) {
-    localStorage.setItem(prefsKey, value);
-    expect(readStoredTheme()).toBe("system");
+  for (const theme of ["dark", "light", "system"] as const) {
+    useUiPrefs.setState({ theme });
+    expect(readStoredTheme()).toBe(theme);
   }
-  vi.stubGlobal("localStorage", {
-    getItem() {
-      throw new Error("Storage unavailable");
-    },
-  });
-  expect(readStoredTheme()).toBe("system");
 });
 
-test("TestStoreThemePreservesPreferences", () => {
-  localStorage.setItem(
-    prefsKey,
-    JSON.stringify({ version: 1, sidebarWidth: 220 }),
-  );
-  for (const theme of choices) {
-    storeTheme(theme);
-    expect(readStoredTheme()).toBe(theme);
-    expect(JSON.parse(localStorage.getItem(prefsKey)!)).toEqual({
-      version: 1,
-      sidebarWidth: 220,
-      theme,
-    });
-  }
-  vi.stubGlobal("localStorage", {
-    getItem: () => null,
-    setItem() {
-      throw new Error("Storage full");
-    },
-  });
-  expect(() => storeTheme("dark")).toThrow("Storage full");
+test("TestStoreThemeWritesThemeMemberToDocument", async () => {
+  useUiPrefs.setState({ sidebarWidth: 240, savedSearches: { keep: [1] } });
+  storeTheme("dark");
+  expect(readStoredTheme()).toBe("dark");
+  // The debounced writer PUTs the whole document; the theme member and the
+  // members other features own reach the server verbatim (doc 05 §11.4).
+  await waitFor(() => expect(putBodies).toHaveLength(1));
+  expect(putBodies[0]!.theme).toBe("dark");
+  expect(putBodies[0]!.sidebarWidth).toBe(240);
+  expect(putBodies[0]!.savedSearches).toEqual({ keep: [1] });
 });
 
 test("TestThemeAppliedBeforeRootCreation", async () => {
   vi.resetModules();
-  localStorage.setItem(prefsKey, '{"theme":"dark"}');
+  // The pre-paint call reads the store, so a stored choice only reaches it
+  // through the document the store already holds.
+  const { useUiPrefs } = await import("../store/useUiPrefs");
+  useUiPrefs.setState({ theme: "dark" });
   const host = document.createElement("div");
   host.id = "root";
   document.body.append(host);

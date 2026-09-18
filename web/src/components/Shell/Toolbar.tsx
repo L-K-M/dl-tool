@@ -39,13 +39,7 @@ import {
   isDroppableText,
   markClipboardHandled,
 } from "../AddTask/AddTaskDialog";
-import {
-  applyTheme,
-  readStoredTheme,
-  resolveTheme,
-  storeTheme,
-  type ThemeChoice,
-} from "../../lib/theme";
+import { applyTheme, resolveTheme, storeTheme } from "../../lib/theme";
 import { selectFilterCounts, useTasks, type Task } from "../../store/useTasks";
 import { useUiPrefs } from "../../store/useUiPrefs";
 import { ColumnsMenu, useGridTable } from "../TaskGrid/ColumnsMenu";
@@ -530,7 +524,14 @@ export function Toolbar(): JSX.Element {
     (state) => selectFilterCounts(state).completed,
   );
   const { value: filter, set: setFilter } = useNameFilter();
-  const [theme, setTheme] = useState<ThemeChoice>(() => readStoredTheme());
+  // The store is the reactive read of the document's theme member, so the
+  // hydrated choice lands without a remount.
+  const theme = useUiPrefs((state) => state.theme);
+  // lib/theme owns the class; keep it synced to the stored choice, including
+  // the one hydrate lands after the first paint.
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
   const registerFilter = useCallback(
     (node: HTMLInputElement | null) =>
       useShellUi.setState({ filterInput: node }),
@@ -554,11 +555,9 @@ export function Toolbar(): JSX.Element {
   const gridTable = useGridTable((state) => state.table);
   const toggleTheme = () => {
     const next = resolveTheme(theme) === "dark" ? "light" : "dark";
+    // storeTheme patches the document member; the effect above applies the
+    // class once the store value lands.
     storeTheme(next);
-    applyTheme(next);
-    setTheme(next);
-    // lib/theme owns the class; the prefs document only records the choice.
-    useUiPrefs.getState().patch({ theme: next });
   };
 
   // Doc 09 section 4 behaviours 2 and 3: drops and pastes anywhere on the

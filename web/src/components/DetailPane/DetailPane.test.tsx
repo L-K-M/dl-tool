@@ -23,7 +23,11 @@ import { DetailPane, visibleTabs } from "./DetailPane";
 import { buildTree, FileTree, type FileChange } from "../FileTree/FileTree";
 import { TaskGrid } from "../TaskGrid/TaskGrid";
 import { useTasks, type Task } from "../../store/useTasks";
-import { defaultPrefs, useUiPrefs } from "../../store/useUiPrefs";
+import {
+  defaultPrefs,
+  useUiPrefs,
+  type UiPrefsState,
+} from "../../store/useUiPrefs";
 import { useShellUi } from "../Shell/Toolbar";
 import { useGridTable } from "../TaskGrid/ColumnsMenu";
 
@@ -156,6 +160,10 @@ beforeEach(() => {
         total_bytes: 1 << 40,
       }),
     ),
+    // Tab clicks and resize gestures patch the document; the debounced PUT
+    // must stay handled under the strict suite.
+    http.get("*/api/v1/prefs", () => HttpResponse.json({})),
+    http.put("*/api/v1/prefs", () => HttpResponse.json({})),
   );
 });
 afterEach(() => {
@@ -175,7 +183,7 @@ function initStores() {
     pending: new Set(),
     filterInput: null,
   });
-  useUiPrefs.setState(structuredClone(defaultPrefs));
+  useUiPrefs.setState(structuredClone(defaultPrefs) as Partial<UiPrefsState>);
   useGridTable.setState({ table: null });
 }
 

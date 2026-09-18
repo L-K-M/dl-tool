@@ -123,6 +123,9 @@ beforeEach(() => {
       taskRequests.push(new URL(request.url));
       return HttpResponse.json(taskPage);
     }),
+    // An authenticated session hydrates the preference document.
+    http.get("*/api/v1/prefs", () => HttpResponse.json({})),
+    http.put("*/api/v1/prefs", () => HttpResponse.json({})),
   );
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(320);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1024);
