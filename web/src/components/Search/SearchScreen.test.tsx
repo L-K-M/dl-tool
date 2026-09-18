@@ -580,9 +580,13 @@ test("TestEnterKeyDoesNotStartSecondJob", async () => {
   );
   // Enter starts the job…
   fireEvent.keyDown(input, { key: "Enter" });
+  // …and a second Enter before the POST even resolves must not post
+  // again — jobId is still null, so only the starting ref closes this
+  // window.
+  fireEvent.keyDown(input, { key: "Enter" });
   await screen.findByText("Indexer A");
   expect(posts).toBe(1);
-  // …and a second Enter while it runs must not post again — the disabled
+  // A third Enter while the job runs hits the jobId guard; the disabled
   // submit button guards the click path only, runSearch owns the keyboard
   // path.
   fireEvent.keyDown(input, { key: "Enter" });

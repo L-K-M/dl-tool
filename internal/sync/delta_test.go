@@ -447,6 +447,9 @@ func TestProjectDropsUnsanitizableSources(t *testing.T) {
 		// behind — RawFragment and ForceQuery ride with them.
 		{"magnet:?xt=urn:btih:abcdef#frag%2Fy", "magnet:?xt=urn:btih:abcdef"},
 		{"https://user:pass@tracker.example/dl?", "https://tracker.example/dl"},
+		// A fragment can carry a secret too — it strips on non-magnet
+		// sources exactly as on magnets.
+		{"https://user:pass@tracker.example/dl#apikey=K", "https://tracker.example/dl"},
 	}
 
 	for _, tc := range cases {

@@ -107,9 +107,14 @@ func DisplaySourceURI(t store.Task) *string {
 
 	if !strings.EqualFold(u.Scheme, "magnet") {
 		// ForceQuery rides with RawQuery — a bare trailing "?" would
-		// otherwise survive the strip.
+		// otherwise survive the strip; the fragment goes the same way, as
+		// "#apikey=…" can carry a secret and never affects which resource
+		// is fetched. RawFragment clears with Fragment or a dangling "#"
+		// survives.
 		u.RawQuery = ""
 		u.ForceQuery = false
+		u.Fragment = ""
+		u.RawFragment = ""
 		display := u.String()
 
 		return &display

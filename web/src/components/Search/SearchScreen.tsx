@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
@@ -117,6 +124,7 @@ export function useSearchJob(): {
   }) => Promise<void>;
   stop: () => Promise<void>;
   jobId: string | null;
+  starting: boolean;
   finished: boolean;
   total: number;
   engines: EngineStatusView[];
@@ -135,6 +143,12 @@ export function useSearchJob(): {
     }
   });
   const [startError, setStartError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  // jobId is only set once the POST resolves, so between the request and
+  // the 202 neither jobId nor finished guards a repeat start — two Enter
+  // keydowns can even run before the starting state commits. Only a ref
+  // read at the top of start closes that window.
+  const startingRef = useRef(false);
 
   const clearJob = useCallback(() => {
     setJobId(null);
@@ -205,23 +219,33 @@ export function useSearchJob(): {
       indexer_ids: string[];
       categories: number[];
     }) => {
+      if (startingRef.current) return;
+      startingRef.current = true;
+      setStarting(true);
       setStartError(null);
-      const { data, error } = await api.POST("/search", {
-        body: {
-          query: q.query,
-          indexer_ids: q.indexer_ids,
-          categories: q.categories,
-        },
-      });
-      if (!data) {
-        setStartError(error?.detail ?? error?.title ?? t("shell.networkError"));
-        return;
-      }
-      setJobId(data.id);
       try {
-        sessionStorage.setItem(SEARCH_JOB_KEY, data.id);
-      } catch {
-        // best-effort; the job still runs without resume
+        const { data, error } = await api.POST("/search", {
+          body: {
+            query: q.query,
+            indexer_ids: q.indexer_ids,
+            categories: q.categories,
+          },
+        });
+        if (!data) {
+          setStartError(
+            error?.detail ?? error?.title ?? t("shell.networkError"),
+          );
+          return;
+        }
+        setJobId(data.id);
+        try {
+          sessionStorage.setItem(SEARCH_JOB_KEY, data.id);
+        } catch {
+          // best-effort; the job still runs without resume
+        }
+      } finally {
+        startingRef.current = false;
+        setStarting(false);
       }
     },
     [t],
@@ -244,6 +268,7 @@ export function useSearchJob(): {
     start,
     stop,
     jobId,
+    starting,
     finished: data?.finished ?? false,
     total: data?.total ?? 0,
     engines: data?.engines ?? [],
@@ -580,7 +605,12 @@ export function SearchScreen(): JSX.Element {
     // The submit button's disabled state guards the click path; the guard
     // lives here too so the input's Enter key cannot start a second job
     // while one runs — an orphaned job is never DELETE'd.
-    if (query === "" || (search.jobId !== null && !search.finished)) return;
+    if (
+      query === "" ||
+      search.starting ||
+      (search.jobId !== null && !search.finished)
+    )
+      return;
     setSelected(new Set());
     setResolved(new Map());
     setFailed(new Set());
@@ -747,7 +777,11 @@ export function SearchScreen(): JSX.Element {
 
           <Button
             size="sm"
-            disabled={!canSearch || (search.jobId !== null && !search.finished)}
+            disabled={
+              !canSearch ||
+              search.starting ||
+              (search.jobId !== null && !search.finished)
+            }
             onClick={runSearch}
           >
             {t("search.submit")}

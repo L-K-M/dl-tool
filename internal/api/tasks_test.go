@@ -1872,6 +1872,35 @@ func TestTaskCreateMixedFamilies422(t *testing.T) {
 	}
 }
 
+// TestTaskCreateTooManySearchResults pins the over-cap answer on the
+// multipart payload path: whether the schema's maxItems or the runtime
+// MaxURIs check in the handler fires first, an oversized search_result_ids
+// submission is a 422 /problems/validation-failed and creates nothing.
+// Either check fires before any res_ id resolves, so synthetic ids
+// suffice — nothing has to seed a search job.
+func TestTaskCreateTooManySearchResults(t *testing.T) {
+	env := newResultTaskEnv(t)
+
+	ids := make([]string, MaxURIs+1)
+	for i := range ids {
+		ids[i] = store.NewID(store.PrefixSearchResult)
+	}
+	payload, err := json.Marshal(map[string]any{"search_result_ids": ids})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	form, contentType := multipartForm(t, payload)
+	resp := env.api.Do(http.MethodPost, "/tasks", form,
+		"Content-Type: "+contentType, "Authorization: Bearer "+env.bearer)
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body %s", resp.Code, resp.Body.String())
+	}
+	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if env.taskCount(t) != 0 {
+		t.Errorf("oversized submission created tasks, want none")
+	}
+}
+
 // TestTaskCreateResultConflicts pins the conflict semantics: a resubmit of a
 // result the server already committed and a repeated id within one submission
 // are both /problems/conflict naming the res_ id — terminal successes for the

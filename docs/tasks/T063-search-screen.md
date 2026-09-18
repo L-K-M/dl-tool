@@ -389,8 +389,8 @@ All matched files use Prettier code style!
 go vet ./...
 cd web && npx tsc --noEmit -p tsconfig.json
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	125.804s
-ok  	github.com/L-K-M/dl-tool/internal/store	76.987s
+ok  	github.com/L-K-M/dl-tool/internal/api	127.664s
+ok  	github.com/L-K-M/dl-tool/internal/store	78.015s
 cd web && npx vitest run
  ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests)
  ✓ src/components/Search/SearchScreen.test.tsx (9 tests)
@@ -429,13 +429,16 @@ ok  	github.com/L-K-M/dl-tool/internal/store	2.275s
 ok  	github.com/L-K-M/dl-tool/internal/sync	1.054s
 ```
 
-The review-fix commit also adds `TestEnterKeyDoesNotStartSecondJob` (the
-Enter-during-search guard) and strengthens `TestStopDeletesTheJob` (poll
-count stable after DELETE), `TestEngineErrorShownInStrip` (focus and hover
-each open the tooltip), `TestTaskCreateResultConflicts` (an isolated
-within-submission duplicate), `TestTaskDisplaySourceRendersSharedRule`
-(authority-form credentials) and `TestTaskCreateMixedFamilies422`
-(multipart file and junk parts).
+The review-fix commits also add `TestEnterKeyDoesNotStartSecondJob` (the
+Enter-during-search guard, including the in-flight-POST window) and
+`TestTaskCreateTooManySearchResults` (over-cap multipart payload), and
+strengthen `TestStopDeletesTheJob` (poll count stable after DELETE),
+`TestEngineErrorShownInStrip` (focus and hover each open the tooltip),
+`TestTaskCreateResultConflicts` (an isolated within-submission
+duplicate), `TestTaskDisplaySourceRendersSharedRule` (authority-form
+credentials), `TestProjectDropsUnsanitizableSources` (non-magnet fragment
+strip) and `TestTaskCreateMixedFamilies422` (multipart file and junk
+parts).
 
 The existing all-`uris`-fail `422` shares the no-`rejected[]` problem shape with the new
 all-fail `404`: `TestCreateTasksDuplicateTorrent` (tasks_test.go) pins the `uris` side and
