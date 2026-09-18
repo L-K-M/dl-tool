@@ -241,8 +241,9 @@ The three zero states, each its own render: `No results` (every indexer answered
     terminal state. `TestBulkChunkPartialRejection` covers one all-fail `404` chunk alongside
     a succeeding chunk and a `201` with a non-empty `rejected[]`, asserting the error toast
     for the all-fail chunk, the summary toast for the `rejected[]` chunk (conflict entries
-    excluded), that only resolved ids get the `✓` link, and that an id that answered
-    `/problems/conflict` ends resolved and unselectable.
+    excluded; no rejection toast at all when every entry is a conflict), that only resolved
+    ids get the `✓` link, and that an id that answered `/problems/conflict` ends resolved
+    and unselectable.
 13. Edit `App.tsx` to route `/search` to `<SearchScreen />`, and add every string to
     `web/src/locales/en/common.json` under a `search` key; no literal user-facing text in the components.
 14. Create `SearchScreen.test.tsx` with `msw` handlers: `TestPollStopsWhenFinished`,
