@@ -317,10 +317,11 @@ The three zero states, each its own render: `No results` (every indexer answered
 - [ ] A case in `internal/sync/delta_test.go` asserts `Project` renders `source_display_uri`
       verbatim when set, a NULL or empty column falls back to `source_uri` with userinfo
       and query string stripped, a `magnet:` source keeps all of its `urn` `xt`
-      parameters (a sibling non-`urn` `xt` is dropped; the scheme match is
-      case-insensitive), and a magnet with no usable `xt` drops out — so neither
-      the SSE snapshot nor a delta can emit a query-string secret for any row,
-      including ones written before the column existed.
+      parameters (a sibling non-`urn` `xt` is dropped; the `urn` prefix within
+      each `xt` is matched case-insensitively), and a magnet with no usable `xt`
+      drops out — so neither the SSE snapshot nor a delta can emit a
+      query-string secret for any row (the contract treats every `urn` `xt`
+      value as non-secret), including ones written before the column existed.
 - [ ] No task-emitting path serialises `source_uri` directly — the PATCH response and
       every SSE delta are built through `queryGetTask`/`queryListTasksPage` and rendered
       by the shared `DisplaySourceURI` helper; verified by grep for other task-row
