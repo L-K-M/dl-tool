@@ -320,6 +320,7 @@ test("TestMoveUpSwapsPriorities", async () => {
 
   // If the second swap PATCH fails, the already-applied first PATCH is
   // undone so the pair never shares a priority the UI cannot reorder.
+  const toastError = vi.spyOn(toast, "error");
   patchCalls.length = 0;
   server.use(
     http.patch("*/api/v1/indexers/idx_archive", async ({ request }) => {
@@ -349,6 +350,21 @@ test("TestMoveUpSwapsPriorities", async () => {
     { id: "idx_archive", body: { priority: 20 } },
     { id: "idx_arch", body: { priority: 20 } },
   ]);
+  expect(toastError).toHaveBeenCalledWith(
+    expect.stringContaining("priority changed by another client"),
+  );
+  // The post-move refetch re-renders the server's (unchanged) order.
+  await waitFor(() => {
+    const names = [
+      ...document.querySelectorAll("tbody tr td:first-child span.font-medium"),
+    ].map((cell) => cell.textContent);
+    expect(names).toEqual([
+      "Internet Archive",
+      "Arch Linux",
+      "Academic Torrents",
+      "Ubuntu",
+    ]);
+  });
 });
 
 test("TestImportedIndexerRendersDisabledWithProvenance", async () => {
