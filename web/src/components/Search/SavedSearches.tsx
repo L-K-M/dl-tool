@@ -141,7 +141,9 @@ export function SaveSearchButton(props: {
             }}
           />
           {refusal !== null && (
-            <p className="text-sm text-destructive">{reason(refusal)}</p>
+            <p role="alert" className="text-sm text-destructive">
+              {reason(refusal)}
+            </p>
           )}
         </div>
         <DialogFooter>
@@ -256,7 +258,7 @@ export function SavedSearchesMenu(props: {
                       </Button>
                     </div>
                     {renameRefusal !== null && (
-                      <p className="text-sm text-destructive">
+                      <p role="alert" className="text-sm text-destructive">
                         {renameRefusal === "duplicate"
                           ? t("search.savedErrDuplicate")
                           : renameRefusal === "tooLong"
