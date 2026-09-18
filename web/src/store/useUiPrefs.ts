@@ -186,7 +186,7 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
             isObject(entry) &&
             typeof entry.id === "string" &&
             typeof entry.name === "string" &&
-            entry.name.length >= 1 &&
+            entry.name.trim().length >= 1 &&
             entry.name.length <= MAX_SAVED_NAME_LENGTH &&
             typeof entry.query === "string" &&
             Array.isArray(entry.indexerIds) &&
