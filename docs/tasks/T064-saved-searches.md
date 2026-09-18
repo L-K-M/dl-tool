@@ -151,4 +151,75 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Stopped before implementing (2026-09-18): the task assumes the server-side preference document
+exists; it does not, and building it needs files outside the `## Files` table.
+
+The goal, the interface contract, the acceptance criteria and the out-of-scope rules all turn on
+`GET`/`PUT /prefs`: "the server-side preference document", "`UiPrefs`, which `PUT /prefs` stores
+verbatim", "restores the query selection from `GET /prefs`", "the preference document already
+stores unknown members verbatim" and "Do NOT store a saved search in `localStorage`". Reality:
+no `/prefs` route is registered, the `ui_prefs` table has no reader or writer, and `useUiPrefs` —
+the only persistence file this task may edit — reads and writes `localStorage` exclusively.
+[T045](T045-column-management-and-ui-prefs.md) built it that way deliberately ("the endpoints
+arrive with M6's preferences task (T107) and this task persists to `localStorage` only"), and
+[T107](T107-tag-prefs-and-watch-folder-endpoints.md) (M6, `todo`) owns `internal/api/prefs.go`,
+`Prefs`/`PutPrefs` in `internal/store/settings.go`, the `internal/api/server.go` registration and
+`internal/api/prefs_test.go`.
+
+So every permitted implementation path is forbidden:
+
+- `localStorage` — the only storage `useUiPrefs` has — is barred by "Do NOT store a saved search
+  in `localStorage`; the document is server-side so every browser agrees."
+- Server-side — required by the goal and the `GET /prefs` acceptance criterion — needs the four
+  T107 files plus regenerated `api/openapi.json` and `web/src/api/schema.d.ts`, all outside this
+  Files table.
+- The criterion "restores the query selection from `GET /prefs`, with no `sessionStorage`
+  fallback left" names a test no code can pass: there is no `GET /prefs` to restore from, and the
+  e2e spec stubs only `/api/v1/search**` and `/api/v1/tasks` against the real binary.
+
+Evidence (run from the repo root at `1c418df`, verbatim):
+
+```text
+$ grep -rn "prefs\|Prefs" internal/api/ --include='*.go'
+(exit 1 — no matches; not even a test file mentions prefs)
+$ grep -in 'prefs' api/openapi.json
+(exit 1 — no matches; no route, schema member or tag mentions prefs)
+$ python3 -c "import json; print(len(json.load(open('api/openapi.json'))['paths']))"
+31
+$ grep -rn "ui_prefs" internal/ | grep -v migrations
+internal/store/db_test.go:37: "tasks", "ui_prefs", "users", "watch_folders",
+internal/store/db_test.go:49: "idx_tasks_state", "idx_tasks_updated", "idx_ui_prefs_key",
+$ grep -n "ui_prefs" internal/store/migrations/00001_init.sql
+288:CREATE TABLE ui_prefs (
+293:CREATE UNIQUE INDEX idx_ui_prefs_key ON ui_prefs(user_id, key);
+316:DROP TABLE ui_prefs;
+(the table exists only in the initial migration; the sole non-migration references are the
+expected table/index lists in internal/store/db_test.go, so no application code reads or writes
+its rows)
+$ grep -n "localStorage\|api\.\|fetch" web/src/store/useUiPrefs.ts
+86:      localStorage.getItem(PREFS_KEY) ?? "null",
+182:        localStorage.setItem(PREFS_KEY, JSON.stringify(merged));
+(the store never touches the network; its entire persistence is localStorage)
+```
+
+Which file should answer it: this task's `## Files` table together with
+[T107](T107-tag-prefs-and-watch-folder-endpoints.md)'s. The repair choices are (a) pull the prefs
+slice of T107 forward into this task or a new earlier task — `internal/api/prefs.go` (the prefs
+pair only), `Prefs`/`PutPrefs` in `internal/store/settings.go`, two registrations in
+`internal/api/server.go`, `internal/api/prefs_test.go` (the prefs pins), the §7.1 generated pair,
+and the `useUiPrefs` transport switch — with T107's table narrowed to tags and watch folders; or
+(b) amend this task's text so `search` persists in the document as it exists today — `localStorage`
+until T107 wires the transport — rewriting the goal, the `PUT /prefs` contract note, the
+`GET /prefs` acceptance criterion and the localStorage prohibition, which weakens FR-057's "every
+browser agrees" until M6. Re-sequencing T064 behind T107 would invert the milestone order: T107
+sits in M6 behind T083/T084, so M4 could not close.
+
+Separately — a pre-existing main defect this task's Verification exposed: `make e2e` failed in
+`web/e2e/pwa.spec.ts` "api requests bypass the cache" because the spec still polled the literal
+cache name `"dl-tool-assets-v1"` while `web/public/sw.js` since `e07b159` (#195) writes
+`dl-tool@<scope>:assets-v1` and deletes the legacy name on activation. The failure was
+deterministic (`Received array: []` after the 5 s poll) on the `Task verification` runs of this
+docs-only branch — the first `make e2e`-running task branch since #195 merged — and was the
+pre-existing defect, not a T064 regression. The repair landed on main as #218 (the spec now
+discovers the `:assets-v1` cache by suffix) and this branch carries it via the merge of
+`65fb87f`; the pwa spec passes locally on this tree.
