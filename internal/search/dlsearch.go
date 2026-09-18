@@ -1133,7 +1133,15 @@ func siteCategories(def *Definition, ids []int) []string {
 // redirects, ports 80 and 443, http and https only, the definition's rate
 // limit, and a 15 s total deadline covering redirects and parsing.
 func (r *Runner) Search(ctx context.Context, def *Definition, cfg map[string]string, q Query) ([]SearchResult, error) {
-	if def == nil || def.Request == nil || def.Response == nil {
+	if def == nil {
+		return nil, errors.New("search: nil definition")
+	}
+	// A static engine answers from def.Entries; dispatch before any request
+	// is built so it never opens a socket during a search (doc 07 §3.8).
+	if def.Kind == "static" {
+		return searchStatic(def, q), nil
+	}
+	if def.Request == nil || def.Response == nil {
 		return nil, errors.New("search: definition has no request/response block")
 	}
 	if def.Request.Method != "" && def.Request.Method != http.MethodGet {
@@ -1281,13 +1289,126 @@ func (r *Runner) Probe(ctx context.Context, def *Definition, cfg map[string]stri
 		res.Ok = true
 		return res, nil
 	case "static":
-		// Validation-only here; T105 extends this branch with the per-URL
-		// reachability check of doc 07 section 3.8.
-		res.Ok = true
-		res.CategoriesFound = len(def.Caps.Categories)
-		return res, nil
+		return r.probeStatic(ctx, def)
 	}
 	return res, fmt.Errorf("search: cannot probe kind %q", def.Kind)
+}
+
+// searchStatic answers from def.Entries with no HTTP request. Rows are
+// filtered by case-insensitive substring of q.Q against Entry.Title, so
+// every static engine is browse-style in the UI. A missing size stays 0,
+// which the UI renders as an em dash, and Seeders and Leechers are always
+// nil.
+func searchStatic(def *Definition, q Query) []SearchResult {
+	results := make([]SearchResult, 0, len(def.Entries))
+	for _, e := range def.Entries {
+		res := SearchResult{
+			EngineID:    def.ID,
+			Title:       e.Title,
+			DownloadURL: e.Download,
+			MagnetURI:   e.Magnet,
+			Infohash:    e.Infohash,
+			SizeBytes:   e.Size,
+			DetailsURL:  e.Details,
+			// The site-side value stays the description; caps.categories
+			// supplies the newznab id.
+			CategoryDesc:         e.Category,
+			DownloadVolumeFactor: 1.0,
+			UploadVolumeFactor:   1.0,
+		}
+		if id, ok := def.Caps.Categories[e.Category]; ok {
+			res.CategoryIDs = []int{id}
+		}
+		if e.Published != "" {
+			// entries[] declares no format; iso8601 is the only shape a
+			// curated list writes, and a value that does not parse stays
+			// unknown rather than failing the list.
+			if s, err := Coerce(e.Published, "datetime", "iso8601"); err == nil {
+				res.PublishedAt = &s
+			}
+		}
+		results = append(results, res)
+	}
+	// LoadDefinition already requires an acquisition handle per entry;
+	// Finalise is the belt for a Definition that bypassed the loader.
+	final, dropped := Finalise(results)
+	if dropped > 0 {
+		slog.Default().Warn("search rows dropped: no download url, magnet or infohash",
+			"engine_id", def.ID, "dropped", dropped)
+	}
+	if q.Q != "" {
+		needle := strings.ToLower(q.Q)
+		kept := final[:0]
+		for _, res := range final {
+			if strings.Contains(strings.ToLower(res.Title), needle) {
+				kept = append(kept, res)
+			}
+		}
+		final = kept
+	}
+	return final
+}
+
+// probeStatic validates the definition, then issues one HEAD per distinct
+// download URL through the guarded client, with the same 15 s total
+// deadline as a live engine. Ok is true only when every URL answered 2xx;
+// Error names each URL that did not, with its status. It follows the same
+// redirect and port rules as every other fetch.
+func (r *Runner) probeStatic(ctx context.Context, def *Definition) (ProbeResult, error) {
+	var res ProbeResult
+	if len(def.Entries) == 0 {
+		return res, errors.New("search: static definition has no entries")
+	}
+	res.CategoriesFound = len(def.Caps.Categories)
+
+	ctx, cancel := context.WithTimeout(ctx, engineDeadline)
+	defer cancel()
+
+	// One HEAD per distinct download URL — entries may share a mirror, so
+	// de-duplicate first (doc 07 section 3.8).
+	var urls []string
+	seen := map[string]bool{}
+	for _, e := range def.Entries {
+		if e.Download != "" && !seen[e.Download] {
+			seen[e.Download] = true
+			urls = append(urls, e.Download)
+		}
+	}
+
+	var failures []string
+	for _, raw := range urls {
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, raw, nil)
+		if err != nil {
+			// A URL that cannot even form a request is reported per-URL,
+			// like a dial failure, not as a probe-level error.
+			failures = append(failures, fmt.Sprintf("%s: %s", raw, secure.RedactError(err)))
+			continue
+		}
+		req.Header.Set("User-Agent", r.userAgent)
+		resp, err := r.clientFor(def, nil, raw).Do(req)
+		if err != nil {
+			if errors.Is(err, secure.ErrSSRFBlocked) {
+				return res, fmt.Errorf("search: fetch refused: %w", secure.RedactError(err))
+			}
+			failures = append(failures, fmt.Sprintf("%s: %s", raw, secure.RedactError(err)))
+			continue
+		}
+		if res.Server == "" {
+			res.Server = resp.Header.Get("Server")
+		}
+		if err := resp.Body.Close(); err != nil {
+			r.log.Debug("search: close probe response body", "error", err)
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			failures = append(failures, fmt.Sprintf("%s: http %d", raw, resp.StatusCode))
+		}
+	}
+	if len(failures) > 0 {
+		res.Error = strings.Join(failures, "; ")
+		return res, nil
+	}
+	res.Ok = true
+	return res, nil
 }
 
 // xmlElement is one node of the generic tree the rss extractor walks —

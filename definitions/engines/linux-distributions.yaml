@@ -3,7 +3,7 @@ id: linux-distributions
 name: Linux Distributions
 description: "Official Ubuntu and Debian installation-image torrents, curated per release."
 homepage: https://releases.ubuntu.com/
-version: "1.0.0"
+version: "1.1.0"
 legal_tier: legitimate
 kind: static
 refresh_note: "Refreshed by the maintainer on each Ubuntu and Debian point release."
@@ -12,18 +12,18 @@ caps:
   categories: {iso: 4020}       # PC/ISO
   seeders_unknown: true
 entries:
-  - title: "Ubuntu 24.04.4 LTS Desktop (amd64)"
-    download: "https://releases.ubuntu.com/24.04/ubuntu-24.04.4-desktop-amd64.iso.torrent"
+  - title: "Ubuntu 24.04.5.1 LTS Desktop (amd64)"
+    download: "https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso.torrent"
     details: "https://releases.ubuntu.com/24.04/"
     category: iso
     size: 0
-  - title: "Ubuntu 24.04.4 LTS Live Server (amd64)"
-    download: "https://releases.ubuntu.com/24.04/ubuntu-24.04.4-live-server-amd64.iso.torrent"
+  - title: "Ubuntu 24.04.5 LTS Live Server (amd64)"
+    download: "https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso.torrent"
     details: "https://releases.ubuntu.com/24.04/"
     category: iso
     size: 0
-  - title: "Debian 13.6.0 netinst (amd64)"
-    download: "https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.6.0-amd64-netinst.iso.torrent"
+  - title: "Debian 13.7.0 netinst (amd64)"
+    download: "https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/debian-13.7.0-amd64-netinst.iso.torrent"
     details: "https://cdimage.debian.org/debian-cd/current/amd64/bt-cd/"
     category: iso
     size: 0

@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/L-K-M/dl-tool/definitions"
 )
 
 // testScope is a fully populated scope for the Expand tests.
@@ -722,4 +725,151 @@ func TestMapResultMagnetCase(t *testing.T) {
 	r := mapResult(def, map[string]string{"download": "MAGNET:?xt=urn:btih:abc"})
 	assert.Equal(t, "MAGNET:?xt=urn:btih:abc", r.MagnetURI)
 	assert.Empty(t, r.DownloadURL)
+}
+
+// deadDialer fails every RoundTrip — a client that cannot dial at all.
+type deadDialer struct{}
+
+func (deadDialer) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("dial refused")
+}
+
+// staticDef parses the doc 07 section 3.8 worked-example fixture.
+func staticDef(t *testing.T) *Definition {
+	t.Helper()
+	return loadTestDef(t, string(readFixture(t, "def_static.yaml")))
+}
+
+// TestStaticSearchMakesNoRequest: a kind: static search answers from
+// entries[] in process — a client that cannot dial still returns every row
+// (doc 07 section 3.8).
+func TestStaticSearchMakesNoRequest(t *testing.T) {
+	r := NewRunner(&http.Client{Transport: deadDialer{}}, nil, "dl-tool/test")
+	res, err := r.Search(context.Background(), staticDef(t), nil, Query{})
+	require.NoError(t, err)
+	require.Len(t, res, 3)
+
+	row := res[0]
+	assert.Equal(t, "Ubuntu 24.04.4 LTS Desktop (amd64)", row.Title)
+	assert.Equal(t, "https://releases.ubuntu.com/24.04/ubuntu-24.04.4-desktop-amd64.iso.torrent", row.DownloadURL)
+	assert.Equal(t, "https://releases.ubuntu.com/24.04/", row.DetailsURL)
+	assert.Equal(t, []int{4020}, row.CategoryIDs)
+	assert.Equal(t, "iso", row.CategoryDesc)
+	assert.Equal(t, int64(0), row.SizeBytes)
+	assert.Equal(t, 1.0, row.DownloadVolumeFactor)
+	assert.Equal(t, 1.0, row.UploadVolumeFactor)
+	assert.Equal(t, "linux-distributions", row.EngineID)
+}
+
+// TestStaticKeywordFilterIsCaseInsensitive: the browse-style filter matches
+// a case-insensitive substring of the entry title, and an empty query
+// returns the whole list.
+func TestStaticKeywordFilterIsCaseInsensitive(t *testing.T) {
+	r := NewRunner(&http.Client{Transport: deadDialer{}}, nil, "dl-tool/test")
+	def := staticDef(t)
+
+	res, err := r.Search(context.Background(), def, nil, Query{Q: "DEBIAN"})
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	assert.Equal(t, "Debian 13.6.0 netinst (amd64)", res[0].Title)
+
+	res, err = r.Search(context.Background(), def, nil, Query{Q: "lts"})
+	require.NoError(t, err)
+	assert.Len(t, res, 2)
+
+	res, err = r.Search(context.Background(), def, nil, Query{Q: "no-such-release"})
+	require.NoError(t, err)
+	assert.Empty(t, res)
+}
+
+// TestStaticSeedersAlwaysNull: a static entry carries no swarm counts, so
+// Seeders and Leechers are nil for every row — unknown stays null, never a
+// fabricated number (doc 07 section 5 rule 4).
+func TestStaticSeedersAlwaysNull(t *testing.T) {
+	r := NewRunner(&http.Client{Transport: deadDialer{}}, nil, "dl-tool/test")
+	res, err := r.Search(context.Background(), staticDef(t), nil, Query{})
+	require.NoError(t, err)
+	require.NotEmpty(t, res)
+	for _, row := range res {
+		assert.Nil(t, row.Seeders, "row %q must have null seeders", row.Title)
+		assert.Nil(t, row.Leechers, "row %q must have null leechers", row.Title)
+		assert.Nil(t, row.Grabs)
+	}
+}
+
+// TestStaticProbeReportsDeadURL: the static probe issues one HEAD per
+// distinct download URL and reports each non-2xx answer with its status in
+// Error — ok:false is data, not a Go error.
+func TestStaticProbeReportsDeadURL(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		assert.Equal(t, http.MethodHead, r.Method)
+		if r.URL.Path == "/gone.torrent" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	def := staticDef(t)
+	dead := srv.URL + "/gone.torrent"
+	live := srv.URL + "/dup.torrent"
+	// Entries may share a URL; the probe de-duplicates before issuing HEADs.
+	// The control-character URL cannot even form a request — it is reported
+	// per-URL like a dial failure, not as a probe-level error.
+	unbuildable := "https://exa\x7fmple.test/bad.torrent"
+	def.Entries = []Entry{
+		{Title: "dead", Download: dead, Category: "iso"},
+		{Title: "dup a", Download: live, Category: "iso"},
+		{Title: "dup b", Download: live, Category: "iso"},
+		{Title: "unbuildable", Download: unbuildable, Category: "iso"},
+	}
+
+	res, err := newTestRunner(srv).Probe(context.Background(), def, nil)
+	require.NoError(t, err)
+	assert.False(t, res.Ok)
+	assert.Contains(t, res.Error, dead)
+	assert.Contains(t, res.Error, "404")
+	assert.Contains(t, res.Error, unbuildable)
+	assert.Equal(t, 2, hits, "the duplicated URL must be probed once")
+}
+
+// TestLinuxDistributionsDefinitionIsWellFormed is the refresh gate of doc 07
+// section 3.9: every entry parses, every download URL is unique, https and
+// ends in .torrent, and every category is a declared caps.categories key.
+func TestLinuxDistributionsDefinitionIsWellFormed(t *testing.T) {
+	data, err := definitions.FS.ReadFile("engines/linux-distributions.yaml")
+	require.NoError(t, err)
+	def, err := LoadDefinition(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, "static", def.Kind)
+	// Sscanf stops at the first non-numeric byte, so pin the exact x.y.z
+	// shape first — "1.1.0-rc1" must not satisfy the bump guard.
+	require.Regexp(t, `^\d+\.\d+\.\d+$`, def.Version)
+	var vmajor, vminor, vpatch int
+	_, err = fmt.Sscanf(def.Version, "%d.%d.%d", &vmajor, &vminor, &vpatch)
+	require.NoError(t, err, "version %q must be x.y.z", def.Version)
+	assert.True(t, vmajor > 1 || (vmajor == 1 && (vminor > 0 || vpatch > 0)),
+		"a refresh must bump the version above the 1.0.0 T057 shipped, got %s", def.Version)
+	assert.NotEmpty(t, def.RefreshNote)
+	assert.Nil(t, def.Request, "a static definition carries no request block")
+	assert.Nil(t, def.Response, "a static definition carries no response block")
+	require.NotEmpty(t, def.Entries)
+
+	seen := map[string]bool{}
+	for i, e := range def.Entries {
+		require.NotEmpty(t, e.Download, "entry %d needs a download URL", i)
+		u, err := url.Parse(e.Download)
+		require.NoError(t, err, "entry %d", i)
+		assert.Equal(t, "https", u.Scheme, "entry %d", i)
+		assert.True(t, strings.HasSuffix(u.Path, ".torrent"),
+			"entry %d download %q must end in .torrent", i, e.Download)
+		assert.False(t, seen[e.Download], "entry %d duplicates a download URL", i)
+		seen[e.Download] = true
+		_, ok := def.Caps.Categories[e.Category]
+		assert.True(t, ok, "entry %d category %q is not a declared caps.categories key", i, e.Category)
+	}
 }
