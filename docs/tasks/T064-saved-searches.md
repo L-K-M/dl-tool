@@ -7,7 +7,7 @@
 | **Status** | todo |
 | **Depends on** | T043, T045, T061, T063, T129 |
 | **Blocks** | — |
-| **Parallel-safe** | no — extends T063's `SearchScreen.tsx` and T045's `useUiPrefs.ts` |
+| **Parallel-safe** | no — extends T063's `SearchScreen.tsx` and [T129](T129-ui-prefs-document.md)'s `useUiPrefs.ts` |
 | **Implements** | [FR-057](../02-requirements.md#fr-057-save-and-re-run-a-search), [FR-058](../02-requirements.md#fr-058-create-a-task-from-a-search-result-in-one-click) (its end-to-end proof) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
 | **Est. size** | 3 new files, ~360 LOC |

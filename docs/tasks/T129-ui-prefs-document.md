@@ -124,7 +124,12 @@ when `SessionState` reaches `authenticated`; before it resolves the store render
 The store tracks which members `patch` or `resetGrid` has touched since the last write completed —
 a dirty-member set the debounced PUT clears. `hydrate` merges the server document beneath that set:
 every server member lands, including over a member still holding its `defaultPrefs` value, while a
-member with a pending local edit keeps the local value, so no write is silently lost.
+member with a pending local edit keeps the local value. One ordering still loses: a hydrate GET
+issued before a PUT can resolve after that PUT completed, holding a snapshot older than the write —
+with the dirty set already cleared, the stale server value would win. A monotonic write counter
+guards it: `hydrate` stamps the counter when it issues the GET, and a response that lands after a
+completed PUT is discarded and the GET re-issued once, so the document converges and no write is
+silently lost.
 
 ## Steps
 1. Add `Prefs` and `PutPrefs` to `internal/store/settings.go`: `Prefs` selects `key, value_json` for
@@ -181,6 +186,8 @@ member with a pending local edit keeps the local value, so no write is silently 
 - [ ] A `useUiPrefs.test.ts` case stubs `GET /prefs` to resolve after a delay, patches a member
       before it resolves, advances past the debounce and asserts the PUT body carries the local
       value — a local edit is never clobbered by an in-flight hydrate.
+- [ ] A `useUiPrefs.test.ts` case lets the debounced PUT complete, then resolves the hydrate GET
+      with a pre-PUT snapshot and asserts the store discards it rather than reverting the member.
 - [ ] A `useUiPrefs.test.ts` case asserts the write still waits out the 500 ms debounce and never
       fires during a drag, now against the PUT rather than `localStorage`.
 - [ ] `storeTheme("dark")` reaches the server document: the re-pinned `theme.test.ts` asserts the
