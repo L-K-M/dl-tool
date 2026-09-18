@@ -122,7 +122,10 @@ type RejectedURI struct {
 	Detail         string `json:"detail"`
 }
 
-// CreateTasksOutput carries HTTP 201 whenever at least one task was created.
+// CreateTasksOutput carries HTTP 201 when at least one task was created —
+// and for a search_result_ids submission whose every id resolved yet was
+// refused (already-committed duplicates): created[] is then empty and
+// rejected[] carries the per-id reasons.
 type CreateTasksOutput struct {
 	Status int `json:"-" enum:"201" doc:"Created"`
 	Body   struct {

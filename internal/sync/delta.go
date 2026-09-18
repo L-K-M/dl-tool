@@ -109,8 +109,8 @@ func DisplaySourceURI(t store.Task) *string {
 		// ForceQuery rides with RawQuery — a bare trailing "?" would
 		// otherwise survive the strip; the fragment goes the same way, as
 		// "#apikey=…" can carry a secret and never affects which resource
-		// is fetched. RawFragment clears with Fragment or a dangling "#"
-		// survives.
+		// is fetched. RawFragment clears alongside so no encoded copy of
+		// it survives either.
 		u.RawQuery = ""
 		u.ForceQuery = false
 		u.Fragment = ""
@@ -126,8 +126,8 @@ func DisplaySourceURI(t store.Task) *string {
 	}
 	u.RawQuery = strings.Join(kept, "&")
 	u.ForceQuery = false
-	// RawFragment rides with Fragment — clearing Fragment alone leaves a
-	// dangling "#" in the rendered string.
+	// RawFragment clears alongside Fragment so no encoded copy of it
+	// survives either.
 	u.Fragment = ""
 	u.RawFragment = ""
 	display := u.String()
