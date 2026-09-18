@@ -229,7 +229,8 @@ test("TestFailedPutRetriedOnceWithDirtyMembers", async () => {
   server.use(
     http.put("*/api/v1/prefs", async ({ request }) => {
       putCalls += 1;
-      if (putCalls === 1) return HttpResponse.error();
+      // The write and its one retry both fail; later writes succeed.
+      if (putCalls <= 2) return HttpResponse.error();
       putBodies.push((await request.json()) as Record<string, unknown>);
       return HttpResponse.json({});
     }),
@@ -239,18 +240,20 @@ test("TestFailedPutRetriedOnceWithDirtyMembers", async () => {
   useUiPrefs.getState().patch({ sidebarWidth: 280 });
   await vi.advanceTimersByTimeAsync(600);
   expect(putCalls).toBe(1);
-  expect(putBodies).toHaveLength(0);
   // One bounded retry carries the still-dirty members.
   await vi.advanceTimersByTimeAsync(2600);
   expect(putCalls).toBe(2);
-  expect(putBodies).toHaveLength(1);
-  expect(putBodies[0]!.sidebarWidth).toBe(280);
-  // The write completed, so the next patch's body is a clean document.
+  expect(putBodies).toHaveLength(0);
+  // The failed retry does not arm another: the count stays put.
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(putCalls).toBe(2);
+  // The members stayed dirty, so the next patch's write carries them.
   useUiPrefs.getState().patch({ detailHeight: 111 });
   await vi.advanceTimersByTimeAsync(600);
-  expect(putBodies).toHaveLength(2);
-  expect(putBodies[1]!.sidebarWidth).toBe(280);
-  expect(putBodies[1]!.detailHeight).toBe(111);
+  expect(putCalls).toBe(3);
+  expect(putBodies).toHaveLength(1);
+  expect(putBodies[0]!.sidebarWidth).toBe(280);
+  expect(putBodies[0]!.detailHeight).toBe(111);
 });
 
 test("TestResetClearsSessionDocument", async () => {
@@ -272,6 +275,52 @@ test("TestResetClearsSessionDocument", async () => {
   expect(state.hydrated).toBe(false);
   await vi.advanceTimersByTimeAsync(1000);
   expect(putBodies).toHaveLength(0);
+});
+
+test("TestInFlightHydrateDiscardedAfterReset", async () => {
+  vi.useFakeTimers();
+  const { useUiPrefs, defaultPrefs } = await freshStore();
+  const pending = useUiPrefs.getState().hydrate();
+  // The session ends while the GET is on the wire; its snapshot must not
+  // merge into the fresh post-reset state.
+  useUiPrefs.getState().reset();
+  await answerGet({ version: 1, theme: "dark", savedSearches: { keep: [1] } });
+  await pending;
+  const state = useUiPrefs.getState();
+  expect(state.theme).toBe("system");
+  expect(state.sidebarWidth).toBe(defaultPrefs.sidebarWidth);
+  expect(state.savedSearches).toBeUndefined();
+  expect(state.hydrated).toBe(false);
+});
+
+test("TestSecondPutWaitsForInFlight", async () => {
+  vi.useFakeTimers();
+  const putResponders: (() => void)[] = [];
+  server.use(
+    http.put("*/api/v1/prefs", async ({ request }) => {
+      putBodies.push((await request.json()) as Record<string, unknown>);
+      // Each PUT holds until the test resolves it, so the second write
+      // provably cannot overtake the first on the wire.
+      return new Promise<Response>((resolve) => {
+        putResponders.push(() => resolve(HttpResponse.json({})));
+      });
+    }),
+  );
+  const { useUiPrefs } = await freshStore();
+  await hydrateNow(useUiPrefs, { version: 1 });
+  useUiPrefs.getState().patch({ sidebarWidth: 280 });
+  await vi.advanceTimersByTimeAsync(600);
+  expect(putBodies).toHaveLength(1);
+  // A second patch while the first PUT is in flight does not issue a
+  // concurrent write — the member stays dirty for the settle-time flush.
+  useUiPrefs.getState().patch({ detailHeight: 111 });
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(putBodies).toHaveLength(1);
+  putResponders.shift()!();
+  await vi.advanceTimersByTimeAsync(600);
+  expect(putBodies).toHaveLength(2);
+  expect(putBodies[1]!.sidebarWidth).toBe(280);
+  expect(putBodies[1]!.detailHeight).toBe(111);
 });
 
 test("TestNoWriteDuringDrag", async () => {

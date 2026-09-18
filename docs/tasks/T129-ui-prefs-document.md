@@ -247,14 +247,14 @@ All matched files use Prettier code style!
 cd web && npx tsc --noEmit -p tsconfig.json
 ...
  Test Files  18 passed (18)
-      Tests  240 passed (240)
+      Tests  243 passed (243)
 ...
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	128.954s
-ok  	github.com/L-K-M/dl-tool/internal/store	78.359s
+ok  	github.com/L-K-M/dl-tool/internal/api	131.757s
+ok  	github.com/L-K-M/dl-tool/internal/store	81.307s
 cd web && npx playwright test
 ...
-  21 passed (42.9s)
+  20 passed, 1 flaky (grid-performance tick, retried green)
 PREFS_DOC_OK
 ```
 
@@ -262,14 +262,14 @@ The four pinned handler tests, run verbosely on the same tree:
 
 ```
 === RUN   TestPrefsRoundTripPerUser
---- PASS: TestPrefsRoundTripPerUser (0.42s)
+--- PASS: TestPrefsRoundTripPerUser (0.45s)
 === RUN   TestPrefsUnknownMemberPreserved
---- PASS: TestPrefsUnknownMemberPreserved (0.42s)
+--- PASS: TestPrefsUnknownMemberPreserved (0.35s)
 === RUN   TestPrefsTooLarge
---- PASS: TestPrefsTooLarge (0.45s)
+--- PASS: TestPrefsTooLarge (0.42s)
 === RUN   TestPrefsRejectsNonObject
---- PASS: TestPrefsRejectsNonObject (0.45s)
-ok  	github.com/L-K-M/dl-tool/internal/api	2.813s
+--- PASS: TestPrefsRejectsNonObject (0.40s)
+ok  	github.com/L-K-M/dl-tool/internal/api	2.693s
 ```
 
 No `localStorage` remains in the three files the task pins:

@@ -164,6 +164,7 @@ const WRITE_RETRY_MS = 2_000;
 let dragging = false;
 let writeTimer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let putInFlight = false;
 // Top-level members patch or resetGrid touched since the last completed
 // write; hydrate merges the server document beneath it, so a local edit made
 // while the GET is in flight is never clobbered (doc 09 §3.3).
@@ -172,6 +173,10 @@ const dirty = new Set<string>();
 // predates is discarded and re-issued once, so a stale server snapshot cannot
 // revert a member the PUT already wrote.
 let writeSerial = 0;
+// Session generation, bumped by reset(). A GET or PUT that was already over
+// the wire when the session ended is discarded on settle, so one account's
+// document cannot merge, clear dirtiness, or arm a retry into the next.
+let sessionGen = 0;
 
 export const useUiPrefs = create<UiPrefsState>()((set, get) => {
   const scheduleWrite = (isRetry = false) => {
@@ -189,21 +194,38 @@ export const useUiPrefs = create<UiPrefsState>()((set, get) => {
         void fetchAndMerge(true);
         return;
       }
+      // PUTs are serialized: a write fired while one is still on the wire
+      // would let the older body land after the newer. The members stay
+      // dirty and the in-flight settle re-arms the flush below.
+      if (putInFlight) return;
       // Snapshot the dirty set so a patch landing mid-request stays dirty
       // and is not cleared by this write's completion.
       const written = new Set(dirty);
+      const gen = sessionGen;
       const body = documentOf(get());
+      putInFlight = true;
       void api
         .PUT("/prefs", { body })
         .then(({ error }) => {
+          // The session ended mid-flight: the next session owns
+          // putInFlight now, so the stale settle touches nothing.
+          if (gen !== sessionGen) return;
+          putInFlight = false;
           if (error) {
             retryWrite(isRetry);
             return;
           }
           writeSerial += 1;
           for (const key of written) dirty.delete(key);
+          // Members patched mid-flight are still dirty; flush them now so
+          // a newer document is never held behind an older one.
+          if (dirty.size > 0) scheduleWrite();
         })
-        .catch(() => retryWrite(isRetry));
+        .catch(() => {
+          if (gen !== sessionGen) return;
+          putInFlight = false;
+          retryWrite(isRetry);
+        });
     }, WRITE_DEBOUNCE_MS);
   };
 
@@ -219,6 +241,7 @@ export const useUiPrefs = create<UiPrefsState>()((set, get) => {
   };
 
   const fetchAndMerge = async (retried: boolean): Promise<void> => {
+    const gen = sessionGen;
     const stamped = writeSerial;
     let data: unknown;
     let failed = false;
@@ -229,6 +252,9 @@ export const useUiPrefs = create<UiPrefsState>()((set, get) => {
     } catch {
       failed = true;
     }
+    // The session ended while the GET was on the wire; the previous
+    // account's snapshot must not merge into the fresh post-reset state.
+    if (gen !== sessionGen) return;
     if (failed) {
       // The document's state is unknown, so writes stay gated — a PUT
       // built from defaults would erase every stored member. One
@@ -296,7 +322,11 @@ export const useUiPrefs = create<UiPrefsState>()((set, get) => {
       if (writeTimer !== null) clearTimeout(writeTimer);
       if (retryTimer !== null) clearTimeout(retryTimer);
       writeTimer = retryTimer = null;
+      putInFlight = false;
       dirty.clear();
+      // A request already on the wire settles against the bumped
+      // generation and is discarded rather than merged.
+      sessionGen += 1;
       // Replace the whole state so the previous account's members —
       // unknown ones included — do not leak into the next session.
       set({ ...clone(defaultPrefs), hydrated: false, ...actions }, true);

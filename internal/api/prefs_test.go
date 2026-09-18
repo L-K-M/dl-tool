@@ -180,6 +180,9 @@ func TestPrefsRejectsNonObject(t *testing.T) {
 		// 422 into the decoder's generic error path.
 		`{"a":`,
 		`{"a":1}junk`,
+		// A number that overflows float64 fails the decode probe; a switch
+		// to json.Valid would silently move this off the 422 contract.
+		`{"v":1e999}`,
 	} {
 		response := env.api.Do(
 			http.MethodPut,
