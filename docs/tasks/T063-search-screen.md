@@ -43,10 +43,11 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | Path | Action | Purpose |
 |---|---|---|
 | `internal/store/search.go` | modify | `GetSearchResult` — resolve a `res_` id to its row, acquisition fields included, while its job is live. |
-| `internal/store/search_test.go` | create | `GetSearchResult` cases: live job resolves; unknown id and a deleted job are both `ErrNotFound`. |
+| `internal/store/search_test.go` | create | `GetSearchResult` cases: live job resolves; unknown id, a deleted job and a row with neither `magnet_uri` nor `download_url` are all `ErrNotFound`. |
 | `internal/store/tasks.go` | modify | `SourceDisplayURI` on `Task`, the insert column and the reads that feed the task DTO. |
 | `internal/api/tasks.go` | modify | `search_result_ids` on `CreateTasksBody`, the one-source-family rule, resolution and the `search-result:<res_id>` display source. |
 | `internal/api/tasks_test.go` | modify | `humatest` cases for the search-result family and its rejections. |
+| `internal/api/search_test.go` | modify | Asserts a seeded result's serialized `GET /search/{id}` row carries no acquisition key. |
 | `web/src/components/Search/SearchScreen.tsx` | create | The screen, the poll loop, the indexer and category pickers, the status strip. |
 | `web/src/components/Search/ResultsGrid.tsx` | create | The virtualised result table and its row actions. |
 | `web/src/components/Search/SearchScreen.test.tsx` | create | Poll lifecycle, status strip, zero states, add-to-queue bodies. |
@@ -137,7 +138,11 @@ The server half, all in the Files table:
 
 // GetSearchResult resolves an opaque res_ id to its stored row — including the
 // server-only acquisition fields — while its search job is still live. An id whose
-// job was deleted or purged is indistinguishable from an unknown id: ErrNotFound.
+// job was deleted or purged, or whose row carries neither magnet_uri nor
+// download_url, is indistinguishable from an unknown id: ErrNotFound.
+// dl-tool is single-user (ADR-0019), so §5.2's "authorise each result through its
+// own search job" means the id resolves only while its search_jobs row exists;
+// there is no per-user owner column to check.
 func GetSearchResult(ctx context.Context, db *sqlx.DB, id string) (SearchResultRow, error)
 ```
 
@@ -149,10 +154,12 @@ SearchResultIDs []string `json:"search_result_ids,omitempty" maxItems:"50"`
 ```
 
 - Exactly one source family per request: a body mixing `search_result_ids` with `uris`,
-  `blob` or file parts is `422 /problems/validation-failed`.
-- Per id, `GetSearchResult` resolves the row; `ErrNotFound` — unknown id, deleted or
-  purged job, or a row carrying neither `magnet_uri` nor `download_url` — produces a
-  `rejected[]` entry of type `/problems/not-found`. A rejected search source carries only
+  `blob` or file parts is `422 /problems/validation-failed`. An empty `search_result_ids`
+  array counts as no family at all, so the existing empty-submission `422` applies; a
+  repeated id is a duplicate `rejected[]` entry, matching the `uris` family's
+  duplicate-in-submission convention.
+- Per id, `GetSearchResult` resolves the row; `ErrNotFound` produces a `rejected[]` entry
+  of type `/problems/not-found`. A rejected search source carries only
   `search_result_id`: `RejectedURI` gains ``SearchResultID string `json:"search_result_id,omitempty"``
   and `URI` becomes `omitempty`; the detail never contains provider data.
 - A resolved `magnet_uri` (preferred) or `download_url` feeds the existing
@@ -160,8 +167,9 @@ SearchResultIDs []string `json:"search_result_ids,omitempty" maxItems:"50"`
   the server-only `source_uri` and `search-result:<res_id>` in `source_display_uri`; the
   task DTO renders `source_display_uri` when it is set, so no response ever carries the
   acquisition source.
-- `404 /problems/not-found` when every submitted id is unavailable; `201` with per-id
-  rejections otherwise.
+- `201` with per-id `rejected[]` entries while at least one id resolves; when every
+  submitted id is unavailable the response is `404 /problems/not-found` — a problem
+  detail body with no `rejected[]` member, mirroring the all-`uris`-fail `422`.
 
 ```tsx
 // web/src/components/AddTask/AddTaskDialog.tsx — extended signature:
@@ -180,20 +188,22 @@ The three zero states, each its own render: `No results` (every indexer answered
 
 ## Steps
 1. Add `GetSearchResult` to `internal/store/search.go`: one query joining `search_results` to its
-   `search_jobs` row, returning `ErrNotFound` for an unknown id or a job that no longer exists. Create
-   `internal/store/search_test.go` with the live-job, unknown-id and deleted-job cases.
+   `search_jobs` row, returning `ErrNotFound` for an unknown id, a job that no longer exists, or a row
+   with neither `magnet_uri` nor `download_url`. Create `internal/store/search_test.go` with the
+   live-job, unknown-id, deleted-job and no-acquisition-URI cases.
 2. Add `SourceDisplayURI *string` (`db:"source_display_uri"`) to `store.Task` in `internal/store/tasks.go`,
    include the column in the create insert and in the selects that feed the task DTO, and let
    `displaySourceURI` prefer it when set.
-3. In `internal/api/tasks.go`, add `SearchResultIDs` to `CreateTasksBody`; reject a body mixing source
-   families with `422 /problems/validation-failed`; resolve each id per the contract above, feed every
-   resolved acquisition URI through the existing normalise → route → insert pipeline, store
-   `search-result:<res_id>` as the display source, and return `404 /problems/not-found` when every id
-   failed.
+3. In `internal/api/tasks.go`, add `SearchResultIDs` to `CreateTasksBody`; enforce the one-family and
+   empty/duplicate rules of the contract above; resolve each id, feed every resolved acquisition URI
+   through the existing normalise → route → insert pipeline, store `search-result:<res_id>` as the
+   display source, and return `404 /problems/not-found` when every id failed.
 4. Extend `internal/api/tasks_test.go` with `humatest` cases: `TestCreateTasksSearchResultIDs` (a seeded
    result whose stored `download_url` embeds `passkey=secret` creates a task whose response `source_uri`
    is `search-result:<res_id>`, and no response field carries the passkey or URL), the per-id
-   `search_result_id` rejection shape, the all-fail `404`, and the mixed-family `422`.
+   `search_result_id` rejection shape, the all-fail `404`, and the mixed-family `422`. Extend
+   `internal/api/search_test.go` to assert the seeded result's serialized `GET /search/{id}` row carries
+   no `download_url`, `magnet_uri` or `details_url` key.
 5. Create `SearchScreen.tsx` with `useSearchJob`, built on `@tanstack/react-query` with
    `refetchInterval: (data) => (data?.finished ? false : 1000)`.
 6. Render the query input, the indexer popover (checkbox list with *All* / *None*, a health dot per row and
@@ -210,9 +220,11 @@ The three zero states, each its own render: `No results` (every indexer answered
 11. Wire the per-row `⬇` to `onDownload(r, 'immediate')`: post `/tasks` with `search_result_ids: [r.id]`,
     flash the row, replace the button with a `✓` linking to the created task, and show one toast per
     failure naming the result title.
-12. Wire the footer: the selected count and summed size, and `Download selected ▾` with exactly two items —
-    *Download immediately* and *Download to…*, the latter opening T049's add dialog through its new
-    `initialSearchResultIds` prop; extend `AddTaskDialog` per the contract above.
+12. Wire the footer: the selected count and summed size (a null `size_bytes` contributes 0), and
+    `Download selected ▾` with exactly two items — *Download immediately* and *Download to…*, the latter
+    opening T049's add dialog through its new `initialSearchResultIds` prop; extend `AddTaskDialog` per
+    the contract above. Both bulk paths submit in chunks of at most 50 ids — the body's `maxItems:"50"`
+    cap — with one toast per failed chunk.
 13. Edit `App.tsx` to route `/search` to `<SearchScreen />`, and add every string to
     `web/src/locales/en/common.json` under a `search` key; no literal user-facing text in the components.
 14. Create `SearchScreen.test.tsx` with `msw` handlers: `TestPollStopsWhenFinished`,
@@ -230,9 +242,14 @@ The three zero states, each its own render: `No results` (every indexer answered
 - [ ] `TestCreateTasksSearchResultIDs` seeds a result whose `download_url` embeds `passkey=secret`, posts
       its `res_` id and asserts a task was created whose `source_uri` renders `search-result:<res_id>` —
       no response field or `rejected[]` detail carries the passkey or the URL.
+- [ ] A `humatest` case in `internal/api/search_test.go` asserts the seeded result's serialized
+      `GET /search/{id}` row carries no `download_url`, `magnet_uri` or `details_url` key, so the
+      acquisition fields cannot re-enter the wire shape unnoticed.
 - [ ] An unknown or expired `res_` id returns a `rejected[]` entry carrying `search_result_id` and no
-      `uri`; a submission whose ids all fail returns `404 /problems/not-found`.
-- [ ] A body mixing `search_result_ids` with `uris` or `blob` returns `422 /problems/validation-failed`.
+      `uri`; a submission whose ids all fail returns `404 /problems/not-found` with a problem detail
+      body and no `rejected[]` member.
+- [ ] A body mixing `search_result_ids` with `uris` or `blob` returns `422 /problems/validation-failed`;
+      an empty `search_result_ids` array is the existing empty-submission `422`.
 - [ ] `aria-rowcount` equals the job's `total`, not the number of rows in the DOM.
 
 ## Verification
@@ -242,7 +259,8 @@ make lint && make vet && make typecheck && make test PKG="./internal/api/... ./i
 ```
 Expected: `ok` for `internal/api` and `internal/store` with the step-4 cases running, Vitest reports
 every test named in step 14 as passing, including the file
-`src/components/Search/SearchScreen.test.tsx`, and the final line of stdout is exactly `SEARCH_UI_OK`.
+`web/src/components/Search/SearchScreen.test.tsx`, and the final line of stdout is exactly
+`SEARCH_UI_OK`.
 
 Also confirm scope:
 ```bash
@@ -250,10 +268,11 @@ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
 Expected: exactly the paths in the Files table, in that order, plus `api/openapi.json` and
 `web/src/api/schema.d.ts` — the §7.1 standing-exception paths this task regenerates with `make gen` —
-and nothing else. Inspect both generated diffs: the only contract change is the `search_result_ids`
-member on the create-tasks body and the optional `search_result_id` on a rejected entry. Use
-`git status`, not `git diff`: a file this task creates is untracked, and `git diff --name-only` never
-lists an untracked file.
+and nothing else. Inspect both generated diffs: the only changes are the `search_result_ids` member on
+the create-tasks body and the optional `search_result_id` on a rejected entry — `SearchResultView` is a
+client-side type, not a schema member, so dropping its acquisition fields produces no generated diff
+(the response schema already omits them). Use `git status`, not `git diff`: a file this task creates is
+untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT add saved searches, the `Save…` button or a Playwright spec; T064 owns all three.
