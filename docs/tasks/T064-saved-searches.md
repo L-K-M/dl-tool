@@ -182,12 +182,18 @@ Evidence (run from the repo root at `a7e0de2`, verbatim):
 ```text
 $ grep -rn "prefs\|Prefs" internal/api/ --include='*.go'
 (exit 1 — no matches; not even a test file mentions prefs)
-$ grep -n '"/prefs"' api/openapi.json
-(exit 1 — no matches; the 31 registered paths carry no /prefs)
+$ grep -n 'prefs' api/openapi.json
+(exit 1 — no matches; no route, schema member or tag mentions prefs)
+$ python3 -c "import json; print(len(json.load(open('api/openapi.json'))['paths']))"
+31
 $ grep -rn "ui_prefs" internal/ | grep -v migrations
 internal/store/db_test.go:37: "tasks", "ui_prefs", "users", "watch_folders",
 internal/store/db_test.go:49: "idx_tasks_state", "idx_tasks_updated", "idx_ui_prefs_key",
-(the table exists — internal/store/migrations/00001_init.sql:288 — but nothing reads or writes it)
+$ grep -n "ui_prefs" internal/store/migrations/00001_init.sql
+288:CREATE TABLE ui_prefs (
+293:CREATE UNIQUE INDEX idx_ui_prefs_key ON ui_prefs(user_id, key);
+316:DROP TABLE ui_prefs;
+(the table exists in the initial migration, but nothing outside the DDL reads or writes it)
 $ grep -n "localStorage\|api\.\|fetch" web/src/store/useUiPrefs.ts
 86:      localStorage.getItem(PREFS_KEY) ?? "null",
 182:        localStorage.setItem(PREFS_KEY, JSON.stringify(merged));
