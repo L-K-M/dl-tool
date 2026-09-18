@@ -231,9 +231,12 @@ The three zero states, each its own render: `No results` (every indexer answered
     `search_result_id`'s row failed and fires one summary toast per chunk reporting the
     rejected count and naming the first rejected title; only resolved ids get the `✓` link.
     A chunk-level failure — transport error or any non-`201` status — marks every id that
-    chunk submitted failed (the ids are known client-side), so no row is left without a
-    terminal state; `TestBulkChunkPartialRejection` covers one all-fail `404` chunk alongside
-    a succeeding chunk.
+    chunk submitted failed (the ids are known client-side) and fires one error toast per
+    chunk; a failed row stays selectable so it can be resubmitted — a transport error's
+    outcome is unknown and a `5xx` or `429` may succeed on retry — so no row is left
+    without a terminal state. `TestBulkChunkPartialRejection` covers one all-fail `404`
+    chunk alongside a succeeding chunk and a `201` with a non-empty `rejected[]`, asserting
+    the summary toast and that only resolved ids get the `✓` link.
 13. Edit `App.tsx` to route `/search` to `<SearchScreen />`, and add every string to
     `web/src/locales/en/common.json` under a `search` key; no literal user-facing text in the components.
 14. Create `SearchScreen.test.tsx` with `msw` handlers: `TestPollStopsWhenFinished`,
