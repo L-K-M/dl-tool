@@ -232,10 +232,12 @@ The three zero states, each its own render: `No results` (every indexer answered
    `DisplaySourceURI` helper in `internal/sync/delta.go` that `Project` and the REST
    renderer in `internal/api/tasks.go` both call — the rule is the contract's,
    including the `magnet:` `xt` carve-out. `internal/sync/delta_test.go` pins all
-   six cases — set, NULL, empty, a magnet keeping only a `urn` `xt`, a magnet
-   with both a `urn` and a non-`urn` `xt` keeping just the `urn` one, and a
-   magnet with no usable `xt` (absent, non-`urn` or q-component-carrying)
-   dropping out — beside the existing `TestProjectDropsUnsanitizableSources`.
+   six cases — set, NULL, empty, a magnet keeping every `urn` `xt` it carries
+   (scheme matched case-insensitively, so an `URN:btih:` `xt` survives, and a
+   second `urn` `xt` survives alongside), a magnet with both a `urn` and a
+   non-`urn` `xt` keeping just the `urn` one, and a magnet with no usable `xt`
+   (absent, non-`urn` or q-component-carrying) dropping out — beside the
+   existing `TestProjectDropsUnsanitizableSources`.
 3. In `internal/api/tasks.go`, add `SearchResultIDs` to `CreateTasksBody`; enforce the one-family and
    empty/duplicate rules of the contract above; resolve each id, feed every resolved acquisition URI
    through the existing normalise → route → insert pipeline, store `search-result:<res_id>` as the
@@ -314,11 +316,11 @@ The three zero states, each its own render: `No results` (every indexer answered
 - [ ] `aria-rowcount` equals the job's `total`, not the number of rows in the DOM.
 - [ ] A case in `internal/sync/delta_test.go` asserts `Project` renders `source_display_uri`
       verbatim when set, a NULL or empty column falls back to `source_uri` with userinfo
-      and query string stripped, a `magnet:` source keeps only its `urn` `xt`
-      parameters (a sibling non-`urn` `xt` is dropped), and a magnet with no
-      usable `xt` drops out — so neither the SSE snapshot nor a delta can emit a
-      query-string secret for any row, including ones written before the column
-      existed.
+      and query string stripped, a `magnet:` source keeps all of its `urn` `xt`
+      parameters (a sibling non-`urn` `xt` is dropped; the scheme match is
+      case-insensitive), and a magnet with no usable `xt` drops out — so neither
+      the SSE snapshot nor a delta can emit a query-string secret for any row,
+      including ones written before the column existed.
 - [ ] No task-emitting path serialises `source_uri` directly — the PATCH response and
       every SSE delta are built through `queryGetTask`/`queryListTasksPage` and rendered
       by the shared `DisplaySourceURI` helper; verified by grep for other task-row
