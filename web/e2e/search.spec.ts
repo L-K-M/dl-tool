@@ -109,11 +109,13 @@ const SEARCH_JOB = {
 /**
  * Stubs the session, the preference document (held in page-side memory so a
  * PUT round-trips through a later GET), the indexer lists, POST/GET/DELETE
- * /search and POST /tasks. Returns every body POST /search received, plus a
- * flag the PUT handler sets once a document with a saved entry lands.
+ * /search and POST /tasks. Returns every body POST /search and POST /tasks
+ * received, plus a flag the PUT handler sets once a document with a saved
+ * entry lands.
  */
 async function stubSearchScreen(page: Page) {
   const searchPosts: { indexer_ids?: string[]; query?: string }[] = [];
+  const taskPosts: unknown[] = [];
   const savedWritten = { value: false };
   await stubTasks(page, 0);
   await page.route("**/api/v1/auth/me", (route) =>
@@ -157,6 +159,7 @@ async function stubSearchScreen(page: Page) {
   });
   await page.route("**/api/v1/tasks", (route) => {
     if (route.request().method() !== "POST") return route.fallback();
+    taskPosts.push(route.request().postDataJSON());
     return route.fulfill({
       status: 201,
       json: {
@@ -171,11 +174,11 @@ async function stubSearchScreen(page: Page) {
       },
     });
   });
-  return { searchPosts, savedWritten };
+  return { searchPosts, taskPosts, savedWritten };
 }
 
 test("a search result adds a task in one click", async ({ page }) => {
-  await stubSearchScreen(page);
+  const { taskPosts } = await stubSearchScreen(page);
   await page.goto("/search");
 
   await page.getByLabel("Search query").fill("ubuntu");
@@ -198,6 +201,10 @@ test("a search result adds a task in one click", async ({ page }) => {
   await expect(page.getByText(`Added ${RESULT_TITLE}`)).toBeVisible({
     timeout: 5_000,
   });
+  // The wire payload, not just the UI: exactly one POST /tasks naming the
+  // clicked row's result id.
+  expect(taskPosts).toHaveLength(1);
+  expect(JSON.stringify(taskPosts[0])).toContain("res_e2e");
 });
 
 test("a saved search re-runs with the stored selection", async ({ page }) => {

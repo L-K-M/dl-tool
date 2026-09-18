@@ -304,6 +304,38 @@ test("TestFailedSavedRunChargesNothingToTheEntry", async () => {
   expect(useUiPrefs.getState().search.saved[0]?.lastTotal).toBe(1);
 });
 
+test("TestFinishedSavedRunChargesItsEntry", async () => {
+  // The positive counterpart to the refused-start test: a saved run whose
+  // job id matches the live job must write lastTotal back — a regression
+  // that drops every run would otherwise look identical to the negative
+  // case above.
+  server.use(
+    http.post("*/api/v1/search", () =>
+      HttpResponse.json({ id: "sch_saved" }, { status: 202 }),
+    ),
+    http.get("*/api/v1/search/sch_saved", () =>
+      HttpResponse.json(
+        jobBody({ finished: true, total: 5, engines: [engine()] }),
+      ),
+    ),
+  );
+  useUiPrefs.setState({
+    hydrated: true,
+    search: {
+      indexerIds: ["ix_a"],
+      categories: [],
+      saved: [entry("weekly", { lastTotal: 2 })],
+    },
+  });
+
+  mountScreen();
+  fireEvent.click(screen.getByRole("button", { name: /^Saved/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "weekly" }));
+  await waitFor(() =>
+    expect(useUiPrefs.getState().search.saved[0]?.lastTotal).toBe(5),
+  );
+});
+
 test("TestDuplicateNameRefused", async () => {
   const saved = [entry("daily")];
   useUiPrefs.setState({
