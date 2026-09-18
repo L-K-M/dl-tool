@@ -4,6 +4,22 @@ import { api } from "../api/client";
 
 const WRITE_DEBOUNCE_MS = 500;
 
+export interface SavedSearch {
+  id: string; // crypto.randomUUID()
+  name: string; // 1..64 characters, unique within the document
+  query: string;
+  indexerIds: string[];
+  categories: number[];
+  createdAt: string; // RFC 3339
+  lastTotal: number; // total of the last run, for the "new since last view" badge
+}
+
+export interface SearchPrefs {
+  indexerIds: string[];
+  categories: number[];
+  saved: SavedSearch[]; // at most 50; saving a 51st is refused with a toast
+}
+
 export interface UiPrefs {
   version: 1;
   grid: {
@@ -19,6 +35,7 @@ export interface UiPrefs {
   detailTab: string;
   theme: "system" | "light" | "dark";
   lastDestination: string | null;
+  search: SearchPrefs;
 }
 
 /** The document shape of doc 09 section 3.3, verbatim. */
@@ -53,6 +70,7 @@ export const defaultPrefs: UiPrefs = {
   detailTab: "general",
   theme: "system",
   lastDestination: "/data/iso",
+  search: { indexerIds: [], categories: [], saved: [] },
 };
 
 export interface UiPrefsState extends UiPrefs {
@@ -144,6 +162,33 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
     typeof merged.lastDestination !== "string"
   )
     merged.lastDestination = defaultPrefs.lastDestination;
+  if (!isObject(merged.search)) merged.search = clone(defaultPrefs.search);
+  const search = merged.search as SearchPrefs;
+  if (
+    !Array.isArray(search.indexerIds) ||
+    search.indexerIds.some((id) => typeof id !== "string")
+  )
+    search.indexerIds = [];
+  if (
+    !Array.isArray(search.categories) ||
+    search.categories.some((id) => typeof id !== "number")
+  )
+    search.categories = [];
+  search.saved = Array.isArray(search.saved)
+    ? search.saved.filter(
+        (entry): entry is SavedSearch =>
+          isObject(entry) &&
+          typeof entry.id === "string" &&
+          typeof entry.name === "string" &&
+          typeof entry.query === "string" &&
+          Array.isArray(entry.indexerIds) &&
+          entry.indexerIds.every((id) => typeof id === "string") &&
+          Array.isArray(entry.categories) &&
+          entry.categories.every((id) => typeof id === "number") &&
+          typeof entry.createdAt === "string" &&
+          typeof entry.lastTotal === "number",
+      )
+    : [];
   return merged;
 }
 
