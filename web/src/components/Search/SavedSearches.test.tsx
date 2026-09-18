@@ -416,6 +416,34 @@ test("TestPrefsDocumentRoundTrips", async () => {
   expect(useUiPrefs.getState().search).toEqual(search);
 });
 
+test("TestSanitizeDropsDuplicateSavedIds", async () => {
+  // A document another client corrupted: two entries share an id, and the
+  // stored selections repeat members. Consumers key entries off id, so the
+  // boundary keeps only the first occurrence of each.
+  server.use(
+    http.get("*/api/v1/prefs", () =>
+      HttpResponse.json({
+        version: 1,
+        search: {
+          indexerIds: ["ix_a", "ix_a", "ix_b"],
+          categories: [2000, 2000],
+          saved: [
+            entry("weekly"),
+            { ...entry("nightly"), id: "sv_weekly" },
+            entry("daily"),
+          ],
+        },
+      }),
+    ),
+  );
+  await useUiPrefs.getState().hydrate();
+
+  const search = useUiPrefs.getState().search;
+  expect(search.indexerIds).toEqual(["ix_a", "ix_b"]);
+  expect(search.categories).toEqual([2000]);
+  expect(search.saved.map((s) => s.id)).toEqual(["sv_weekly", "sv_daily"]);
+});
+
 test("TestRenameAndDeleteUpdateTheDocument", async () => {
   const saved = [entry("daily"), entry("weekly")];
   const runs: SavedSearch[] = [];

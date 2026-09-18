@@ -174,11 +174,16 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
     search.indexerIds.some((id) => typeof id !== "string")
   )
     search.indexerIds = [];
+  else search.indexerIds = [...new Set(search.indexerIds)];
   if (
     !Array.isArray(search.categories) ||
     search.categories.some((id) => typeof id !== "number")
   )
     search.categories = [];
+  else search.categories = [...new Set(search.categories)];
+  // Consumers key saved entries off id — the finish effect writes lastTotal
+  // through a map keyed on it — so a duplicated id keeps its first entry.
+  const seenSavedIds = new Set<string>();
   search.saved = Array.isArray(search.saved)
     ? search.saved
         .filter(
@@ -196,6 +201,11 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
             typeof entry.createdAt === "string" &&
             typeof entry.lastTotal === "number",
         )
+        .filter((entry) => {
+          if (seenSavedIds.has(entry.id)) return false;
+          seenSavedIds.add(entry.id);
+          return true;
+        })
         .slice(0, MAX_SAVED_SEARCHES)
     : [];
   return merged;
