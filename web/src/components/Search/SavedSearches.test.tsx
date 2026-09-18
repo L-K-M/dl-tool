@@ -417,9 +417,10 @@ test("TestPrefsDocumentRoundTrips", async () => {
 });
 
 test("TestSanitizeDropsDuplicateSavedIds", async () => {
-  // A document another client corrupted: two entries share an id, and the
-  // stored selections repeat members. Consumers key entries off id, so the
-  // boundary keeps only the first occurrence of each.
+  // A document another client corrupted: entries repeat an id and a name,
+  // and the stored selections repeat members. Consumers key entries off id
+  // and the document makes names unique, so the boundary keeps only the
+  // first occurrence of each.
   server.use(
     http.get("*/api/v1/prefs", () =>
       HttpResponse.json({
@@ -434,6 +435,7 @@ test("TestSanitizeDropsDuplicateSavedIds", async () => {
               categories: [2000, 2000],
             },
             { ...entry("nightly"), id: "sv_weekly" },
+            { ...entry("weekly"), id: "sv_again" },
             entry("daily"),
           ],
         },

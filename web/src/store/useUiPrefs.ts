@@ -182,8 +182,10 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
     search.categories = [];
   else search.categories = [...new Set(search.categories)];
   // Consumers key saved entries off id — the finish effect writes lastTotal
-  // through a map keyed on it — so a duplicated id keeps its first entry.
+  // through a map keyed on it — and the documented invariant makes names
+  // unique too, so a duplicated id or name keeps only its first entry.
   const seenSavedIds = new Set<string>();
+  const seenSavedNames = new Set<string>();
   search.saved = Array.isArray(search.saved)
     ? search.saved
         .filter(
@@ -204,6 +206,8 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
         .filter((entry) => {
           if (seenSavedIds.has(entry.id)) return false;
           seenSavedIds.add(entry.id);
+          if (seenSavedNames.has(entry.name)) return false;
+          seenSavedNames.add(entry.name);
           return true;
         })
         // The same corruption vector hits the per-entry selections, which a

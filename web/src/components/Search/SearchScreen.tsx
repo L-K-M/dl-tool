@@ -689,20 +689,23 @@ export function SearchScreen(): JSX.Element {
       setSelected(new Set());
       setResolved(new Map());
       setFailed(new Set());
-      setNewSince((prev) => {
-        const next = new Map(prev);
-        next.delete(s.id);
-        return next;
-      });
       const jobId = await search.start({
         query: s.query,
         indexer_ids: s.indexerIds,
         categories: s.categories,
       });
       // A refused start leaves no job to charge the entry with; only a run
-      // that owns a live job may write back to it.
-      if (jobId !== null)
+      // that owns a live job may write back to it — and only then is the
+      // badge spent, otherwise a refused start would destroy the unread
+      // count without ever having shown the results.
+      if (jobId !== null) {
+        setNewSince((prev) => {
+          const next = new Map(prev);
+          next.delete(s.id);
+          return next;
+        });
         setSavedRun({ id: s.id, jobId, previousTotal: s.lastTotal });
+      }
     },
     [search],
   );
