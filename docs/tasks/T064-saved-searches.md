@@ -157,7 +157,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 `make lint && make typecheck && make test-web && make e2e && echo SAVED_SEARCH_OK` on the final tree
 (2026-09-18, PATH=`$HOME/.local/go/bin:$HOME/go/bin`, Playwright `LD_LIBRARY_PATH` covering the cached
 Chromium libs). Condensed — vitest only prints tests over its slow threshold individually; every
-`SavedSearches.test.tsx` case is inside the file's `6 tests` pass line, and both `search.spec.ts`
+`SavedSearches.test.tsx` case is inside the file's `9 tests` pass line, and both `search.spec.ts`
 cases print in the Playwright list:
 
 ```text
@@ -170,18 +170,18 @@ cd web && npx prettier --check .
 All matched files use Prettier code style!
 cd web && npx tsc --noEmit -p tsconfig.json
 cd web && npx vitest run
- ✓ src/components/Search/SavedSearches.test.tsx (6 tests) 1866ms
-   ✓ TestSaveCapturesQueryAndSelection  723ms
-   ✓ TestRunSavedSearchUsesStoredIndexers  332ms
-   ✓ TestPrefsDocumentRoundTrips  516ms
+ ✓ src/components/Search/SavedSearches.test.tsx (9 tests)
+   ✓ TestSaveCapturesQueryAndSelection  652ms
+   ✓ TestPrefsDocumentRoundTrips  519ms
+   ✓ TestRenameAndDeleteUpdateTheDocument  587ms
  Test Files  19 passed (19)
-      Tests  251 passed (251)
+      Tests  254 passed (254)
 cd web && npx playwright test
 Running 23 tests using 5 workers
-  ✓   3 [chromium] › e2e/search.spec.ts:172:1 › a search result adds a task in one click (648ms)
-  ✓   7 [chromium] › e2e/search.spec.ts:192:1 › a saved search re-runs with the stored selection (1.9s)
-  ✓   4 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin (725ms)
-  23 passed (41.0s)
+  ✓   2 [chromium] › e2e/search.spec.ts:180:1 › a search result adds a task in one click (698ms)
+  ✓   8 [chromium] › e2e/search.spec.ts:210:1 › a saved search re-runs with the stored selection (2.4s)
+  ✓   3 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin (719ms)
+  23 passed (42.9s)
 SAVED_SEARCH_OK
 ```
 
