@@ -144,6 +144,12 @@ beforeEach(() => {
       }),
     ),
     http.get("*/api/v1/fs/roots", () => HttpResponse.json({ roots: [] })),
+    // The pickers persist through the prefs document; writes the selection
+    // source change schedules must stay handled under the strict suite.
+    http.get("*/api/v1/prefs", () => HttpResponse.json({ version: 1 })),
+    http.put("*/api/v1/prefs", async ({ request }) =>
+      HttpResponse.json(await request.json()),
+    ),
   );
 });
 afterEach(() => {
@@ -592,6 +598,45 @@ test("TestEnterKeyDoesNotStartSecondJob", async () => {
   fireEvent.keyDown(input, { key: "Enter" });
   await new Promise((resolve) => setTimeout(resolve, 100));
   expect(posts).toBe(1);
+});
+
+test("TestSelectionComesFromPrefsDocument", async () => {
+  const posted: unknown[] = [];
+  server.use(
+    http.post("*/api/v1/search", async ({ request }) => {
+      posted.push(await request.json());
+      return HttpResponse.json({ id: "sch_test" }, { status: 202 });
+    }),
+    http.get("*/api/v1/search/:id", () =>
+      HttpResponse.json(
+        jobBody({ finished: true, engines: [engine()], total: 0 }),
+      ),
+    ),
+  );
+  // The stored selection drives the POST body; a dead id is pruned and the
+  // sessionStorage key T063 wrote is deleted on load, never read.
+  useUiPrefs.setState({
+    hydrated: true,
+    search: {
+      indexerIds: ["ix_a", "ix_gone"],
+      categories: [2000],
+      saved: [],
+    },
+  });
+  sessionStorage.setItem(
+    "dl.search.v1",
+    JSON.stringify({ indexer_ids: ["ix_other"], category: 9999 }),
+  );
+
+  mount();
+  await startSearch();
+  await waitFor(() => expect(posted).toHaveLength(1));
+  expect(posted[0]).toEqual({
+    query: "ubuntu",
+    indexer_ids: ["ix_a"],
+    categories: [2000],
+  });
+  expect(sessionStorage.getItem("dl.search.v1")).toBeNull();
 });
 
 test("TestStopDeletesTheJob", async () => {

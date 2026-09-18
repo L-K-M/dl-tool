@@ -118,11 +118,11 @@ await page.route('**/api/v1/tasks', route => route.fulfill({ status: 201, json: 
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestRunSavedSearchUsesStoredIndexers` asserts the `POST /search` body equals the saved selection.
-- [ ] `TestFiftyEntryCap` asserts the 51st save is refused and the document still holds 50 entries.
-- [ ] The Playwright spec asserts the row's `⬇` becomes `✓` within five seconds of the click.
-- [ ] The Playwright spec's second case asserts the re-run body carries the stored `indexer_ids`.
-- [ ] Reloading the page restores the query selection from `GET /prefs`, with no `sessionStorage` fallback left.
+- [x] `TestRunSavedSearchUsesStoredIndexers` asserts the `POST /search` body equals the saved selection.
+- [x] `TestFiftyEntryCap` asserts the 51st save is refused and the document still holds 50 entries.
+- [x] The Playwright spec asserts the row's `⬇` becomes `✓` within five seconds of the click.
+- [x] The Playwright spec's second case asserts the re-run body carries the stored `indexer_ids`.
+- [x] Reloading the page restores the query selection from `GET /prefs`, with no `sessionStorage` fallback left.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -153,9 +153,135 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test-web && make e2e && echo SAVED_SEARCH_OK` on the final tree
+(2026-09-18, PATH=`$HOME/.local/go/bin:$HOME/go/bin`, Playwright `LD_LIBRARY_PATH` covering the cached
+Chromium libs). Condensed — vitest only prints tests over its slow threshold individually; every
+`SavedSearches.test.tsx` case is inside the file's `9 tests` pass line, and both `search.spec.ts`
+cases print in the Playwright list:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> eslint .
+cd web && npx prettier --check .
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+ ✓ src/components/Search/SavedSearches.test.tsx (9 tests)
+   ✓ TestSaveCapturesQueryAndSelection  652ms
+   ✓ TestPrefsDocumentRoundTrips  519ms
+   ✓ TestRenameAndDeleteUpdateTheDocument  587ms
+ Test Files  19 passed (19)
+      Tests  254 passed (254)
+cd web && npx playwright test
+Running 23 tests using 5 workers
+  ✓   2 [chromium] › e2e/search.spec.ts:180:1 › a search result adds a task in one click (698ms)
+  ✓   8 [chromium] › e2e/search.spec.ts:210:1 › a saved search re-runs with the stored selection (2.4s)
+  ✓   3 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin (719ms)
+  23 passed (42.9s)
+SAVED_SEARCH_OK
+```
+
+Scope, run before the finishing commit (`git status --porcelain=v1 -uall -- . ':(exclude)docs' |
+awk '{print $NF}' | sort`). `useUiPrefs.ts` and `SearchScreen.test.tsx` were already committed on
+the branch by earlier pushes, so they do not appear in the working-tree listing; the second block
+shows the union the squash merge carries (`git status` + `git diff origin/main --name-only`) — the
+Files table plus the task file itself, and nothing else:
+
+```text
+web/e2e/search.spec.ts
+web/src/components/Search/SavedSearches.test.tsx
+web/src/components/Search/SavedSearches.tsx
+web/src/components/Search/SearchScreen.tsx
+web/src/locales/en/common.json
+```
+
+```text
+docs/tasks/T064-saved-searches.md
+web/e2e/search.spec.ts
+web/src/components/Search/SavedSearches.test.tsx
+web/src/components/Search/SavedSearches.tsx
+web/src/components/Search/SearchScreen.test.tsx
+web/src/components/Search/SearchScreen.tsx
+web/src/locales/en/common.json
+web/src/store/useUiPrefs.ts
+```
+
+One deviation from step 8's mechanism, recorded here because it is load-bearing: the spec stubs
+`/auth/me` instead of calling `loginAsAdmin`. `setup.spec.ts` owns the first-run account — the
+comment in `a11y.spec.ts` states no spec may mint it because an `ensureAdmin` on a parallel worker
+races the wizard assertion — and the first staged run failed exactly that way (`/login?next=%2F`
+instead of `/setup`). The spec therefore stubs the session like `a11y`/`keyboard` do and stubs
+`/prefs` with a page-side document, so the reload still restores the selection through `GET /prefs`
+and every assertion the criteria name is unchanged.
 
 ## Blocked
+Resolved by the plan repair in [#222](https://github.com/L-K-M/dl-tool/pull/222), which added the
+`web/src/locales/en/common.json` row this `## Blocked` record prescribes to the `## Files` table.
+The staged branch resumed with the `defaultValue`-to-catalogue swap the record describes.
+
+Stopped mid-implementation (2026-09-18): the `## Files` table has no locale
+catalogue row, but the two controls need new user-visible strings and every
+shipped string must resolve through `t()` against a catalogue key.
+
+The store member, both controls and the `SearchScreen` wiring are implemented
+and typecheck-clean on branch `task/T064-saved-searches` (commits `4d42caf`,
+`6cce22e`), along with `SavedSearches.test.tsx`, the `SearchScreen.test.tsx`
+re-pin and `web/e2e/search.spec.ts`; only the string catalogue blocks the
+Verification run. [T063](T063-search-screen.md)'s own `## Files` table carries
+`web/src/locales/en/common.json` for the same reason — this task's table was
+written without one, although the `Save…` dialog, the `Saved ▾` popover, its
+empty state, four inline refusal reasons, the 50-entry cap toast, the
+rename/delete aria labels and the "new since last view" badge all introduce
+text no existing key covers.
+
+The catalogue requirement is not stylistic. `web/eslint.config.js` rejects
+literal JSX text ("add the key to a locale catalogue"), `initI18n` installs a
+`parseMissingKeyHandler` that returns the key verbatim — so a missing key
+renders `search.savedMenu`, not a label — and `i18n.test.ts`'s
+`TestMissingKeyThrowsInTests` keeps a strict mode that treats a missing key
+as a thrown error. Verified on this tree:
+
+```text
+$ node -e 'i18next.init({resources:{en:{common:{}}}, parseMissingKeyHandler:(k)=>k, interpolation:{escapeValue:false}}).then(()=>{console.log(i18next.t("search.savedMenu",{defaultValue:"Saved"}));console.log(i18next.t("Added {{title}}",{title:"x"}))})'
+search.savedMenu        # defaultValue is overridden by the missing-key handler
+Added {{title}}         # handler output is not interpolated, so natural
+                        # language keys cannot carry placeholders either
+```
+
+The same fallback is what the new tests trip over — all five
+`SavedSearches.test.tsx` cases fail at `getByRole("button", { name: /^Saved/ })`
+because the rendered label is the literal text `search.savedMenu`. The unit
+tests cannot pass until the keys exist in a catalogue, which makes the
+missing table row load-bearing rather than cosmetic.
+
+Every permitted path is therefore forbidden:
+
+- Literal JSX text — banned by the `no-restricted-syntax` rule
+  (`JSXText[value=/[A-Za-z]{2,}/]`).
+- `t()` with a catalogue-missing key, `defaultValue` or a natural-language
+  key — renders the key string in production and throws under strict mode;
+  `TestNoEmptyCatalogueValues` and `TestM3CataloguesExist` pin en as the
+  complete shipped catalogue ([`09-web-ui-spec.md` §10.2](../09-web-ui-spec.md#102-i18n)).
+- Reusing existing keys — the closest candidates
+  (`shell.sidebar.savedSearches`, `settings.dirty.save`,
+  `errors.problem.conflict`) cover at most three of the strings; "Save…",
+  the empty-name/too-long/empty-query refusals, the cap toast, the added
+  toast and the badge have no plausible key, and cross-namespace reuse
+  (`settings:`, `errors:`) for a search-screen control is itself a drift
+  hazard the catalogue organisation exists to prevent.
+
+Which file should answer it: `web/src/locales/en/common.json`, the file
+T063's `## Files` table listed for the same component family. The repair is
+one row in this task's `## Files` table (plus the `search.*` keys for the
+strings above); the staged branch then resumes with a mechanical
+`defaultValue`-to-catalogue swap. The alternative — a documented exemption
+letting this component embed English text — weakens the i18n convention for
+every later task and should be an ADR, not an inline choice.
+
 Resolved by the plan repair that created [T129](T129-ui-prefs-document.md): the `## Blocked` record
 below named two repairs, and the repair took the first — the prefs slice of T107 moved forward into a
 new earlier task rather than into this one's `## Files` table. T129 owns `GET`/`PUT /prefs`, the

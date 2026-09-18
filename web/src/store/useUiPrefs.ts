@@ -4,6 +4,27 @@ import { api } from "../api/client";
 
 const WRITE_DEBOUNCE_MS = 500;
 
+/** The saved-search cap the document enforces at both the write path
+ *  (SavedSearches refuses the 51st) and the sanitize boundary. */
+export const MAX_SAVED_SEARCHES = 50;
+export const MAX_SAVED_NAME_LENGTH = 64;
+
+export interface SavedSearch {
+  id: string; // crypto.randomUUID()
+  name: string; // 1..64 characters, unique within the document
+  query: string;
+  indexerIds: string[];
+  categories: number[];
+  createdAt: string; // RFC 3339
+  lastTotal: number; // total of the last run, for the "new since last view" badge
+}
+
+export interface SearchPrefs {
+  indexerIds: string[];
+  categories: number[];
+  saved: SavedSearch[]; // at most 50; saving a 51st is refused with a toast
+}
+
 export interface UiPrefs {
   version: 1;
   grid: {
@@ -19,6 +40,7 @@ export interface UiPrefs {
   detailTab: string;
   theme: "system" | "light" | "dark";
   lastDestination: string | null;
+  search: SearchPrefs;
 }
 
 /** The document shape of doc 09 section 3.3, verbatim. */
@@ -53,6 +75,7 @@ export const defaultPrefs: UiPrefs = {
   detailTab: "general",
   theme: "system",
   lastDestination: "/data/iso",
+  search: { indexerIds: [], categories: [], saved: [] },
 };
 
 export interface UiPrefsState extends UiPrefs {
@@ -144,6 +167,58 @@ function sanitizeDoc(doc: Record<string, unknown>): Record<string, unknown> {
     typeof merged.lastDestination !== "string"
   )
     merged.lastDestination = defaultPrefs.lastDestination;
+  if (!isObject(merged.search)) merged.search = clone(defaultPrefs.search);
+  const search = merged.search as SearchPrefs;
+  if (
+    !Array.isArray(search.indexerIds) ||
+    search.indexerIds.some((id) => typeof id !== "string")
+  )
+    search.indexerIds = [];
+  else search.indexerIds = [...new Set(search.indexerIds)];
+  if (
+    !Array.isArray(search.categories) ||
+    search.categories.some((id) => typeof id !== "number")
+  )
+    search.categories = [];
+  else search.categories = [...new Set(search.categories)];
+  // Consumers key saved entries off id — the finish effect writes lastTotal
+  // through a map keyed on it — and the documented invariant makes names
+  // unique too, so a duplicated id or name keeps only its first entry.
+  const seenSavedIds = new Set<string>();
+  const seenSavedNames = new Set<string>();
+  search.saved = Array.isArray(search.saved)
+    ? search.saved
+        .filter(
+          (entry): entry is SavedSearch =>
+            isObject(entry) &&
+            typeof entry.id === "string" &&
+            typeof entry.name === "string" &&
+            entry.name.trim().length >= 1 &&
+            entry.name.length <= MAX_SAVED_NAME_LENGTH &&
+            typeof entry.query === "string" &&
+            Array.isArray(entry.indexerIds) &&
+            entry.indexerIds.every((id) => typeof id === "string") &&
+            Array.isArray(entry.categories) &&
+            entry.categories.every((id) => typeof id === "number") &&
+            typeof entry.createdAt === "string" &&
+            typeof entry.lastTotal === "number",
+        )
+        .filter((entry) => {
+          if (seenSavedIds.has(entry.id)) return false;
+          if (seenSavedNames.has(entry.name)) return false;
+          seenSavedIds.add(entry.id);
+          seenSavedNames.add(entry.name);
+          return true;
+        })
+        // The same corruption vector hits the per-entry selections, which a
+        // re-run posts verbatim without passing back through this boundary.
+        .map((entry) => ({
+          ...entry,
+          indexerIds: [...new Set(entry.indexerIds)],
+          categories: [...new Set(entry.categories)],
+        }))
+        .slice(0, MAX_SAVED_SEARCHES)
+    : [];
   return merged;
 }
 
