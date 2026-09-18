@@ -236,13 +236,13 @@ The three zero states, each its own render: `No results` (every indexer answered
     outcome is unknown and a `5xx` or `429` may succeed on retry. A resubmit of a result the
     server already committed is detected by the pipeline and rejected with
     `/problems/conflict` rather than silently creating a second task; a `rejected[]` entry of
-    that type on a resubmit is terminal success, not failure — the row gets the `✓` and is no
-    longer selectable — so no row is left without a terminal state.
-    `TestBulkChunkPartialRejection` covers one all-fail `404` chunk alongside a succeeding
-    chunk and a `201` with a non-empty `rejected[]`, asserting the error toast for the
-    all-fail chunk, the summary toast for the `rejected[]` chunk, that only resolved ids get
-    the `✓` link, and that a resubmitted id answered `/problems/conflict` ends resolved and
-    unselectable.
+    that type is terminal success, not failure — the row gets the `✓`, is excluded from the
+    rejection summary toast, and is no longer selectable — so no row is left without a
+    terminal state. `TestBulkChunkPartialRejection` covers one all-fail `404` chunk alongside
+    a succeeding chunk and a `201` with a non-empty `rejected[]`, asserting the error toast
+    for the all-fail chunk, the summary toast for the `rejected[]` chunk (conflict entries
+    excluded), that only resolved ids get the `✓` link, and that an id that answered
+    `/problems/conflict` ends resolved and unselectable.
 13. Edit `App.tsx` to route `/search` to `<SearchScreen />`, and add every string to
     `web/src/locales/en/common.json` under a `search` key; no literal user-facing text in the components.
 14. Create `SearchScreen.test.tsx` with `msw` handlers: `TestPollStopsWhenFinished`,
