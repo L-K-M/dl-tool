@@ -24,6 +24,7 @@ import {
 import App from "../../App";
 import { initI18n } from "../../i18n";
 import { useTasks, type Task } from "../../store/useTasks";
+import { useUiPrefs } from "../../store/useUiPrefs";
 import {
   RemoveTasksDialog,
   ShellActionsContext,
@@ -573,4 +574,23 @@ test("TestToolbarCollapsesToIconsBelow1100", () => {
       "max-[1100px]:hidden",
     );
   }
+});
+
+test("TestToolbarAppliesHydratedThemeWithoutRemount", async () => {
+  server.use(
+    http.get("*/api/v1/prefs", () =>
+      HttpResponse.json({ version: 1, theme: "dark" }),
+    ),
+  );
+  mountToolbar();
+  expect(document.documentElement.classList.contains("dark")).toBe(false);
+  // The hydrated choice lands through the reactive store read: the mounted
+  // toolbar's effect applies it to the document element — no remount.
+  await act(async () => {
+    await useUiPrefs.getState().hydrate();
+  });
+  expect(useUiPrefs.getState().theme).toBe("dark");
+  expect(document.documentElement.classList.contains("dark")).toBe(true);
+  document.documentElement.classList.remove("dark");
+  useUiPrefs.setState({ theme: "system" });
 });
