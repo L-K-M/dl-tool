@@ -10,7 +10,7 @@
 | **Parallel-safe** | no — replaces the `/search` placeholder in T040's `App.tsx` |
 | **Implements** | [FR-058](../02-requirements.md#fr-058-create-a-task-from-a-search-result-in-one-click) (client and server halves; the "server half is T020" attribution predates `res_` ids — T020's merged contract has no `search_result_ids` member — so this task's Files table covers both) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md) |
-| **Est. size** | 4 new files, 8 modified, ~1,000 LOC |
+| **Est. size** | 4 new files, 12 modified, ~1,050 LOC |
 
 ## Goal
 `/search` renders Download Station's search screen: query box, indexer multi-select, category filter,
@@ -42,12 +42,16 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
+| `internal/store/models.go` | modify | `SourceDisplayURI *string` (`db:"source_display_uri"`) on `Task` — the struct is defined here, not in `tasks.go`. |
 | `internal/store/search.go` | modify | `GetSearchResult` — resolve a `res_` id to its row, acquisition fields included, while its job is live. |
 | `internal/store/search_test.go` | create | `GetSearchResult` cases: live job resolves; unknown id, a deleted job and a row with neither `magnet_uri` nor `download_url` are all `ErrNotFound`. |
-| `internal/store/tasks.go` | modify | `SourceDisplayURI` on `Task`, the insert column and the reads that feed the task DTO. |
+| `internal/store/tasks.go` | modify | The create insert's `source_display_uri` column and `queryGetTask` selecting it — the get-side read that feeds the task DTO. |
+| `internal/store/tasks_list.go` | modify | `queryListTasksPage` selects `source_display_uri` — it feeds `GET /tasks` and, through `SSEHandlers.Snapshot` → `sync.Project`, the SSE snapshot. |
 | `internal/api/tasks.go` | modify | `search_result_ids` on `CreateTasksBody`, the one-source-family rule, resolution and the `search-result:<res_id>` display source. |
 | `internal/api/tasks_test.go` | modify | `humatest` cases for the search-result family and its rejections. |
 | `internal/api/search_test.go` | modify | Asserts a seeded result's serialized `GET /search/{id}` row carries no acquisition key. |
+| `internal/sync/delta.go` | modify | `Project`'s `displaySourceURI` prefers `SourceDisplayURI`; the nil-or-empty fallback strips `RawQuery` as well as userinfo — fail-closed for rows that predate the column. |
+| `internal/sync/delta_test.go` | modify | `Project` pins: a set `source_display_uri` renders verbatim; NULL and empty fall back to `source_uri` with userinfo and query string stripped. |
 | `web/src/components/Search/SearchScreen.tsx` | create | The screen, the poll loop, the indexer and category pickers, the status strip. |
 | `web/src/components/Search/ResultsGrid.tsx` | create | The virtualised result table and its row actions. |
 | `web/src/components/Search/SearchScreen.test.tsx` | create | Poll lifecycle, status strip, zero states, add-to-queue bodies. |
@@ -168,7 +172,16 @@ SearchResultIDs []string `json:"search_result_ids,omitempty" maxItems:"50"`
   normalise → route → insert pipeline unchanged. The task row stores the resolved URI in
   the server-only `source_uri` and `search-result:<res_id>` in `source_display_uri`; the
   task DTO renders `source_display_uri` when it is set, so no response ever carries the
-  acquisition source.
+  acquisition source. That rendering must hold on every path that emits a task —
+  `GET /tasks`, `GET /tasks/{id}`, the PATCH response and the SSE snapshot/deltas —
+  so `queryListTasksPage` selects the column too and `sync.Project` prefers the field.
+- Both `displaySourceURI` renderers (`internal/api/tasks.go` and `internal/sync/delta.go`)
+  share one rule: `source_display_uri` set wins; a NULL or empty column falls back to
+  `source_uri` with userinfo **and** `RawQuery` stripped. Rows written before this column
+  existed have it NULL and a stored `source_uri` may carry a secret in its query string
+  (a Torznab `passkey` rides there, not in userinfo), so the fallback is deliberately
+  fail-closed — every pre-existing row's emitted URI loses its query string, benign or
+  not. No backfill: the column is written at insert only.
 - `201` with per-id `rejected[]` entries while at least one id resolves — duplicates of a
   resolved id included; the `404` applies only when no submitted id resolves. The
   all-unavailable `404 /problems/not-found` is a problem detail body with no `rejected[]`
@@ -194,9 +207,14 @@ The three zero states, each its own render: `No results` (every indexer answered
    `search_jobs` row, returning `ErrNotFound` for an unknown id, a job that no longer exists, or a row
    with neither `magnet_uri` nor `download_url`. Create `internal/store/search_test.go` with the
    live-job, unknown-id, deleted-job and no-acquisition-URI cases.
-2. Add `SourceDisplayURI *string` (`db:"source_display_uri"`) to `store.Task` in `internal/store/tasks.go`,
-   include the column in the create insert and in the selects that feed the task DTO, and let
-   `displaySourceURI` prefer it when set.
+2. Add `SourceDisplayURI *string` (`db:"source_display_uri"`) to `store.Task` in `internal/store/models.go`,
+   include the column in the create insert and in both selects that feed the task DTO —
+   `queryGetTask` (`internal/store/tasks.go`) and `queryListTasksPage`
+   (`internal/store/tasks_list.go`, which also feeds the SSE snapshot via
+   `SSEHandlers.Snapshot` → `sync.Project`) — and let both `displaySourceURI` renderers
+   prefer it when set, with the shared nil-or-empty fallback described in the contract
+   above. `internal/sync/delta_test.go` pins all three cases — set, NULL and empty —
+   beside the existing `TestProjectDropsUnsanitizableSources`.
 3. In `internal/api/tasks.go`, add `SearchResultIDs` to `CreateTasksBody`; enforce the one-family and
    empty/duplicate rules of the contract above; resolve each id, feed every resolved acquisition URI
    through the existing normalise → route → insert pipeline, store `search-result:<res_id>` as the
@@ -273,6 +291,10 @@ The three zero states, each its own render: `No results` (every indexer answered
 - [ ] The existing all-`uris`-fail `422` is asserted alongside the new all-fail `404` in
       `internal/api/tasks_test.go`, so the shared no-`rejected[]` problem shape is pinned, not assumed.
 - [ ] `aria-rowcount` equals the job's `total`, not the number of rows in the DOM.
+- [ ] A case in `internal/sync/delta_test.go` asserts `Project` renders `source_display_uri`
+      verbatim when set, and a NULL or empty column falls back to `source_uri` with userinfo
+      and query string stripped — so neither the SSE snapshot nor a delta can emit a
+      query-string secret for any row, including ones written before the column existed.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -315,6 +337,16 @@ untracked, and `git diff --name-only` never lists an untracked file.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
+Resolved by the follow-up plan repair to #214: the `## Files` table now lists the four rows the
+blocker named — `internal/store/models.go` for the `SourceDisplayURI` field on `Task`,
+`internal/store/tasks_list.go` for `queryListTasksPage` selecting the column,
+`internal/sync/delta.go` for `Project` preferring it, and `internal/sync/delta_test.go` for the
+set/NULL/empty pins — and the `internal/store/tasks.go` row's purpose no longer claims the field
+lives there. The contract prescribes the sanitizing fallback the blocker required: on nil-or-empty
+`source_display_uri`, both `displaySourceURI` renderers strip `RawQuery` as well as userinfo, so
+pre-existing rows fail closed and no migration or backfill is needed. T063 remains unimplemented
+and still marked `todo`.
+
 Stopped before implementing (2026-09-18, second blocker): the repaired `## Files` table still
 does not admit the files the prescribed `source_display_uri` change lives in. Step 2 and the
 store row's purpose presume `internal/store/tasks.go` holds both the `Task` struct and every
