@@ -382,17 +382,18 @@ existing row has `source_display_uri` NULL: the repair's `delta.go` row closes t
 existing hole only if its prescription reads "prefer `SourceDisplayURI`, and when it is
 NULL strip `RawQuery` as well as userinfo from `source_uri`" — a sanitizing fallback, not
 a backfill, so no migration row is needed. The accepted cost: every pre-existing row's
-emitted URI loses its query string (benign or not) until a writer populates the column —
-that is deliberate fail-closed behavior, and a later backfill is the only way such rows
-regain benign parameters.
+emitted URI loses its query string (benign or not) — deliberate fail-closed behavior.
+The column is written at insert only, so pre-existing rows regain benign parameters
+solely through a later backfill; nothing else populates their column.
 
 Which file should answer it: this file's `## Files` table — the repair needs four rows
 (`internal/store/models.go` for the `SourceDisplayURI` field on `Task`,
 `internal/store/tasks_list.go` for `queryListTasksPage` selecting the column — scanned
-into the pinned `*string` field, so NULL arrives as nil and needs no `COALESCE`; nil
-selects the sanitized `source_uri` fallback,
+into the pinned `*string` field, so NULL arrives as nil and needs no `COALESCE`; nil or
+empty selects the sanitized `source_uri` fallback,
 `internal/sync/delta.go` for `Project` preferring it and clearing `RawQuery` on the
-NULL fallback, and `internal/sync/delta_test.go` for both pins), and the
+nil-or-empty fallback, and `internal/sync/delta_test.go` for pins covering NULL, empty
+and set values), and the
 `internal/store/tasks.go` row's purpose should drop the claim that the field lives there.
 No compliant implementation exists without them: the scope check of the Verification
 block would list all four outside the table.
