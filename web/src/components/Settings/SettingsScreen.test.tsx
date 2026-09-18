@@ -104,6 +104,8 @@ beforeEach(() => {
   putBodies = [];
   useUiPrefs.setState({
     ...structuredClone(defaultPrefs),
+    // The document is already hydrated in these cases; writes must fire.
+    hydrated: true,
     startupFilter: undefined,
     rememberLastDestination: undefined,
     confirmOnDelete: undefined,

@@ -49,8 +49,12 @@ beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 beforeEach(() => {
   putBodies.length = 0;
   // The store is the document's only reader and writer now; reset its
-  // members rather than a persisted row.
-  useUiPrefs.setState(JSON.parse(JSON.stringify(defaultPrefs)));
+  // members rather than a persisted row. Writes are gated on an applied
+  // hydrate, so the seeded store is already hydrated.
+  useUiPrefs.setState({
+    ...JSON.parse(JSON.stringify(defaultPrefs)),
+    hydrated: true,
+  });
   server.use(
     http.get("*/api/v1/prefs", () => HttpResponse.json({})),
     http.put("*/api/v1/prefs", async ({ request }) => {

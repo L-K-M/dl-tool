@@ -95,7 +95,11 @@ beforeEach(() => {
     pending: new Set(),
     filterInput: null,
   });
-  useUiPrefs.setState(structuredClone(defaultPrefs) as Partial<UiPrefsState>);
+  useUiPrefs.setState({
+    ...structuredClone(defaultPrefs),
+    // Writes are gated on an applied hydrate; these cases act post-hydrate.
+    hydrated: true,
+  } as Partial<UiPrefsState>);
   useGridTable.setState({ table: null });
   putBodies = [];
   tasks = [task("one"), task("two"), task("three")];

@@ -10,7 +10,10 @@ export function readStoredTheme(): ThemeChoice {
   // store is touched lazily inside the function body: useUiPrefs never
   // imports this file, so the one-way import initializes cleanly under any
   // module order.
-  return useUiPrefs.getState().theme;
+  const theme = useUiPrefs.getState().theme;
+  // The document is open, so a value outside the enum degrades to "system"
+  // rather than propagating into resolveTheme.
+  return theme === "light" || theme === "dark" ? theme : "system";
 }
 
 export function storeTheme(choice: ThemeChoice): void {

@@ -170,7 +170,17 @@ func TestPrefsTooLarge(t *testing.T) {
 func TestPrefsRejectsNonObject(t *testing.T) {
 	env := newTasksTestEnv(t)
 
-	for _, body := range []string{`[1,2]`, `"text"`, `42`, `true`, `null`} {
+	for _, body := range []string{
+		`[1,2]`,
+		`"text"`,
+		`42`,
+		`true`,
+		`null`,
+		// Malformed bodies starting with '{' must not slip past the pinned
+		// 422 into the decoder's generic error path.
+		`{"a":`,
+		`{"a":1}junk`,
+	} {
 		response := env.api.Do(
 			http.MethodPut,
 			"/prefs",

@@ -100,9 +100,18 @@ function SessionProvider({ children }: { children: ReactNode }) {
   });
   // Doc 09 §3.3: every authenticated boot, login and setup completion
   // re-runs hydrate; the store renders its defaults until the GET resolves.
+  // A settled non-authenticated status resets the document so one account's
+  // members never bleed into the next session.
   useEffect(() => {
     if (query.data?.status === "authenticated")
-      void useUiPrefs.getState().hydrate();
+      useUiPrefs
+        .getState()
+        .hydrate()
+        .catch(() => {
+          // hydrate never rejects, but keep the defaults-on-failure
+          // contract explicit if that ever changes.
+        });
+    else if (query.data) useUiPrefs.getState().reset();
   }, [query.data?.status]);
   if (query.isError)
     return (

@@ -247,14 +247,14 @@ All matched files use Prettier code style!
 cd web && npx tsc --noEmit -p tsconfig.json
 ...
  Test Files  18 passed (18)
-      Tests  237 passed (237)
+      Tests  240 passed (240)
 ...
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	129.165s
-ok  	github.com/L-K-M/dl-tool/internal/store	77.514s
+ok  	github.com/L-K-M/dl-tool/internal/api	128.954s
+ok  	github.com/L-K-M/dl-tool/internal/store	78.359s
 cd web && npx playwright test
 ...
-  21 passed (40.1s)
+  21 passed (42.9s)
 PREFS_DOC_OK
 ```
 

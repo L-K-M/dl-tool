@@ -8,6 +8,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -24,8 +25,10 @@ const maxPrefsBodyBytes int64 = 64 << 10
 
 // PrefsBody is one preference document. The server stores unknown members
 // verbatim and returns them unchanged, so the SPA can add a preference
-// without a server change. version is an integer the SPA owns; the server
-// never inspects it. There is no PATCH: PUT replaces wholesale.
+// without a server change — except that numbers decode as float64, so
+// integer members beyond 2^53 do not survive a round trip exactly. version
+// is an integer the SPA owns; the server never inspects it. There is no
+// PATCH: PUT replaces wholesale.
 type PrefsBody map[string]any
 
 // PrefsOutput returns the stored document or an empty object when the
@@ -124,7 +127,7 @@ func limitPrefsBody(ctx huma.Context, next func(huma.Context)) {
 	// capped and non-object cases.
 	r, w := humachi.Unwrap(ctx)
 
-	r.Body = http.MaxBytesReader(nil, r.Body, maxPrefsBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxPrefsBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeProblem(w, Problem(
@@ -137,7 +140,8 @@ func limitPrefsBody(ctx huma.Context, next func(huma.Context)) {
 	}
 
 	trimmed := bytes.TrimSpace(body)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
+	var probe map[string]any
+	if len(trimmed) == 0 || trimmed[0] != '{' || json.Unmarshal(trimmed, &probe) != nil {
 		writeProblem(w, Problem(
 			SlugValidationFailed,
 			http.StatusUnprocessableEntity,
