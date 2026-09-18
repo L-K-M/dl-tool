@@ -186,9 +186,15 @@ test("a search result adds a task in one click", async ({ page }) => {
   const strip = page.getByLabel("Per-indexer search status");
   await expect(strip).toContainText("●");
   await page.getByRole("button", { name: `Download ${RESULT_TITLE}` }).click();
+  // The row's ⬇ button is replaced by a ✓ link to the created task.
+  const addedLink = page.getByRole("link", {
+    name: `${RESULT_TITLE} added — view task`,
+  });
+  await expect(addedLink).toBeVisible({ timeout: 5_000 });
+  await expect(addedLink).toHaveText("✓");
   await expect(
-    page.getByRole("link", { name: `${RESULT_TITLE} added — view task` }),
-  ).toBeVisible({ timeout: 5_000 });
+    page.getByRole("button", { name: `Download ${RESULT_TITLE}` }),
+  ).toHaveCount(0);
   await expect(page.getByText(`Added ${RESULT_TITLE}`)).toBeVisible({
     timeout: 5_000,
   });

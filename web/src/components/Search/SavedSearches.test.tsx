@@ -375,12 +375,14 @@ test("TestRenameAndDeleteUpdateTheDocument", async () => {
   expect(useUiPrefs.getState().search.saved[0]?.name).toBe("nightly");
 
   // The rename and the delete each mark the document dirty; the debounced
-  // writer may coalesce them into one PUT, so the flush waits for at least
-  // one write and pins the surviving entry in the last body the server saw.
-  await waitFor(() => expect(puts.length).toBeGreaterThanOrEqual(1), {
-    timeout: 3000,
-  });
-  expect(
-    (puts.at(-1)?.search as { saved?: { name: string }[] })?.saved,
-  ).toEqual([expect.objectContaining({ name: "nightly" })]);
+  // writer may coalesce them, so the wait holds until the last PUT body the
+  // server saw carries the surviving entry — flushing the writes before
+  // afterEach resets the handlers.
+  await waitFor(
+    () =>
+      expect(
+        (puts.at(-1)?.search as { saved?: { name: string }[] })?.saved,
+      ).toEqual([expect.objectContaining({ name: "nightly" })]),
+    { timeout: 3000 },
+  );
 });
