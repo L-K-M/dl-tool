@@ -596,7 +596,6 @@ export function SearchScreen(): JSX.Element {
             )?.name;
             toast.success(
               t("search.addedToQueue", {
-                defaultValue: "Added {{title}}",
                 title: createdName ?? singleTitle,
               }),
             );

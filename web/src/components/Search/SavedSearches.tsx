@@ -52,29 +52,17 @@ export function SaveSearchButton(props: {
 
   const reason = (code: string): string =>
     code === "duplicate"
-      ? t("search.savedErrDuplicate", {
-          defaultValue: "A saved search with that name already exists.",
-        })
+      ? t("search.savedErrDuplicate")
       : code === "tooLong"
-        ? t("search.savedErrTooLong", {
-            defaultValue: "Keep the name under 64 characters.",
-          })
+        ? t("search.savedErrTooLong")
         : code === "emptyQuery"
-          ? t("search.savedErrNoQuery", {
-              defaultValue: "Run a search first — there is nothing to save.",
-            })
-          : t("search.savedErrEmpty", { defaultValue: "Enter a name." });
+          ? t("search.savedErrNoQuery")
+          : t("search.savedErrEmpty");
 
   const submit = () => {
     if (saved.length >= MAX_SAVED) {
       setOpen(false);
-      toast.error(
-        t("search.savedCap", {
-          defaultValue:
-            "Saved searches are capped at {{count}} — delete one first.",
-          count: MAX_SAVED,
-        }),
-      );
+      toast.error(t("search.savedCap", { count: MAX_SAVED }));
       return;
     }
     const code = validateSavedName(name, saved);
@@ -102,12 +90,7 @@ export function SaveSearchButton(props: {
     setOpen(false);
     setName("");
     setRefusal(null);
-    toast.success(
-      t("search.savedOk", {
-        defaultValue: "Saved {{name}}",
-        name: name.trim(),
-      }),
-    );
+    toast.success(t("search.savedOk", { name: name.trim() }));
   };
 
   return (
@@ -122,22 +105,16 @@ export function SaveSearchButton(props: {
       }}
     >
       <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-        {t("search.save", { defaultValue: "Save…" })}
+        {t("search.save")}
       </Button>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>
-            {t("search.savedDialogTitle", { defaultValue: "Save search" })}
-          </DialogTitle>
-          <DialogDescription>
-            {t("search.savedDialogDesc", {
-              defaultValue: "Name this search to re-run it later.",
-            })}
-          </DialogDescription>
+          <DialogTitle>{t("search.savedDialogTitle")}</DialogTitle>
+          <DialogDescription>{t("search.savedDialogDesc")}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="saved-search-name">
-            {t("search.savedNameLabel", { defaultValue: "Name" })}
+            {t("search.savedNameLabel")}
           </Label>
           <Input
             id="saved-search-name"
@@ -157,7 +134,7 @@ export function SaveSearchButton(props: {
         </div>
         <DialogFooter>
           <Button size="sm" onClick={submit}>
-            {t("search.savedConfirm", { defaultValue: "Save" })}
+            {t("search.savedConfirm")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -206,14 +183,13 @@ export function SavedSearchesMenu(props: {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button size="sm" variant="outline">
-          {t("search.savedMenu", { defaultValue: "Saved" })}{" "}
-          <ChevronDown aria-hidden="true" />
+          {t("search.savedMenu")} <ChevronDown aria-hidden="true" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 gap-1 p-1.5">
         {saved.length === 0 ? (
           <p className="px-1.5 py-2 text-sm text-muted-foreground">
-            {t("search.savedEmpty", { defaultValue: "No saved searches yet." })}
+            {t("search.savedEmpty")}
           </p>
         ) : (
           <ul className="max-h-64 overflow-auto">
@@ -227,10 +203,7 @@ export function SavedSearchesMenu(props: {
                     <div className="flex items-center gap-1">
                       <Input
                         value={renameText}
-                        aria-label={t("search.savedRename", {
-                          defaultValue: "Rename {{name}}",
-                          name: s.name,
-                        })}
+                        aria-label={t("search.savedRename", { name: s.name })}
                         autoFocus
                         onChange={(e) => {
                           setRenameText(e.target.value);
@@ -244,9 +217,7 @@ export function SavedSearchesMenu(props: {
                       <Button
                         size="sm"
                         variant="ghost"
-                        aria-label={t("search.savedRenameConfirm", {
-                          defaultValue: "Confirm rename",
-                        })}
+                        aria-label={t("search.savedRenameConfirm")}
                         onClick={() => commitRename(s)}
                       >
                         <Check aria-hidden="true" />
@@ -254,9 +225,7 @@ export function SavedSearchesMenu(props: {
                       <Button
                         size="sm"
                         variant="ghost"
-                        aria-label={t("search.savedRenameCancel", {
-                          defaultValue: "Cancel rename",
-                        })}
+                        aria-label={t("search.savedRenameCancel")}
                         onClick={() => setRenamingId(null)}
                       >
                         <X aria-hidden="true" />
@@ -265,18 +234,10 @@ export function SavedSearchesMenu(props: {
                     {renameRefusal !== null && (
                       <p className="text-sm text-destructive">
                         {renameRefusal === "duplicate"
-                          ? t("search.savedErrDuplicate", {
-                              defaultValue:
-                                "A saved search with that name already exists.",
-                            })
+                          ? t("search.savedErrDuplicate")
                           : renameRefusal === "tooLong"
-                            ? t("search.savedErrTooLong", {
-                                defaultValue:
-                                  "Keep the name under 64 characters.",
-                              })
-                            : t("search.savedErrEmpty", {
-                                defaultValue: "Enter a name.",
-                              })}
+                            ? t("search.savedErrTooLong")
+                            : t("search.savedErrEmpty")}
                       </p>
                     )}
                   </div>
@@ -296,7 +257,6 @@ export function SavedSearchesMenu(props: {
                       <span
                         className="rounded-full bg-accent px-1.5 text-xs tabular-nums"
                         title={t("search.savedNew", {
-                          defaultValue: "{{count}} new since last view",
                           count: props.newSince?.get(s.id),
                         })}
                       >
@@ -306,10 +266,7 @@ export function SavedSearchesMenu(props: {
                     <Button
                       size="sm"
                       variant="ghost"
-                      aria-label={t("search.savedRename", {
-                        defaultValue: "Rename {{name}}",
-                        name: s.name,
-                      })}
+                      aria-label={t("search.savedRename", { name: s.name })}
                       onClick={() => beginRename(s)}
                     >
                       <Pencil aria-hidden="true" />
@@ -317,10 +274,7 @@ export function SavedSearchesMenu(props: {
                     <Button
                       size="sm"
                       variant="ghost"
-                      aria-label={t("search.savedDelete", {
-                        defaultValue: "Delete {{name}}",
-                        name: s.name,
-                      })}
+                      aria-label={t("search.savedDelete", { name: s.name })}
                       onClick={() =>
                         patchSaved(saved.filter((e) => e.id !== s.id))
                       }

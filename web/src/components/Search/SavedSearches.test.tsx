@@ -178,7 +178,7 @@ test("TestSaveCapturesQueryAndSelection", async () => {
   fireEvent.change(screen.getByLabelText("Name"), {
     target: { value: "weekly" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   const saved = useUiPrefs.getState().search.saved;
   expect(saved).toHaveLength(1);
@@ -263,7 +263,7 @@ test("TestDuplicateNameRefused", async () => {
   fireEvent.change(screen.getByLabelText("Name"), {
     target: { value: "daily" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   expect(
     await screen.findByText("A saved search with that name already exists."),
@@ -287,7 +287,7 @@ test("TestFiftyEntryCap", async () => {
   fireEvent.change(screen.getByLabelText("Name"), {
     target: { value: "fifty-one" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   // The 51st save is refused with a toast naming the cap.
   expect(

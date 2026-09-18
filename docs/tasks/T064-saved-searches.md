@@ -118,11 +118,11 @@ await page.route('**/api/v1/tasks', route => route.fulfill({ status: 201, json: 
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestRunSavedSearchUsesStoredIndexers` asserts the `POST /search` body equals the saved selection.
-- [ ] `TestFiftyEntryCap` asserts the 51st save is refused and the document still holds 50 entries.
-- [ ] The Playwright spec asserts the row's `⬇` becomes `✓` within five seconds of the click.
-- [ ] The Playwright spec's second case asserts the re-run body carries the stored `indexer_ids`.
-- [ ] Reloading the page restores the query selection from `GET /prefs`, with no `sessionStorage` fallback left.
+- [x] `TestRunSavedSearchUsesStoredIndexers` asserts the `POST /search` body equals the saved selection.
+- [x] `TestFiftyEntryCap` asserts the 51st save is refused and the document still holds 50 entries.
+- [x] The Playwright spec asserts the row's `⬇` becomes `✓` within five seconds of the click.
+- [x] The Playwright spec's second case asserts the re-run body carries the stored `indexer_ids`.
+- [x] Reloading the page restores the query selection from `GET /prefs`, with no `sessionStorage` fallback left.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -153,9 +153,76 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test-web && make e2e && echo SAVED_SEARCH_OK` on the final tree
+(2026-09-18, PATH=`$HOME/.local/go/bin:$HOME/go/bin`, Playwright `LD_LIBRARY_PATH` covering the cached
+Chromium libs). Condensed — vitest only prints tests over its slow threshold individually; every
+`SavedSearches.test.tsx` case is inside the file's `6 tests` pass line, and both `search.spec.ts`
+cases print in the Playwright list:
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> eslint .
+cd web && npx prettier --check .
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+ ✓ src/components/Search/SavedSearches.test.tsx (6 tests) 1866ms
+   ✓ TestSaveCapturesQueryAndSelection  723ms
+   ✓ TestRunSavedSearchUsesStoredIndexers  332ms
+   ✓ TestPrefsDocumentRoundTrips  516ms
+ Test Files  19 passed (19)
+      Tests  251 passed (251)
+cd web && npx playwright test
+Running 23 tests using 5 workers
+  ✓   3 [chromium] › e2e/search.spec.ts:172:1 › a search result adds a task in one click (648ms)
+  ✓   7 [chromium] › e2e/search.spec.ts:192:1 › a saved search re-runs with the stored selection (1.9s)
+  ✓   4 [chromium] › e2e/setup.spec.ts:26:1 › first run creates the admin (725ms)
+  23 passed (41.0s)
+SAVED_SEARCH_OK
+```
+
+Scope, run before the finishing commit (`git status --porcelain=v1 -uall -- . ':(exclude)docs' |
+awk '{print $NF}' | sort`). `useUiPrefs.ts` and `SearchScreen.test.tsx` were already committed on
+the branch by earlier pushes, so they do not appear in the working-tree listing; the second block
+shows the union the squash merge carries (`git status` + `git diff origin/main --name-only`) — the
+Files table plus the task file itself, and nothing else:
+
+```text
+web/e2e/search.spec.ts
+web/src/components/Search/SavedSearches.test.tsx
+web/src/components/Search/SavedSearches.tsx
+web/src/components/Search/SearchScreen.tsx
+web/src/locales/en/common.json
+```
+
+```text
+docs/tasks/T064-saved-searches.md
+web/e2e/search.spec.ts
+web/src/components/Search/SavedSearches.test.tsx
+web/src/components/Search/SavedSearches.tsx
+web/src/components/Search/SearchScreen.test.tsx
+web/src/components/Search/SearchScreen.tsx
+web/src/locales/en/common.json
+web/src/store/useUiPrefs.ts
+```
+
+One deviation from step 8's mechanism, recorded here because it is load-bearing: the spec stubs
+`/auth/me` instead of calling `loginAsAdmin`. `setup.spec.ts` owns the first-run account — the
+comment in `a11y.spec.ts` states no spec may mint it because an `ensureAdmin` on a parallel worker
+races the wizard assertion — and the first staged run failed exactly that way (`/login?next=%2F`
+instead of `/setup`). The spec therefore stubs the session like `a11y`/`keyboard` do and stubs
+`/prefs` with a page-side document, so the reload still restores the selection through `GET /prefs`
+and every assertion the criteria name is unchanged.
 
 ## Blocked
+Resolved by the plan repair in [#222](https://github.com/L-K-M/dl-tool/pull/222), which added the
+`web/src/locales/en/common.json` row this `## Blocked` record prescribes to the `## Files` table.
+The staged branch resumed with the `defaultValue`-to-catalogue swap the record describes.
+
 Stopped mid-implementation (2026-09-18): the `## Files` table has no locale
 catalogue row, but the two controls need new user-visible strings and every
 shipped string must resolve through `t()` against a catalogue key.
