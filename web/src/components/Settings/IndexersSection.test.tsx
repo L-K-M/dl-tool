@@ -187,13 +187,15 @@ test("TestRowsRenderInServerOrder", async () => {
   // rolls back on a 403, with an error toast (doc 09 §10.6).
   let release: ((response: Response) => void) | undefined;
   server.use(
-    http.patch(
-      "*/api/v1/indexers/idx_academic",
-      () =>
-        new Promise<Response>((resolve) => {
-          release = resolve;
-        }),
-    ),
+    http.patch("*/api/v1/indexers/idx_academic", async ({ request }) => {
+      patchCalls.push({
+        id: "idx_academic",
+        body: (await request.json()) as Record<string, unknown>,
+      });
+      return new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+    }),
   );
   const academic = rowOf("Academic Torrents");
   const box = within(academic).getByRole("checkbox", {
@@ -202,8 +204,8 @@ test("TestRowsRenderInServerOrder", async () => {
   expect(box.getAttribute("aria-checked")).toBe("false");
   fireEvent.click(box);
   await waitFor(() => expect(box.getAttribute("aria-checked")).toBe("true"));
-  if (release === undefined) throw new Error("PATCH never arrived");
-  release(
+  await waitFor(() => expect(release).toBeDefined());
+  release!(
     HttpResponse.json(
       {
         type: "/problems/ssrf-blocked",
@@ -220,7 +222,29 @@ test("TestRowsRenderInServerOrder", async () => {
     });
     expect(live.getAttribute("aria-checked")).toBe("false");
   });
-  expect(toastError).toHaveBeenCalled();
+  // The PATCH carried only the toggle, and the toast surfaces the 403 detail.
+  expect(patchCalls).toEqual([{ id: "idx_academic", body: { enabled: true } }]);
+  expect(toastError).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(toastError.mock.calls)).toContain(
+    "private-network indexers need allow_private_network",
+  );
+
+  // Clearing a stored URL in Edit is sent to the server (which 422s naming
+  // url), never silently dropped from the PATCH body.
+  fireEvent.click(
+    within(rowOf("Arch Linux")).getByRole("button", { name: "Edit" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  const urlInput = within(dialog).getByLabelText("URL") as HTMLInputElement;
+  expect(urlInput.value).toBe(
+    "https://jackett.example/api/v2.0/indexers/archlinux/results/torznab/",
+  );
+  fireEvent.change(urlInput, { target: { value: "" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(patchCalls.length).toBe(2));
+  expect(patchCalls[1].id).toBe("idx_arch");
+  expect(patchCalls[1].body).toMatchObject({ url: "" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
 test("TestProbeFailureRendersAsData", async () => {
@@ -242,9 +266,9 @@ test("TestProbeFailureRendersAsData", async () => {
   fireEvent.click(within(row).getByRole("button", { name: "Test" }));
   await screen.findByText("HTTP 404 on the caps endpoint");
   const live = rowOf("Arch Linux");
-  expect(within(live).getByText("failed")).toBeTruthy();
-  expect(within(live).getByText("Jackett 0.24.x")).toBeTruthy();
-  expect(within(live).getByText("5")).toBeTruthy();
+  const verdict = within(live).getByText("failed").closest("dl") as HTMLElement;
+  expect(within(verdict).getByText("Jackett 0.24.x")).toBeTruthy();
+  expect(within(verdict).getByText("5")).toBeTruthy();
   expect(toastError).not.toHaveBeenCalled();
 });
 
@@ -262,7 +286,7 @@ test("TestTestAllRunsEveryRow", async () => {
       "idx_ubuntu",
     ]),
   );
-  expect((await screen.findAllByText("passed")).length).toBe(4);
+  await waitFor(() => expect(screen.getAllByText("passed").length).toBe(4));
 });
 
 test("TestMoveUpSwapsPriorities", async () => {

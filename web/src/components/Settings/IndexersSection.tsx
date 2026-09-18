@@ -302,6 +302,8 @@ export function IndexersSection(): JSX.Element {
               const result = results[row.id];
               const toggling =
                 toggle.isPending && toggle.variables?.id === row.id;
+              const canMoveUp = swapPriority(rows, row.id, -1).length > 0;
+              const canMoveDown = swapPriority(rows, row.id, 1).length > 0;
               const provenance =
                 row.definition_source === "bundled"
                   ? null
@@ -330,7 +332,10 @@ export function IndexersSection(): JSX.Element {
                       </p>
                     )}
                     {result !== undefined && (
-                      <dl className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                      <dl
+                        aria-live="polite"
+                        className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground"
+                      >
                         <div className="flex gap-1">
                           <dt>{t("indexers.resultOk")}</dt>
                           <dd>
@@ -430,7 +435,7 @@ export function IndexersSection(): JSX.Element {
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        disabled={moving}
+                        disabled={moving || !canMoveUp}
                         aria-label={t("indexers.moveUpFor", {
                           name: row.name,
                         })}
@@ -442,7 +447,7 @@ export function IndexersSection(): JSX.Element {
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        disabled={moving}
+                        disabled={moving || !canMoveDown}
                         aria-label={t("indexers.moveDownFor", {
                           name: row.name,
                         })}
@@ -462,6 +467,16 @@ export function IndexersSection(): JSX.Element {
       <IndexerDialog
         state={dialog}
         onClose={(changed) => {
+          // A saved edit can change the URL or key, so a stale probe verdict
+          // for the old configuration must not survive the refetch.
+          if (changed && dialog?.mode === "edit") {
+            const id = dialog.indexer.id;
+            setResults((current) => {
+              const next = { ...current };
+              delete next[id];
+              return next;
+            });
+          }
           setDialog(null);
           if (changed) void indexers.refetch();
         }}

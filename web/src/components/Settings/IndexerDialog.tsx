@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import { useEffect, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -33,6 +34,34 @@ const selectClass =
 
 function problemDetail(error: Problem | undefined): string | undefined {
   return error?.detail ?? error?.title ?? error?.type;
+}
+
+/** The documented error mapping of doc 05 §9.1, shared by the add/edit and
+ *  import forms: 409 conflict, 403 /problems/ssrf-blocked naming the blocked
+ *  target, 422 naming the field in errors[].location, else the fallback. */
+function reportIndexerError(
+  t: TFunction,
+  ct: TFunction,
+  error: Problem | undefined,
+  opts: { blocked: string; fallback: "saveFailed" | "importFailed" },
+): void {
+  const detail = problemDetail(error) ?? ct("shell.networkError");
+  if (error?.status === 409 || error?.type === "/problems/conflict") {
+    toast.error(t("indexers.dialog.conflict"));
+  } else if (error?.type === "/problems/ssrf-blocked") {
+    toast.error(
+      t("indexers.dialog.ssrfBlocked", { url: opts.blocked, detail }),
+    );
+  } else if (error?.status === 422) {
+    const field = error.errors?.[0]?.location;
+    toast.error(
+      field === undefined
+        ? t("indexers.dialog.invalidFieldGeneric", { detail })
+        : t("indexers.dialog.invalidField", { field, detail }),
+    );
+  } else {
+    toast.error(t(`indexers.dialog.${opts.fallback}`, { detail }));
+  }
 }
 
 /** onClose(true) means the caller must refetch GET /indexers. */
@@ -115,25 +144,11 @@ function EditForm({
   const [priority, setPriority] = useState(String(editing?.priority ?? 50));
   const [busy, setBusy] = useState(false);
 
-  const report = (error: Problem | undefined) => {
-    const detail = problemDetail(error) ?? ct("shell.networkError");
-    if (error?.status === 409 || error?.type === "/problems/conflict") {
-      toast.error(t("indexers.dialog.conflict"));
-    } else if (error?.type === "/problems/ssrf-blocked") {
-      toast.error(
-        t("indexers.dialog.ssrfBlocked", { url: url.trim(), detail }),
-      );
-    } else if (error?.status === 422) {
-      const field = error.errors?.[0]?.location;
-      toast.error(
-        field === undefined
-          ? t("indexers.dialog.invalidFieldGeneric", { detail })
-          : t("indexers.dialog.invalidField", { field, detail }),
-      );
-    } else {
-      toast.error(t("indexers.dialog.saveFailed", { detail }));
-    }
-  };
+  const report = (error: Problem | undefined) =>
+    reportIndexerError(t, ct, error, {
+      blocked: url.trim(),
+      fallback: "saveFailed",
+    });
 
   const submit = async () => {
     const parsed = Number.parseInt(priority, 10);
@@ -169,7 +184,9 @@ function EditForm({
           enabled,
           priority: parsed,
         };
-        if (url.trim() !== "") body.url = url.trim();
+        // Send the URL whenever it changed — including a cleared field, so a
+        // server-side 422 names url instead of silently keeping the old value.
+        if (url.trim() !== (editing?.url ?? "")) body.url = url.trim();
         if (apiKey !== "") body.api_key = apiKey;
         const { error } = await api.PATCH("/indexers/{id}", {
           params: { path: { id: state.indexer.id } },
@@ -302,28 +319,12 @@ function ImportForm({
     warnings: string[];
   } | null>(null);
 
-  const report = (error: Problem | undefined) => {
-    const detail = problemDetail(error) ?? ct("shell.networkError");
-    if (error?.status === 409 || error?.type === "/problems/conflict") {
-      toast.error(t("indexers.dialog.conflict"));
-    } else if (error?.type === "/problems/ssrf-blocked") {
-      toast.error(
-        t("indexers.dialog.ssrfBlocked", {
-          url: torznabUrl.trim(),
-          detail,
-        }),
-      );
-    } else if (error?.status === 422) {
-      const field = error.errors?.[0]?.location;
-      toast.error(
-        field === undefined
-          ? t("indexers.dialog.invalidFieldGeneric", { detail })
-          : t("indexers.dialog.invalidField", { field, detail }),
-      );
-    } else {
-      toast.error(t("indexers.dialog.importFailed", { detail }));
-    }
-  };
+  const report = (error: Problem | undefined) =>
+    reportIndexerError(t, ct, error, {
+      // A file import's blocked target is inside the file, not the URL field.
+      blocked: file?.name ?? torznabUrl.trim(),
+      fallback: "importFailed",
+    });
 
   const submit = async () => {
     if (file === null && (torznabUrl.trim() === "" || apiKey === "")) {
