@@ -112,6 +112,10 @@ type Server struct {
 	// /settings operations T092 adds to the same handlers.
 	settings *SettingsHandlers
 
+	// prefs owns the GET/PUT /prefs document operations of doc 05 section
+	// 11.4.
+	prefs *PrefsHandlers
+
 	// categories owns the category operations of doc 05 section 8.1 and
 	// the tag list of section 8.2.
 	categories *CategoryHandlers
@@ -304,6 +308,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		Engines:    engines,
 		tasks:      NewTaskHandlers(db, engines, cfg.DataRoots),
 		settings:   NewSettingsHandlers(db, engines),
+		prefs:      NewPrefsHandlers(db),
 		categories: NewCategoryHandlers(db, cfg.DataRoots),
 		fs:         NewFSHandlers(cfg.DataRoots),
 		search:     NewSearchHandlers(log, searchDeps),
@@ -464,7 +469,7 @@ func (s *Server) registerOperations() {
 	s.auth.registerOperations(s.API)
 	s.tasks.registerOperations(s.API)
 	s.settings.registerOperations(s.API)
-	s.registerPrefsOperations()
+	s.prefs.Register(s.API)
 	s.categories.Register(s.API)
 	s.fs.Register(s.API)
 	RegisterSearchRoutes(s.API, s.search)

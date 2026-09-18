@@ -387,9 +387,15 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Return the stored preference document */
+    /**
+     * Return the stored preference document
+     * @description The account's whole UI preference document, or an empty object when none was stored; the SPA owns the defaults it patches over. Members the server does not model come back verbatim.
+     */
     get: operations["prefs-get"];
-    /** Replace the stored preference document */
+    /**
+     * Replace the stored preference document
+     * @description Replaces the account's whole UI preference document with the request body, which must be a JSON object of at most 64 KiB. Members the server does not model are stored verbatim.
+     */
     put: operations["prefs-put"];
     post?: never;
     delete?: never;
