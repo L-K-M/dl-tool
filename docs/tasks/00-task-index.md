@@ -250,7 +250,7 @@ T113, T115 and T121 are M7, and T124 and T125 are M0. A dependency on a numerica
 therefore usually not a forward reference: work milestones in order and the dependency is already
 satisfied. Do not "fix" these edges.
 
-Two consequences of that overflow numbering are recorded rather than "fixed":
+The consequences of that overflow numbering are recorded rather than "fixed":
 
 - **T091 and T092 sit in M6, not M7.** The settings sections T117, T118 and T119 need
   `GET`/`PATCH /settings`, so the settings and system-info endpoints — and the backup handler whose file
