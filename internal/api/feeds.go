@@ -31,9 +31,10 @@ const (
 )
 
 // FeedDTO renders the feed object of docs/05-api-contract.md section 10.1:
-// timestamps are RFC 3339 or null, and a credential-bearing url is redacted
-// member-wise (feedDTO). There is no auto_download member — the member is
-// T068's (deferral register) and absent from the wire object until then.
+// timestamps are RFC 3339 or null (next_fetch_at is a NOT NULL column, so it
+// is always present), and a credential-bearing url is redacted member-wise
+// (feedDTO). There is no auto_download member — the member is T068's
+// (deferral register) and absent from the wire object until then.
 type FeedDTO struct {
 	ID               string  `json:"id"`
 	URL              string  `json:"url"              doc:"The feed URL; userinfo and apikey/token/passkey query values render as __redacted__"`
@@ -81,7 +82,7 @@ type FeedItemDTO struct {
 // auto:<feed_id> rule lifecycle it drives (deferral register).
 type CreateFeedInput struct {
 	Body struct {
-		URL              string  `json:"url"                required:"true" minLength:"1" doc:"http or https feed URL; userinfo and passkey-style query secrets are stored but never returned"`
+		URL              string  `json:"url"                required:"true" minLength:"1" doc:"http or https feed URL; userinfo and passkey-style query secrets are stored but never returned; a url containing __redacted__ is rejected — it is a rendered form, not a fetchable address"`
 		Title            *string `json:"title,omitempty"`
 		Enabled          *bool   `json:"enabled,omitempty"           doc:"Default true"`
 		RefreshIntervalS *int    `json:"refresh_interval_s,omitempty" minimum:"0" doc:"Seconds between polls; 0 uses the global RSS interval, otherwise at least 300"`
@@ -97,7 +98,7 @@ type CreateFeedInput struct {
 type PatchFeedInput struct {
 	ID   string `path:"id" doc:"The fed_ id of the feed"`
 	Body struct {
-		URL              *string `json:"url,omitempty"`
+		URL              *string `json:"url,omitempty"              minLength:"1"`
 		Title            *string `json:"title,omitempty"`
 		Enabled          *bool   `json:"enabled,omitempty"`
 		RefreshIntervalS *int    `json:"refresh_interval_s,omitempty" minimum:"0"`
@@ -300,6 +301,11 @@ func (h *FeedHandlers) List(ctx context.Context, _ *struct{}) (*ListFeedsOutput,
 // least 300. next_fetch_at is now, so the poller's next pass picks the new
 // feed up (task T065 step 7).
 func (h *FeedHandlers) Create(ctx context.Context, in *CreateFeedInput) (*FeedOutput, error) {
+	if strings.Contains(in.Body.URL, redactedValue) {
+		// A url copied from a redacted GET /feeds response is not a
+		// fetchable address; storing it would break the feed silently.
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, feedURLDetail)
+	}
 	if err := checkFeedURL(in.Body.URL); err != nil {
 		return nil, err
 	}
@@ -535,8 +541,24 @@ func feedDTO(f store.Feed) FeedDTO {
 		NextFetchAt:      time.UnixMilli(f.NextFetchAt).UTC().Format(time.RFC3339),
 		EscalationLevel:  f.EscalationLevel,
 		DisabledTill:     unixMilliToRFC3339(f.DisabledTill),
-		LastError:        f.LastError,
+		LastError:        scrubFeedLastError(f.LastError, f.URL),
 	}
+}
+
+// scrubFeedLastError removes the feed's own url from a stored fetch error:
+// a *url.Error string embeds the request URL verbatim, userinfo and query
+// secrets included, so the member-wise redaction of the url field would be
+// undone by last_error. The poller should write the column through
+// secure.RedactError; this is the read-side backstop for any error that
+// still carries the raw address.
+func scrubFeedLastError(lastError *string, rawURL string) *string {
+	if lastError == nil || !strings.Contains(*lastError, rawURL) {
+		return lastError
+	}
+
+	scrubbed := strings.ReplaceAll(*lastError, rawURL, redactFeedURL(rawURL))
+
+	return &scrubbed
 }
 
 // feedItemDTO renders one feed_items row into the section 10.1 item object;

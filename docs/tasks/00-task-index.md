@@ -378,7 +378,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
-| T065 | Store RSS feeds and items and serve feed CRUD | T006, T007, T008 | yes | done | [T065](T065-feed-store-and-crud.md) |
+| T065 | Store RSS feeds and items and serve feed CRUD | T006, T007, T008 | no | done | [T065](T065-feed-store-and-crud.md) |
 | T066 | Poll feeds with conditional GET, jitter and the Sonarr backoff ladder | T012, T054, T065 | no | todo | [T066](T066-feed-poller-and-backoff.md) |
 | T067 | Parse feed items and extract a download URI with the four-tier ladder | T015, T066 | yes | todo | [T067](T067-item-parser-and-uri-extraction.md) |
 | T068 | Validate rule documents and serve rule CRUD | T007, T008, T065 | no | todo | [T068](T068-rule-document-and-validator.md) |

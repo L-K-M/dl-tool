@@ -869,7 +869,7 @@ export interface components {
        */
       refresh_interval_s?: number;
       title?: string;
-      /** @description http or https feed URL; userinfo and passkey-style query secrets are stored but never returned */
+      /** @description http or https feed URL; userinfo and passkey-style query secrets are stored but never returned; a url containing __redacted__ is rejected — it is a rendered form, not a fetchable address */
       url: string;
     };
     CreateIndexerInputBody: {

@@ -294,6 +294,21 @@ func TestFeedValidation(t *testing.T) {
 	response = env.patchFeed(t, feedID, map[string]any{"item_cap": -1})
 	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 
+	// A url still carrying the __redacted__ member — copied off a GET
+	// /feeds response — is not a fetchable address: create rejects it
+	// rather than store a silently broken feed.
+	response = env.createFeed(t, map[string]any{
+		"url": "https://" + redactedValue + "@tracker.example.com/feed.xml",
+	})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	// refresh_interval_s 0 is the documented "use the global interval"
+	// sentinel, valid even though it is below 300.
+	response = env.patchFeed(t, feedID, map[string]any{"refresh_interval_s": 0})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
 	// The documented boundary values pass.
 	response = env.patchFeed(t, feedID, map[string]any{"refresh_interval_s": 300, "item_cap": 0})
 	if response.Code != http.StatusOK {
@@ -319,22 +334,45 @@ func TestFeedItemsPagingNewestFirst(t *testing.T) {
 	seeded := env.seedFeedItems(t, feedID, 5, base)
 	env.seedFeedItems(t, otherID, 2, base)
 
-	// Newest first: seeded[i] is oldest when i is smallest.
+	// Two rows sharing one sort key order only by the id tie-break; the
+	// stored ids — not the insert order — decide which leads.
+	tied := base + 1000
+	tiedItems := []store.FeedItem{
+		{FeedID: feedID, Identity: "identity-tie-1", Title: "tie 1", TitleNorm: "tie 1", PublishedAt: &tied},
+		{FeedID: feedID, Identity: "identity-tie-2", Title: "tie 2", TitleNorm: "tie 2", PublishedAt: &tied},
+	}
+	if _, err := store.UpsertFeedItems(t.Context(), env.db, tiedItems, base); err != nil {
+		t.Fatalf("seed tied items: %v", err)
+	}
+	seeded = append(seeded, tiedItems...)
+	tieIDs := []string{env.feedItemID(t, tiedItems[0]), env.feedItemID(t, tiedItems[1])}
+	if tieIDs[1] > tieIDs[0] {
+		tieIDs[0], tieIDs[1] = tieIDs[1], tieIDs[0]
+	}
+
+	// Newest first: the tied pair has the largest sort key and leads page
+	// one, ordered id DESC; the remaining seeds follow, oldest-seeded last.
 	response := env.getFeedItems(t, feedID, "limit=2")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
 	}
 	page := decodeFeedItemsPage(t, response)
-	if page.Total != 5 {
-		t.Errorf("total = %d, want 5 ignoring the limit", page.Total)
+	if page.Total != 7 {
+		t.Errorf("total = %d, want 7 ignoring the limit", page.Total)
 	}
 	if page.NextCursor == nil {
 		t.Fatalf("next_cursor = null on a non-last page; body %s", response.Body.String())
+	}
+	if len(page.Items) != 2 || page.Items[0].ID != tieIDs[0] || page.Items[1].ID != tieIDs[1] {
+		t.Errorf("tied page = %+v, want the pair ordered id DESC %v", page.Items, tieIDs)
 	}
 
 	seen := map[string]bool{}
 	var lastKey int64
 	for pageNumber := 0; ; pageNumber++ {
+		if len(page.Items) > 2 {
+			t.Errorf("page %d carried %d items, want at most the limit 2", pageNumber, len(page.Items))
+		}
 		for _, item := range page.Items {
 			if seen[item.ID] {
 				t.Fatalf("item %s appeared on two pages", item.ID)
@@ -356,8 +394,8 @@ func TestFeedItemsPagingNewestFirst(t *testing.T) {
 			t.Fatalf("page %d status = %d, want %d; body %s", pageNumber+1, response.Code, http.StatusOK, response.Body.String())
 		}
 		page = decodeFeedItemsPage(t, response)
-		if page.Total != 5 {
-			t.Errorf("page %d total = %d, want 5 ignoring the cursor", pageNumber+1, page.Total)
+		if page.Total != 7 {
+			t.Errorf("page %d total = %d, want 7 ignoring the cursor", pageNumber+1, page.Total)
 		}
 		if pageNumber > len(seeded) {
 			t.Fatal("paging did not terminate")
@@ -374,7 +412,11 @@ func TestFeedItemsPagingNewestFirst(t *testing.T) {
 
 	// A cursor minted for one feed is stale under another.
 	first := env.getFeedItems(t, feedID, "limit=2")
-	cursor := *decodeFeedItemsPage(t, first).NextCursor
+	head := decodeFeedItemsPage(t, first)
+	if head.NextCursor == nil {
+		t.Fatalf("next_cursor = null on a non-last page; body %s", first.Body.String())
+	}
+	cursor := *head.NextCursor
 	response = env.getFeedItems(t, otherID, "limit=2&cursor="+cursor)
 	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 
@@ -488,12 +530,35 @@ func TestUpsertFeedItemsIsIdempotent(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("%d feed_items rows after re-upsert, want 2", len(rows))
 	}
+	wantTitle := map[string]string{"a": "first renamed", "b": "second again"}
+	refreshedAt := map[string]int64{}
 	for _, row := range rows {
+		if row.Title != wantTitle[row.Identity] {
+			t.Errorf("item %q title = %q, want the refreshed %q", row.Identity, row.Title, wantTitle[row.Identity])
+		}
+		refreshedAt[row.Identity] = row.UpdatedAt
 		if !row.Read {
 			t.Errorf("item %q read reset to false by the re-upsert", row.Identity)
 		}
 		if row.FirstSeenAt != base {
 			t.Errorf("item %q first_seen_at = %d, want the insert-time %d", row.Identity, row.FirstSeenAt, base)
+		}
+	}
+
+	// A third upsert that changes nothing performs no write: updated_at
+	// stays put instead of drifting toward "last polled".
+	added, err = store.UpsertFeedItems(ctx, env.db, []store.FeedItem{
+		{FeedID: feedID, Identity: "a", Title: "first renamed", TitleNorm: "first renamed"},
+	}, base+2000)
+	if err != nil {
+		t.Fatalf("no-change upsert: %v", err)
+	}
+	if added != 0 {
+		t.Errorf("no-change upsert added %d, want 0", added)
+	}
+	for _, row := range env.feedItemRows(t, feedID) {
+		if row.UpdatedAt != refreshedAt[row.Identity] {
+			t.Errorf("item %q updated_at = %d after a no-change upsert, want %d", row.Identity, row.UpdatedAt, refreshedAt[row.Identity])
 		}
 	}
 }
@@ -600,6 +665,25 @@ func TestCredentialFeedURLIsRedacted(t *testing.T) {
 	if stored != "https://user:pass@tracker.example.com/feed.xml" {
 		t.Errorf("stored url = %q after a redacted PATCH, want it untouched", stored)
 	}
+
+	// A stored fetch error that embeds the raw url — a *url.Error string
+	// carries it verbatim — is scrubbed like the url member, so the
+	// secret cannot round-trip out through last_error.
+	fetchErr := `Get "https://user:pass@tracker.example.com/feed.xml": dial tcp: i/o timeout`
+	if err := store.UpdateFeedFetchState(t.Context(), env.db, store.Feed{
+		ID: userinfo, NextFetchAt: 1, LastError: &fetchErr,
+	}); err != nil {
+		t.Fatalf("seed last_error: %v", err)
+	}
+	feeds = decodeFeedList(t, env.getFeeds(t))
+	for _, feed := range feeds {
+		if feed.ID != userinfo {
+			continue
+		}
+		if feed.LastError == nil || strings.Contains(*feed.LastError, "user:pass") || !strings.Contains(*feed.LastError, redactedValue) {
+			t.Errorf("last_error = %v, want the embedded url scrubbed to its redacted form", feed.LastError)
+		}
+	}
 }
 
 // TestUnreadFilterMatchesReadColumn pins the read = 0 predicate of doc 05
@@ -620,6 +704,9 @@ func TestUnreadFilterMatchesReadColumn(t *testing.T) {
 	response := env.markFeedItems(t, feedID, map[string]any{"ids": readIDs, "read": true})
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if updated := decodeUpdated(t, response); updated != 2 {
+		t.Errorf("mark read updated = %d, want the two submitted ids", updated)
 	}
 
 	response = env.getFeedItems(t, feedID, "unread=true&limit=1")
@@ -739,6 +826,11 @@ func TestMarkAllFeedItemsReadIsIdempotent(t *testing.T) {
 	}
 	if updated := decodeUpdated(t, response); updated != 3 {
 		t.Errorf("updated = %d, want 3", updated)
+	}
+	for i, row := range env.feedItemRows(t, feedID) {
+		if !row.Read {
+			t.Errorf("feedItemRows[%d] = %+v, want read after read-all", i, row)
+		}
 	}
 
 	response = env.markAllFeedItemsRead(t, feedID)

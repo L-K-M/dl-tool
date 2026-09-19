@@ -128,22 +128,24 @@ func FeedByID(ctx context.Context, db *sqlx.DB, id string) (Feed, error) {
 	return feed, nil
 }
 
-// queryCreateFeed writes every column: the caller owns the identity and
-// scheduling fields, and the fetch-state columns take their zero values so a
-// create can never smuggle a ladder position in.
-const queryCreateFeed = `INSERT INTO feeds (` + feedColumns + `)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+// queryCreateFeed writes only the operator-owned columns plus next_fetch_at,
+// which the caller owns; the fetch-state columns are absent so they take
+// their DDL zero values and a create can never smuggle a ladder position in.
+const queryCreateFeed = `INSERT INTO feeds (
+id, url, title, enabled, refresh_interval_s, item_cap, priority,
+next_fetch_at, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // CreateFeed inserts one row. The caller owns f.ID (a fed_ ULID) and
-// f.NextFetchAt; created_at and updated_at stamp here. A duplicate url is
-// ErrConflict — the API maps it to 409 /problems/conflict.
+// f.NextFetchAt; the fetch-state fields of f are ignored — the poller writes
+// them through UpdateFeedFetchState. created_at and updated_at stamp here.
+// A duplicate url is ErrConflict — the API maps it to 409
+// /problems/conflict.
 func CreateFeed(ctx context.Context, db *sqlx.DB, f Feed) error {
 	now := time.Now().UnixMilli()
 	if _, err := db.ExecContext(ctx, queryCreateFeed,
 		f.ID, f.URL, f.Title, f.Enabled, f.RefreshIntervalS, f.ItemCap,
-		f.Priority, f.ETag, f.LastModified, f.TTLMinutes, f.LastFetchAt,
-		f.LastSuccessAt, f.NextFetchAt, f.EscalationLevel, f.DisabledTill,
-		f.LastError, now, now,
+		f.Priority, f.NextFetchAt, now, now,
 	); err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("store: create feed %s: %w", f.ID, ErrConflict)
@@ -270,7 +272,9 @@ WHERE feed_id = ? AND identity IN (?)`
 
 // queryUpsertFeedItem refreshes only title and updated_at on a repeated
 // identity: read and first_seen_at are insert-time facts a re-poll must not
-// reset (docs/05-api-contract.md section 10.1).
+// reset (docs/05-api-contract.md section 10.1). The WHERE guard skips the
+// write when the title is unchanged, so a poll that turns up nothing new
+// does not dirty every retained row.
 const queryUpsertFeedItem = `INSERT INTO feed_items
 (id, feed_id, guid, identity, title, title_norm, link, download_url,
  info_hash, size_bytes, published_at, read, first_seen_at, raw_json,
@@ -278,7 +282,8 @@ const queryUpsertFeedItem = `INSERT INTO feed_items
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (feed_id, identity) DO UPDATE SET
   title = excluded.title,
-  updated_at = excluded.updated_at`
+  updated_at = excluded.updated_at
+WHERE feed_items.title IS NOT excluded.title`
 
 // UpsertFeedItems inserts items in one transaction with
 // INSERT ... ON CONFLICT (feed_id, identity) DO UPDATE SET title=..., updated_at=...
