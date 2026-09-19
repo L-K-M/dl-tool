@@ -166,9 +166,9 @@ until T071 populates it from `rule_matches` (deferral register).
 `auto_download` is not modelled on either write body: the member is absent from both schemas, so a sender
 gets `422` under the request body's `additionalProperties: false` — explicit, never a silent no-op. T068
 adds the member and the `auto:<feed_id>` rule lifecycle it drives (deferral register), and the interim is
-pinned by `TestAutoDownloadIsRejectedUntilT068`, which T068 then replaces. The read side is pinned the
-same way: §10.1's feed object carries no `auto_download` member, so `FeedDTO` never renders one — the
-interim wire shape cannot vary by implementer.
+pinned by `TestAutoDownloadIsRejectedUntilT068`, which T068 then replaces. The read side is pinned by
+`TestFeedObjectShape`: §10.1's feed object carries no `auto_download` member, so `FeedDTO` never renders
+one — the interim wire shape cannot vary by implementer.
 
 Statuses, exactly doc 05 §10.1: `200` · `201` · `204` · `404` · `409 /problems/conflict` on a duplicate
 `url` · `422 /problems/validation-failed` for a non-`http(s)` URL, `refresh_interval_s` below `300` and not
@@ -219,7 +219,7 @@ takes no body.
 - [ ] `TestUpsertFeedItemsIsIdempotent` asserts a second upsert of the same batch adds `0` rows and keeps
   `read` untouched.
 - [ ] `TestFeedObjectShape` asserts the feed object carries `priority`, `unread_count` and RFC 3339
-  `next_fetch_at`.
+  `next_fetch_at`, and no `auto_download` member.
 - [ ] `TestCredentialFeedURLIsRedacted` asserts a `user:pass@` URL returns `__redacted__` userinfo on
   read, that every name `isSecretQueryParameter` recognises is masked (one case per name), and that a
   PATCH echoing the redacted URL leaves the stored URL unchanged.

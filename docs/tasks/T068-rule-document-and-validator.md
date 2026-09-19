@@ -190,19 +190,23 @@ Statuses, exactly doc 05 §10.2: `200` · `201` · `204` · `404` · `409 /probl
    violation on `rules.name` to `409 /problems/conflict`.
 8. Wire `auto_download` into `internal/api/feeds.go`. On `POST /feeds` the member is a plain `bool`; on
    `PATCH /feeds/{id}` it is `*bool`, so omitted or `null` leaves the `auto:<feed_id>` rule untouched and
-   only an explicit `false` deletes it — a plain `bool` would read every unrelated PATCH as `false`.
+   only an explicit `false` deletes it, when such a rule exists — a plain `bool` would read every
+   unrelated PATCH as `false`.
    `true` creates a rule named `auto:<feed_id>` when none carries the name — enabled, `feeds: [<the
    feed's URL>]` (doc 08 §4.2 scopes rules by URL, so a later feed-URL edit does not rewrite the rule,
    exactly doc 09 §8.1's documented behaviour), an empty `match` block and an omitted
    `action.destination`, which §10.2 resolves to the global default — built as a `RuleDoc`, run through
    `ApplyDefaults` and `Validate`, and stored by `CreateRule`. The member is write-only: §10.1's feed
    object carries no `auto_download` on read. The `auto:` prefix is reserved: `POST`/`PATCH /rules` reject
-   an `auto:`-prefixed `name` with `422`, so a user-authored rule can never be adopted by, or deleted
-   through, the feed lifecycle. `DELETE /feeds/{id}` removes the `auto:` rule before the feed row — on
-   delete the order flips so a failed rule delete answers `500 /problems/internal` with the feed intact
-   and the call retryable, and no orphaned `auto:` rule can outlive its feed. The two writes share no
-   transaction, so a failed rule create after a committed feed create leaves a valid feed the client
-   repairs by re-sending `auto_download: true`. T065's interim-422 pin is replaced by these cases.
+   an `auto:`-prefixed `name` with `422`, so a user-authored rule can never be adopted by the feed
+   lifecycle. In the other direction the `auto:` rule is an ordinary rule — doc 09 §8.1 says it is edited
+   and deleted like any other, so `DELETE /rules/{id}` on it succeeds and is how an operator disables
+   auto-download without touching the feed; re-enabling is `PATCH auto_download: true`. `DELETE
+   /feeds/{id}` removes the `auto:` rule, when one carries the name, before the feed row — on delete the
+   order flips so a failed rule delete answers `500 /problems/internal` with the feed intact and the call
+   retryable, and no orphaned `auto:` rule can outlive its feed. The two writes share no transaction, so a
+   failed rule create after a committed feed create leaves a valid feed the client repairs by re-sending
+   `auto_download: true`. T065's interim-422 pin is replaced by these cases.
 9. Edit `internal/api/server.go` to construct the handlers and call `Register(api)`.
 10. Create `internal/api/rules_test.go`: `POST /rules` with `episode.filter: "1x01"` is `422` and
     `errors[0].location` is `body.definition.episode.filter`; `"1x01-;"` is accepted; an empty string in
@@ -226,6 +230,8 @@ Statuses, exactly doc 05 §10.2: `200` · `201` · `204` · `404` · `409 /probl
   `enabled` toggle — leaves the existing `auto:` rule untouched.
 - [ ] `TestAutoPrefixNameRejected` asserts `POST`/`PATCH /rules` answer `422` to an `auto:`-prefixed
   `name`.
+- [ ] `TestAutoRuleDeletesLikeAnyOther` asserts `DELETE /rules/{id}` on an `auto:` rule is `204` — the
+  operator's way to disable auto-download — and a later `PATCH auto_download: true` recreates it.
 - [ ] `TestDeleteFeedRemovesAutoRule` asserts the `auto:<feed_id>` rule is gone after `DELETE`.
 
 ## Verification
