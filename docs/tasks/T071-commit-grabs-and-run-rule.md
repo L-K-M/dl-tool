@@ -153,7 +153,8 @@ limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule i
     `rule_matches` to `rules` returning each item's matching rules as `{id, name}` pairs, so
     `GET /feeds/{id}/items` renders the `matched_rules` member of doc 05 §10.1 instead of the interim `[]`
     T065 ships. Every stored `rule_matches` row represents a rule that matched the item, so no status
-    filter applies.
+    filter applies. An empty `ids` slice returns an empty map without querying — an `IN ()` list is a
+    SQL error.
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria

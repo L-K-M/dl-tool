@@ -166,13 +166,16 @@ until T071 populates it from `rule_matches` (deferral register).
 `auto_download` is not modelled on either write body: the member is absent from both schemas, so a sender
 gets `422` under the request body's `additionalProperties: false` — explicit, never a silent no-op. T068
 adds the member and the `auto:<feed_id>` rule lifecycle it drives (deferral register), and the interim is
-pinned by `TestAutoDownloadIsRejectedUntilT068`, which T068 then replaces.
+pinned by `TestAutoDownloadIsRejectedUntilT068`, which T068 then replaces. The read side is pinned the
+same way: §10.1's feed object carries no `auto_download` member, so `FeedDTO` never renders one — the
+interim wire shape cannot vary by implementer.
 
 Statuses, exactly doc 05 §10.1: `200` · `201` · `204` · `404` · `409 /problems/conflict` on a duplicate
 `url` · `422 /problems/validation-failed` for a non-`http(s)` URL, `refresh_interval_s` below `300` and not
 `0`, or `item_cap` below `0`. `PATCH /feeds/{id}/items` and `POST /feeds/{id}/items/read-all` return `200`
-`{"updated":n}` where `n` counts only the rows whose state changed, `404` when the feed id addresses no
-row, and `422` on an empty `ids`, more than 500 ids, or a missing `read`.
+`{"updated":n}` where `n` counts only the rows whose state changed, and `404` when the feed id addresses
+no row. Only the PATCH body can `422` — an empty `ids`, more than 500 ids, or a missing `read`; `read-all`
+takes no body.
 
 ## Steps
 1. Create `internal/store/feeds.go` with the two structs and the thirteen functions above, every statement
@@ -196,9 +199,10 @@ row, and `422` on an empty `ids`, more than 500 ids, or a missing `read`.
 8. Serve `GET /feeds/{id}/items` with `limit` (default 50, max 200), `cursor` and `unread`, returning
    `next_cursor` and `total` exactly as doc 05 §10.1 shows; the feed id is resolved first so an unknown one
    is `404`, and a cursor minted under another filter is `422`.
-9. Serve `PATCH /feeds/{id}/items` and `POST /feeds/{id}/items/read-all` per §10.1: `ids` is required,
-   1–500 entries, `read` is required; both answer `{"updated":n}` counting only rows whose state changed,
-   skip ids that belong to another feed or no row, and are idempotent.
+9. Serve `PATCH /feeds/{id}/items` and `POST /feeds/{id}/items/read-all` per §10.1 — the PATCH body's
+   `ids` is required, 1–500 entries, and `read` is required; `read-all` takes no body. Both answer
+   `{"updated":n}` counting only rows whose state changed, skip ids that belong to another feed or no
+   row, and are idempotent.
 10. Edit `internal/api/server.go` to construct the handlers and call `Register(api)`.
 11. Create `internal/api/feeds_test.go` covering: create then list; a duplicate URL is `409`; `ftp://` is
     `422`; `refresh_interval_s: 60` is `422`; patch toggles `enabled`; delete returns `204` and cascades the
@@ -216,8 +220,9 @@ row, and `422` on an empty `ids`, more than 500 ids, or a missing `read`.
   `read` untouched.
 - [ ] `TestFeedObjectShape` asserts the feed object carries `priority`, `unread_count` and RFC 3339
   `next_fetch_at`.
-- [ ] `TestCredentialFeedURLIsRedacted` asserts a `user:pass@` or `?apikey=` URL returns `__redacted__`
-  values on read and that a PATCH echoing the redacted URL leaves the stored URL unchanged.
+- [ ] `TestCredentialFeedURLIsRedacted` asserts a `user:pass@` URL returns `__redacted__` userinfo on
+  read, that every name `isSecretQueryParameter` recognises is masked (one case per name), and that a
+  PATCH echoing the redacted URL leaves the stored URL unchanged.
 - [ ] `TestUnreadFilterMatchesReadColumn` asserts `unread=true` returns only `read = 0` rows and
   `unread_count` tracks the same predicate.
 - [ ] `TestMarkFeedItemsRead` asserts `updated` counts only rows that changed state and that ids of a
