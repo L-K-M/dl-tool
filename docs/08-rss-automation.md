@@ -453,14 +453,16 @@ expensive and more authoritative.
 | 3 | Normalised episode / content key | `rule_seen_episodes.episode_key` (per rule) and `rule_matches.content_key` (global) | Reject `duplicate_episode` (step 9) or `already_have` (step 10) unless the new release beats the stored one on score. |
 
 A `content_key` is built from the strongest identity the item has: a staged episode key becomes
-`ep:<rule_id>:<episode_key>` — a bare `1x5` is only unique inside its rule, so the global column
-namespaces it — an item with no staged episode key takes its `info_hash`, else its `identity`.
-Episode keys therefore never collide across rules: two rules matching the same hash-less episode each
-grab a copy (`rule_seen_episodes` is per rule); cross-rule contention for the same episode is
-arbitrated by the info-hash rung (step 10's `duplicate_infohash`), not by this key. That rung can only
-fire once the item's hash is known: a `.torrent`-URL episode whose hash reaches `rule_matches.info_hash`
-only via the post-grab back-fill slips past it unless that back-fill lands before the later rule's pass,
-so this arbitration holds only once the back-fill has an owner.
+`ep:<rule_id>:<episode_key>` — the four-regex vocabulary of §6.4 extracts no show name, so a bare `1x5`
+is only unique within one rule's match scope and the global column namespaces it per rule — an item
+with no staged episode key takes its `info_hash`, else its `identity`. Two rules over different shows
+therefore never collide; one rule spanning several shows still shares episode numbers, the same limit
+qBittorrent's per-filter seen list has. Cross-rule contention for the same episode is arbitrated by the
+info-hash rung (step 10's `duplicate_infohash`), not by this key — and only when the candidate item
+carries a hash: a `.torrent`-URL item has none until the post-grab back-fill lands, and the back-fill
+§7 scopes to `rule_matches.info_hash` would not help it — the rung compares the candidate's own
+`feed_items.info_hash` — so hash-less candidates get no cross-rule arbitration until the back-fill also
+stamps `feed_items` or resolves prior grabs by `feed_item_id` (F380).
 
 The DDL, indices and retention policy for `feeds`, `feed_items`, `rules`, `rule_matches` and
 `rule_seen_episodes` are owned by [`04-data-model.md`](04-data-model.md#35-rss); do not restate them here.

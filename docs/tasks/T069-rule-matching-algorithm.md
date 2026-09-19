@@ -271,8 +271,10 @@ carriers. The three smaller divergences are ruled on in the same pass: this file
 `Candidate` gained `FeedPriority` and `Evaluate` takes `map[string]FeedRef`, restoring the step-13 sort
 key the contract could not carry — the gap is registered in `PLAN-REVIEW-FINDINGS.md` as F669; and
 `content_key` construction is pinned in doc 08 §7 — an episode-derived key is namespaced per rule as
-`ep:<rule_id>:<episode_key>` so different shows no longer collide as `already_have` (F138), an item
-with no staged episode key uses its `info_hash`, else its `identity`, closing the doc's open question,
+`ep:<rule_id>:<episode_key>` so the global check no longer collides different shows across rules; one
+rule spanning several shows still shares bare episode numbers, the documented limit of the four-regex
+vocabulary (F138); an item with no staged episode key uses its `info_hash`, else its `identity`,
+closing the doc's open question,
 and step 13's grouping is ruled per-rule with the step-10 global `content_key` check arbitrating
 cross-rule contention under the `(priority ASC, name ASC)` pass order, so `Resolve` drops the constant
 `rulePriority` parameter (F361). The index row stays `todo`; the next loop iteration implements it.
