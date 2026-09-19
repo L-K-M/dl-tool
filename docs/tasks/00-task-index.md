@@ -172,7 +172,7 @@ The feed poller, the rule engine, dry-run and the RSS screens. Exit checkpoint: 
 | [T066](T066-feed-poller-and-backoff.md) | Poll feeds with conditional GET, jitter and the Sonarr backoff ladder | T012, T054, T065 | done |
 | [T067](T067-item-parser-and-uri-extraction.md) | Parse feed items and extract a download URI with the four-tier ladder | T015, T066 | done |
 | [T068](T068-rule-document-and-validator.md) | Validate rule documents and serve rule CRUD | T007, T008, T065 | done |
-| [T069](T069-rule-matching-algorithm.md) | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | todo |
+| [T069](T069-rule-matching-algorithm.md) | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | done |
 | [T070](T070-rule-dry-run-endpoint.md) | Dry-run a rule and report a reason code for every evaluated item | T068, T069 | todo |
 | [T071](T071-commit-grabs-and-run-rule.md) | Commit rule matches as tasks and run a rule against existing items | T020, T024, T065, T066, T069, T070 | todo |
 | [T072](T072-rss-feeds-screen.md) | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066, T068, T071 | todo |
@@ -382,7 +382,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T066 | Poll feeds with conditional GET, jitter and the Sonarr backoff ladder | T012, T054, T065 | no | done | [T066](T066-feed-poller-and-backoff.md) |
 | T067 | Parse feed items and extract a download URI with the four-tier ladder | T015, T066 | yes | done | [T067](T067-item-parser-and-uri-extraction.md) |
 | T068 | Validate rule documents and serve rule CRUD | T007, T008, T065 | no | done | [T068](T068-rule-document-and-validator.md) |
-| T069 | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | yes | todo | [T069](T069-rule-matching-algorithm.md) |
+| T069 | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | yes | done | [T069](T069-rule-matching-algorithm.md) |
 | T070 | Dry-run a rule and report a reason code for every evaluated item | T068, T069 | no | todo | [T070](T070-rule-dry-run-endpoint.md) |
 | T071 | Commit rule matches as tasks and run a rule against existing items | T020, T024, T065, T066, T069, T070 | no | todo | [T071](T071-commit-grabs-and-run-rule.md) |
 | T072 | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066, T068, T071 | no | todo | [T072](T072-rss-feeds-screen.md) |
