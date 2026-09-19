@@ -327,9 +327,12 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		categories: NewCategoryHandlers(db, cfg.DataRoots),
 		fs:         NewFSHandlers(cfg.DataRoots),
 		search:     NewSearchHandlers(log, searchDeps),
-		feeds:      NewFeedHandlers(db),
-		SSE:        sseHandlers,
-		bgCancel:   bgCancel,
+		// The feed poller shares the SSRF-guarded client with the search
+		// fan-out; its item parser is nil until T067 lands parse.go — the
+		// poller reports that as a fetch failure rather than panic.
+		feeds:    NewFeedHandlers(db, searchDeps.HTTP, nil, log),
+		SSE:      sseHandlers,
+		bgCancel: bgCancel,
 	}
 	// Any construction failure after the first goroutine started still
 	// releases it before the error return.

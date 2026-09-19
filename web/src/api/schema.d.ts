@@ -284,6 +284,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/feeds/{id}/refresh": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Poll the feed now
+     * @description Forces one conditional GET now, bypassing disabled_till and the backoff ladder, and reports the poll outcome. A fetch failure is still 200 with error set; 404 means the feed id addresses no row.
+     */
+    post: operations["refresh-feed"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/fs/browse": {
     parameters: {
       query?: never;
@@ -1388,6 +1408,15 @@ export interface components {
       type: string;
       uri?: string;
     };
+    Result: {
+      /** Format: int64 */
+      elapsed_ms: number;
+      error?: string;
+      fetched: boolean;
+      /** Format: int64 */
+      items_added: number;
+      not_modified: boolean;
+    };
     RootsOutputBody: {
       roots: components["schemas"]["FSRoot"][] | null;
     };
@@ -2240,6 +2269,38 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["FeedItemsUpdatedOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "refresh-feed": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The fed_ id of the feed */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Result"];
         };
       };
       /** @description Error */

@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/mmcdole/gofeed v1.4.2
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go v0.44.0
 	golang.org/x/text v0.41.0
