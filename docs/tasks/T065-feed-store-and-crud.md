@@ -178,8 +178,9 @@ no row. Only the PATCH body can `422` — an empty `ids`, more than 500 ids, or 
 takes no body.
 
 ## Steps
-1. Create `internal/store/feeds.go` with the two structs and the thirteen functions above, every statement
-   carrying an explicit column list and a context. `ListFeeds` and `FeedByID` select `unread_count` as a
+1. Create `internal/store/feeds.go` with the three structs — `Feed`, `FeedItem` and `FeedItemFilter` —
+   and the thirteen functions above, every statement carrying an explicit column list and a context.
+   `ListFeeds` and `FeedByID` select `unread_count` as a
    correlated `(SELECT COUNT(*) FROM feed_items i WHERE i.feed_id = feeds.id AND i.read = 0)` expression in
    the column list.
 2. Generate ids with `store.NewID(store.PrefixFeed)` for feeds and `store.PrefixFeedItem` for items, per
@@ -225,7 +226,8 @@ takes no body.
   read, that every name `isSecretQueryParameter` recognises is masked (one case per name), and that a
   PATCH echoing the redacted URL leaves the stored URL unchanged.
 - [ ] `TestUnreadFilterMatchesReadColumn` asserts `unread=true` returns only `read = 0` rows and
-  `unread_count` tracks the same predicate.
+  `unread_count` tracks the same predicate, and that `total` counts only the rows behind the active
+  `FeedItemFilter` — it drops under `unread=true`.
 - [ ] `TestMarkFeedItemsRead` asserts `updated` counts only rows that changed state and that ids of a
   different feed are skipped.
 - [ ] `TestMarkAllFeedItemsReadIsIdempotent` asserts the second `read-all` call returns `{"updated":0}`.

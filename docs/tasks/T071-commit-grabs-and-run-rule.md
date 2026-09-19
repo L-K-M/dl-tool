@@ -5,7 +5,7 @@
 | **ID** | T071 |
 | **Milestone** | M5 |
 | **Status** | todo |
-| **Depends on** | T020, T024, T066, T069, T070 |
+| **Depends on** | T020, T024, T065, T066, T069, T070 |
 | **Blocks** | T073 |
 | **Parallel-safe** | no — extends `internal/rss/poll.go` and `internal/api/rules.go` |
 | **Implements** | [FR-077](../02-requirements.md#fr-077-run-a-rule-against-existing-items) |
