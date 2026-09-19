@@ -80,8 +80,10 @@ func TestCreateTasksBlocksLoopbackURI(t *testing.T) {
 	env := newSSRFEnv(t)
 
 	for _, raw := range []string{"http://127.0.0.1:8080/x", "http://127.0.0.1/x", "http://[::1]/x"} {
-		resp := env.createTasks(t, map[string]any{"uris": []string{raw}})
-		assertProblem(t, resp, http.StatusForbidden, SlugSSRFBlocked)
+		t.Run(raw, func(t *testing.T) {
+			resp := env.createTasks(t, map[string]any{"uris": []string{raw}})
+			assertProblem(t, resp, http.StatusForbidden, SlugSSRFBlocked)
+		})
 	}
 	assertNoEngineAdd(t, env)
 }
@@ -207,6 +209,27 @@ func TestInspectBlocksBlockedHost(t *testing.T) {
 	resp := env.inspect(t, map[string]any{"uris": []string{"http://blocked.example/x.iso"}})
 	assertProblem(t, resp, http.StatusForbidden, SlugSSRFBlocked)
 	env.assertNoTask(t)
+}
+
+// TestTorrentURLCreatesIdentitylessTask keeps endpoint-level coverage of
+// the contract the late-resolution test used to prove through POST /tasks
+// before its 127.0.0.1 stub URL became unsubmitable: a .torrent URI creates
+// the task with no infohash — identity arrives with the metadata, not the
+// submission.
+func TestTorrentURLCreatesIdentitylessTask(t *testing.T) {
+	env := newSSRFEnv(t)
+
+	resp := env.createTasks(t, map[string]any{"uris": []string{"http://public.example/fixture.torrent"}})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", resp.Code, http.StatusCreated, resp.Body.String())
+	}
+	created := decodeCreateBody(t, resp).Created
+	if len(created) != 1 {
+		t.Fatalf("created = %+v, want exactly one task", created)
+	}
+	if created[0].InfohashV1 != nil || created[0].InfohashV2 != nil {
+		t.Errorf("infohashes = %v/%v, want both nil at create", created[0].InfohashV1, created[0].InfohashV2)
+	}
 }
 
 // TestInspectBlockedAndJunk mirrors TestCreateTasksBlockedAndJunk on the

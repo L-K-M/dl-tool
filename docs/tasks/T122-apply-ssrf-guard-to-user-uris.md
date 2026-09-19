@@ -203,8 +203,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/secure/...
-ok  	github.com/L-K-M/dl-tool/internal/api	129.478s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.456s
+ok  	github.com/L-K-M/dl-tool/internal/api	130.324s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.649s
 SSRF_WIRED_OK
 ```
 
@@ -215,7 +215,8 @@ No `FAIL`, no `SKIP`. The nine named cases run under `internal/api` and pass:
 `TestPreflightAllowsSFTPOnPort2222`, `TestPreflightBlocksWhenOneAnswerIsPrivate`,
 `TestPreflightRedactsUserinfo`. The review-driven cases pass with them:
 `TestBlockedTaskCannotResume`, `TestCreateTasksBlockedAndJunk`,
-`TestInspectBlockedAndJunk` and `TestPreflightBlocksUnparseable`.
+`TestInspectBlockedAndJunk`, `TestPreflightBlocksUnparseable` and
+`TestTorrentURLCreatesIdentitylessTask`.
 
 Scope check — the review fix landed on top of the task commit, so `git status` on the working tree
 shows only its delta; the cumulative branch diff against `origin/main` is the Files table exactly:
