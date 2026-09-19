@@ -193,12 +193,17 @@ Statuses, exactly doc 05 §10.2: `200` · `201` · `204` · `404` · `409 /probl
    only an explicit `false` deletes it, when such a rule exists — a plain `bool` would read every
    unrelated PATCH as `false`.
    `true` creates a rule named `auto:<feed_id>` when none carries the name — enabled, `feeds: [<the
-   feed's URL>]` (doc 08 §4.2 scopes rules by URL, so a later feed-URL edit does not rewrite the rule,
+   feed's URL — the post-patch URL when the same request also changes it>]` (doc 08 §4.2 scopes rules by
+   URL, so a later feed-URL edit does not rewrite the rule,
    exactly doc 09 §8.1's documented behaviour), an empty `match` block and an omitted
    `action.destination`, which §10.2 resolves to the global default — built as a `RuleDoc`, run through
    `ApplyDefaults` and `Validate`, and stored by `CreateRule`. The member is write-only: §10.1's feed
-   object carries no `auto_download` on read. The `auto:` prefix is reserved: `POST`/`PATCH /rules` reject
-   an `auto:`-prefixed `name` with `422`, so a user-authored rule can never be adopted by the feed
+   object carries no `auto_download` on read. The `auto:` prefix is reserved: `POST /rules` rejects an
+   `auto:`-prefixed `name` with `422`, and `PATCH /rules` rejects one only when the submitted name
+   differs from the stored rule's own — echoing an `auto:` rule's name to edit it stays legal, so the
+   reservation covers creates and renames, never edits. The check lives in the `rules.go` handlers, not
+   `Validate`: the feed lifecycle's own `auto:<feed_id>` rule runs through `Validate` and must not fail
+   on its own name. Either way a user-authored rule can never be adopted by the feed
    lifecycle. In the other direction the `auto:` rule is an ordinary rule — doc 09 §8.1 says it is edited
    and deleted like any other, so `DELETE /rules/{id}` on it succeeds and is how an operator disables
    auto-download without touching the feed; re-enabling is `PATCH auto_download: true`. `DELETE
@@ -228,8 +233,9 @@ Statuses, exactly doc 05 §10.2: `200` · `201` · `204` · `404` · `409 /probl
   idempotent — one `auto:` rule, never two.
 - [ ] `TestPatchOmittingAutoDownloadKeepsRule` asserts a PATCH that omits the member — a rename, an
   `enabled` toggle — leaves the existing `auto:` rule untouched.
-- [ ] `TestAutoPrefixNameRejected` asserts `POST`/`PATCH /rules` answer `422` to an `auto:`-prefixed
-  `name`.
+- [ ] `TestAutoPrefixNameRejected` asserts `POST /rules` answers `422` to an `auto:`-prefixed `name`, and
+  `PATCH /rules` answers `422` to one that differs from the stored name while accepting a PATCH that
+  echoes an `auto:` rule's own name to edit it.
 - [ ] `TestAutoRuleDeletesLikeAnyOther` asserts `DELETE /rules/{id}` on an `auto:` rule is `204` — the
   operator's way to disable auto-download — and a later `PATCH auto_download: true` recreates it.
 - [ ] `TestDeleteFeedRemovesAutoRule` asserts the `auto:<feed_id>` rule is gone after `DELETE`.
