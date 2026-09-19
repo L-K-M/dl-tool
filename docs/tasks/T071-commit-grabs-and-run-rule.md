@@ -5,7 +5,7 @@
 | **ID** | T071 |
 | **Milestone** | M5 |
 | **Status** | todo |
-| **Depends on** | T020, T024, T065, T066, T069, T070 |
+| **Depends on** | T020, T024, T065, T066, T067, T069, T070 |
 | **Blocks** | T073 |
 | **Parallel-safe** | no — extends `internal/rss/poll.go`, `internal/api/rules.go`, `internal/api/server.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-077](../02-requirements.md#fr-077-run-a-rule-against-existing-items) |
@@ -194,7 +194,7 @@ limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule i
 - [ ] `TestFeedItemsMatchedRules` asserts an item with a committed `rule_matches` row lists that rule's
   `id` and `name`, and an unmatched item still renders `[]`.
 - [ ] `NewServer` hands one `ruleTaskCreator` to `NewRuleHandlers`, `NewFeedHandlers` and
-  `Server.RuleCreator`, and both `NewPoller` call sites pass `rss.NewParser`, so a `200` that
+  `Server.RuleCreator`, and both production `NewPoller` call sites pass `rss.NewParser`, so a `200` that
   adds items runs the rules pass in production (docs/14-conventions.md §8.3).
 
 ## Verification
