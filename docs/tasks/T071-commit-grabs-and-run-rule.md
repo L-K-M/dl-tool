@@ -152,10 +152,11 @@ limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule i
 11. Add `ListItemMatchedRules(ctx, db, ids []string)` to `internal/store/feeds.go` — one join over
     `rule_matches` to `rules` returning each item's matching rules as `{id, name}` pairs, so
     `GET /feeds/{id}/items` renders the `matched_rules` member of doc 05 §10.1 instead of the interim `[]`
-    T065 ships. Every stored `rule_matches` row represents a rule that matched the item, so no status
-    filter applies. An empty `ids` slice returns an empty map without querying — an empty items page is
-    a normal request, and skipping the query keeps that case independent of how the engine parses an
-    empty `IN` list.
+    T065 ships: wire the map into `internal/api/feeds.go`, defaulting items with no matches to `[]`, and
+    pin it with `TestFeedItemsMatchedRules` in `internal/api/feeds_test.go`. Every stored `rule_matches`
+    row represents a rule that matched the item, so no status filter applies. An empty `ids` slice
+    returns an empty map without querying — an empty items page is a normal request, and skipping the
+    query keeps that case independent of how the engine parses an empty `IN` list.
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
