@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // The two title parsers of docs/08-rss-automation.md section 6.2, in the
@@ -57,12 +58,23 @@ func (f EpisodeFilter) tokenMatches(token EpisodeToken, title string) bool {
 	}
 }
 
+// singlePatternCache memoises the per-(season, episode) regexes:
+// singleEpisodePattern runs once per single-number token per item, and
+// compiling the same pattern every call would dominate an evaluation pass.
+var singlePatternCache sync.Map // [2]int{season, episode} -> *regexp.Regexp
+
 // singleEpisodePattern compiles the section 6.2 single-number form
 // \b(?:s0?{S}[ -_\.]?e0?{E}|{S}x0?{E})(?:\D|\b) for a normalised season —
 // ParseEpisodeFilter has already stripped its leading zeros.
 func singleEpisodePattern(season, episode int) *regexp.Regexp {
+	key := [2]int{season, episode}
+	if cached, ok := singlePatternCache.Load(key); ok {
+		return cached.(*regexp.Regexp)
+	}
 	s, e := strconv.Itoa(season), strconv.Itoa(episode)
-	return regexp.MustCompile(`(?i)\b(?:s0?` + s + `[ -_.]?e0?` + e + `|` + s + `x0?` + e + `)(?:\D|\b)`)
+	re := regexp.MustCompile(`(?i)\b(?:s0?` + s + `[ -_.]?e0?` + e + `|` + s + `x0?` + e + `)(?:\D|\b)`)
+	singlePatternCache.Store(key, re)
+	return re
 }
 
 // ParseSeasonEpisode is the title parser every range token uses: try

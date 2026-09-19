@@ -2,10 +2,13 @@ package rss
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
@@ -36,6 +39,34 @@ func (s fakeState) BestScoreForContentKey(_ context.Context, key string) (int, b
 
 func emptyState() fakeState {
 	return fakeState{hashes: map[string]bool{}, episodes: map[string]bool{}, best: map[string]int{}}
+}
+
+// testDBState is a State reading the real schema — so a "writes nothing"
+// check exercises the same tables the production dbState (T071) will.
+type testDBState struct{ db *sqlx.DB }
+
+func (s testDBState) HasInfoHash(ctx context.Context, hash string) (bool, error) {
+	var n int
+	err := s.db.GetContext(ctx, &n,
+		`SELECT COUNT(*) FROM rule_matches WHERE info_hash = ?`, hash)
+	return n > 0, err
+}
+
+func (s testDBState) SeenEpisode(ctx context.Context, ruleID, key string) (bool, error) {
+	var n int
+	err := s.db.GetContext(ctx, &n,
+		`SELECT COUNT(*) FROM rule_seen_episodes WHERE rule_id = ? AND episode_key = ?`, ruleID, key)
+	return n > 0, err
+}
+
+func (s testDBState) BestScoreForContentKey(ctx context.Context, key string) (int, bool, error) {
+	var score int
+	err := s.db.GetContext(ctx, &score,
+		`SELECT score FROM rule_matches WHERE content_key = ? ORDER BY matched_at DESC LIMIT 1`, key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return score, err == nil, err
 }
 
 const testRuleID = "rul_01TEST0000000000000000000"
@@ -82,7 +113,7 @@ func TestEveryReasonCodeIsProduced(t *testing.T) {
 		item   store.FeedItem
 		state  fakeState
 		reason string
-		detail string // substring the detail must carry
+		detail string // exact ReasonDetail string, asserted verbatim
 	}{
 		{
 			name:   "cooldown",
@@ -259,6 +290,9 @@ func TestEpisodeFilterWorkedExamples(t *testing.T) {
 		{"2x5;9;12-14;", "Show.S02E09", true},
 		{"2x5;9;12-14;", "Show 2x13", true},
 		{"2x5;9;12-14;", "Show.S03E13", false}, // same range, wrong season
+		// Doc 08 section 6.3 pins this row: group 2 is ";" so every token
+		// is empty and nothing can match — a deliberate no-op, not "all of
+		// season 1".
 		{"1x;", "Show.S01E01", false},
 		{"01x05;", "Show 1x05", true}, // dl-tool normalises the season
 		{"", "anything at all", true},
@@ -279,6 +313,15 @@ func TestEpisodeFilterWorkedExamples(t *testing.T) {
 
 	// The "1x01" row is a save-time 422: the filter must fail to parse.
 	_, err := ParseEpisodeFilter("1x01")
+	require.Error(t, err)
+
+	// "0x;" parses to the zero EpisodeFilter that Match reads as
+	// match-everything; Evaluate refuses it rather than silently matching
+	// all.
+	doc := RuleDoc{Episode: &EpisodeSpec{Filter: "0x;"}}
+	doc.ApplyDefaults()
+	_, _, err = Evaluate(t.Context(), doc, store.Rule{ID: testRuleID},
+		[]store.FeedItem{matchItem("w2", "Show.S01E01")}, testFeedScope, emptyState(), testNow.UnixMilli())
 	require.Error(t, err)
 }
 
@@ -319,9 +362,22 @@ func TestRuleRoutesHTTPAndMagnet(t *testing.T) {
 }
 
 // TestEvaluateWritesNothing: the acceptance criterion — every table a rule
-// run could touch holds the same row count afterwards.
+// run could touch holds the same row count afterwards, with a State that
+// reads the real schema. The seeded rule_matches row also proves the state
+// lookups ran: the item collides on content_key and reports already_have.
 func TestEvaluateWritesNothing(t *testing.T) {
 	db := newTestDB(t)
+	now := testNow.UnixMilli()
+
+	require.NoError(t, store.CreateRule(t.Context(), db, store.Rule{
+		ID: testRuleID, Name: "iso-rule", Enabled: true, DefinitionJSON: "{}",
+	}))
+	_, err := db.ExecContext(t.Context(),
+		`INSERT INTO rule_matches
+		(id, rule_id, content_key, title, status, score, matched_at, created_at, updated_at)
+		VALUES ('rm_w1', ?, 'id-w1', 'Ubuntu ISO', 'sent', 40, ?, ?, ?)`,
+		testRuleID, now, now, now)
+	require.NoError(t, err)
 
 	counts := func() map[string]int {
 		out := map[string]int{}
@@ -337,9 +393,12 @@ func TestEvaluateWritesNothing(t *testing.T) {
 
 	doc := RuleDoc{Match: MatchSpec{AnyOf: []string{"*"}}}
 	doc.ApplyDefaults()
-	_, _, err := Evaluate(t.Context(), doc, store.Rule{ID: testRuleID},
-		[]store.FeedItem{matchItem("w1", "Ubuntu ISO")}, testFeedScope, emptyState(), testNow.UnixMilli())
+	decisions, cands, err := Evaluate(t.Context(), doc, store.Rule{ID: testRuleID},
+		[]store.FeedItem{matchItem("w1", "Ubuntu ISO")}, testFeedScope, testDBState{db: db}, now)
 	require.NoError(t, err)
+	require.Len(t, decisions, 1)
+	require.Equal(t, ReasonAlreadyHave, decisions[0].Reason) // the seeded row was read
+	require.Empty(t, cands)
 	require.Equal(t, before, counts())
 }
 
@@ -408,7 +467,8 @@ func TestRepackVariantsDecision(t *testing.T) {
 	doc := RuleDoc{Episode: &EpisodeSpec{Smart: true}}
 	doc.ApplyDefaults()
 	rule := store.Rule{ID: testRuleID}
-	seen := map[string]bool{testRuleID + "\x00" + "1x5": true}
+	epKey := func(ep string) string { return testRuleID + "\x00" + ep }
+	seen := map[string]bool{epKey("1x5"): true}
 
 	// REPACK of a seen episode: accepted, staging 1x5-REPACK.
 	_, cands, err := Evaluate(t.Context(), doc, rule,
@@ -422,8 +482,8 @@ func TestRepackVariantsDecision(t *testing.T) {
 	// Same variant already stored: duplicate_episode again.
 	d := evalOne(t, doc, rule, matchItem("v2", "Show.S01E05.REPACK.1080p"),
 		fakeState{episodes: map[string]bool{
-			testRuleID + "\x00" + "1x5":        true,
-			testRuleID + "\x00" + "1x5-REPACK": true,
+			epKey("1x5"):        true,
+			epKey("1x5-REPACK"): true,
 		}})
 	require.Equal(t, ReasonDuplicateEpisode, d.Reason)
 	require.Equal(t, `episode_key "1x5-REPACK" already seen for this rule`, d.ReasonDetail)
@@ -462,6 +522,15 @@ func TestFeedScopeAndDateFloorRemoveSilently(t *testing.T) {
 		[]store.FeedItem{matchItem("f2", "Ubuntu ISO")}, testFeedScope, emptyState(), testNow.UnixMilli())
 	require.NoError(t, err)
 	require.Empty(t, decisions)
+
+	// And the feed scope alone, without the floor, removes the same way.
+	doc = RuleDoc{Feeds: []string{"https://example.com/other.xml"}}
+	doc.ApplyDefaults()
+	decisions, cands, err = Evaluate(t.Context(), doc, store.Rule{ID: testRuleID},
+		[]store.FeedItem{matchItem("f3", "Ubuntu ISO")}, testFeedScope, emptyState(), testNow.UnixMilli())
+	require.NoError(t, err)
+	require.Empty(t, decisions)
+	require.Empty(t, cands)
 }
 
 // TestMatchedByAndHighlight: a matched decision names the winning any_of
@@ -484,4 +553,37 @@ func TestStateErrorPropagates(t *testing.T) {
 		[]store.FeedItem{withHash(matchItem("x1", "Ubuntu ISO"), "dcb9178653b651c7ca4526e11fa8e22f74e2fd7a")},
 		testFeedScope, fakeState{err: fmt.Errorf("db gone")}, testNow.UnixMilli())
 	require.Error(t, err)
+}
+
+// TestUnroutableItemErrors: a matched item whose download_url cannot be
+// normalised or routed is a store-invariant breach — it aborts the pass
+// with an error rather than vanishing silently.
+func TestUnroutableItemErrors(t *testing.T) {
+	doc := RuleDoc{}
+	doc.ApplyDefaults()
+	rule := store.Rule{ID: testRuleID}
+
+	noURL := matchItem("u1", "Ubuntu ISO")
+	noURL.DownloadURL = nil
+	_, _, err := Evaluate(t.Context(), doc, rule,
+		[]store.FeedItem{noURL}, testFeedScope, emptyState(), testNow.UnixMilli())
+	require.Error(t, err)
+
+	badURL := matchItem("u2", "Ubuntu ISO")
+	badURL.DownloadURL = strPtr("nzb://example.com/1")
+	_, _, err = Evaluate(t.Context(), doc, rule,
+		[]store.FeedItem{badURL}, testFeedScope, emptyState(), testNow.UnixMilli())
+	require.Error(t, err)
+}
+
+// TestUnknownMatchFieldErrors: a match.fields entry the store cannot serve
+// fails loudly at evaluation setup instead of silently shrinking the
+// haystack.
+func TestUnknownMatchFieldErrors(t *testing.T) {
+	doc := RuleDoc{Match: MatchSpec{Fields: []string{"desription"}}}
+	doc.ApplyDefaults()
+	_, _, err := Evaluate(t.Context(), doc, store.Rule{ID: testRuleID},
+		[]store.FeedItem{matchItem("u3", "Ubuntu ISO")}, testFeedScope, emptyState(), testNow.UnixMilli())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `"desription"`)
 }

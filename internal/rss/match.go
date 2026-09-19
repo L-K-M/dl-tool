@@ -183,6 +183,14 @@ func newRuleEval(doc RuleDoc, rule store.Rule) (*ruleEval, error) {
 	}
 	e.doc.Match.Mode, e.doc.Match.Fields = mode, fields
 
+	// An unknown field would silently shrink the haystack; reject it here
+	// rather than per item.
+	for _, field := range fields {
+		if field != matchFieldTitle {
+			return nil, fmt.Errorf("match.fields: unsupported field %q", field)
+		}
+	}
+
 	for i, entry := range doc.Match.NoneOf {
 		clause, err := compileClause(mode, entry, doc.Match.CaseSensitive, false)
 		if err != nil {
@@ -226,6 +234,13 @@ func newRuleEval(doc RuleDoc, rule store.Rule) (*ruleEval, error) {
 			if err != nil {
 				return nil, fmt.Errorf("episode.filter: %w", err)
 			}
+			if filter.Season == 0 && len(filter.Tokens) == 0 {
+				// A "0x;"-shaped filter parses to the zero EpisodeFilter,
+				// which Match reads as match-everything — the worst
+				// failure mode for a grabbing tool. Reject it here so a
+				// non-empty filter can never silently match all.
+				return nil, fmt.Errorf("episode.filter %q selects no season", doc.Episode.Filter)
+			}
 			e.filter, e.filterSet = filter, true
 		}
 		e.smart = doc.Episode.Smart
@@ -250,13 +265,14 @@ func newRuleEval(doc RuleDoc, rule store.Rule) (*ruleEval, error) {
 	return e, nil
 }
 
-// Evaluate runs steps 1 to 11 of docs/08-rss-automation.md section 5 for
-// one rule. Items are the candidate set, already newest-first. feedByID is
-// keyed on feed_items.feed_id. It is side-effect free and safe to call
+// Evaluate runs steps 1 to 12 of docs/08-rss-automation.md section 5 for
+// one rule — decide, then collect and route; nothing is written. Items are
+// the candidate set, already newest-first. feedByID is keyed on
+// feed_items.feed_id. It is side-effect free and safe to call
 // concurrently.
 func Evaluate(ctx context.Context, doc RuleDoc, rule store.Rule, items []store.FeedItem,
 	feedByID map[string]FeedRef, st State, now int64) ([]Decision, []Candidate, error) {
-	// now is for the steps 12-14 timestamps T071 owns; steps 1-11 and 13
+	// now is for the step-14 timestamps T071 owns; steps 1-12 and 13
 	// read only stored values, so it is unused here.
 	e, err := newRuleEval(doc, rule)
 	if err != nil {
@@ -333,12 +349,15 @@ func (e *ruleEval) evaluateItem(ctx context.Context, item store.FeedItem, feed F
 	if len(e.anyOf) > 0 {
 		entry, ok := e.matchAny(haystack)
 		if !ok {
-			missEntry, missToken := e.closestMiss(haystack)
+			missEntry, missToken, _ := e.closestMiss(haystack)
 			return reject(ReasonNoMatch, fmt.Sprintf("any_of[%d] token %q not found",
 				missEntry, e.anyOf[missEntry].parts[missToken]))
 		}
 		matchedBy["any_of"] = e.anyOf[entry].raw
-		if span := e.anyOf[entry].tokens[0].FindStringIndex(haystack); span != nil {
+		// Highlight is a title offset, so the span is searched in the
+		// title itself — not the joined haystack, which would shift the
+		// offsets once match.fields carries more than title.
+		if span := e.anyOf[entry].tokens[0].FindStringIndex(item.Title); span != nil {
 			highlight = [2]int{span[0], span[1]}
 		}
 	}
@@ -441,23 +460,25 @@ func (e *ruleEval) evaluateItem(ctx context.Context, item store.FeedItem, feed F
 	}
 
 	// Step 12 — collect, routing exactly like a pasted URI. An item whose
-	// stored download_url cannot be normalised or routed leaves the set
-	// silently: it is a store-invariant breach (the parser only stores
-	// items with a download URI), not a rule outcome, and no reason code
-	// of section 5.1 covers it.
-	d.Matched, d.MatchedBy, d.Highlight = true, matchedBy, highlight
+	// stored download_url cannot be normalised or routed is a
+	// store-invariant breach (the parser only stores items with a
+	// download URI), not a rule outcome — and no reason code of section
+	// 5.1 covers it, so it aborts the pass with an explicit error instead
+	// of vanishing silently. Never log the raw URL: it may carry userinfo.
 	if item.DownloadURL == nil {
-		return Decision{}, nil, false, nil
+		return Decision{}, nil, false, fmt.Errorf("rss: evaluate rule %s: item %s: no download_url", e.rule.ID, item.Identity)
 	}
 	norm, err := uri.Normalize(*item.DownloadURL)
 	if err != nil {
-		return Decision{}, nil, false, nil
+		return Decision{}, nil, false, fmt.Errorf("rss: evaluate rule %s: item %s: %w", e.rule.ID, item.Identity, err)
 	}
 	name, err := engine.Route(norm, nil)
 	if err != nil {
-		return Decision{}, nil, false, nil
+		return Decision{}, nil, false, fmt.Errorf("rss: evaluate rule %s: item %s: route %s: %w",
+			e.rule.ID, item.Identity, norm.URI, err)
 	}
 
+	d.Matched, d.MatchedBy, d.Highlight = true, matchedBy, highlight
 	return d, &Candidate{
 		Item:         item,
 		FeedURL:      feed.URL,
@@ -492,8 +513,10 @@ func (e *ruleEval) matchAny(haystack string) (entry int, ok bool) {
 
 // closestMiss picks the any_of entry that came nearest to passing — fewest
 // unmatched tokens, earliest index on a tie — and the index of its first
-// missing token, so reason_detail can name both.
-func (e *ruleEval) closestMiss(haystack string) (entry, token int) {
+// missing token, so reason_detail can name both. ok is false when every
+// entry matched, which cannot happen at the only call site (it runs after
+// matchAny failed) but keeps the signature honest.
+func (e *ruleEval) closestMiss(haystack string) (entry, token int, ok bool) {
 	fewest := -1
 	for i, clause := range e.anyOf {
 		misses, firstMiss := 0, -1
@@ -506,10 +529,10 @@ func (e *ruleEval) closestMiss(haystack string) (entry, token int) {
 			}
 		}
 		if firstMiss >= 0 && (fewest < 0 || misses < fewest) {
-			fewest, entry, token = misses, i, firstMiss
+			fewest, entry, token, ok = misses, i, firstMiss, true
 		}
 	}
-	return entry, token
+	return entry, token, ok
 }
 
 // score sums the weights of every score.formats pattern matching the
