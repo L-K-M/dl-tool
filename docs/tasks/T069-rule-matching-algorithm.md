@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T069 |
 | **Milestone** | M5 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T015, T016, T067, T068 |
 | **Blocks** | T070, T071 |
 | **Parallel-safe** | yes — creates `internal/rss/match.go` and `internal/rss/episode.go` only |
@@ -171,13 +171,13 @@ func RepackVariants(key, title string) []string
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestEveryReasonCodeIsProduced` asserts all ten codes appear, and no eleventh string.
-- [ ] `TestNoneOfEvaluatedBeforeAnyOf` asserts an item hitting both reports `excluded`.
-- [ ] `TestUnknownSizePasses` asserts an item with `size_bytes` NULL is not rejected.
-- [ ] `TestEpisodeFilterWorkedExamples` covers all nine rows of doc 08 §6.3.
-- [ ] `TestSmartKeyCollapsesNotations` asserts `S01E05` and `1x05` both produce `1x5`.
-- [ ] `TestRuleRoutesHTTPAndMagnet` asserts one candidate is `aria2` and the other `qbittorrent`.
-- [ ] `Evaluate` writes nothing: the test database row counts are unchanged afterwards.
+- [x] `TestEveryReasonCodeIsProduced` asserts all ten codes appear, and no eleventh string.
+- [x] `TestNoneOfEvaluatedBeforeAnyOf` asserts an item hitting both reports `excluded`.
+- [x] `TestUnknownSizePasses` asserts an item with `size_bytes` NULL is not rejected.
+- [x] `TestEpisodeFilterWorkedExamples` covers all nine rows of doc 08 §6.3.
+- [x] `TestSmartKeyCollapsesNotations` asserts `S01E05` and `1x05` both produce `1x5`.
+- [x] `TestRuleRoutesHTTPAndMagnet` asserts one candidate is `aria2` and the other `qbittorrent`.
+- [x] `Evaluate` writes nothing: the test database row counts are unchanged afterwards.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -209,7 +209,62 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head, verbatim:
+
+```
+$ make lint && make test PKG=./internal/rss/... && echo MATCH_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/rss/...
+ok  	github.com/L-K-M/dl-tool/internal/rss	7.742s
+MATCH_OK
+```
+
+The acceptance-criteria tests, from the same head under `go test -race -count=1 -v`:
+
+```
+--- PASS: TestEveryReasonCodeIsProduced (0.00s)
+--- PASS: TestNoneOfEvaluatedBeforeAnyOf (0.00s)
+--- PASS: TestUnknownSizePasses (0.00s)
+--- PASS: TestEpisodeFilterWorkedExamples (0.00s)
+--- PASS: TestSmartKeyCollapsesNotations (0.00s)
+--- PASS: TestRuleRoutesHTTPAndMagnet (0.00s)
+--- PASS: TestEvaluateWritesNothing (0.38s)
+--- PASS: TestResolveContest (0.00s)
+--- PASS: TestResolveFeedPriorityAndRecency (0.00s)
+--- PASS: TestSmartDedupWithinRun (0.00s)
+--- PASS: TestRepackVariantsDecision (0.00s)
+--- PASS: TestFeedScopeAndDateFloorRemoveSilently (0.00s)
+--- PASS: TestMatchedByAndHighlight (0.00s)
+--- PASS: TestStateErrorPropagates (0.00s)
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/rss/episode.go
+internal/rss/match.go
+internal/rss/match_test.go
+```
+
+One addition to the printed contract: `Candidate` gained an unexported `stagedKeys`
+field carrying every episode key a REPACK+PROPER accept must write to
+`rule_seen_episodes` (doc 08 §6.4 stages `key-REPACK` and `key-PROPER` for a
+title that is both). `EpisodeKey` stays the primary staged key and the
+`ep:<rule_id>:<key>` content key. Only package `rss` commits staged keys
+(T071's grab.go), so the field is unexported and the exported contract is
+unchanged.
 
 ## Blocked
 
@@ -277,4 +332,5 @@ vocabulary (F138); an item with no staged episode key uses its `info_hash`, else
 closing the doc's open question,
 and step 13's grouping is ruled per-rule with the step-10 global `content_key` check arbitrating
 cross-rule contention under the `(priority ASC, name ASC)` pass order, so `Resolve` drops the constant
-`rulePriority` parameter (F361). The index row stays `todo`; the next loop iteration implements it.
+`rulePriority` parameter (F361). The index row stayed `todo` for the next loop iteration; this commit
+implements it, so the row now reads `done`.
