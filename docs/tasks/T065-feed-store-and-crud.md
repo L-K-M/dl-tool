@@ -52,7 +52,7 @@ package store
 // stored verbatim and redacted only on the wire (see the FeedDTO rules below).
 type Feed struct {
 	ID               string  `db:"id"                 json:"id"`
-	URL              string  `db:"url"                json:"url"`
+	URL              string  `db:"url"                json:"-"`
 	Title            *string `db:"title"              json:"title"`
 	Enabled          bool    `db:"enabled"            json:"enabled"`
 	RefreshIntervalS int     `db:"refresh_interval_s" json:"refresh_interval_s"`
@@ -135,7 +135,7 @@ type FeedItemFilter struct {
 
 // ListFeedItems pages newest first — COALESCE(published_at, first_seen_at) DESC, id DESC as the
 // tie-break — and returns the page, the next cursor and the total matching the filter, ignoring
-// the cursor (doc 05 §1.4).
+// the cursor and the limit (doc 05 §1.4).
 func ListFeedItems(ctx context.Context, db *sqlx.DB, f FeedItemFilter) (items []FeedItem, nextCursor string, total int, err error)
 
 // SetFeedItemsRead marks the listed items of one feed read or unread and returns how many rows
@@ -226,8 +226,8 @@ takes no body.
   read, that every name `isSecretQueryParameter` recognises is masked (one case per name), and that a
   PATCH echoing the redacted URL leaves the stored URL unchanged.
 - [ ] `TestUnreadFilterMatchesReadColumn` asserts `unread=true` returns only `read = 0` rows and
-  `unread_count` tracks the same predicate, and that `total` counts only the rows behind the active
-  `FeedItemFilter` — it drops under `unread=true`.
+  `unread_count` tracks the same predicate, and that `total` counts every row matching the filter,
+  ignoring the cursor and the limit — it drops under `unread=true`.
 - [ ] `TestMarkFeedItemsRead` asserts `updated` counts only rows that changed state and that ids of a
   different feed are skipped.
 - [ ] `TestMarkAllFeedItemsReadIsIdempotent` asserts the second `read-all` call returns `{"updated":0}`.

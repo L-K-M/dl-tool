@@ -233,9 +233,9 @@ Statuses, exactly doc 05 §10.2: `200` · `201` · `204` · `404` · `409 /probl
   idempotent — one `auto:` rule, never two.
 - [ ] `TestPatchOmittingAutoDownloadKeepsRule` asserts a PATCH that omits the member — a rename, an
   `enabled` toggle — leaves the existing `auto:` rule untouched.
-- [ ] `TestAutoPrefixNameRejected` asserts `POST /rules` answers `422` to an `auto:`-prefixed `name`, and
-  `PATCH /rules` answers `422` to one that differs from the stored name while accepting a PATCH that
-  echoes an `auto:` rule's own name to edit it.
+- [ ] `TestAutoPrefixNameRejected` asserts `POST /rules` answers `422` to an `auto:`-prefixed `name`,
+  `PATCH /rules` answers `422` to one that differs from the stored name, and accepts both a PATCH that
+  echoes an `auto:` rule's own name and one that omits `name` entirely — an `enabled` toggle.
 - [ ] `TestAutoRuleDeletesLikeAnyOther` asserts `DELETE /rules/{id}` on an `auto:` rule is `204` — the
   operator's way to disable auto-download — and a later `PATCH auto_download: true` recreates it.
 - [ ] `TestDeleteFeedRemovesAutoRule` asserts the `auto:<feed_id>` rule is gone after `DELETE`.
