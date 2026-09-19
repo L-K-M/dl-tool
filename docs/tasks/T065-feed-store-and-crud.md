@@ -184,11 +184,11 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Blocked
 
 This task cannot run as written: the file predates the 2026-09-01 consistency review and its
-interface contract contradicts the current docs in five places, so the documented `§10.1`
-surface cannot be served inside the `## Files` table without deviating from one authority or
-the other. Recorded rather than silently widened, matching the record-then-repair workflow of
-T046 (#160/#161), T049 (#167/#168), T050 (#169/#170, #171/#172), T052 (#184/#185),
-T057 (#201/#202), T058 (#204), T063 (#212/#214) and T064 (#217).
+interface contract diverges from the docs and the task suite in five places, so the
+documented `§10.1` surface cannot be served inside the `## Files` table without deviating
+from one authority or the other. Recorded rather than silently widened, matching the
+record-then-repair workflow of T046 (#160/#161), T049 (#167/#168), T050 (#169/#170, #171/#172),
+T052 (#184/#185), T057 (#201/#202), T058 (#204), T063 (#212/#214) and T064 (#217).
 
 1. The contract structs cannot render the documented objects. `feeds.priority` exists in the
    schema (doc 04 §3.5, migration `00001_init.sql`) and is a member of the §10.1 feed object
@@ -235,4 +235,5 @@ T057 (#201/#202), T058 (#204), T063 (#212/#214) and T064 (#217).
    a new task between T065 and T072.
 
 5. `matched_rules` on the §10.1 item object reads `rule_matches`, which T071 owns; until then
-   the member can only render `[]` or be omitted, and the repair should say which.
+   the member can only render `[]` or be omitted. Remedy: the repair names one of the two as
+   the interim wire behaviour.
