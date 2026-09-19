@@ -220,6 +220,10 @@ func TestNotModifiedAddsNoItems(t *testing.T) {
 	require.Equal(t, 0, res.ItemsAdded)
 	require.Equal(t, int32(2), calls.Load())
 	require.Equal(t, 1, itemCount(t, db, feed.ID), "a 304 must not store items")
+
+	stored := feedByID(t, db, feed.ID)
+	require.NotNil(t, stored.ETag, "a 304 must not clear the stored ETag")
+	require.Equal(t, `"v1"`, *stored.ETag)
 }
 
 // TestBackoffLadderEscalatesAndDecrements: three consecutive 500s walk the
@@ -421,6 +425,8 @@ func TestNextFetchAtAppliesJitter(t *testing.T) {
 // pushed to the next allowed hour; a skipped weekday pushes to the next
 // allowed day's first hour.
 func TestSkipHoursReschedules(t *testing.T) {
+	require.Equal(t, time.Saturday, testNow.Weekday(), "SkipDays expectations assume a Saturday")
+	require.Equal(t, 12, testNow.Hour(), "SkipHours expectations assume 12:00 UTC")
 	base := testNow.UnixMilli() // 12:00 UTC Saturday
 
 	meta := FeedMeta{SkipHours: []int{13}}
@@ -500,10 +506,12 @@ func TestPollDuePollsOnlyDueFeeds(t *testing.T) {
 func TestPollDueContinuesPastFailures(t *testing.T) {
 	db := newTestDB(t)
 
-	var status atomic.Int32
-	status.Store(http.StatusInternalServerError)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(int(status.Load()))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/good" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
@@ -513,7 +521,44 @@ func TestPollDueContinuesPastFailures(t *testing.T) {
 	poller := testPoller(t, db, srv, stubParser{})
 	require.NoError(t, poller.PollDue(t.Context(), store.Job{Kind: "rss_poll"}))
 	require.Equal(t, 1, feedByID(t, db, bad.ID).EscalationLevel)
-	require.Equal(t, 1, feedByID(t, db, good.ID).EscalationLevel)
+	require.NotNil(t, feedByID(t, db, good.ID).LastSuccessAt)
+}
+
+// TestConcurrentPollSameFeedSkipped: while one poll of a feed is in
+// flight — regardless of which poller instance holds it — a second Poll of
+// the same feed fetches nothing. A forced refresh reports the conflict;
+// a scheduled poll skips quietly.
+func TestConcurrentPollSameFeedSkipped(t *testing.T) {
+	db := newTestDB(t)
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	feed := newFeed(t, db, srv.URL+"/feed")
+	poller := testPoller(t, db, srv, stubParser{})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = poller.Poll(t.Context(), feed, false)
+	}()
+	// Wait until the first poll holds the claim, then race it.
+	require.Eventually(t, func() bool {
+		_, busy := inFlightPolls.Load(feed.ID)
+		return busy
+	}, 2*time.Second, time.Millisecond)
+
+	res, err := poller.Poll(t.Context(), feedByID(t, db, feed.ID), true)
+	require.NoError(t, err)
+	require.False(t, res.Fetched)
+	require.Contains(t, res.Error, "already in progress")
+
+	<-done
 }
 
 // TestResultIsTheRefreshBody pins the doc 05 section 10.1 refresh shape: a

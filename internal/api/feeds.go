@@ -520,12 +520,16 @@ func (h *FeedHandlers) MarkAllRead(ctx context.Context, in *MarkAllFeedItemsRead
 // section 10.1). The outcome — including a fetch failure — is the 200 body;
 // only a missing feed or a bookkeeping failure is an error response.
 func (h *FeedHandlers) Refresh(ctx context.Context, in *RefreshFeedInput) (*RefreshFeedOutput, error) {
+	// The guard precedes the store call: a nil db — the document-only
+	// builds that leave poller nil — must answer 503, not panic inside
+	// sqlx before the configured check ever runs.
+	if h.poller == nil {
+		return nil, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the feed poller is not configured")
+	}
+
 	feed, err := store.FeedByID(ctx, h.db, in.ID)
 	if err != nil {
 		return nil, FromStore(err)
-	}
-	if h.poller == nil {
-		return nil, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the feed poller is not configured")
 	}
 
 	result, err := h.poller.Poll(ctx, feed, true)

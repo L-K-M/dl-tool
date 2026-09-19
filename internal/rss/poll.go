@@ -104,7 +104,18 @@ type Poller struct {
 	log       *slog.Logger
 	now       func() time.Time
 	startedAt time.Time
+	// pollMu serialises PollDue passes on this poller: the jobs pool runs
+	// handlers concurrently, so a minute-long pass could otherwise overlap
+	// the next enqueued rss_poll and double-walk the due list.
+	pollMu sync.Mutex
 }
+
+// inFlightPolls is the process-wide set of feed ids currently being
+// fetched. It lives at package level because the job poller and the refresh
+// endpoint's poller are separate instances that must not fetch the same
+// feed concurrently — a racing Poll would double-hit the publisher and
+// lose-update the feed's escalation state.
+var inFlightPolls sync.Map
 
 // NewPoller takes the shared SSRF-guarded client built in internal/secure;
 // the poller never constructs an http.Client of its own.
@@ -161,6 +172,18 @@ func (p *Poller) Poll(ctx context.Context, f store.Feed, force bool) (res Result
 	defer func() {
 		res.ElapsedMS = p.now().UnixMilli() - now
 	}()
+
+	if _, busy := inFlightPolls.LoadOrStore(f.ID, struct{}{}); busy {
+		// Another poller — a concurrent PollDue pass or the refresh
+		// endpoint — is already fetching this feed. A scheduled poll
+		// skips quietly; a forced one reports the conflict like any
+		// other fetch failure so refresh still answers 200 with error.
+		if force {
+			res.Error = "a poll of this feed is already in progress"
+		}
+		return res, nil
+	}
+	defer inFlightPolls.Delete(f.ID)
 
 	if !force && f.DisabledTill != nil && *f.DisabledTill > now {
 		// DueFeeds already excludes this feed; the check here keeps a
@@ -446,10 +469,22 @@ func headerValue(resp *http.Response, name string) *string {
 
 // PollDue is the jobs.Handler body for kind "rss_poll": it polls every due
 // feed, pollParallel at a time and never more than one request per host at
-// once — each host's queue is claimed whole by a single worker. Per-feed
+// once — each host's queue is claimed whole by a single worker. Only one
+// pass runs per poller (the jobs pool can overlap enqueued rss_poll rows
+// once a pass outlives the one-minute cadence), and inFlightPolls keeps a
+// concurrent refresh of the same feed from fetching it twice. Per-feed
 // failures are recorded on the feed's ladder and logged; they do not fail
 // the job, because the ladder — not the job retry — owns feed retries.
 func (p *Poller) PollDue(ctx context.Context, _ store.Job) error {
+	if !p.pollMu.TryLock() {
+		// The previous pass is still running — the jobs pool can claim a
+		// second rss_poll while the first is in flight. Leftover feeds
+		// stay due and the next minute's pass picks them up.
+		p.log.WarnContext(ctx, "rss_poll pass skipped: previous pass still running")
+		return nil
+	}
+	defer p.pollMu.Unlock()
+
 	feeds, err := store.DueFeeds(ctx, p.db, p.now().UnixMilli(), dueFeedLimit)
 	if err != nil {
 		return fmt.Errorf("rss: list due feeds: %w", err)
