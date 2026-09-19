@@ -824,19 +824,34 @@ func TestTestRuleReturnsEveryItem(t *testing.T) {
 }
 
 // TestTestRuleIgnoreStateFalseIsAccepted pins the handler's explicit-false
-// branch: body.ignore_state=false must dereference through the pointer,
-// reach rss.DryRun as false, and still return 200 with every item.
+// branch: body.ignore_state=false must dereference through the pointer and
+// reach rss.DryRun as false — observable because the stored rule_matches
+// row collides with the item's info hash, so a stateful run rejects it
+// where a stateless one would match.
 func TestTestRuleIgnoreStateFalseIsAccepted(t *testing.T) {
 	env := newTasksTestEnv(t)
 
 	feedID := env.seedFeed(t, "https://example.com/ignore-state.xml")
 	published := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
 	downloadURL := "https://example.com/t/x.torrent"
+	hash := "dcb9178653b651c7ca4526e11fa8e22f74e2fd7a"
 	items := []store.FeedItem{
-		{FeedID: feedID, Identity: "i1", Title: "ubuntu 26.04 desktop amd64", TitleNorm: "ubuntu 26.04 desktop amd64", DownloadURL: &downloadURL, PublishedAt: &published},
+		{FeedID: feedID, Identity: "i1", Title: "ubuntu 26.04 desktop amd64", TitleNorm: "ubuntu 26.04 desktop amd64", DownloadURL: &downloadURL, InfoHash: &hash, PublishedAt: &published},
 	}
 	if _, err := store.UpsertFeedItems(t.Context(), env.db, items, published); err != nil {
 		t.Fatalf("seed feed items: %v", err)
+	}
+	if err := store.CreateRule(t.Context(), env.db, store.Rule{
+		ID: "rul_01DRYRUNSTATE00000000000", Name: "grabbed", Enabled: true, DefinitionJSON: "{}",
+	}); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := env.db.ExecContext(t.Context(),
+		`INSERT INTO rule_matches
+		(id, rule_id, info_hash, title, status, score, matched_at, created_at, updated_at)
+		VALUES ('rm_ignore_state', 'rul_01DRYRUNSTATE00000000000', ?, 'ubuntu 26.04 desktop amd64', 'sent', 0, ?, ?, ?)`,
+		hash, published, published, published); err != nil {
+		t.Fatalf("seed rule_matches: %v", err)
 	}
 
 	body := validTestRuleBody()
@@ -851,5 +866,20 @@ func TestTestRuleIgnoreStateFalseIsAccepted(t *testing.T) {
 	}
 	if report.Evaluated != 1 || len(report.Results) != 1 {
 		t.Fatalf("report = %+v, want evaluated=1 with the item in results", report)
+	}
+	if report.Results[0].Matched || report.Results[0].Reason != rss.ReasonDuplicateInfoHash {
+		t.Errorf("row = %+v, want the stateful duplicate_infohash rejection — explicit false must reach DryRun", report.Results[0])
+	}
+
+	// The stateless default still matches the same item.
+	response = env.testRule(t, validTestRuleBody())
+	if response.Code != http.StatusOK {
+		t.Fatalf("default status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode response body %q: %v", response.Body.String(), err)
+	}
+	if report.Matched != 1 {
+		t.Errorf("default report = %+v, want the stateless run matching the item", report)
 	}
 }
