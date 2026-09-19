@@ -74,11 +74,15 @@ func assertNoEngineAdd(t *testing.T, env *tasksTestEnv) {
 
 // TestCreateTasksBlocksLoopbackURI pins acceptance criterion 1: a loopback
 // submission is the 403 problem, and the engine is never asked to fetch it.
+// The default-port variant exercises the address rule itself — the :8080
+// form the criterion names is refused by the port rule before resolution.
 func TestCreateTasksBlocksLoopbackURI(t *testing.T) {
 	env := newSSRFEnv(t)
 
-	resp := env.createTasks(t, map[string]any{"uris": []string{"http://127.0.0.1:8080/x"}})
-	assertProblem(t, resp, http.StatusForbidden, SlugSSRFBlocked)
+	for _, raw := range []string{"http://127.0.0.1:8080/x", "http://127.0.0.1/x", "http://[::1]/x"} {
+		resp := env.createTasks(t, map[string]any{"uris": []string{raw}})
+		assertProblem(t, resp, http.StatusForbidden, SlugSSRFBlocked)
+	}
 	assertNoEngineAdd(t, env)
 }
 
@@ -203,6 +207,40 @@ func TestInspectBlocksBlockedHost(t *testing.T) {
 	resp := env.inspect(t, map[string]any{"uris": []string{"http://blocked.example/x.iso"}})
 	assertProblem(t, resp, http.StatusForbidden, SlugSSRFBlocked)
 	env.assertNoTask(t)
+}
+
+// TestInspectBlockedAndJunk mirrors TestCreateTasksBlockedAndJunk on the
+// inspect endpoint: the all-blocked 403 is for submissions whose every URI
+// the guard refused, and a blocked URI beside another refusal keeps the
+// all-rejected 422 — with nothing written either way.
+func TestInspectBlockedAndJunk(t *testing.T) {
+	env := newInspectTestEnv(t)
+	env.server.tasks.resolver = ssrfResolver
+
+	resp := env.inspect(t, map[string]any{
+		"uris": []string{"http://blocked.example/x.iso", "ed2k://|file|x|1|AA|/"},
+	})
+	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugUnsupportedScheme)
+	env.assertNoTask(t)
+}
+
+// TestPreflightBlocksUnparseable pins the fail-closed parse branch: input
+// the normaliser never produced — engines parse URIs more permissively than
+// url.Parse — is refused, not allowed.
+func TestPreflightBlocksUnparseable(t *testing.T) {
+	guard := newSSRFGuard(slog.New(slog.NewJSONHandler(io.Discard, nil)), false)
+
+	err := secure.PreflightURI(t.Context(), guard, ssrfResolver, "http://127.0.0.1:8080/%zz")
+	if !errors.Is(err, secure.ErrSSRFBlocked) {
+		t.Fatalf("PreflightURI = %v, want ErrSSRFBlocked", err)
+	}
+	var blocked *secure.BlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("PreflightURI error = %T, want *secure.BlockedError", err)
+	}
+	if blocked.Reason != "parse" {
+		t.Errorf("reason = %q, want parse", blocked.Reason)
+	}
 }
 
 // TestPreflightIgnoresMagnet pins acceptance criterion 5: schemes the guard

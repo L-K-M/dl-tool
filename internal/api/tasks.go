@@ -70,7 +70,7 @@ VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING`
 	// carries; its fixed message is ssrfBlockedMessage.
 	errorCodeSSRFBlocked = "ssrf_blocked"
 	ssrfBlockedMessage   = "blocked by the SSRF guard"
-	ssrfAllBlockedDetail = "every uri in the submission was refused by the ssrf guard; see rejected[] for the per-uri reasons"
+	ssrfAllBlockedDetail = "every uri in the submission was refused by the ssrf guard"
 	engineRefusesURIFmt  = "engine %q does not accept this uri"
 	// duplicateDetail is the conflict detail of a duplicate torrent; the
 	// full detail names the live task that holds the identity.
@@ -485,7 +485,10 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 				ssrfRejections++
 			}
 		}
-		allURIsBlocked = len(uris) > 0 && ssrfRejections == len(uris)
+		// The 403 is honest only when SSRF is the whole refusal story: a
+		// blocked URI beside a rejected part or a routing miss keeps the
+		// all-rejected 422, since the problem response drops rejected[].
+		allURIsBlocked = len(uris) > 0 && ssrfRejections == len(uris) && len(rejected) == ssrfRejections
 	}
 
 	// select_files precedes every insert: a refusal creates nothing. The
@@ -845,10 +848,11 @@ func (h *TaskHandlers) planURIs(
 		// The SSRF preflight runs on the normalised URI — userinfo stripped,
 		// obfuscated inner URI already decoded — before the task is planned.
 		// A blocked URI still gets its row, created already terminal in
-		// error: the refusal stays inspectable and resubmission is
-		// idempotent, and because the row never sits in queued the admission
-		// pass can never hand it to an engine. The blocked row is not a
-		// duplicate holder either, so markPlanned stays skipped.
+		// error: the refusal stays inspectable, and because the row never
+		// sits in queued the admission pass can never hand it to an engine.
+		// Transport URIs carry no infohash, so markPlanned cannot dedupe a
+		// repeat — each resubmission leaves another inspectable refusal row,
+		// the same shape resubmitting any non-torrent URI already produces.
 		if err := h.preflight(ctx, n.URI); err != nil {
 			rejected = append(rejected, ssrfRejection(raw))
 			planned = append(planned, plannedTask{

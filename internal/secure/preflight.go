@@ -31,19 +31,39 @@ type Resolver interface {
 // A literal-IP host is checked without a lookup. Otherwise EVERY address the
 // host resolves to must pass g.AllowAddr: one blocked answer blocks the URI,
 // and an empty or failing lookup blocks it too.
+//
+// Residual risk, because this check is preflight-only: the engines re-resolve
+// the host when they dial and follow HTTP redirects on their own, so DNS
+// rebinding or a 30x from an allowed host to a blocked address can still
+// reach the LAN. Closing that window is a plan-level decision (pin the
+// resolved address through admission, or have the adapters fetch through
+// the guarded dialer); it is recorded under T122's ## Blocked.
 func PreflightURI(ctx context.Context, g *Guard, r Resolver, rawURI string) error {
-	u, err := url.Parse(rawURI)
-	if err != nil {
-		// Unparseable input carries no scheme to govern; the normaliser and
-		// router reject it before any engine is involved.
+	// The scheme gate is textual, not parse-dependent: the governed set is
+	// small and closed, so a URI without a "scheme:" prefix (a bare
+	// infohash) or with an ungoverned scheme (magnet, ed2k, the obfuscated
+	// forms) is passed through without ever asking url.Parse — which is
+	// stricter than the engines' parsers on bodies such as ed2k's pipes.
+	scheme, _, found := strings.Cut(rawURI, ":")
+	if !found {
 		return nil
 	}
-
-	scheme := strings.ToLower(u.Scheme)
-	switch scheme {
+	switch strings.ToLower(scheme) {
 	case "http", "https", "ftp", "ftps", "sftp":
 	default:
 		return nil
+	}
+
+	u, err := url.Parse(rawURI)
+	if err != nil {
+		// A governed scheme whose body will not parse cannot be proven
+		// safe — fail closed, as the "guard" branch does for a wiring gap.
+		blocked := &BlockedError{Reason: "parse", URL: RedactURL(rawURI)}
+		if g.usable() {
+			return g.block(blocked, netip.Addr{}, "")
+		}
+
+		return blocked
 	}
 
 	if !g.usable() || r == nil {

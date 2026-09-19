@@ -303,7 +303,10 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	// user-submitted transport URI before its task can reach an engine.
 	// The engines dial for themselves, so this preflight — not the guarded
 	// http client of T123 — is the only check a submitted URI faces; the
-	// resolver is the process resolver.
+	// resolver is the process resolver. The resolved address is not pinned
+	// anywhere downstream, so an engine-side re-resolve that answers
+	// differently (DNS rebinding) or a redirect to a blocked target still
+	// reaches the LAN — PreflightURI's doc comment records the residual.
 	taskGuard := secure.NewGuard(log, cfg.SSRFAllowPrivate)
 
 	server := &Server{

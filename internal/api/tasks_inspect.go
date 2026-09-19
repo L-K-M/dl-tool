@@ -144,7 +144,7 @@ func (h *TaskHandlers) InspectTasks(ctx context.Context, in *InspectTasksInput) 
 	// all-blocked 403; any other all-refused submission keeps the 422 with
 	// the first rejection's reason (doc 05 section 5.3).
 	if len(output.Body.Manifests) == 0 {
-		if len(rawURIs) > 0 && blockedURIs == len(rawURIs) {
+		if len(rawURIs) > 0 && blockedURIs == len(rawURIs) && len(output.Body.Rejected) == blockedURIs {
 			return nil, Problem(SlugSSRFBlocked, http.StatusForbidden, ssrfAllBlockedDetail)
 		}
 
