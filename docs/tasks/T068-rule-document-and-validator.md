@@ -10,12 +10,14 @@
 | **Parallel-safe** | no — registers a second operation group on T007's Huma API |
 | **Implements** | [FR-074](../02-requirements.md#fr-074-reject-a-malformed-episode-filter-at-save-time) |
 | **Decisions** | [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |
-| **Est. size** | 4 new files, ~430 LOC. The validator and the endpoints ship together because the whole requirement is "rejected at save time". |
+| **Est. size** | 4 new files, ~560 LOC. The validator and the endpoints ship together because the whole requirement is "rejected at save time"; the `auto:<feed_id>` lifecycle adds the feed-side edits the T065 repair assigned here. |
 
 ## Goal
 `RuleDoc` is the Go shape of the rule document, `Validate` rejects every malformed member with the field
 path that caused it, and `/rules` stores validated documents. A malformed `episode.filter` such as `1x01`
-is `422` at save time, never a rule that silently matches nothing.
+is `422` at save time, never a rule that silently matches nothing. The same change wires `auto_download`
+into the feed write paths: `POST`/`PATCH /feeds` accept the member and `DELETE /feeds/{id}` removes the
+`auto:<feed_id>` rule, the lifecycle doc 05 §10.1 describes and the deferral register assigns to this task.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
@@ -31,6 +33,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    the `rules` DDL and the three match modes.
 5. [`docs/08-rss-automation.md` §5.2 Regex safety](../08-rss-automation.md#52-regex-safety) — RE2, the
    1024-byte pattern cap and the 32-entry `score.formats` cap.
+6. [`docs/05-api-contract.md` §10.1 Feeds](../05-api-contract.md#101-feeds) — the `auto_download` member
+   and the `auto:<feed_id>` rule it creates, scopes and deletes.
 
 ## Files
 | Path | Action | Purpose |
@@ -39,6 +43,8 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/store/rules.go` | create | `Rule` and the CRUD queries over `rules`. |
 | `internal/api/rules.go` | create | Rule CRUD handlers and the group's `Register`. |
 | `internal/api/rules_test.go` | create | Validation, CRUD, conflict and status-code cases. |
+| `internal/api/feeds.go` | edit | Add `auto_download` to the POST/PATCH bodies and the `auto:<feed_id>` lifecycle to `Create`, `Patch` and `Delete`. |
+| `internal/api/feeds_test.go` | edit | The auto-rule cases; replaces T065's interim-422 pin. |
 | `internal/api/server.go` | edit | Call `NewRuleHandlers(...).Register(api)` once. |
 
 No other file may be modified.
@@ -154,6 +160,10 @@ type Rule struct {
 // ListRules returns every rule ordered by (priority ASC, name ASC) — the evaluation order.
 func ListRules(ctx context.Context, db *sqlx.DB, enabledOnly bool) ([]Rule, error)
 func RuleByID(ctx context.Context, db *sqlx.DB, id string) (Rule, error)
+
+// RuleByName resolves one rule by its unique name, ErrNotFound when none carries it. The
+// `auto:<feed_id>` lifecycle resolves by name, never by a stored back-reference.
+func RuleByName(ctx context.Context, db *sqlx.DB, name string) (Rule, error)
 func CreateRule(ctx context.Context, db *sqlx.DB, r Rule) error
 func UpdateRule(ctx context.Context, db *sqlx.DB, r Rule) error
 func DeleteRule(ctx context.Context, db *sqlx.DB, id string) error
@@ -178,12 +188,22 @@ Statuses, exactly doc 05 §10.2: `200` · `201` · `204` · `404` · `409 /probl
    `ApplyDefaults`, and mirror `name`, `enabled` and `priority` into their own columns.
 7. Reject a `definition.name` that disagrees with the request's `name` with `422`, and map a `UNIQUE`
    violation on `rules.name` to `409 /problems/conflict`.
-8. Edit `internal/api/server.go` to construct the handlers and call `Register(api)`.
-9. Create `internal/api/rules_test.go`: `POST /rules` with `episode.filter: "1x01"` is `422` and
-   `errors[0].location` is `body.definition.episode.filter`; `"1x01-;"` is accepted; an empty string in
-   `none_of` is `422`; `match.mode: "glob"` is `422`; an uncompilable regex is `422`; a duplicate name is
-   `409`; `GET /rules` returns `(priority ASC, name ASC)`; `PATCH` re-validates; `DELETE` is `204`.
-10. Run the verification command and paste its output under `## Evidence`.
+8. Wire `auto_download` into `internal/api/feeds.go`. `true` on `POST /feeds` or `PATCH /feeds/{id}`
+   creates a rule named `auto:<feed_id>` when none carries the name — enabled, `feeds: [<the feed's
+   URL>]` (doc 08 §4.2 scopes rules by URL, so a later feed-URL edit does not rewrite the rule, exactly
+   doc 09 §8.1's documented behaviour), an empty `match` block and an omitted `action.destination`, which
+   §10.2 resolves to the global default — built as a `RuleDoc`, run through `ApplyDefaults` and
+   `Validate`, and stored by `CreateRule`. `false` deletes the rule bearing that name when it exists, and
+   `DELETE /feeds/{id}` removes it the same way. The rule write follows the committed feed write; the two
+   share no transaction, so a failed rule write leaves a valid feed the client can repair by re-sending
+   `auto_download: true`. T065's interim-422 pin is replaced by these cases.
+9. Edit `internal/api/server.go` to construct the handlers and call `Register(api)`.
+10. Create `internal/api/rules_test.go`: `POST /rules` with `episode.filter: "1x01"` is `422` and
+    `errors[0].location` is `body.definition.episode.filter`; `"1x01-;"` is accepted; an empty string in
+    `none_of` is `422`; `match.mode: "glob"` is `422`; an uncompilable regex is `422`; a duplicate name is
+    `409`; `GET /rules` returns `(priority ASC, name ASC)`; `PATCH` re-validates; `DELETE` is `204`.
+    Extend `internal/api/feeds_test.go` with the `auto_download` cases of step 8.
+11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestEpisodeFilterMissingSemicolonIsRejected` asserts the `422` and the exact location string.
@@ -192,6 +212,11 @@ Statuses, exactly doc 05 §10.2: `200` · `201` · `204` · `404` · `409 /probl
 - [ ] `TestValidateReportsEveryProblem` asserts a document with three faults yields three `errors[]`.
 - [ ] `TestRuleListOrderedByPriorityThenName` passes.
 - [ ] Stored `definition_json` round-trips through `RuleDoc` unchanged.
+- [ ] `TestAutoDownloadCreatesAutoRule` asserts `POST /feeds` with `auto_download: true` stores a rule
+  named `auto:<feed_id>` — enabled, scoped to the feed's URL, with an empty `match`.
+- [ ] `TestPatchAutoDownloadFalseDeletesAutoRule` passes, and a repeated `auto_download: true` PATCH is
+  idempotent — one `auto:` rule, never two.
+- [ ] `TestDeleteFeedRemovesAutoRule` asserts the `auto:<feed_id>` rule is gone after `DELETE`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

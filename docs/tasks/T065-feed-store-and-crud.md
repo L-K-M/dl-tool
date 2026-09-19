@@ -10,12 +10,13 @@
 | **Parallel-safe** | no — it also edits the shared file `internal/api/server.go` |
 | **Implements** | [FR-070](../02-requirements.md#fr-070-manage-feeds-and-refresh-on-demand) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md) |
-| **Est. size** | 3 new files, ~380 LOC |
+| **Est. size** | 3 new files, ~560 LOC — the two mark-read operations, `unread_count` and the redacted DTO mapping widen the pre-review estimate |
 
 ## Goal
-`/feeds` creates, lists, updates and deletes feed rows, and `GET /feeds/{id}/items` pages a feed's stored
-items newest first. The store layer also carries the upsert, trim and scheduling queries the poller needs, so
-T066 adds no SQL of its own beyond one fetch-state write.
+`/feeds` creates, lists, updates and deletes feed rows, `GET /feeds/{id}/items` pages a feed's stored
+items newest first, and `PATCH /feeds/{id}/items` with `POST /feeds/{id}/items/read-all` mark stored items
+read. The store layer also carries the upsert, trim and scheduling queries the poller needs, so T066 adds
+no SQL of its own beyond one fetch-state write.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
@@ -25,9 +26,11 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    their indices. The columns are fixed; this task adds none.
 3. [`docs/05-api-contract.md` §1.4 Cursor pagination](../05-api-contract.md#14-cursor-pagination) — the
    cursor shape `GET /feeds/{id}/items` reuses.
-4. [`docs/04-data-model.md` §7 Retention](../04-data-model.md#7-retention) — `feed_items` keeps the newest
+4. [`docs/05-api-contract.md` §1.6 Units, timestamps and nulls](../05-api-contract.md#16-units-timestamps-and-nulls)
+   — RFC 3339 on the wire, Unix milliseconds in the store, and the `__redacted__` write-back rule.
+5. [`docs/04-data-model.md` §7 Retention](../04-data-model.md#7-retention) — `feed_items` keeps the newest
    `feeds.item_cap` rows per feed.
-5. [`docs/14-conventions.md` §2.4 SQL and sqlx](../14-conventions.md#24-sql-and-sqlx) — explicit column
+6. [`docs/14-conventions.md` §2.4 SQL and sqlx](../14-conventions.md#24-sql-and-sqlx) — explicit column
    lists, `?` placeholders, one transaction per multi-statement write.
 
 ## Files
@@ -45,7 +48,8 @@ No other file may be modified.
 ```go
 package store
 
-// Feed is one row of feeds. Secrets never appear here; the URL is stored verbatim.
+// Feed is one row of feeds plus the computed unread_count. Secrets never appear here; the URL is
+// stored verbatim and redacted only on the wire (see the FeedDTO rules below).
 type Feed struct {
 	ID               string  `db:"id"                 json:"id"`
 	URL              string  `db:"url"                json:"url"`
@@ -53,6 +57,10 @@ type Feed struct {
 	Enabled          bool    `db:"enabled"            json:"enabled"`
 	RefreshIntervalS int     `db:"refresh_interval_s" json:"refresh_interval_s"`
 	ItemCap          int     `db:"item_cap"           json:"item_cap"`
+	Priority         int     `db:"priority"           json:"priority"`
+	// UnreadCount is not a feeds column: ListFeeds and FeedByID populate it with a correlated
+	// `read = 0` subquery over feed_items, and no write ever touches it.
+	UnreadCount      int     `db:"unread_count"       json:"-"`
 	ETag             *string `db:"etag"               json:"-"`
 	LastModified     *string `db:"last_modified"      json:"-"`
 	TTLMinutes       *int    `db:"ttl_minutes"        json:"-"`
@@ -79,15 +87,21 @@ type FeedItem struct {
 	InfoHash    *string `db:"info_hash"` // 40 or 64 lowercase hex
 	SizeBytes   *int64  `db:"size_bytes"`
 	PublishedAt *int64  `db:"published_at"`
+	Read        bool    `db:"read"`
 	FirstSeenAt int64   `db:"first_seen_at"`
 	RawJSON     *string `db:"raw_json"`
 	CreatedAt   int64   `db:"created_at"`
 	UpdatedAt   int64   `db:"updated_at"`
 }
 
+// ListFeeds returns every feed with UnreadCount populated, ordered by (title, id) so the feed
+// list is stable; FeedByID resolves one row the same way, ErrNotFound when the id addresses none.
 func ListFeeds(ctx context.Context, db *sqlx.DB) ([]Feed, error)
 func FeedByID(ctx context.Context, db *sqlx.DB, id string) (Feed, error)
 func CreateFeed(ctx context.Context, db *sqlx.DB, f Feed) error
+
+// UpdateFeed writes the operator-owned columns — url, title, enabled, refresh_interval_s,
+// item_cap, priority and updated_at — and leaves every fetch-state column untouched.
 func UpdateFeed(ctx context.Context, db *sqlx.DB, f Feed) error
 func DeleteFeed(ctx context.Context, db *sqlx.DB, id string) error
 
@@ -109,45 +123,107 @@ func UpsertFeedItems(ctx context.Context, db *sqlx.DB, items []FeedItem, now int
 // COALESCE(published_at, first_seen_at) DESC. cap <= 0 keeps everything.
 func TrimFeedItems(ctx context.Context, db *sqlx.DB, feedID string, cap int) (int64, error)
 
-// ListFeedItems pages one feed newest first. feedIDs empty means every feed.
-func ListFeedItems(ctx context.Context, db *sqlx.DB, feedIDs []string, limit int, cursor string) ([]FeedItem, string, error)
+// FeedItemFilter scopes ListFeedItems: FeedIDs empty means every feed, UnreadOnly selects the
+// read = 0 rows, and the cursor is bound to both — a cursor minted under another filter answers
+// ErrStaleCursor, which the handler maps to 422 exactly like the task list's cursor.
+type FeedItemFilter struct {
+	FeedIDs    []string
+	UnreadOnly bool
+	Limit      int
+	Cursor     string
+}
+
+// ListFeedItems pages newest first — COALESCE(published_at, first_seen_at) DESC, id DESC as the
+// tie-break — and returns the page, the next cursor and the total matching the filter, ignoring
+// the cursor (doc 05 §1.4).
+func ListFeedItems(ctx context.Context, db *sqlx.DB, f FeedItemFilter) (items []FeedItem, nextCursor string, total int, err error)
+
+// SetFeedItemsRead marks the listed items of one feed read or unread and returns how many rows
+// changed state. An id that names no row of this feed is skipped, which makes the call idempotent.
+func SetFeedItemsRead(ctx context.Context, db *sqlx.DB, feedID string, ids []string, read bool, now int64) (int64, error)
+
+// MarkAllFeedItemsRead marks every unread item of one feed read and returns the count.
+func MarkAllFeedItemsRead(ctx context.Context, db *sqlx.DB, feedID string, now int64) (int64, error)
 ```
 
-Read state has no column in doc 04 §3.5, so it is derived, not stored: an item is **unread** when
-`first_seen_at >= feeds.last_success_at`, that is, it arrived in the most recent successful poll.
-`unread_count` counts those rows and the `unread` query filters on the same predicate.
+`feed_items.read` carries the read state — doc 04 §3.5 ships the column and `idx_feed_items_read`, and
+§10.1 defines `unread_count` and the `unread` filter on it: `unread_count` on the feed object counts the
+feed's `read = 0` rows and the `unread` query selects exactly those rows. The `UpsertFeedItems` conflict
+update touches `title` and `updated_at` only — `read` and `first_seen_at` are insert-time facts a re-poll
+must not reset.
+
+The wire objects are DTOs, not the store rows. `FeedDTO` renders the §10.1 feed object: `last_fetch_at`,
+`last_success_at`, `next_fetch_at` and `disabled_till` become RFC 3339 strings or `null` (§1.6), and
+`priority` and `unread_count` ride along. A credential-bearing `url` is redacted member-wise — userinfo
+and the values of the `apikey`, `token` and `passkey` query parameters become `__redacted__` while the
+rest of the URL stays readable, reusing `secretQueryParameters`, `isSecretQueryParameter` and
+`redactedValue` from `server.go`; this is §10.1's feed rule, not `secure.RedactURL`, which strips the
+whole query for logs. A PATCH `url` that still contains `__redacted__` is a no-op on the stored column,
+the same semantics `extract_passwords` and the indexer `api_key` already carry. `FeedItemDTO` renders the
+§10.1 item object — `read`, `published_at` as RFC 3339 or `null` — with `matched_rules` rendered as `[]`
+until T071 populates it from `rule_matches` (deferral register).
+
+`auto_download` is not modelled on either write body: the member is absent from both schemas, so a sender
+gets `422` under the request body's `additionalProperties: false` — explicit, never a silent no-op. T068
+adds the member and the `auto:<feed_id>` rule lifecycle it drives (deferral register), and the interim is
+pinned by `TestAutoDownloadIsRejectedUntilT068`, which T068 then replaces.
 
 Statuses, exactly doc 05 §10.1: `200` · `201` · `204` · `404` · `409 /problems/conflict` on a duplicate
 `url` · `422 /problems/validation-failed` for a non-`http(s)` URL, `refresh_interval_s` below `300` and not
-`0`, or `item_cap` below `0`.
+`0`, or `item_cap` below `0`. `PATCH /feeds/{id}/items` and `POST /feeds/{id}/items/read-all` return `200`
+`{"updated":n}` where `n` counts only the rows whose state changed, `404` when the feed id addresses no
+row, and `422` on an empty `ids`, more than 500 ids, or a missing `read`.
 
 ## Steps
-1. Create `internal/store/feeds.go` with the two structs and the eleven functions above, every statement
-   carrying an explicit column list and a context.
+1. Create `internal/store/feeds.go` with the two structs and the thirteen functions above, every statement
+   carrying an explicit column list and a context. `ListFeeds` and `FeedByID` select `unread_count` as a
+   correlated `(SELECT COUNT(*) FROM feed_items i WHERE i.feed_id = feeds.id AND i.read = 0)` expression in
+   the column list.
 2. Generate ids with `store.NewID(store.PrefixFeed)` for feeds and `store.PrefixFeedItem` for items, per
    [`docs/04-data-model.md` §1.5](../04-data-model.md#15-id-prefix-allocation).
 3. Implement `UpsertFeedItems` in one `sqlx.Tx`, counting new rows from the `RowsAffected` of inserts that
-   did not conflict; a repeated identity inside one batch must not create a second row.
+   did not conflict; a repeated identity inside one batch must not create a second row. The conflict update
+   writes `title` and `updated_at` only, never `read` or `first_seen_at`.
 4. Implement `TrimFeedItems` with a single `DELETE ... WHERE id NOT IN (SELECT id ... LIMIT :cap)`.
-5. Create `internal/api/feeds.go` with `FeedHandlers`, `NewFeedHandlers`, `Register` and the five
-   operations `List`, `Create`, `Patch`, `Delete`, `Items`, mirroring T050's handler shape.
+5. Create `internal/api/feeds.go` with `FeedHandlers`, `NewFeedHandlers`, `Register` and the seven
+   operations `List`, `Create`, `Patch`, `Delete`, `Items`, `MarkItems`, `MarkAllRead`, mirroring T050's
+   handler shape, plus the `FeedDTO`/`FeedItemDTO` mapping and the member-wise URL redaction described
+   above.
 6. Map `store.ErrNotFound` to `404` and a `UNIQUE` violation on `feeds.url` to `409 /problems/conflict`;
    never return the raw SQLite error text.
 7. Set `next_fetch_at = now` on create so a new feed is picked up by the next poll pass, and leave
    `escalation_level` at `0`.
 8. Serve `GET /feeds/{id}/items` with `limit` (default 50, max 200), `cursor` and `unread`, returning
-   `next_cursor` and `total` exactly as doc 05 §10.1 shows.
-9. Edit `internal/api/server.go` to construct the handlers and call `Register(api)`.
-10. Create `internal/api/feeds_test.go` covering: create then list; a duplicate URL is `409`; `ftp://` is
+   `next_cursor` and `total` exactly as doc 05 §10.1 shows; the feed id is resolved first so an unknown one
+   is `404`, and a cursor minted under another filter is `422`.
+9. Serve `PATCH /feeds/{id}/items` and `POST /feeds/{id}/items/read-all` per §10.1: `ids` is required,
+   1–500 entries, `read` is required; both answer `{"updated":n}` counting only rows whose state changed,
+   skip ids that belong to another feed or no row, and are idempotent.
+10. Edit `internal/api/server.go` to construct the handlers and call `Register(api)`.
+11. Create `internal/api/feeds_test.go` covering: create then list; a duplicate URL is `409`; `ftp://` is
     `422`; `refresh_interval_s: 60` is `422`; patch toggles `enabled`; delete returns `204` and cascades the
-    feed's items; the item page is newest first and its cursor returns the next page without overlap.
-11. Run the verification command and paste its output under `## Evidence`.
+    feed's items; the item page is newest first and its cursor returns the next page without overlap; the
+    feed object carries `priority`, `unread_count` and RFC 3339 fetch timestamps; a credential-bearing URL
+    is redacted on read and a `__redacted__` PATCH leaves the stored URL untouched; `auto_download` is
+    `422`; `unread` filters to `read = 0` rows; `PATCH .../items` and `read-all` mark and count correctly.
+12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestFeedCrud`, `TestDuplicateFeedURLConflicts` and `TestFeedValidation` pass.
 - [ ] `TestFeedItemsPagingNewestFirst` asserts no row appears on two pages.
 - [ ] `TestDeleteFeedCascadesItems` asserts zero `feed_items` rows survive.
-- [ ] `TestUpsertFeedItemsIsIdempotent` asserts a second upsert of the same batch adds `0` rows.
+- [ ] `TestUpsertFeedItemsIsIdempotent` asserts a second upsert of the same batch adds `0` rows and keeps
+  `read` untouched.
+- [ ] `TestFeedObjectShape` asserts the feed object carries `priority`, `unread_count` and RFC 3339
+  `next_fetch_at`.
+- [ ] `TestCredentialFeedURLIsRedacted` asserts a `user:pass@` or `?apikey=` URL returns `__redacted__`
+  values on read and that a PATCH echoing the redacted URL leaves the stored URL unchanged.
+- [ ] `TestUnreadFilterMatchesReadColumn` asserts `unread=true` returns only `read = 0` rows and
+  `unread_count` tracks the same predicate.
+- [ ] `TestMarkFeedItemsRead` asserts `updated` counts only rows that changed state and that ids of a
+  different feed are skipped.
+- [ ] `TestMarkAllFeedItemsReadIsIdempotent` asserts the second `read-all` call returns `{"updated":0}`.
+- [ ] `TestAutoDownloadIsRejectedUntilT068` asserts `POST /feeds` with `auto_download: true` is `422`.
 - [ ] No new column, table or index exists beyond doc 04 §3.5.
 
 ## Verification
@@ -168,9 +244,13 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Out of scope — do NOT
 - Do NOT fetch anything. `POST /feeds/{id}/refresh` and every HTTP call belong to T066.
 - Do NOT parse XML or fill `download_url`, `info_hash` or `title_norm` from a feed body; T067 owns parsing.
-- Do NOT add a `read` column, a `read_items` table or a folder table; doc 04 §3.5 has none, and the feed
-  tree's folders are a client-side grouping in T072.
-- Do NOT write `rules`, `rule_matches` or `rule_seen_episodes`; T068 and T071 own them.
+- Do NOT add a column, a `read_items` table or a folder table; doc 04 §3.5 is the whole schema, and the
+  feed tree's folders are a client-side grouping in T072.
+- Do NOT model `auto_download` or write `rules` rows — the member and the `auto:<feed_id>` lifecycle are
+  T068's (deferral register); until then the absent member is a `422`, pinned by
+  `TestAutoDownloadIsRejectedUntilT068`.
+- Do NOT populate `matched_rules` — T071 joins `rule_matches`; render `[]` until then.
+- Do NOT write `rule_matches` or `rule_seen_episodes`; T071 owns them.
 - Do NOT add an `unread` counter to the SSE payload; the feeds screen refetches.
 
 ## Forbidden shortcuts
@@ -237,3 +317,16 @@ T052 (#184/#185), T057 (#201/#202), T058 (#204), T063 (#212/#214) and T064 (#217
 5. `matched_rules` on the §10.1 item object reads `rule_matches`, which T071 owns; until then
    the member can only render `[]` or be omitted. Remedy: the repair names one of the two as
    the interim wire behaviour.
+
+**Repair applied.** The contract and steps above now carry the remedies: `Feed` gained `Priority` and the
+computed `UnreadCount`, `FeedItem` gained `Read`, `ListFeedItems` returns `total` through a
+`FeedItemFilter`, and `SetFeedItemsRead`/`MarkAllFeedItemsRead` serve the two mark-read endpoints inside
+the existing Files table (finding 4's named carrier: this task). The stale derived-read paragraph is
+rewritten to `read = 0` semantics (finding 2), and the DTO rules spell out `priority`, `unread_count`,
+RFC 3339 timestamps and the §10.1 credential-URL redaction the pre-review contract omitted (finding 1).
+`auto_download` is deferred to T068 — which owns the `RuleDoc` schema a valid `definition_json` needs —
+with the interim wire behaviour pinned: the member is absent from the write schemas, so a sender gets
+`422` under `additionalProperties: false` instead of a silent no-op (finding 3). `matched_rules` renders
+`[]` until T071 populates it from `rule_matches` (finding 5). Both deferrals are named in the register of
+`00-task-index.md`, T068 and T071 carry the extra Files rows, and T072 gained the T068 edge so its
+add-dialog checkbox can never post a member no merged task serves.

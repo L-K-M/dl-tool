@@ -5,7 +5,7 @@
 | **ID** | T072 |
 | **Milestone** | M5 |
 | **Status** | todo |
-| **Depends on** | T014, T040, T044, T052, T065, T066 |
+| **Depends on** | T014, T040, T044, T052, T065, T066, T068 |
 | **Blocks** | T073 |
 | **Parallel-safe** | no — adds a route to T040's `web/src/App.tsx` |
 | **Implements** | — (renders [FR-070](../02-requirements.md#fr-070-manage-feeds-and-refresh-on-demand) and [FR-072](../02-requirements.md#fr-072-extract-a-download-uri-from-each-item), covered by T065, T066 and T067) |
