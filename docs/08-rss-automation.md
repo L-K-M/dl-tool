@@ -455,6 +455,9 @@ expensive and more authoritative.
 A `content_key` is built from the strongest identity the item has: a staged episode key becomes
 `ep:<rule_id>:<episode_key>` — a bare `1x5` is only unique inside its rule, so the global column
 namespaces it — an item with no staged episode key takes its `info_hash`, else its `identity`.
+Episode keys therefore never collide across rules: two rules matching the same hash-less episode each
+grab a copy (`rule_seen_episodes` is per rule); cross-rule contention for the same episode is
+arbitrated by the info-hash rung (step 10's `duplicate_infohash`), not by this key.
 
 The DDL, indices and retention policy for `feeds`, `feed_items`, `rules`, `rule_matches` and
 `rule_seen_episodes` are owned by [`04-data-model.md`](04-data-model.md#35-rss); do not restate them here.
