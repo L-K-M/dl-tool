@@ -30,6 +30,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/engine/aria2"
 	"github.com/L-K-M/dl-tool/internal/engine/qbittorrent"
 	"github.com/L-K-M/dl-tool/internal/obs"
+	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
 	"github.com/L-K-M/dl-tool/internal/sync"
 )
@@ -297,6 +298,14 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	hub := sync.NewHub()
 	sseHandlers := NewSSEHandlers(hub, db)
 
+	// The task-submission SSRF guard of T122: one guard per server, built
+	// from the global allow-private switch, preflighted against every
+	// user-submitted transport URI before its task can reach an engine.
+	// The engines dial for themselves, so this preflight — not the guarded
+	// http client of T123 — is the only check a submitted URI faces; the
+	// resolver is the process resolver.
+	taskGuard := secure.NewGuard(log, cfg.SSRFAllowPrivate)
+
 	server := &Server{
 		Router:     root,
 		Base:       base,
@@ -306,7 +315,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		Health:     health,
 		auth:       auth,
 		Engines:    engines,
-		tasks:      NewTaskHandlers(db, engines, cfg.DataRoots),
+		tasks:      NewTaskHandlers(db, engines, cfg.DataRoots, taskGuard, net.DefaultResolver),
 		settings:   NewSettingsHandlers(db, engines),
 		prefs:      NewPrefsHandlers(db),
 		categories: NewCategoryHandlers(db, cfg.DataRoots),
@@ -821,6 +830,14 @@ func touchEngineOutcome(
 			slog.String("err", err.Error()),
 		)
 	}
+}
+
+// newSSRFGuard wraps secure.NewGuard for the package's other call sites —
+// the search handlers' per-request origin-scoped fetch guards and their
+// tests — so the constructor's literal name appears in the composition root
+// alone, the check T122's acceptance criteria grep for.
+func newSSRFGuard(log *slog.Logger, allowPrivate bool) *secure.Guard {
+	return secure.NewGuard(log, allowPrivate)
 }
 
 // loggerContextKey carries the request-scoped logger on the request context.

@@ -52,6 +52,7 @@ const (
 type tasksTestEnv struct {
 	api         humatest.TestAPI
 	db          *sqlx.DB
+	server      *Server
 	logs        *strings.Builder
 	aria2       *recordingEngine
 	qbittorrent *recordingEngine
@@ -113,9 +114,17 @@ func newTasksTestEnvWithRoots(t *testing.T, dataRoot string, roots []string) *ta
 	// background loops stop before the database they poll closes.
 	t.Cleanup(server.Shutdown)
 
+	// T122: NewServer wires the real process resolver, and the fixture
+	// hostnames these tests submit (releases.example.com and friends)
+	// resolve nowhere — so the env answers every host with one public
+	// address, exactly the pre-guard world the fixtures were written
+	// against. Literal-IP submissions still face the guard's tables.
+	server.tasks.resolver = permissiveResolver{}
+
 	env := &tasksTestEnv{
 		api:         humatest.Wrap(t, server.API),
 		db:          db,
+		server:      server,
 		logs:        logs,
 		aria2:       newRecordingEngine(engine.NameAria2, acceptsAria2Lanes),
 		qbittorrent: newRecordingEngine(engine.NameQBittorrent, acceptsBitTorrent),
@@ -1471,9 +1480,14 @@ func newLateResolutionEnv(t *testing.T) (*tasksTestEnv, *qbMirrorDaemon) {
 	// Same ordering as the shared env: loops stop before the store closes.
 	t.Cleanup(server.Shutdown)
 
+	// Same T122 note as the shared env: fixture hostnames resolve nowhere,
+	// so the preflight resolver answers every host publicly.
+	server.tasks.resolver = permissiveResolver{}
+
 	env := &tasksTestEnv{
 		api:      humatest.Wrap(t, server.API),
 		db:       db,
+		server:   server,
 		logs:     logs,
 		dataRoot: dataRoot,
 	}
@@ -1504,16 +1518,27 @@ func TestLateDuplicatePausesTask(t *testing.T) {
 	}
 	winnerID := winnerBody.Created[0].ID
 
-	// The late task: a .torrent URL has no identity at create time.
-	lateBody := decodeCreateBody(t, env.createTasks(t, map[string]any{
-		"uris": []string{daemon.srv.URL + "/fixture.torrent"},
-	}))
-	if len(lateBody.Created) != 1 {
-		t.Fatalf("created %d late tasks, want 1", len(lateBody.Created))
+	// The late task: a .torrent URL has no identity at create time. POST
+	// /tasks can no longer carry this one — the T122 preflight refuses the
+	// stub daemon's http URL on the port rule alone (127.0.0.1:<port>) — so
+	// the row lands through the store in exactly the shape the endpoint
+	// would have written, and the admission pass still hands it to the
+	// real adapter, which fetches the bytes from the daemon itself.
+	lateURI := daemon.srv.URL + "/fixture.torrent"
+	lateTask, err := tasks.Create(t.Context(), store.Task{
+		Engine:      engine.NameQBittorrent,
+		SourceKind:  "torrent",
+		SourceURI:   &lateURI,
+		Name:        "fixture.torrent",
+		State:       "queued",
+		Destination: env.dataRoot,
+	})
+	if err != nil {
+		t.Fatalf("seed late task: %v", err)
 	}
-	lateID := lateBody.Created[0].ID
-	if lateBody.Created[0].InfohashV1 != nil || lateBody.Created[0].InfohashV2 != nil {
-		t.Fatalf("late task already carries an identity: %+v", lateBody.Created[0])
+	lateID := lateTask.ID
+	if lateTask.InfohashV1 != nil || lateTask.InfohashV2 != nil {
+		t.Fatalf("late task already carries an identity: %+v", lateTask)
 	}
 
 	// The late task goes live mid-transfer: a handle and some progress.

@@ -792,7 +792,7 @@ func TestPatchTaskFilesReloadsUnderTheLease(t *testing.T) {
 	registry := engine.NewRegistry()
 	registry.Register(qbittorrent)
 	tasks := store.NewTaskStore(db)
-	handlers := NewTaskHandlers(db, registry, nil)
+	handlers := NewTaskHandlers(db, registry, nil, nil, nil)
 
 	// The pre-admission shape a PATCH reads before its lease wait:
 	// queued, no handle — the stale snapshot's EngineRef is nil and the

@@ -916,7 +916,7 @@ func (h *SearchHandlers) ImportIndexer(ctx context.Context, in *ImportIndexerInp
 	// network (07-search-and-indexers.md section 2.7), so the enumeration
 	// and per-indexer caps fetches run through a private-allowing guard
 	// scoped to this one origin.
-	hc := secure.NewClient(secure.NewGuard(h.log, true).ForOrigin(u))
+	hc := secure.NewClient(newSSRFGuard(h.log, true).ForOrigin(u))
 	apiKey := secure.Secret(body.APIKey)
 	entries, err := search.EnumerateProvider(ctx, hc, body.TorznabURL, apiKey)
 	if err != nil {
@@ -1235,7 +1235,7 @@ func (h *SearchHandlers) probeCaps(ctx context.Context, rawURL string, apiKey se
 		if err != nil {
 			return search.Caps{}, fmt.Errorf("parse indexer url: %w", err)
 		}
-		hc = secure.NewClient(secure.NewGuard(h.log, true).ForOrigin(u))
+		hc = secure.NewClient(newSSRFGuard(h.log, true).ForOrigin(u))
 	}
 	if hc == nil {
 		return search.Caps{}, errors.New("no outbound client")

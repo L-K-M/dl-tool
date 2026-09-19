@@ -1649,7 +1649,7 @@ func newPauseEnv(t *testing.T) *pauseEnv {
 		registry:    registry,
 		destination: root,
 		admit:       engine.NewAdmitter(registry, tasks, time.Second, nil),
-		handlers:    NewTaskHandlers(db, registry, nil),
+		handlers:    NewTaskHandlers(db, registry, nil, nil, nil),
 	}
 }
 
