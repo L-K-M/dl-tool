@@ -265,9 +265,11 @@ func (h *RuleHandlers) Patch(ctx context.Context, in *PatchRuleInput) (*RuleOutp
 	case in.Body.Name != nil:
 		effectiveName = *in.Body.Name
 	case in.Body.Definition != nil && doc.Name != "":
-		// A replacement document renames through its own name member;
-		// an empty one keeps the stored name rather than blank it.
 		effectiveName = doc.Name
+	case in.Body.Definition != nil:
+		// A replacement document whose name is empty keeps the stored
+		// name rather than blank it.
+		effectiveName = rule.Name
 	}
 	if effectiveName == "" {
 		return nil, ruleFieldProblem("body.name", ruleEmptyNameDetail)
@@ -275,8 +277,13 @@ func (h *RuleHandlers) Patch(ctx context.Context, in *PatchRuleInput) (*RuleOutp
 	if effectiveName != rule.Name && strings.HasPrefix(effectiveName, autoRulePrefix) {
 		return nil, ruleFieldProblem("body.name", ruleAutoNameDetail)
 	}
-	if err := checkRuleFeeds(doc); err != nil {
-		return nil, err
+	// The feeds check guards submitted documents only: a PATCH without a
+	// definition never rewrites the member, so the stored document's
+	// feeds are not the request's to validate.
+	if in.Body.Definition != nil {
+		if err := checkRuleFeeds(doc); err != nil {
+			return nil, err
+		}
 	}
 
 	doc.ApplyDefaults()

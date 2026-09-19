@@ -407,7 +407,7 @@ func (h *FeedHandlers) Patch(ctx context.Context, in *PatchFeedInput) (*FeedOutp
 		return nil, FromStore(err)
 	}
 
-	urlMoved := in.Body.URL != nil && !strings.Contains(*in.Body.URL, redactedValue) && *in.Body.URL != feed.URL
+	oldURL := feed.URL
 	if in.Body.URL != nil && !strings.Contains(*in.Body.URL, redactedValue) {
 		if err := checkFeedURL(*in.Body.URL); err != nil {
 			return nil, err
@@ -459,7 +459,9 @@ func (h *FeedHandlers) Patch(ctx context.Context, in *PatchFeedInput) (*FeedOutp
 	var lifecycleErr error
 	switch {
 	case in.Body.AutoDownload == nil:
-		if urlMoved {
+		// The scope check reads the committed rows, so a future url
+		// normalisation cannot let a real move slip past it.
+		if updated.URL != oldURL {
 			lifecycleErr = keepAutoRuleScoped(ctx, h.db, updated)
 		}
 	case *in.Body.AutoDownload:
@@ -697,28 +699,7 @@ func ensureAutoRule(ctx context.Context, db *sqlx.DB, feed store.Feed) error {
 	name := autoRuleName(feed.ID)
 	switch existing, err := store.RuleByName(ctx, db, name); {
 	case err == nil:
-		var stored rss.RuleDoc
-		if err := json.Unmarshal([]byte(existing.DefinitionJSON), &stored); err != nil {
-			return fmt.Errorf("auto rule %s: decode: %w", name, err)
-		}
-		if len(stored.Feeds) == 1 && stored.Feeds[0] == feed.URL {
-			return nil
-		}
-
-		stored.Feeds = []string{feed.URL}
-		stored.ApplyDefaults()
-		if errs := stored.Validate(); len(errs) > 0 {
-			return fmt.Errorf("auto rule %s: %s", name, errs[0].Message)
-		}
-		raw, err := json.Marshal(stored)
-		if err != nil {
-			return fmt.Errorf("auto rule %s: encode: %w", name, err)
-		}
-		existing.Enabled = *stored.Enabled
-		existing.Priority = stored.Priority
-		existing.DefinitionJSON = string(raw)
-
-		return store.UpdateRule(ctx, db, existing)
+		return rescopeAutoRule(ctx, db, existing, feed.URL)
 	case !errors.Is(err, store.ErrNotFound):
 		return err
 	}
@@ -747,6 +728,35 @@ func ensureAutoRule(ctx context.Context, db *sqlx.DB, feed store.Feed) error {
 	return nil
 }
 
+// rescopeAutoRule rewrites an existing auto:<feed_id> rule's scope to the
+// feed's current url when it drifted — in place, so the row's id, its
+// dedup watermark and every member the operator edited survive. A rule
+// already scoped to the url is the desired state and a no-op.
+func rescopeAutoRule(ctx context.Context, db *sqlx.DB, existing store.Rule, feedURL string) error {
+	var stored rss.RuleDoc
+	if err := json.Unmarshal([]byte(existing.DefinitionJSON), &stored); err != nil {
+		return fmt.Errorf("auto rule %s: decode: %w", existing.Name, err)
+	}
+	if len(stored.Feeds) == 1 && stored.Feeds[0] == feedURL {
+		return nil
+	}
+
+	stored.Feeds = []string{feedURL}
+	stored.ApplyDefaults()
+	if errs := stored.Validate(); len(errs) > 0 {
+		return fmt.Errorf("auto rule %s: %s", existing.Name, errs[0].Message)
+	}
+	raw, err := json.Marshal(stored)
+	if err != nil {
+		return fmt.Errorf("auto rule %s: encode: %w", existing.Name, err)
+	}
+	existing.Enabled = *stored.Enabled
+	existing.Priority = stored.Priority
+	existing.DefinitionJSON = string(raw)
+
+	return store.UpdateRule(ctx, db, existing)
+}
+
 // dropAutoRule removes the auto:<feed_id> rule when one carries the name
 // and is a no-op otherwise — an absent rule is the state auto_download:
 // false asks for. A delete lost to a concurrent lifecycle call is the same
@@ -771,7 +781,8 @@ func dropAutoRule(ctx context.Context, db *sqlx.DB, feedID string) error {
 // auto_download leaves the rule's existence to the operator — only the
 // scope of a live rule follows the url.
 func keepAutoRuleScoped(ctx context.Context, db *sqlx.DB, feed store.Feed) error {
-	if _, err := store.RuleByName(ctx, db, autoRuleName(feed.ID)); err != nil {
+	rule, err := store.RuleByName(ctx, db, autoRuleName(feed.ID))
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -779,7 +790,13 @@ func keepAutoRuleScoped(ctx context.Context, db *sqlx.DB, feed store.Feed) error
 		return err
 	}
 
-	return ensureAutoRule(ctx, db, feed)
+	// A rule deleted by a concurrent lifecycle call leaves nothing to
+	// re-scope — the same desired state dropAutoRule tolerates.
+	if err := rescopeAutoRule(ctx, db, rule, feed.URL); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+
+	return nil
 }
 
 // feedItemDTO renders one feed_items row into the section 10.1 item object;

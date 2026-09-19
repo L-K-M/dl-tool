@@ -288,9 +288,9 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/rss/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	153.761s
-ok  	github.com/L-K-M/dl-tool/internal/rss	7.040s
-ok  	github.com/L-K-M/dl-tool/internal/store	78.452s
+ok  	github.com/L-K-M/dl-tool/internal/api	146.839s
+ok  	github.com/L-K-M/dl-tool/internal/rss	7.330s
+ok  	github.com/L-K-M/dl-tool/internal/store	77.079s
 RULEDOC_OK
 ```
 

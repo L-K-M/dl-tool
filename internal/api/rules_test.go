@@ -680,8 +680,10 @@ func TestRuleLastMatchAtIsMonotonic(t *testing.T) {
 	if rule.LastMatchAt == nil || *rule.LastMatchAt != 2000 {
 		t.Fatalf("last_match_at = %v, want 2000", rule.LastMatchAt)
 	}
+	updatedAt := rule.UpdatedAt
 
-	// An older write does not regress the watermark.
+	// An older write does not regress the watermark — and does not churn
+	// updated_at for a row whose content did not change.
 	if err := store.SetRuleLastMatchAt(ctx, env.db, ruleID, 1000); err != nil {
 		t.Fatalf("set older last_match_at: %v", err)
 	}
@@ -692,8 +694,12 @@ func TestRuleLastMatchAtIsMonotonic(t *testing.T) {
 	if rule.LastMatchAt == nil || *rule.LastMatchAt != 2000 {
 		t.Errorf("last_match_at = %v, want it held at 2000", rule.LastMatchAt)
 	}
+	if rule.UpdatedAt != updatedAt {
+		t.Errorf("updated_at moved on a non-advancing write: %d -> %d", updatedAt, rule.UpdatedAt)
+	}
 
-	// A newer write advances it.
+	// A newer write advances it, stamping updated_at.
+	time.Sleep(2 * time.Millisecond)
 	if err := store.SetRuleLastMatchAt(ctx, env.db, ruleID, 3000); err != nil {
 		t.Fatalf("set newer last_match_at: %v", err)
 	}
@@ -703,5 +709,26 @@ func TestRuleLastMatchAtIsMonotonic(t *testing.T) {
 	}
 	if rule.LastMatchAt == nil || *rule.LastMatchAt != 3000 {
 		t.Errorf("last_match_at = %v, want 3000", rule.LastMatchAt)
+	}
+	if rule.UpdatedAt <= updatedAt {
+		t.Errorf("updated_at = %d, want a stamp after %d on an advancing write", rule.UpdatedAt, updatedAt)
+	}
+}
+
+// TestCheckRuleFeedsRejectsRedactedForms pins the write-guard/read-render
+// contract: every url shape redactFeedURL emits for a credential-bearing
+// feed is refused by checkRuleFeeds, so a rendered form can never be
+// written back as a non-address — if the redaction format ever changes,
+// this test catches the two drifting apart.
+func TestCheckRuleFeedsRejectsRedactedForms(t *testing.T) {
+	for _, raw := range []string{
+		"https://user:secret@tracker.example.com/feed.xml",
+		"https://tracker.example.com/feed.xml?apikey=sekret&genre=iso",
+		"https://tracker.example.com/feed.xml?token=%zz",
+	} {
+		doc := rss.RuleDoc{Feeds: []string{redactFeedURL(raw)}}
+		if err := checkRuleFeeds(doc); err == nil {
+			t.Errorf("checkRuleFeeds accepted the redacted form of %q", raw)
+		}
 	}
 }

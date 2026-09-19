@@ -159,12 +159,16 @@ func DeleteRule(ctx context.Context, db *sqlx.DB, id string) error {
 // section 5 step 14: the newest published_at the rule committed a grab for.
 // The write is monotonic — MAX keeps the larger of the stored value and at,
 // so a late or retried call cannot re-open the consumed window and re-grab
-// items the rule already committed. ErrNotFound means id addresses no row.
+// items the rule already committed — and updated_at moves only when the
+// watermark does, so a non-advancing write leaves no phantom modification.
+// ErrNotFound means id addresses no row.
 func SetRuleLastMatchAt(ctx context.Context, db *sqlx.DB, id string, at int64) error {
 	result, err := db.ExecContext(ctx,
-		`UPDATE rules SET last_match_at = MAX(IFNULL(last_match_at, ?), ?), updated_at = ?
+		`UPDATE rules
+		SET updated_at = CASE WHEN last_match_at IS NULL OR last_match_at < ? THEN ? ELSE updated_at END,
+			last_match_at = MAX(IFNULL(last_match_at, ?), ?)
 		WHERE id = ?`,
-		at, at, time.Now().UnixMilli(), id,
+		at, time.Now().UnixMilli(), at, at, id,
 	)
 	if err != nil {
 		return fmt.Errorf("store: set last_match_at of rule %s: %w", id, err)
