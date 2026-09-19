@@ -21,6 +21,7 @@ const (
 	operationCreateRule = "create-rule"
 	operationPatchRule  = "patch-rule"
 	operationDeleteRule = "delete-rule"
+	operationTestRule   = "test-rule"
 
 	ruleConflictDetail      = "a rule with that name already exists"
 	ruleNameDetail          = "definition.name must equal the request's name"
@@ -82,6 +83,24 @@ type ListRulesOutput struct {
 	Body struct {
 		Rules []RuleDTO `json:"rules"`
 	}
+}
+
+// TestRuleInput is the body of POST /rules/test (docs/05-api-contract.md
+// section 10.3). The rule arrives as raw JSON so a malformed document is
+// this handler's 422 — errors[].location naming the member — never a
+// schema-level rejection with a shape the editor cannot point at.
+type TestRuleInput struct {
+	Body struct {
+		Rule        json.RawMessage `json:"rule"                    required:"true"             doc:"The full rule document, unsaved"`
+		Feeds       []string        `json:"feeds,omitempty"         doc:"Feed ids; the default is rule.feeds resolved by url, else every enabled feed"`
+		Limit       int             `json:"limit,omitempty"         minimum:"1" maximum:"500" default:"200" doc:"Items per feed, newest first"`
+		IgnoreState *bool           `json:"ignore_state,omitempty"  doc:"Default true: bypass rule_matches and rule_seen_episodes so the preview repeats byte for byte"`
+	}
+}
+
+// TestRuleOutput carries the 200 dry-run report.
+type TestRuleOutput struct {
+	Body rss.DryRunReport
 }
 
 // RuleOutput carries 201 from Create and 200 from Patch.
@@ -157,6 +176,19 @@ func (h *RuleHandlers) Register(hapi huma.API) {
 		// is 422, never silently ignored.
 		RejectUnknownQueryParameters: true,
 	}, h.Delete)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: operationTestRule,
+		Method:      http.MethodPost,
+		Path:        "/rules/test",
+		Summary:     "Dry-run a rule",
+		Description: "Evaluates an unsaved rule document against the stored items of the named feeds and returns every evaluated item — matched and unmatched — with its score, the clause that matched, or a reason code and the clause index responsible. Nothing is created or stored, so the editor can call it on a 250 ms debounce. 404 when a named feed id does not exist; 422 when the document fails validation, with one errors[] entry per member.",
+		Tags:        []string{"rules"},
+		Security:    credentialRequired,
+		// Same strictness as every other operation: a mistyped query key
+		// is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, h.TestRule)
 }
 
 // List serves GET /rules: every rule in evaluation order, definition
@@ -338,15 +370,59 @@ func (h *RuleHandlers) Delete(ctx context.Context, in *DeleteRuleInput) (*struct
 	return nil, nil
 }
 
+// TestRule serves POST /rules/test: the unsaved document is unmarshalled,
+// defaulted and validated before any database access — one errors[] entry
+// per FieldError, located under body.rule — then rss.DryRun evaluates it.
+// The handler takes no transaction and writes nothing; every pattern was
+// compiled during Validate, so evaluation cannot panic.
+func (h *RuleHandlers) TestRule(ctx context.Context, in *TestRuleInput) (*TestRuleOutput, error) {
+	var doc rss.RuleDoc
+	if err := json.Unmarshal(in.Body.Rule, &doc); err != nil {
+		return nil, ruleFieldProblem("body.rule", "the rule document is not valid JSON")
+	}
+
+	doc.ApplyDefaults()
+	if errs := doc.Validate(); len(errs) > 0 {
+		return nil, ruleValidationProblemAt("body.rule.", errs)
+	}
+
+	ignoreState := true
+	if in.Body.IgnoreState != nil {
+		ignoreState = *in.Body.IgnoreState
+	}
+	report, err := rss.DryRun(ctx, h.db, rss.DryRunRequest{
+		Rule:        doc,
+		FeedIDs:     in.Body.Feeds,
+		Limit:       in.Body.Limit,
+		IgnoreState: ignoreState,
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, FromStore(err)
+		}
+
+		return nil, internalFailure(ctx, "test rule", err)
+	}
+
+	return &TestRuleOutput{Body: report}, nil
+}
+
 // ruleValidationProblem renders the 422 of doc 05 section 10.2: one
 // errors[] entry per FieldError, its location prefixed into the definition
 // member — episode.filter arrives as body.definition.episode.filter.
 func ruleValidationProblem(errs []rss.FieldError) error {
+	return ruleValidationProblemAt("body.definition.", errs)
+}
+
+// ruleValidationProblemAt is ruleValidationProblem against another member:
+// POST /rules/test carries the document in body.rule, so its errors[] point
+// there instead of body.definition.
+func ruleValidationProblemAt(prefix string, errs []rss.FieldError) error {
 	details := make([]*huma.ErrorDetail, 0, len(errs))
 	for _, fieldErr := range errs {
 		details = append(details, &huma.ErrorDetail{
 			Message:  fieldErr.Message,
-			Location: "body.definition." + fieldErr.Location,
+			Location: prefix + fieldErr.Location,
 		})
 	}
 
