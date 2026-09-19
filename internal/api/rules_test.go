@@ -733,3 +733,153 @@ func TestCheckRuleFeedsRejectsRedactedForms(t *testing.T) {
 		}
 	}
 }
+
+// testRule posts one unsaved document to POST /rules/test with the test
+// bearer credential.
+func (e *tasksTestEnv) testRule(t *testing.T, body any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Post("/rules/test", body, "Authorization: Bearer "+e.bearer)
+}
+
+// validTestRuleBody is one legal POST /rules/test body; mutate the
+// returned maps to build the invalid cases.
+func validTestRuleBody() map[string]any {
+	return map[string]any{
+		"rule": map[string]any{
+			"name":   "preview",
+			"match":  map[string]any{"any_of": []string{"*ubuntu*"}},
+			"action": map[string]any{"destination": "/data/iso", "category": "linux"},
+		},
+	}
+}
+
+// TestTestRuleMalformedFilterIsRejected pins the 422 of doc 05 section
+// 10.3: a malformed episode.filter fails Validate before any database
+// access, with errors[].location naming the member under body.rule.
+func TestTestRuleMalformedFilterIsRejected(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	body := validTestRuleBody()
+	body["rule"].(map[string]any)["episode"] = map[string]any{"filter": "1x01"}
+	response := env.testRule(t, body)
+	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if len(problem.Errors) == 0 || problem.Errors[0].Location != "body.rule.episode.filter" {
+		t.Fatalf("errors = %+v, want errors[0].location body.rule.episode.filter", problem.Errors)
+	}
+}
+
+// TestTestRuleUnknownFeedIsNotFound pins the 404 of doc 05 section 10.3: a
+// named feed id that addresses no row is /problems/not-found.
+func TestTestRuleUnknownFeedIsNotFound(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	body := validTestRuleBody()
+	body["feeds"] = []string{"fed_does_not_exist"}
+	response := env.testRule(t, body)
+	assertProblem(t, response, http.StatusNotFound, SlugNotFound)
+}
+
+// TestTestRuleReturnsEveryItem pins the shape the editor's live preview
+// needs: 200 whatever the per-item outcomes, evaluated, matched and
+// elapsed_ms always present, and every stored item in results — matched
+// rows carry matched_by and would_do, unmatched rows carry reason.
+func TestTestRuleReturnsEveryItem(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	feedID := env.seedFeed(t, "https://example.com/dryrun.xml")
+	published := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	downloadURL := "https://example.com/t/x.torrent"
+	items := []store.FeedItem{
+		{FeedID: feedID, Identity: "i1", Title: "ubuntu 26.04 desktop amd64", TitleNorm: "ubuntu 26.04 desktop amd64", DownloadURL: &downloadURL, PublishedAt: &published},
+		{FeedID: feedID, Identity: "i2", Title: "debian 13 netinst", TitleNorm: "debian 13 netinst", DownloadURL: &downloadURL, PublishedAt: &published},
+	}
+	if _, err := store.UpsertFeedItems(t.Context(), env.db, items, published); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+
+	response := env.testRule(t, validTestRuleBody())
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var report rss.DryRunReport
+	if err := json.Unmarshal(response.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode response body %q: %v", response.Body.String(), err)
+	}
+	if report.Evaluated != 2 || report.Matched != 1 || len(report.Results) != 2 {
+		t.Fatalf("report = %+v, want evaluated=2 matched=1 and every item in results", report)
+	}
+	for _, row := range report.Results {
+		if row.Matched {
+			if row.WouldDo == nil || row.WouldDo.Destination != "/data/iso" || len(row.MatchedBy) == 0 {
+				t.Errorf("matched row = %+v, want matched_by and would_do", row)
+			}
+		} else if row.Reason == "" || row.ReasonDetail == "" {
+			t.Errorf("unmatched row = %+v, want reason and reason_detail", row)
+		}
+	}
+	if !strings.Contains(response.Body.String(), `"elapsed_ms":`) {
+		t.Errorf("body %s, want elapsed_ms present", response.Body.String())
+	}
+}
+
+// TestTestRuleIgnoreStateFalseIsAccepted pins the handler's explicit-false
+// branch: body.ignore_state=false must dereference through the pointer and
+// reach rss.DryRun as false — observable because the stored rule_matches
+// row collides with the item's info hash, so a stateful run rejects it
+// where a stateless one would match.
+func TestTestRuleIgnoreStateFalseIsAccepted(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	feedID := env.seedFeed(t, "https://example.com/ignore-state.xml")
+	published := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	downloadURL := "https://example.com/t/x.torrent"
+	hash := "dcb9178653b651c7ca4526e11fa8e22f74e2fd7a"
+	items := []store.FeedItem{
+		{FeedID: feedID, Identity: "i1", Title: "ubuntu 26.04 desktop amd64", TitleNorm: "ubuntu 26.04 desktop amd64", DownloadURL: &downloadURL, InfoHash: &hash, PublishedAt: &published},
+	}
+	if _, err := store.UpsertFeedItems(t.Context(), env.db, items, published); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+	if err := store.CreateRule(t.Context(), env.db, store.Rule{
+		ID: "rul_01DRYRUNSTATE00000000000", Name: "grabbed", Enabled: true, DefinitionJSON: "{}",
+	}); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := env.db.ExecContext(t.Context(),
+		`INSERT INTO rule_matches
+		(id, rule_id, info_hash, title, status, score, matched_at, created_at, updated_at)
+		VALUES ('rm_ignore_state', 'rul_01DRYRUNSTATE00000000000', ?, 'ubuntu 26.04 desktop amd64', 'sent', 0, ?, ?, ?)`,
+		hash, published, published, published); err != nil {
+		t.Fatalf("seed rule_matches: %v", err)
+	}
+
+	body := validTestRuleBody()
+	body["ignore_state"] = false
+	response := env.testRule(t, body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var report rss.DryRunReport
+	if err := json.Unmarshal(response.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode response body %q: %v", response.Body.String(), err)
+	}
+	if report.Evaluated != 1 || len(report.Results) != 1 {
+		t.Fatalf("report = %+v, want evaluated=1 with the item in results", report)
+	}
+	if report.Results[0].Matched || report.Results[0].Reason != rss.ReasonDuplicateInfoHash {
+		t.Errorf("row = %+v, want the stateful duplicate_infohash rejection — explicit false must reach DryRun", report.Results[0])
+	}
+
+	// The stateless default still matches the same item.
+	response = env.testRule(t, validTestRuleBody())
+	if response.Code != http.StatusOK {
+		t.Fatalf("default status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode response body %q: %v", response.Body.String(), err)
+	}
+	if report.Matched != 1 {
+		t.Errorf("default report = %+v, want the stateless run matching the item", report)
+	}
+}
