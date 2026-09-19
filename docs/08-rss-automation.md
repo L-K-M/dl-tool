@@ -457,7 +457,10 @@ A `content_key` is built from the strongest identity the item has: a staged epis
 namespaces it — an item with no staged episode key takes its `info_hash`, else its `identity`.
 Episode keys therefore never collide across rules: two rules matching the same hash-less episode each
 grab a copy (`rule_seen_episodes` is per rule); cross-rule contention for the same episode is
-arbitrated by the info-hash rung (step 10's `duplicate_infohash`), not by this key.
+arbitrated by the info-hash rung (step 10's `duplicate_infohash`), not by this key. That rung can only
+fire once the item's hash is known: a `.torrent`-URL episode whose hash reaches `rule_matches.info_hash`
+only via the post-grab back-fill slips past it unless that back-fill lands before the later rule's pass,
+so this arbitration holds only once the back-fill has an owner.
 
 The DDL, indices and retention policy for `feeds`, `feed_items`, `rules`, `rule_matches` and
 `rule_seen_episodes` are owned by [`04-data-model.md`](04-data-model.md#35-rss); do not restate them here.
