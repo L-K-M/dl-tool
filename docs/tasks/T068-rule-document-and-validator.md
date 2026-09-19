@@ -71,7 +71,7 @@ type RuleDoc struct {
 type MatchSpec struct {
 	Mode           string   `json:"mode,omitempty"`            // wildcard | regex | plain, default wildcard
 	CaseSensitive  bool     `json:"case_sensitive,omitempty"`  // default false
-	Fields         []string `json:"fields,omitempty"`          // title | description | category, default [title]
+	Fields         []string `json:"fields,omitempty"`          // title only in v1, default [title]
 	AnyOf          []string `json:"any_of,omitempty"`
 	NoneOf         []string `json:"none_of,omitempty"`
 	MinSize        string   `json:"min_size,omitempty"`        // IEC, e.g. "1GiB"

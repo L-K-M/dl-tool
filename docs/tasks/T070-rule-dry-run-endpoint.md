@@ -119,8 +119,8 @@ whatever the per-item outcomes · `404` when a named feed id does not exist · `
    `StatelessState` and `DryRun`.
 2. Resolve the feed set: `req.FeedIDs`, else `rule.feeds` matched by URL, else every enabled feed; return
    `store.ErrNotFound` for an unknown id.
-3. Select at most `Limit` items per feed with `store.ListFeedItems`, newest first, and build
-   `feedURLByID` and a feed-title map in the same pass.
+3. Select at most `Limit` items per feed with `store.ListFeedItems`, newest first, and build the
+   `feedByID` map of `FeedRef` (URL and `feeds.priority`) and a feed-title map in the same pass.
 4. Call `Evaluate` with `StatelessState` when `IgnoreState`, otherwise with the database-backed state;
    measure `ElapsedMS` around the call with `time.Since`.
 5. Emit one `DryRunItem` per evaluated item — matched and unmatched — and set `Evaluated` to

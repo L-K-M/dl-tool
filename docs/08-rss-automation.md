@@ -234,7 +234,7 @@ feeds:                        # empty/omitted = all enabled feeds
 match:
   mode: wildcard              # wildcard | regex | plain   (default: wildcard)
   case_sensitive: false       # default false, like qBittorrent, unlike Synology
-  fields: [title]             # title | description | category  (default: [title])
+  fields: [title]             # title only — the store carries no other matchable field (default: [title])
   any_of:                     # OR across entries; each entry is AND across whitespace tokens
     - "ubuntu *desktop* amd64"
     - "kubuntu *amd64*"
@@ -274,11 +274,11 @@ throttle:
 |---|---|---|---|
 | `name` | string | — | Required, unique. Stored in `rules.name`, not inside the document. |
 | `enabled` | bool | `true` | Disabled rules are skipped by the poller but still testable via the dry run. |
-| `priority` | int | `0` | Evaluation order, ascending; ties broken by `name` ascending. Also the third sort key in per-run resolution. |
+| `priority` | int | `0` | Evaluation order, ascending; ties broken by `name` ascending. |
 | `feeds` | string[] | `[]` | Feed URLs. Empty means every enabled feed. |
 | `match.mode` | enum | `wildcard` | `wildcard` \| `regex` \| `plain`. Semantics in [`04-data-model.md`](04-data-model.md#46-rulesdefinition_json--matchmode). |
 | `match.case_sensitive` | bool | `false` | When false, lowercase both haystack and patterns before compiling. |
-| `match.fields` | string[] | `["title"]` | Any of `title`, `description`, `category`. Joined with `\n` to form the haystack. |
+| `match.fields` | string[] | `["title"]` | Only `title` — `feed_items` has no `description` or `category` carrier ([`04-data-model.md`](04-data-model.md#35-rss) §3.5). The enum grows only when the store does. Joined with `\n` to form the haystack. |
 | `match.any_of` | string[] | `[]` | OR across entries. Empty passes. |
 | `match.none_of` | string[] | `[]` | OR across entries; any hit rejects. Empty never rejects. |
 | `match.min_size` | string | unset | IEC size, e.g. `1GiB`, `700MiB`. Compared against `feed_items.size_bytes`. |
@@ -327,7 +327,7 @@ For each enabled rule, ordered by `(priority ASC, name ASC)`, over the candidate
 10. **Dedup ladder** (§7): identity → info-hash → content key.
 11. **Score.** Sum the weights of every `score.formats` entry whose `pattern` matches the haystack. If `total < score.minimum`, reject `below_minimum_score`.
 12. **Collect.** Do **not** grab yet.
-13. **Per-run resolution.** Group all accepted candidates by `content_key`; within each group sort by `(score DESC, rule.priority ASC, feed_priority ASC, published_at DESC)` and grab only the winner. `feed_priority` is `feeds.priority` (default `0`, lower preferred); when two feeds carry the same content, the lower-priority feed's copy wins the group. Record the losers as `fallback` rows so a failed hand-off to the download client can be retried with the runner-up. `fallback` rows obey the same idempotency rule as step 14: one row per `(rule_id, feed_item_id)`, updated in place while the group's winner keeps failing, never re-inserted per run.
+13. **Per-run resolution.** Group the candidates this rule accepted in the pass by `content_key`; within each group sort by `(score DESC, feed_priority ASC, published_at DESC)` and grab only the winner. Resolution is per rule: the pass evaluates rules in `(priority ASC, name ASC)` order and commits one rule's winners before evaluating the next, so two rules competing for one `content_key` are decided by the step-10 check against the earlier rule's committed row, never by pooling candidates across rules. `feed_priority` is `feeds.priority` (default `0`, lower preferred); when two feeds carry the same content, the lower-priority feed's copy wins the group. Record the losers as `fallback` rows so a failed hand-off to the download client can be retried with the runner-up. `fallback` rows obey the same idempotency rule as step 14: one row per `(rule_id, feed_item_id)`, updated in place while the group's winner keeps failing, never re-inserted per run.
 14. **Commit.** Insert `rule_matches`, insert `rule_seen_episodes`, set `rule.last_match_at = item.published_at`, enforce `throttle.max_per_run`. The task itself is created through the ordinary task-creation path: the destination is re-checked against the configured roots and the concurrency limits apply exactly as in [`05-api-contract.md`](05-api-contract.md) §5.11 — a rejected destination leaves the item ungrabbed with `rule_matches.status = 'failed'`, never an unaccounted task, while a task merely held by admission control is a normal grab. Like a failed hand-off (step 13), a breach is retryable: a `failed` row must not mark the episode seen, and the item re-enters the candidate set on later runs until it succeeds. A retry **updates** the existing `(rule_id, feed_item_id)` row's `matched_at` and `last_error` instead of inserting another, so a permanently broken rule cannot grow the table without bound, and `max_per_run` counts grabs only — failed attempts never consume a slot, so one broken rule cannot starve its own or another rule's successful grabs.
 
 Steps 1 and 3 remove an item from the candidate set before evaluation; they produce no reason code and the
@@ -349,7 +349,7 @@ it — see [`05-api-contract.md`](05-api-contract.md#103-post-rulestest--the-dry
 | `unparseable_episode` | 9 | `smart filter found no season/episode in the title` |
 | `duplicate_episode` | 9 | `episode_key "1x5" already seen for this rule` |
 | `duplicate_infohash` | 10 | `infohash dcb9178653b651c7ca4526e11fa8e22f74e2fd7a already grabbed` |
-| `already_have` | 10 | `content_key "tv:the-show:s01e05" already grabbed with score 40` |
+| `already_have` | 10 | `content_key "ep:rul_01JKA…:1x5" already grabbed with score 40` |
 | `below_minimum_score` | 11 | `score=-80 < minimum=0` |
 
 ### 5.2 Regex safety
@@ -451,6 +451,10 @@ expensive and more authoritative.
 | 1 | Feed item GUID, resolved through the identity chain of §3.2 | `feed_items.identity`, unique with `feed_id` | The item is not new. It is never re-evaluated in a poll cycle, so no reason code is produced. |
 | 2 | BitTorrent info-hash, lowercase hex, **40 characters (v1) or 64 characters (v2)** | `feed_items.info_hash` for the item and `rule_matches.info_hash` (unique partial index) for the grab — both columns accept either width | Reject `duplicate_infohash`. This is the only cross-feed authoritative check. |
 | 3 | Normalised episode / content key | `rule_seen_episodes.episode_key` (per rule) and `rule_matches.content_key` (global) | Reject `duplicate_episode` (step 9) or `already_have` (step 10) unless the new release beats the stored one on score. |
+
+A `content_key` is built from the strongest identity the item has: a staged episode key becomes
+`ep:<rule_id>:<episode_key>` — a bare `1x5` is only unique inside its rule, so the global column
+namespaces it — an item with no staged episode key takes its `info_hash`, else its `identity`.
 
 The DDL, indices and retention policy for `feeds`, `feed_items`, `rules`, `rule_matches` and
 `rule_seen_episodes` are owned by [`04-data-model.md`](04-data-model.md#35-rss); do not restate them here.
@@ -570,9 +574,9 @@ distribution or a public-domain catalogue.
 - (resolved 2026-09-01: `feed_priority` is `feeds.priority`, added to the DDL in
   [`04-data-model.md`](04-data-model.md) §3.5 and to the feed object in
   [`05-api-contract.md`](05-api-contract.md) §10.1.)
-- [NEEDS CLARIFICATION: `content_key` construction is unspecified for non-TV content. §7 assumes a form like
-  `tv:the-show:s01e05`; a rule with no `episode` block currently has no content key, so step 13 degenerates to
-  one group per item.]
+- (resolved 2026-09-19: `content_key` construction is pinned in §7 — an episode-derived key is
+  namespaced per rule as `ep:<rule_id>:<episode_key>`; an item with no staged episode key uses its
+  `info_hash`, else its `identity`, so non-TV items sharing a hash across feeds still group in step 13.)
 - Download Station's RSS update-interval dropdown values are UNVERIFIED; its documented default is
   "updates the lists of RSS feeds on a daily basis". dl-tool's 30-minute default is taken from qBittorrent
   instead and does not need to match.
@@ -592,3 +596,4 @@ distribution or a public-domain catalogue.
 | 2026-09-01 | Closed the `feed_priority` open question: it is `feeds.priority` (`04-data-model.md` §3.5), default 0, lower preferred. |
 | 2026-09-02 | Multi-user model dropped ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
 | 2026-09-02 | Single-account cleanup: an omitted `action.destination` resolves to the global default and is checked against the data roots — there is no per-user default and no jail ([ADR-0019](decisions/0019-single-account-no-ownership.md)). |
+| 2026-09-19 | T069 repair (F369, F362, F361, F138 and the step-13 `feed_priority` gap): `match.fields` narrowed to `title` — the only field `feed_items` stores — with `description`/`category` readmitted only when the store gains carriers; step 13's grouping pinned as per-rule with `rule.priority` removed from the sort tuple; `content_key` construction pinned — `ep:<rule_id>:<episode_key>` for a staged episode key, else `info_hash`, else `identity` — closing the open question. |
