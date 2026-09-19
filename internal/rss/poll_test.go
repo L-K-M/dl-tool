@@ -537,7 +537,6 @@ func TestConcurrentPollSameFeedSkipped(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	defer close(release)
 
 	feed := newFeed(t, db, srv.URL+"/feed")
 	poller := testPoller(t, db, srv, stubParser{})
@@ -558,6 +557,7 @@ func TestConcurrentPollSameFeedSkipped(t *testing.T) {
 	require.False(t, res.Fetched)
 	require.Contains(t, res.Error, "already in progress")
 
+	close(release)
 	<-done
 }
 
