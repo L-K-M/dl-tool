@@ -1039,3 +1039,71 @@ func TestDeleteFeedRemovesAutoRule(t *testing.T) {
 		t.Errorf("auto rule outlived its feed: %v", err)
 	}
 }
+
+// TestAutoRuleFollowsFeedURL pins the scope invariant: an auto:<feed_id>
+// rule's feeds[] is the feed's current url, so a url change — whether the
+// PATCH carries auto_download: true or omits the member — re-scopes the
+// existing rule in place, keeping its id and its dedup watermark. A url
+// move on a feed without an auto rule creates none.
+func TestAutoRuleFollowsFeedURL(t *testing.T) {
+	env := newTasksTestEnv(t)
+	ctx := t.Context()
+
+	response := env.createFeed(t, map[string]any{
+		"url": "https://archlinux.org/feeds/releases/", "auto_download": true,
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	feedID := decodeFeedBody(t, response).ID
+	before, err := store.RuleByName(ctx, env.db, autoRuleName(feedID))
+	if err != nil {
+		t.Fatalf("resolve auto rule: %v", err)
+	}
+	if err := store.SetRuleLastMatchAt(ctx, env.db, before.ID, 4242); err != nil {
+		t.Fatalf("seed last_match_at: %v", err)
+	}
+
+	// A url move with auto_download: true re-scopes the same row.
+	response = env.patchFeed(t, feedID, map[string]any{
+		"url": "https://debian.org/feeds/", "auto_download": true,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	rule, err := store.RuleByName(ctx, env.db, autoRuleName(feedID))
+	if err != nil {
+		t.Fatalf("resolve auto rule after url move: %v", err)
+	}
+	if rule.ID != before.ID {
+		t.Errorf("auto rule id = %s, want the re-scoped row %s, not a fresh create", rule.ID, before.ID)
+	}
+	if rule.LastMatchAt == nil || *rule.LastMatchAt != 4242 {
+		t.Errorf("last_match_at = %v, want the dedup watermark kept through the re-scope", rule.LastMatchAt)
+	}
+	if doc := env.autoRuleDocument(t, feedID); len(doc.Feeds) != 1 || doc.Feeds[0] != "https://debian.org/feeds/" {
+		t.Errorf("feeds = %v, want the rule scoped to the post-patch url", doc.Feeds)
+	}
+
+	// A url move with the member omitted re-scopes it too: the rule
+	// tracks the feed, so its scope cannot be left pointing at the old
+	// url where another feed might later live.
+	response = env.patchFeed(t, feedID, map[string]any{"url": "https://fedoraproject.org/feeds/"})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if doc := env.autoRuleDocument(t, feedID); len(doc.Feeds) != 1 || doc.Feeds[0] != "https://fedoraproject.org/feeds/" {
+		t.Errorf("feeds = %v after an omitted auto_download, want the scope following the url", doc.Feeds)
+	}
+
+	// But an omitted member never creates a rule: a feed that has none
+	// keeps none across a url move.
+	plainID := env.seedFeed(t, "https://archlinux.org/feeds/releases/")
+	response = env.patchFeed(t, plainID, map[string]any{"url": "https://example.com/feed.xml"})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if _, err := store.RuleByName(ctx, env.db, autoRuleName(plainID)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("url move minted an auto rule on a feed that had none: %v", err)
+	}
+}

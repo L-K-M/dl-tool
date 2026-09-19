@@ -382,6 +382,12 @@ func (h *FeedHandlers) Create(ctx context.Context, in *CreateFeedInput) (*FeedOu
 	// re-sending auto_download: true on PATCH.
 	if in.Body.AutoDownload {
 		if err := ensureAutoRule(ctx, h.db, feed); err != nil {
+			// The committed feed is repairable through PATCH
+			// auto_download: true, but the problem body carries no feed
+			// id — log it so the orphan can be found.
+			logFromContext(ctx).Error("create auto rule failed; feed committed",
+				slog.String("feed_id", feed.ID), slog.Any("err", err))
+
 			return nil, internalFailure(ctx, "create auto rule", err)
 		}
 	}
@@ -401,6 +407,7 @@ func (h *FeedHandlers) Patch(ctx context.Context, in *PatchFeedInput) (*FeedOutp
 		return nil, FromStore(err)
 	}
 
+	urlMoved := in.Body.URL != nil && !strings.Contains(*in.Body.URL, redactedValue) && *in.Body.URL != feed.URL
 	if in.Body.URL != nil && !strings.Contains(*in.Body.URL, redactedValue) {
 		if err := checkFeedURL(*in.Body.URL); err != nil {
 			return nil, err
@@ -443,21 +450,25 @@ func (h *FeedHandlers) Patch(ctx context.Context, in *PatchFeedInput) (*FeedOutp
 	}
 
 	// The lifecycle resolves by name after the feed write commits, so a
-	// rule created here scopes to the post-patch url (doc 05 section
-	// 10.1). An omitted member — nil — leaves the rule untouched, and like
-	// the create above the two writes share no transaction: a failed rule
-	// write leaves the committed feed patch in place, retryable by
-	// re-sending the member.
-	if in.Body.AutoDownload != nil {
-		var err error
-		if *in.Body.AutoDownload {
-			err = ensureAutoRule(ctx, h.db, updated)
-		} else {
-			err = dropAutoRule(ctx, h.db, updated.ID)
+	// rule created or re-scoped here sees the post-patch url (doc 05
+	// section 10.1). An omitted member — nil — leaves the rule untouched
+	// unless the url moved out from under an existing auto: rule: the rule
+	// tracks the feed, so its scope follows. Like the create above the
+	// writes share no transaction: a failed rule write leaves the
+	// committed feed patch in place, retryable by re-sending the member.
+	var lifecycleErr error
+	switch {
+	case in.Body.AutoDownload == nil:
+		if urlMoved {
+			lifecycleErr = keepAutoRuleScoped(ctx, h.db, updated)
 		}
-		if err != nil {
-			return nil, internalFailure(ctx, "auto rule lifecycle", err)
-		}
+	case *in.Body.AutoDownload:
+		lifecycleErr = ensureAutoRule(ctx, h.db, updated)
+	default:
+		lifecycleErr = dropAutoRule(ctx, h.db, updated.ID)
+	}
+	if lifecycleErr != nil {
+		return nil, internalFailure(ctx, "auto rule lifecycle", lifecycleErr)
 	}
 
 	return &FeedOutput{Status: http.StatusOK, Body: feedDTO(updated)}, nil
@@ -677,13 +688,37 @@ func autoRuleName(feedID string) string {
 // resolves to the global default at grab time (doc 05 sections 10.1 and
 // 10.2). The document is built, defaulted and validated like a POST /rules
 // submission, so the lifecycle can never store a rule the write path would
-// reject. A name that already resolves is the desired state: the call is
-// idempotent, and so is a UNIQUE race against another writer.
+// reject. A name that already resolves is the desired state — idempotent,
+// and so is a UNIQUE race against another writer — except when the feed's
+// url moved under it: the rule tracks the feed, so its scope is re-written
+// to the current url in place, keeping the row's id, its dedup watermark
+// and every member the operator edited.
 func ensureAutoRule(ctx context.Context, db *sqlx.DB, feed store.Feed) error {
 	name := autoRuleName(feed.ID)
-	switch _, err := store.RuleByName(ctx, db, name); {
+	switch existing, err := store.RuleByName(ctx, db, name); {
 	case err == nil:
-		return nil
+		var stored rss.RuleDoc
+		if err := json.Unmarshal([]byte(existing.DefinitionJSON), &stored); err != nil {
+			return fmt.Errorf("auto rule %s: decode: %w", name, err)
+		}
+		if len(stored.Feeds) == 1 && stored.Feeds[0] == feed.URL {
+			return nil
+		}
+
+		stored.Feeds = []string{feed.URL}
+		stored.ApplyDefaults()
+		if errs := stored.Validate(); len(errs) > 0 {
+			return fmt.Errorf("auto rule %s: %s", name, errs[0].Message)
+		}
+		raw, err := json.Marshal(stored)
+		if err != nil {
+			return fmt.Errorf("auto rule %s: encode: %w", name, err)
+		}
+		existing.Enabled = *stored.Enabled
+		existing.Priority = stored.Priority
+		existing.DefinitionJSON = string(raw)
+
+		return store.UpdateRule(ctx, db, existing)
 	case !errors.Is(err, store.ErrNotFound):
 		return err
 	}
@@ -714,7 +749,8 @@ func ensureAutoRule(ctx context.Context, db *sqlx.DB, feed store.Feed) error {
 
 // dropAutoRule removes the auto:<feed_id> rule when one carries the name
 // and is a no-op otherwise — an absent rule is the state auto_download:
-// false asks for.
+// false asks for. A delete lost to a concurrent lifecycle call is the same
+// desired state, so ErrNotFound from the delete is a no-op too.
 func dropAutoRule(ctx context.Context, db *sqlx.DB, feedID string) error {
 	rule, err := store.RuleByName(ctx, db, autoRuleName(feedID))
 	if errors.Is(err, store.ErrNotFound) {
@@ -723,8 +759,27 @@ func dropAutoRule(ctx context.Context, db *sqlx.DB, feedID string) error {
 	if err != nil {
 		return err
 	}
+	if err := store.DeleteRule(ctx, db, rule.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
 
-	return store.DeleteRule(ctx, db, rule.ID)
+	return nil
+}
+
+// keepAutoRuleScoped re-scopes an existing auto:<feed_id> rule after the
+// feed's url moved, and creates nothing when the feed has none: an omitted
+// auto_download leaves the rule's existence to the operator — only the
+// scope of a live rule follows the url.
+func keepAutoRuleScoped(ctx context.Context, db *sqlx.DB, feed store.Feed) error {
+	if _, err := store.RuleByName(ctx, db, autoRuleName(feed.ID)); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+
+		return err
+	}
+
+	return ensureAutoRule(ctx, db, feed)
 }
 
 // feedItemDTO renders one feed_items row into the section 10.1 item object;

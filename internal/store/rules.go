@@ -157,11 +157,14 @@ func DeleteRule(ctx context.Context, db *sqlx.DB, id string) error {
 
 // SetRuleLastMatchAt advances the dedup watermark of docs/08-rss-automation.md
 // section 5 step 14: the newest published_at the rule committed a grab for.
-// ErrNotFound means id addresses no row.
+// The write is monotonic — MAX keeps the larger of the stored value and at,
+// so a late or retried call cannot re-open the consumed window and re-grab
+// items the rule already committed. ErrNotFound means id addresses no row.
 func SetRuleLastMatchAt(ctx context.Context, db *sqlx.DB, id string, at int64) error {
 	result, err := db.ExecContext(ctx,
-		`UPDATE rules SET last_match_at = ?, updated_at = ? WHERE id = ?`,
-		at, time.Now().UnixMilli(), id,
+		`UPDATE rules SET last_match_at = MAX(IFNULL(last_match_at, ?), ?), updated_at = ?
+		WHERE id = ?`,
+		at, at, time.Now().UnixMilli(), id,
 	)
 	if err != nil {
 		return fmt.Errorf("store: set last_match_at of rule %s: %w", id, err)

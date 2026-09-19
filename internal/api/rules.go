@@ -22,9 +22,11 @@ const (
 	operationPatchRule  = "patch-rule"
 	operationDeleteRule = "delete-rule"
 
-	ruleConflictDetail = "a rule with that name already exists"
-	ruleNameDetail     = "definition.name must equal the request's name"
-	ruleAutoNameDetail = "names beginning auto: are reserved for the feed auto-download lifecycle"
+	ruleConflictDetail      = "a rule with that name already exists"
+	ruleNameDetail          = "definition.name must equal the request's name"
+	ruleAutoNameDetail      = "names beginning auto: are reserved for the feed auto-download lifecycle"
+	ruleEmptyNameDetail     = "the name must not be empty"
+	ruleRedactedFeedsDetail = "a feeds entry containing __redacted__ is a rendered form, not a feed url"
 
 	// autoRulePrefix is the reserved name prefix of doc 05 section 10.1's
 	// feed lifecycle: auto:<feed_id> rules are created and removed by the
@@ -193,6 +195,9 @@ func (h *RuleHandlers) Create(ctx context.Context, in *CreateRuleInput) (*RuleOu
 	if doc.Name != in.Body.Name {
 		return nil, ruleFieldProblem("body.definition.name", ruleNameDetail)
 	}
+	if err := checkRuleFeeds(doc); err != nil {
+		return nil, err
+	}
 
 	doc.ApplyDefaults()
 	if errs := doc.Validate(); len(errs) > 0 {
@@ -259,11 +264,19 @@ func (h *RuleHandlers) Patch(ctx context.Context, in *PatchRuleInput) (*RuleOutp
 	switch {
 	case in.Body.Name != nil:
 		effectiveName = *in.Body.Name
-	case in.Body.Definition != nil:
+	case in.Body.Definition != nil && doc.Name != "":
+		// A replacement document renames through its own name member;
+		// an empty one keeps the stored name rather than blank it.
 		effectiveName = doc.Name
+	}
+	if effectiveName == "" {
+		return nil, ruleFieldProblem("body.name", ruleEmptyNameDetail)
 	}
 	if effectiveName != rule.Name && strings.HasPrefix(effectiveName, autoRulePrefix) {
 		return nil, ruleFieldProblem("body.name", ruleAutoNameDetail)
+	}
+	if err := checkRuleFeeds(doc); err != nil {
+		return nil, err
 	}
 
 	doc.ApplyDefaults()
@@ -339,6 +352,22 @@ func ruleValidationProblem(errs []rss.FieldError) error {
 	}
 }
 
+// checkRuleFeeds rejects a feeds entry still carrying the __redacted__
+// sentinel: it is a rendered form copied off a GET response, not a
+// fetchable address — storing it would silently break matching, the same
+// reason POST /feeds refuses a redacted url.
+func checkRuleFeeds(doc rss.RuleDoc) error {
+	for i, feedURL := range doc.Feeds {
+		if strings.Contains(feedURL, redactedValue) {
+			location := fmt.Sprintf("body.definition.feeds[%d]", i)
+
+			return ruleFieldProblem(location, ruleRedactedFeedsDetail)
+		}
+	}
+
+	return nil
+}
+
 // ruleFieldProblem is the single-member 422 the name checks produce: it
 // rides the same validation slug so a client reads one error shape.
 func ruleFieldProblem(location, detail string) error {
@@ -358,6 +387,12 @@ func ruleDTO(r store.Rule) (RuleDTO, error) {
 	var doc rss.RuleDoc
 	if err := json.Unmarshal([]byte(r.DefinitionJSON), &doc); err != nil {
 		return RuleDTO{}, fmt.Errorf("decode definition of rule %s: %w", r.ID, err)
+	}
+	// Feed urls get the member-wise redaction of doc 05 section 10.1 like
+	// the feed object's url: the stored document keeps the secret —
+	// matching needs it verbatim — but the API never returns it.
+	for i := range doc.Feeds {
+		doc.Feeds[i] = redactFeedURL(doc.Feeds[i])
 	}
 
 	return RuleDTO{

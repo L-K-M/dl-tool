@@ -307,6 +307,13 @@ func TestRuleDocumentValidation(t *testing.T) {
 		{"too many formats", map[string]any{}, map[string]any{"score": map[string]any{"formats": tooManyFormats}}, "body.definition.score.formats"},
 		{"bad score pattern", map[string]any{}, map[string]any{"score": map[string]any{"formats": []map[string]any{{"name": "x", "pattern": "a[", "weight": 1}}}}, "body.definition.score.formats[0].pattern"},
 		{"bad content_layout", map[string]any{}, map[string]any{"action": map[string]any{"content_layout": "flat"}}, "body.definition.action.content_layout"},
+		{"inverted size window", map[string]any{"min_size": "2GiB", "max_size": "1GiB"}, nil, "body.definition.match.max_size"},
+		{"nan size", map[string]any{"min_size": "nanb"}, nil, "body.definition.match.min_size"},
+		{"infinite size", map[string]any{"max_size": "infb"}, nil, "body.definition.match.max_size"},
+		{"overflowing size", map[string]any{"max_size": "1e30b"}, nil, "body.definition.match.max_size"},
+		{"huge eib size", map[string]any{"min_size": "16EiB"}, nil, "body.definition.match.min_size"},
+		{"negative cooldown", map[string]any{}, map[string]any{"throttle": map[string]any{"cooldown_days": -1}}, "body.definition.throttle.cooldown_days"},
+		{"negative max_per_run", map[string]any{}, map[string]any{"throttle": map[string]any{"max_per_run": -1}}, "body.definition.throttle.max_per_run"},
 	}
 	for _, tc := range cases {
 		body := validRuleBody("case-" + tc.name)
@@ -354,7 +361,11 @@ func TestDuplicateRuleNameConflicts(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
 	}
-	second := decodeRuleBody(t, env.createRule(t, validRuleBody("second")))
+	seed := env.createRule(t, validRuleBody("second"))
+	if seed.Code != http.StatusCreated {
+		t.Fatalf("seed status = %d, want %d; body %s", seed.Code, http.StatusCreated, seed.Body.String())
+	}
+	second := decodeRuleBody(t, seed)
 
 	response = env.createRule(t, validRuleBody("taken"))
 	assertProblem(t, response, http.StatusConflict, SlugConflict)
@@ -439,7 +450,11 @@ func TestRuleNameMismatchRejected(t *testing.T) {
 	response := env.createRule(t, body)
 	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 
-	ruleID := decodeRuleBody(t, env.createRule(t, validRuleBody("outer"))).ID
+	seed := env.createRule(t, validRuleBody("outer"))
+	if seed.Code != http.StatusCreated {
+		t.Fatalf("seed status = %d, want %d; body %s", seed.Code, http.StatusCreated, seed.Body.String())
+	}
+	ruleID := decodeRuleBody(t, seed).ID
 	response = env.patchRule(t, ruleID, map[string]any{
 		"name":       "outer-renamed",
 		"definition": map[string]any{"name": "different"},
@@ -458,7 +473,11 @@ func TestAutoPrefixNameRejected(t *testing.T) {
 	response := env.createRule(t, validRuleBody("auto:fed_01JKQ7AAAA"))
 	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 
-	ruleID := decodeRuleBody(t, env.createRule(t, validRuleBody("mine"))).ID
+	seed := env.createRule(t, validRuleBody("mine"))
+	if seed.Code != http.StatusCreated {
+		t.Fatalf("seed status = %d, want %d; body %s", seed.Code, http.StatusCreated, seed.Body.String())
+	}
+	ruleID := decodeRuleBody(t, seed).ID
 	response = env.patchRule(t, ruleID, map[string]any{"name": "auto:fed_01JKQ7BBBB"})
 	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 	response = env.patchRule(t, ruleID, map[string]any{
@@ -525,5 +544,164 @@ func TestAutoRuleDeletesLikeAnyOther(t *testing.T) {
 	}
 	if recreated.ID == autoRule.ID {
 		t.Error("recreated rule kept the deleted row's id, want a fresh rul_ id")
+	}
+}
+
+// TestPatchRuleName pins the mirrored-name rules of PATCH: an explicit ""
+// is 422 at body.name — a stored rule can never carry an empty name — a
+// replacement document whose name is empty keeps the stored name rather
+// than blank it, and a definition-only rename still works.
+func TestPatchRuleName(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.createRule(t, validRuleBody("original"))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	ruleID := decodeRuleBody(t, response).ID
+
+	response = env.patchRule(t, ruleID, map[string]any{"name": ""})
+	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if len(problem.Errors) == 0 || problem.Errors[0].Location != "body.name" {
+		t.Fatalf("errors = %+v, want errors[0].location body.name", problem.Errors)
+	}
+
+	// A replacement document carrying an empty name keeps the stored
+	// name rather than blank it — name is required in the document
+	// schema, so "" is the degenerate spelling of "no rename".
+	response = env.patchRule(t, ruleID, map[string]any{
+		"definition": map[string]any{"name": "", "match": map[string]any{}, "action": map[string]any{}},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if patched := decodeRuleBody(t, response); patched.Name != "original" || patched.Definition.Name != "original" {
+		t.Errorf("patched = %+v, want the stored name kept and mirrored into the document", patched)
+	}
+
+	// A definition-only rename still applies, mirrored into the column.
+	response = env.patchRule(t, ruleID, map[string]any{
+		"definition": map[string]any{"name": "renamed", "match": map[string]any{}, "action": map[string]any{}},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if patched := decodeRuleBody(t, response); patched.Name != "renamed" || patched.Definition.Name != "renamed" {
+		t.Errorf("patched = %+v, want renamed in the column and the document", patched)
+	}
+}
+
+// TestRuleFeedURLsAreRedacted pins the section 10.1 credential rule on the
+// rule document's feeds member: GET /rules renders userinfo and secret
+// query values __redacted__ while the stored document keeps them verbatim
+// for matching — and a write echoing a redacted entry is 422, never a
+// stored non-address.
+func TestRuleFeedURLsAreRedacted(t *testing.T) {
+	env := newTasksTestEnv(t)
+	const rawURL = "https://user:pass@tracker.example.com/feed.xml?apikey=sekret&genre=iso"
+
+	response := env.createFeed(t, map[string]any{"url": rawURL, "auto_download": true})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	feedID := decodeFeedBody(t, response).ID
+
+	rules := decodeRuleList(t, env.getRules(t))
+	if len(rules) != 1 {
+		t.Fatalf("rules = %+v, want the one auto rule", rules)
+	}
+	if len(rules[0].Definition.Feeds) != 1 {
+		t.Fatalf("feeds = %v, want one entry", rules[0].Definition.Feeds)
+	}
+	rendered := rules[0].Definition.Feeds[0]
+	if strings.Contains(rendered, "user:pass") || strings.Contains(rendered, "sekret") {
+		t.Errorf("rendered feeds entry leaks a credential: %q", rendered)
+	}
+	if !strings.Contains(rendered, redactedValue) || !strings.Contains(rendered, "genre=iso") {
+		t.Errorf("rendered feeds entry = %q, want __redacted__ members and the genre member kept", rendered)
+	}
+
+	// The stored document keeps the raw url: matching compares it
+	// verbatim against feed urls.
+	if doc := env.autoRuleDocument(t, feedID); len(doc.Feeds) != 1 || doc.Feeds[0] != rawURL {
+		t.Errorf("stored feeds = %v, want the verbatim credential url", doc.Feeds)
+	}
+
+	// A write echoing a redacted entry is 422 on create and on patch.
+	body := validRuleBody("scoped")
+	body["definition"].(map[string]any)["feeds"] = []string{
+		"https://" + redactedValue + "@tracker.example.com/feed.xml",
+	}
+	response = env.createRule(t, body)
+	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if len(problem.Errors) == 0 || problem.Errors[0].Location != "body.definition.feeds[0]" {
+		t.Fatalf("errors = %+v, want errors[0].location body.definition.feeds[0]", problem.Errors)
+	}
+
+	seed := env.createRule(t, validRuleBody("scoped"))
+	if seed.Code != http.StatusCreated {
+		t.Fatalf("seed status = %d, want %d; body %s", seed.Code, http.StatusCreated, seed.Body.String())
+	}
+	response = env.patchRule(t, decodeRuleBody(t, seed).ID, map[string]any{
+		"definition": map[string]any{
+			"name":  "scoped",
+			"feeds": []string{"https://tracker.example.com/feed.xml?token=" + redactedValue},
+			"match": map[string]any{}, "action": map[string]any{},
+		},
+	})
+	problem = assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if len(problem.Errors) == 0 || problem.Errors[0].Location != "body.definition.feeds[0]" {
+		t.Fatalf("patch errors = %+v, want errors[0].location body.definition.feeds[0]", problem.Errors)
+	}
+}
+
+// TestRuleLastMatchAtIsMonotonic pins the dedup watermark's direction:
+// SetRuleLastMatchAt never moves last_match_at backwards, so an
+// out-of-order or retried write cannot re-open the consumed window and
+// re-grab items the rule already committed.
+func TestRuleLastMatchAtIsMonotonic(t *testing.T) {
+	env := newTasksTestEnv(t)
+	ctx := t.Context()
+
+	response := env.createRule(t, validRuleBody("watermarked"))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	ruleID := decodeRuleBody(t, response).ID
+
+	// The first write on a NULL column stores the given value.
+	if err := store.SetRuleLastMatchAt(ctx, env.db, ruleID, 2000); err != nil {
+		t.Fatalf("set last_match_at: %v", err)
+	}
+	rule, err := store.RuleByID(ctx, env.db, ruleID)
+	if err != nil {
+		t.Fatalf("read rule: %v", err)
+	}
+	if rule.LastMatchAt == nil || *rule.LastMatchAt != 2000 {
+		t.Fatalf("last_match_at = %v, want 2000", rule.LastMatchAt)
+	}
+
+	// An older write does not regress the watermark.
+	if err := store.SetRuleLastMatchAt(ctx, env.db, ruleID, 1000); err != nil {
+		t.Fatalf("set older last_match_at: %v", err)
+	}
+	rule, err = store.RuleByID(ctx, env.db, ruleID)
+	if err != nil {
+		t.Fatalf("re-read rule: %v", err)
+	}
+	if rule.LastMatchAt == nil || *rule.LastMatchAt != 2000 {
+		t.Errorf("last_match_at = %v, want it held at 2000", rule.LastMatchAt)
+	}
+
+	// A newer write advances it.
+	if err := store.SetRuleLastMatchAt(ctx, env.db, ruleID, 3000); err != nil {
+		t.Fatalf("set newer last_match_at: %v", err)
+	}
+	rule, err = store.RuleByID(ctx, env.db, ruleID)
+	if err != nil {
+		t.Fatalf("re-read rule: %v", err)
+	}
+	if rule.LastMatchAt == nil || *rule.LastMatchAt != 3000 {
+		t.Errorf("last_match_at = %v, want 3000", rule.LastMatchAt)
 	}
 }

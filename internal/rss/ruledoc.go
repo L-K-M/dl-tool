@@ -2,6 +2,7 @@ package rss
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -56,9 +57,9 @@ type MatchSpec struct {
 	Fields         []string `json:"fields,omitempty"`         // title | description | category, default [title]
 	AnyOf          []string `json:"any_of,omitempty"`
 	NoneOf         []string `json:"none_of,omitempty"`
-	MinSize        string   `json:"min_size,omitempty"` // IEC, e.g. "1GiB"
-	MaxSize        string   `json:"max_size,omitempty"`
-	PublishedAfter string   `json:"published_after,omitempty"` // RFC 3339
+	MinSize        string   `json:"min_size,omitempty"        doc:"IEC size such as 1GiB or 700MiB"`
+	MaxSize        string   `json:"max_size,omitempty"        doc:"IEC size such as 1GiB or 700MiB"`
+	PublishedAfter string   `json:"published_after,omitempty" format:"date-time" doc:"RFC 3339; only items published after it match"`
 }
 
 // EpisodeSpec is the optional episode block; omit it entirely for non-TV
@@ -171,6 +172,15 @@ func (d RuleDoc) Validate() []FieldError {
 			add("match.max_size", "%v", err)
 		}
 	}
+	if d.Match.MinSize != "" && d.Match.MaxSize != "" {
+		// An inverted window can never match; the cross-check runs only
+		// when both members parsed, so their own errors are not doubled.
+		minimum, minErr := parseIECSize(d.Match.MinSize)
+		maximum, maxErr := parseIECSize(d.Match.MaxSize)
+		if minErr == nil && maxErr == nil && minimum > maximum {
+			add("match.max_size", "max_size %q is below min_size %q", d.Match.MaxSize, d.Match.MinSize)
+		}
+	}
 	if d.Match.PublishedAfter != "" {
 		if _, err := time.Parse(time.RFC3339, d.Match.PublishedAfter); err != nil {
 			add("match.published_after", "want an RFC 3339 timestamp, got %q", d.Match.PublishedAfter)
@@ -190,6 +200,13 @@ func (d RuleDoc) Validate() []FieldError {
 		for i, format := range d.Score.Formats {
 			checkPattern(&errs, fmt.Sprintf("score.formats[%d].pattern", i), MatchModeRegex, format.Pattern)
 		}
+	}
+
+	if d.Throttle.CooldownDays < 0 {
+		add("throttle.cooldown_days", "must be at least 0, got %d", d.Throttle.CooldownDays)
+	}
+	if d.Throttle.MaxPerRun < 0 {
+		add("throttle.max_per_run", "must be at least 0, got %d", d.Throttle.MaxPerRun)
 	}
 
 	switch d.Action.ContentLayout {
@@ -288,7 +305,10 @@ func parseIECSize(s string) (int64, error) {
 		}
 		number := strings.TrimSpace(trimmed[:len(trimmed)-len(unit.suffix)])
 		value, err := strconv.ParseFloat(number, 64)
-		if err != nil || value < 0 {
+		// !(...) is deliberate: NaN fails value >= 0 and +Inf fails the
+		// upper bound, so both — and any product outside int64 — fall
+		// through to the rejection rather than convert to a garbage count.
+		if err != nil || !(value >= 0 && value*float64(unit.mult) < float64(math.MaxInt64)) {
 			break
 		}
 

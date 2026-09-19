@@ -1384,10 +1384,16 @@ export interface components {
       any_of?: string[] | null;
       case_sensitive?: boolean;
       fields?: string[] | null;
+      /** @description IEC size such as 1GiB or 700MiB */
       max_size?: string;
+      /** @description IEC size such as 1GiB or 700MiB */
       min_size?: string;
       mode?: string;
       none_of?: string[] | null;
+      /**
+       * Format: date-time
+       * @description RFC 3339; only items published after it match
+       */
       published_after?: string;
     };
     MkdirInputBody: {

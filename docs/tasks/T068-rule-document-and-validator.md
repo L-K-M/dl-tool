@@ -288,26 +288,30 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/rss/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	145.827s
-ok  	github.com/L-K-M/dl-tool/internal/rss	7.030s
-ok  	github.com/L-K-M/dl-tool/internal/store	77.548s
+ok  	github.com/L-K-M/dl-tool/internal/api	153.761s
+ok  	github.com/L-K-M/dl-tool/internal/rss	7.040s
+ok  	github.com/L-K-M/dl-tool/internal/store	78.452s
 RULEDOC_OK
 ```
 
 The acceptance-criteria tests, from the same head under `go test -race -count=1 -v`:
 
 ```
---- PASS: TestAutoDownloadCreatesAutoRule (0.37s)
---- PASS: TestPatchAutoDownloadFalseDeletesAutoRule (0.41s)
---- PASS: TestPatchOmittingAutoDownloadKeepsRule (0.43s)
---- PASS: TestDeleteFeedRemovesAutoRule (0.37s)
---- PASS: TestEpisodeFilterMissingSemicolonIsRejected (0.37s)
---- PASS: TestEmptyPatternInNoneOfIsRejected (0.38s)
+--- PASS: TestAutoDownloadCreatesAutoRule (0.40s)
+--- PASS: TestPatchAutoDownloadFalseDeletesAutoRule (0.48s)
+--- PASS: TestPatchOmittingAutoDownloadKeepsRule (0.40s)
+--- PASS: TestDeleteFeedRemovesAutoRule (0.41s)
+--- PASS: TestAutoRuleFollowsFeedURL (0.41s)
+--- PASS: TestEpisodeFilterMissingSemicolonIsRejected (0.39s)
+--- PASS: TestEmptyPatternInNoneOfIsRejected (0.43s)
 --- PASS: TestParseEpisodeFilterNormalisesSeason (0.00s)
---- PASS: TestValidateReportsEveryProblem (0.38s)
+--- PASS: TestValidateReportsEveryProblem (0.42s)
 --- PASS: TestRuleListOrderedByPriorityThenName (0.40s)
---- PASS: TestAutoPrefixNameRejected (0.41s)
---- PASS: TestAutoRuleDeletesLikeAnyOther (0.40s)
+--- PASS: TestAutoPrefixNameRejected (0.44s)
+--- PASS: TestAutoRuleDeletesLikeAnyOther (0.41s)
+--- PASS: TestPatchRuleName (0.44s)
+--- PASS: TestRuleFeedURLsAreRedacted (0.46s)
+--- PASS: TestRuleLastMatchAtIsMonotonic (0.38s)
 ```
 
 Scope check:
