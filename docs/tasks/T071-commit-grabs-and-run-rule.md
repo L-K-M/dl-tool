@@ -201,4 +201,60 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+This task cannot run as written: the contract hands a `TaskCreator` to both consumers — `Poller`
+for the post-poll `RunAllRules` pass and `RuleHandlers` for `POST /rules/{id}/run` — but no file
+in the `## Files` table can deliver one. The contract pins the implementation to `internal/api`
+(`ruleTaskCreator{tasks *TaskHandlers}` calling `TaskHandlers.CreateTasks`), and a `*TaskHandlers`
+exists only inside `internal/api/server.go`, while the `rss_poll` job's `Poller` is built only in
+`cmd/dl-tool/main.go`. Both files are outside the table, so every seam the table permits — a
+`Poller.SetTaskCreator` setter, a `NewPoller`/`NewRuleHandlers`/`NewFeedHandlers` parameter, a
+`Deps` member — lands with no caller. docs/14-conventions.md §8.3 counts a constructor or
+injection point with no call site as not done, and a registered `POST /rules/{id}/run` whose
+creator is nil in the only construction path has no documented behaviour: the contract's status
+list (200 · 404 · 503 "when the engine refuses every grab") covers a refusal, not a missing wire,
+so answering for it means inventing an API edge — the improvise-instead-of-stop case.
+
+Evidence to rerun before ruling, observed on this branch:
+
+- `grep -n "NewTaskHandlers\|NewRuleHandlers\|NewFeedHandlers" internal/api/server.go` —
+  `tasks:` and `rules:` are set inside one `Server` literal (`NewTaskHandlers(db, engines,
+  cfg.DataRoots, taskGuard, net.DefaultResolver)` then `NewRuleHandlers(db)`), so `rules` can
+  never receive `tasks` without restructuring the literal or a post-construction call — both
+  server.go edits.
+- `grep -rn "NewPoller(" cmd internal` — two call sites: `cmd/dl-tool/main.go` builds the
+  `rss_poll` job's poller; `internal/api/feeds.go` builds the refresh endpoint's. The feeds.go
+  site is editable but `NewFeedHandlers(db, hc, parser, log)` receives no `*TaskHandlers` and its
+  own call site is server.go, so even it cannot construct `ruleTaskCreator`.
+- `grep -n "server.go\|main.go" docs/tasks/T*.md` — within M5, T072 and T073 are web-only and
+  own neither file; the first `main.go` owners are T074/T076/T077/T079 and the first `server.go`
+  owners T080+, all in later milestones. Read ownership from `## Files` tables only — prose
+  mentions (this file's `## Blocked` section included) also match the grep. So inside M5 the
+  wiring has no carrier, and the M5 exit
+  checkpoint itself — docs/00-INDEX.md, "a rule auto-downloads the Arch Linux release feed" —
+  cannot pass until it lands. Same defect class as the recorded findings F342 (T083's
+  `TaskCreator`), F087, F162 and F263 — unwired constructors the plan review already counts as
+  defects, not deferrals.
+- Compounding upstream: both `NewPoller` call sites still pass a nil `ItemParser` — T067's
+  `## Evidence` records "both are outside the Files table … until a later task wires
+  `rss.NewParser`", and no task carries that either — so even a wired creator never sees a `200`
+  that added items in production: `Poll` leaves through the parser-not-wired failure before
+  `completeFetch` can upsert.
+
+Remedy — the owner picks one:
+
+1. Widen this task's `## Files` table with `internal/api/server.go` and `cmd/dl-tool/main.go`:
+   hoist `NewTaskHandlers` into a local before the `Server` literal so `NewRuleHandlers` (for
+   `RunRule`) and `NewFeedHandlers` (for the refresh poller's creator) can receive it or a
+   `ruleTaskCreator` built from it, and pass `rss.NewParser(time.Now)` at both parser injection
+   points — server.go's `NewFeedHandlers` argument and main.go's `rss_poll` job — plus the
+   creator, e.g. an exported accessor on `*api.Server`, to the main.go poller. One pass then
+   closes both halves of T067's parser deferral and this task's wiring together.
+2. Keep the table and name a new carrier task owning server.go and main.go that lands before the
+   M5 exit checkpoint; T071 would then ship the seams nil-gated and documented as unwired like
+   T067's parser — but the nil-creator behaviour of the registered `POST /rules/{id}/run` still
+   needs a documented status, which is itself a contract edit.
+
+Which file should answer: this task's `## Files` table (remedy 1) or `docs/tasks/00-task-index.md`'s
+roster plus the new task file (remedy 2). The gap belongs in `PLAN-REVIEW-FINDINGS.md` during the
+repair; F342 already records the T083 twin.
