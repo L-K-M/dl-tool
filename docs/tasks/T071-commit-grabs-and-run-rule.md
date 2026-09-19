@@ -194,7 +194,8 @@ limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule i
 - [ ] `TestFeedItemsMatchedRules` asserts an item with a committed `rule_matches` row lists that rule's
   `id` and `name`, and an unmatched item still renders `[]`.
 - [ ] `NewServer` hands one `ruleTaskCreator` to `NewRuleHandlers`, `NewFeedHandlers` and
-  `Server.RuleCreator`, and both production `NewPoller` call sites pass `rss.NewParser`, so a `200` that
+  `Server.RuleCreator`, and both production parser injection points — `NewFeedHandlers` in
+  `internal/api/server.go` and `NewPoller` in `cmd/dl-tool/main.go` — pass `rss.NewParser`, so a `200` that
   adds items runs the rules pass in production (docs/14-conventions.md §8.3).
 
 ## Verification
