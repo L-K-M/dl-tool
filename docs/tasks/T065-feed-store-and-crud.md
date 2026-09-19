@@ -182,4 +182,57 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+This task cannot run as written: the file predates the 2026-09-01 consistency review and its
+interface contract contradicts the current docs in five places, so the documented `§10.1`
+surface cannot be served inside the `## Files` table without deviating from one authority or
+the other. Recorded rather than silently widened, matching the record-then-repair workflow of
+T046 (#160/#161), T049 (#167/#168), T050 (#169/#170, #171/#172), T052 (#184/#185),
+T057 (#201/#202), T058 (#204), T063 (#212/#214) and T064 (#217).
+
+1. The contract structs cannot render the documented objects. `feeds.priority` exists in the
+   schema (doc 04 §3.5, migration `00001_init.sql`) and is a member of the §10.1 feed object
+   and of both the POST and PATCH member sets — it is the rule engine's per-run tie-break
+   (doc 08 §5 step 13) — but the `Feed` struct above carries no field for it, so the feed
+   object can neither return `priority` nor accept it on write. `feed_items.read` likewise
+   exists (`idx_feed_items_read` was added with it in #12) and is a member of the §10.1 item
+   object (`"read":false`), but `FeedItem` has no field for it. `ListFeedItems` returns
+   `(items, next_cursor, error)` — no `total` — while step 8 and §1.4 require `total` in the
+   envelope. And `unread_count`, a required member of every §10.1 feed object, is produced by
+   none of the eleven functions. Remedy: amend the interface contract — add `Priority` to
+   `Feed`, `Read` to `FeedItem`, a `total` return on `ListFeedItems` (or a sibling count
+   function), and an `unread_count` source on the feed read path (a field populated by a
+   correlated `read = 0` subquery in `ListFeeds`/`FeedByID`, or a batch count function). All
+   of it lands in `internal/store/feeds.go`, which the Files table already admits; only the
+   contract text needs the amendment.
+
+2. The "read state is derived" paragraph is stale. It asserts doc 04 §3.5 has no read column;
+   the section has carried `read INTEGER NOT NULL DEFAULT 0` and `idx_feed_items_read` since
+   #12, and §10.1 defines `unread_count` and the `unread` filter on `read = 0`. Implementing
+   the derived predicate `first_seen_at >= feeds.last_success_at` would resurrect a marked
+   item as unread until the next successful poll — breaking the mark-read semantics #12 added
+   the column for — and would leave the covering index dead schema. Remedy: rewrite the
+   paragraph to the `read = 0` semantics of §10.1.
+
+3. `auto_download` cannot be served inside this scope. §10.1 has `POST /feeds` and
+   `PATCH /feeds/{id}` accept it — `true` creates the `auto:<feed_id>` rule, `false` deletes
+   it, and `DELETE /feeds/{id}` removes it — but this task's own out-of-scope list forbids
+   `rules` writes (T068 and T071 own them), and constructing a valid `auto:` `definition_json`
+   needs T068's rule-document schema (doc 08). Silently dropping the member is an undetected
+   no-op for the add-dialog's checkbox; inventing an undocumented `422` breaks the contract
+   the other way. Remedy: name the carrier — either widen this task to a minimal auto-rule
+   write (which imports T068's rule-document schema into this task), or defer the member to
+   T068 or a new carrier via a deferral-register row, with the interim wire behaviour spelled
+   out.
+
+4. The mark-read endpoints are orphaned. `PATCH /feeds/{id}/items` and
+   `POST /feeds/{id}/items/read-all` are defined in §10.1 (`{"updated":n}`, statuses
+   `200`/`404`/`422`), doc 09 §8.4 builds **Mark read** / **Mark all read** on them, and
+   T072 step 8 treats read state as server-derived — but no task's operation set or Files
+   table includes them (checked T066, T067, T068, T072, T117). Remedy: name a carrier — the
+   natural one is this task, since both endpoints live in `internal/api/feeds.go` over one
+   or two more functions in `internal/store/feeds.go`, both already in the Files table — or
+   a new task between T065 and T072.
+
+5. `matched_rules` on the §10.1 item object reads `rule_matches`, which T071 owns; until then
+   the member can only render `[]` or be omitted, and the repair should say which.
