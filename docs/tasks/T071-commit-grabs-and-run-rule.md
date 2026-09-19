@@ -246,8 +246,8 @@ Remedy — the owner picks one:
 1. Widen this task's `## Files` table with `internal/api/server.go` and `cmd/dl-tool/main.go`:
    hoist `NewTaskHandlers` into a local before the `Server` literal so `NewRuleHandlers` (for
    `RunRule`) and `NewFeedHandlers` (for the refresh poller's creator) can receive it or a
-   `ruleTaskCreator` built from it, and pass `rss.NewParser(time.Now)` at both `NewPoller` call
-   sites — server.go's `NewFeedHandlers` argument and main.go's `rss_poll` job — plus the
+   `ruleTaskCreator` built from it, and pass `rss.NewParser(time.Now)` at both parser injection
+   points — server.go's `NewFeedHandlers` argument and main.go's `rss_poll` job — plus the
    creator, e.g. an exported accessor on `*api.Server`, to the main.go poller. One pass then
    closes both halves of T067's parser deferral and this task's wiring together.
 2. Keep the table and name a new carrier task owning server.go and main.go that lands before the
