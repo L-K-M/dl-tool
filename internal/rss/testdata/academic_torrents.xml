@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:academictorrents="https://academictorrents.com" version="2.0">
+<channel>
+<title>Academic Torrents</title>
+<description>Recent Torrents</description>
+<link>https://academictorrents.com/</link>
+<item>
+<title>Algorithmic Lower Bounds: Fun with Hardness Proofs (MIT 6.890) - Video lectures 2014</title>
+<category>Course</category>
+<infohash>f447784b18231897c892dbe45d943924583eab64</infohash>
+<guid>https://academictorrents.com/details/f447784b18231897c892dbe45d943924583eab64</guid>
+<link>https://academictorrents.com/details/f447784b18231897c892dbe45d943924583eab64</link>
+<description>"Algorithmic Lower Bounds: Fun with Hardness Proofs" is a class taking a practical approach to proving problems can’t be solved efficiently (in polynomial time and assuming standard complexity-theoretic assumptions like P ≠ NP). The class focuses on reductions and techniques for proving problems are computationally hard for a variety of complexity classes. Along the way, the class will create many interesting gadgets, learn many hardness proof styles, explore the connection between games and computation, survey several important problems and complexity classes, and crush hopes and dreams (for fast optimal solutions). Main course URL: https://ocw.mit.edu/6-890F14 This content hosted at the Internet Archive at https://archive.org/details/MIT6.890F14 Files may have changed, which prevents torrents from downloading correctly or completely; please check for an updated torrent at https://archive.org/download/MIT6.890F14/MIT6.890F14_archive.torrent Note: retrieval usually requires a client that supports webseeding (GetRight style). Note: many Internet Archive torrents contain a  pad file  directory. This directory and the files within it may be erased once retrieval completes. Note: the file MIT6.890F14_meta.xml contains metadata about this torrent s contents.</description>
+<size>6169821184</size>
+</item><item>
+<title>Reddit comments/submissions 2026-08</title>
+<category>Dataset</category>
+<infohash>f4848163a5fb650e4b15eee0202858447bca120a</infohash>
+<guid>https://academictorrents.com/details/f4848163a5fb650e4b15eee0202858447bca120a</guid>
+<link>https://academictorrents.com/details/f4848163a5fb650e4b15eee0202858447bca120a</link>
+<description>Reddit comments and submisReddit comments and submissions from 2026-08 Documentation, json schemas and more can be found at https://github.com/ArthurHeitmann/arctic_shift Helper scripts for processing files can be found at https://github.com/Watchful1/PushshiftDumpssions</description>
+<size>74613168905</size>
+</item><item>
+<title>UnityLV-MultiX Dataset echocardiography videos</title>
+<category>Dataset</category>
+<infohash>6e8a8eac48777052f4f8b8f5b30954036d59405d</infohash>
+<guid>https://academictorrents.com/details/6e8a8eac48777052f4f8b8f5b30954036d59405d</guid>
+<link>https://academictorrents.com/details/6e8a8eac48777052f4f8b8f5b30954036d59405d</link>
+<description>The images used in this dataset were sourced from the Imperial College Healthcare NHS Trust, comprises 100 apical four-chamber (A4C) echocardiography videos collected in 2019. This dataset features a closely balanced gender distribution, with 47% male and 53% female participants, and a median age of 60 years (interquartile range: 48.5–73.0). For each video, one end-diastolic (ED) frame and one end-systolic (ES) frame were extracted, resulting in a total of 200 images. These images were independently annotated by 11 experts, who were unaware of each other’s annotations. This dataset serves as an independent external test for evaluation purposes. This unique dataset is publicly released to promote further research in the field and to encourage the validation and benchmarking of deep learning models using multi-expert labelled data. Our goal is to enhance model reliability and generalizability. By offering this resource, we aim to support more rigorous evaluations, enabling researchers to test and refine their models in diverse, complex scenarios. Ultimately, this will help improve the performance and broader application of deep learning technologies in medical echo imaging. The echocardiograms were acquired during examinations performed by experienced echocardiographers, following standard protocols. Ethical approval was obtained from the Health Regulatory Agency for the anonymised export of large quantities of imaging data. As the data was originally acquired for clinical purposes, individual patient consent was not required. The dataset (images and labels) is available under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International license. The release of the associated dataset received a Favourable Opinion from the South Central − Oxford C Research Ethics Committee (Integrated Research Application System identifier 279328, 20/SC/0386). Annotation Examples The image on the left illustrates an example of the multi-expert annotations within this dataset, while the corresponding consensus curve is shown on the right. Dataset Package The dataset package available for download includes the following: An Images folder containing 200 images (100 end-diastole and 100 end-systole). UnityLV_multiX_annotations.json The file contains annotations for an external test dataset comprising 100 studies. Each study consists of end-diastolic (ED) and end-systolic (ES) frames, annotated by 11 experts. Each study includes two frames: the ED frame appears first, followed by the ES frame. Example: 02-008cb0fa74df88e44971367a2291e4a2969741e21bafbeffdb27a0b0b72e29d3-0003.png 02-008cb0fa74df88e44971367a2291e4a2969741e21bafbeffdb27a0b0b72e29d3-0041.png In this example, 02-008cb0fa... represents the unique identifier for the study (video), while 0003 and 0041 are the frame numbers corresponding to the ED and ES phases, respectively. This JSON file contains ([X],[Y]) coordinate tuples for multiple experts. The JSON is organised by image name corresponding to the Images folder. For each image, it has coordinates for each anonymized userId. UnityLV_multiX_consensus_curves.json This file contains the consensus (average) label represented as ([X],[Y]) coordinate tuples for each image in the Images folder. The JSON file is organized by image names, which correspond to the files in the Images folder. The annotation of this dataset was facilitated using https://data.unityimaging.net. The Unity web-based, interactive, real-time annotation platform enables clinical experts across the UK to collaboratively and efficiently label medical images. The platform’s intuitive interface allows experts to annotate key anatomical structures with precision, including critical features such as key points and curves along the endocardial border, as illustrated above. The platform’s accessibility and real-time capabilities facilitate large-scale multi-expert annotations, enhancing the quality and accuracy of labelled datasets for medical image analysis. https://www.sciencedirect.com/science/article/pii/S001048252501501X</description>
+<size>34590597</size>
+</item><item>
+<title>Advanced Data Structures (MIT 6.851) - Video lectures 2012</title>
+<category>Course</category>
+<infohash>a7ef136c1ad6c7924642a1ac399bc0800d9da4f4</infohash>
+<guid>https://academictorrents.com/details/a7ef136c1ad6c7924642a1ac399bc0800d9da4f4</guid>
+<link>https://academictorrents.com/details/a7ef136c1ad6c7924642a1ac399bc0800d9da4f4</link>
+<description>Data structures play a central role in modern computer science. You interact with data structures even more often than with algorithms (think Google, your mail server, and even your network routers). In addition, data structures are essential building blocks in obtaining efficient algorithms. This course covers major results and current directions of research in data structure. Main course URL: https://ocw.mit.edu/6-851S12/ This content hosted at the Internet Archive at http://archive.org/details/MIT6.851S12 Files may have changed, which prevents torrents from downloading correctly or completely; please check for an updated torrent at http://archive.org/download/MIT6.851S12/MIT6.851S12_archive.torrent Note: retrieval usually requires a client that supports webseeding (GetRight style). Note: many Internet Archive torrents contain a  pad file  directory. This directory and the files within it may be erased once retrieval completes. Note: the file MIT6.851S12_meta.xml contains metadata about this torrent s contents.</description>
+<size>14407434240</size>
+</item><item>
+<title>Results - Energy Landscape Controllers for XX Spin Rings - Robustness</title>
+<category>Dataset</category>
+<infohash>dcb9178653b651c7ca4526e11fa8e22f74e2fd7a</infohash>
+<guid>https://academictorrents.com/details/dcb9178653b651c7ca4526e11fa8e22f74e2fd7a</guid>
+<link>https://academictorrents.com/details/dcb9178653b651c7ca4526e11fa8e22f74e2fd7a</link>
+<description>This is a dataset to investigate the robustness of energy landscape controllers for transporting a single excitation in XX-coupled spin-1/2 rings of size 5 and 6. Transfers from spin 1 to spins 2,3 (for a 5-ring) and 2,3,4 (for a 6-ring) are considered (all others can be obtained from the symmetries in the rings).</description>
+<size>71000122956</size>
+</item><item>
+<title>Results - Robustness of Energy Landscape Control - Sensitivity vs RIM</title>
+<category>Dataset</category>
+<infohash>ddd4cbd3647db0e6f03dff94884b0e3b59f1c220</infohash>
+<guid>https://academictorrents.com/details/ddd4cbd3647db0e6f03dff94884b0e3b59f1c220</guid>
+<link>https://academictorrents.com/details/ddd4cbd3647db0e6f03dff94884b0e3b59f1c220</link>
+<description>Recent achievements in quantum control have resulted in advanced techniques for designing controllers for applications in quantum communication, computing, and sensing. However, the susceptibility of such systems to noise and uncertainties necessitates robust controllers that perform effectively under uncertainty conditions to realize the full potential of quantum devices. The time-domain log-sensitivity and a recently introduced robustness infidelity measure (RIM) are two means to quantify controller robustness in quantum systems. The data in this repository was generated by the code located at https://qyber.black/spinnet/code-robustness-of-energy-landscape-control-sensitivity-vs-rim and used for:</description>
+<size>21872846359</size>
+</item><item>
+<title>Data - Static Bias Controllers for XX Spin Rings</title>
+<category>Dataset</category>
+<infohash>0bd5aa6f397a5ea4f13f1b16d857e37520702d9d</infohash>
+<guid>https://academictorrents.com/details/0bd5aa6f397a5ea4f13f1b16d857e37520702d9d</guid>
+<link>https://academictorrents.com/details/0bd5aa6f397a5ea4f13f1b16d857e37520702d9d</link>
+<description>Propagation of information encoded in spin degrees of freedom through networks of coupled spins enables important applications in spintronics and quantum information processing. This data set contains the results of applying optimal control of information propagation in networks of spin-1/2 particles with uniform nearest neighbor XX-couplings forming a ring with a single excitation in the network as simple prototype of a router for spin-based information. The control is implemented via spatially distributed potentials, which remain constant during information transfer. The limited degrees of freedom makes finding a control that maximizes the transfer probability in a short time difficult.</description>
+<size>13754044142</size>
+</item><item>
+<title>Data - Energy Landscape Controllers for XX Spin Rings</title>
+<category>Dataset</category>
+<infohash>52aeb71e1e2c4dc1618b380498cacbef722071a7</infohash>
+<guid>https://academictorrents.com/details/52aeb71e1e2c4dc1618b380498cacbef722071a7</guid>
+<link>https://academictorrents.com/details/52aeb71e1e2c4dc1618b380498cacbef722071a7</link>
+<description/>
+<size>189786121</size>
+</item><item>
+<title>Design and Analysis of Algorithms (MIT 6.046J) - Video lectures 2015</title>
+<category>Course</category>
+<infohash>033e3357cc20338aa43ce6494d35f6324eb98063</infohash>
+<guid>https://academictorrents.com/details/033e3357cc20338aa43ce6494d35f6324eb98063</guid>
+<link>https://academictorrents.com/details/033e3357cc20338aa43ce6494d35f6324eb98063</link>
+<description>This is an intermediate algorithms course with an emphasis on teaching techniques for the design and analysis of efficient algorithms, emphasizing methods of application. Topics include divide-and-conquer, randomization, dynamic programming, greedy algorithms, incremental improvement, complexity, and cryptography. Main course URL: https://ocw.mit.edu/6-046JS15 This content hosted at the Internet Archive at https://archive.org/details/MIT6.046JS15 Files may have changed, which prevents torrents from downloading correctly or completely; please check for an updated torrent at https://archive.org/download/MIT6.046JS15/MIT6.046JS15_archive.torrent Note: retrieval usually requires a client that supports webseeding (GetRight style). Note: many Internet Archive torrents contain a  pad file  directory. This directory and the files within it may be erased once retrieval completes. Note: the file MIT6.046JS15_meta.xml contains metadata about this torrent s contents.</description>
+<size>7381975040</size>
+</item><item>
+<title>enwiki-20260801-pages-articles-multistream.xml.bz2</title>
+<category>Dataset</category>
+<infohash>7d6adf33cd9976877fdc4b487607c3bdaf733241</infohash>
+<guid>https://academictorrents.com/details/7d6adf33cd9976877fdc4b487607c3bdaf733241</guid>
+<link>https://academictorrents.com/details/7d6adf33cd9976877fdc4b487607c3bdaf733241</link>
+<description>English Wikipedia Multistream 2026-08-01 https://en.wikipedia.org/wiki/Wikipedia:Database_download Corresponding index file: https://academictorrents.com/details/4d29de8b54945597064c1148b78b3e79546d07e5</description>
+<size>26668484995</size>
+</item><item>
+<title>enwiki-20260801-pages-articles-multistream-index.txt.bz2</title>
+<category>Dataset</category>
+<infohash>4d29de8b54945597064c1148b78b3e79546d07e5</infohash>
+<guid>https://academictorrents.com/details/4d29de8b54945597064c1148b78b3e79546d07e5</guid>
+<link>https://academictorrents.com/details/4d29de8b54945597064c1148b78b3e79546d07e5</link>
+<description>English Wikipedia Multistream Index 2026-08-01 https://en.wikipedia.org/wiki/Wikipedia:Database_download Corresponding multistream file: https://academictorrents.com/details/7d6adf33cd9976877fdc4b487607c3bdaf733241</description>
+<size>283588691</size>
+</item><item>
+<title>Introduction to Algorithms (MIT 6.006) - Video lectures 2020</title>
+<category>Course</category>
+<infohash>1e6d57c0d31127fe9b97f5aac62c43c4fd9ffa65</infohash>
+<guid>https://academictorrents.com/details/1e6d57c0d31127fe9b97f5aac62c43c4fd9ffa65</guid>
+<link>https://academictorrents.com/details/1e6d57c0d31127fe9b97f5aac62c43c4fd9ffa65</link>
+<description>This course is an introduction to mathematical modeling of computational problems, as well as common algorithms, algorithmic paradigms, and data structures used to solve these problems. It emphasizes the relationship between algorithms and programming and introduces basic performance measures and analysis techniques for these problems. Main course URL: https://ocw.mit.edu/6-006S20 This content hosted at the Internet Archive at https://archive.org/details/MIT6.006S20 Files may have changed, which prevents torrents from downloading correctly or completely; please check for an updated torrent at https://archive.org/download/MIT6.006S20/MIT6.006S20_archive.torrent Note: retrieval usually requires a client that supports webseeding (GetRight style). Note: many Internet Archive torrents contain a  pad file  directory. This directory and the files within it may be erased once retrieval completes. Note: the file MIT6.006S20_meta.xml contains metadata about this torrent s contents.</description>
+<size>5117050880</size>
+</item><item>
+<title>Cara.app Art Dataset — Full Metadata Database for 52,045 Top Posts with 674k Comment Trees (SQLite)</title>
+<category>Dataset</category>
+<infohash>cab03c1b0cbc8ed99a0495d491d281d80517146a</infohash>
+<guid>https://academictorrents.com/details/cab03c1b0cbc8ed99a0495d491d281d80517146a</guid>
+<link>https://academictorrents.com/details/cab03c1b0cbc8ed99a0495d491d281d80517146a</link>
+<description># IMPORTANT INFO: https://pastes.fmhy.net/Oqp9D5 (IF DOWN USE THE MIRRORS) # IMPORTANT INFO MIRRORS : https://pastes.dev/NXxSNxjLee https://your.ls/qpnek https://rentry.co/iiytmqz3 https://drive.proton.me/urls/Q578E7FQ9G#j7VQxLJz8K4l https://pst.moe/paste/rtjrgj https://fluffle.cc/lvxyth8qlkmctnph https://codepasta.app/paste/superfine-black Cara.app Art Dataset — 123,056 Original Images from Top Community Posts (112 GB) Companion SQLite database for the Cara.app Art Dataset image archive. Full image database: https://academictorrents.com/details/77d4e2a65852258420a8e47bf29c8f3a5043a446 (down) Covers all 52,045 posts with over 150 likes on Cara.app (as of August 2026) and contains: full post records (title, body text, timestamps, like/comment/repost counters, software tags, topic tags, flair, polls, mention and quote/repost links, portfolio flags); 162,484 image rows (CDN URLs matching the image archive, carousel order, cover flags, dimensions where recovered, per-image AI-generation flags); 674,762 comments with complete nested thread structure, text, timestamps and like counts; and 5,775 author profiles (display name, bio, website, follower/following counts, account state). &amp;mdash;- ## How to link image files to metadata (filename lookup) Every file in the  images  folder maps to exactly one row in the  images  table by its **basename**, which carries  post_id  — from there you reach the full post and author. **SQL (any sqlite3 client):**    sql &amp;mdash; all metadata for one downloaded file: SELECT i.*, p.title, p.content, p.created_at, p.like_counter, u.name AS author_name, u.slug AS author_slug, u.follower_counter FROM images i</description>
+<size>403398656</size>
+</item><item>
+<title>Cara.app Art Dataset — 123,056 Original Images from Top Community Posts (120 GB)</title>
+<category>Dataset</category>
+<infohash>77d4e2a65852258420a8e47bf29c8f3a5043a446</infohash>
+<guid>https://academictorrents.com/details/77d4e2a65852258420a8e47bf29c8f3a5043a446</guid>
+<link>https://academictorrents.com/details/77d4e2a65852258420a8e47bf29c8f3a5043a446</link>
+<description># **companion metadata database**: https://academictorrents.com/details/cab03c1b0cbc8ed99a0495d491d281d80517146a This archive contains 123,056 original artwork image files (~120 GB, JPG/PNG/GIF/WEBP) belonging to the 52,047 most-liked posts (over 150 likes each) on Cara.app, an art-sharing and portfolio platform popular among professional and hobbyist illustrators. Images were collected in August 2026 from Cara s public content-delivery network and are provided at original uploaded resolution. Each file is uniquely named by its CDN path and maps one-to-one to rows in the companion metadata database ( subset_dataset.db , distributed separately) via its filename. The **companion database**: https://academictorrents.com/details/cab03c1b0cbc8ed99a0495d491d281d80517146a (Cara.app Art Dataset — Full Metadata Database for 52,045 Top Posts with 674k Comment Trees (SQLite)) provides per-image carousel ordering, cover flags, pixel dimensions where recoverable, platform AI-generation flags, full post text and engagement metrics, complete comment threads, and author profiles. Intended uses include computer-vision research, art-market and style-trend analysis, AI-vs-human classification studies, and digital-arts historiography. &amp;mdash;- ## How to link image files to metadata (filename lookup) Every file in the  images  folder maps to exactly one row in the  images  table by its **basename**, which carries  post_id  — from there you reach the full post and author. **SQL (any sqlite3 client):**    sql &amp;mdash; all metadata for one downloaded file: SELECT i.*, p.title, p.content, p.created_at, p.like_counter, u.name AS author_name, u.slug AS author_slug, u.follower_counter FROM images i</description>
+<size>119981202380</size>
+</item><item>
+<title>Stack Exchange Data Dump (2026-06-30)</title>
+<category>Dataset</category>
+<infohash>794176de24c33cc0e8b629b45a746cd870f3e95f</infohash>
+<guid>https://academictorrents.com/details/794176de24c33cc0e8b629b45a746cd870f3e95f</guid>
+<link>https://academictorrents.com/details/794176de24c33cc0e8b629b45a746cd870f3e95f</link>
+<description>This data dump is sourced from the various sites in the Stack Exchange network of Q&amp;A sites. This dump contains data up to and including 2026-06-30. The exact licenses for each bit of content is embedded in each entry. For license date ranges, see the root-level license.txt, or https://stackoverflow.com/help/licensing. For the schema, see the sede-and-data-dump-schema.md file within each .7z This torrent has also been archived at https://archive.org/details/stackexchange_20260630_sakura</description>
+<size>99396616192</size>
+</item><item>
+<title>Reddit comments/submissions 2005-06 to 2024-12</title>
+<category>Dataset</category>
+<infohash>ba051999301b109eab37d16f027b3f49ade2de13</infohash>
+<guid>https://academictorrents.com/details/ba051999301b109eab37d16f027b3f49ade2de13</guid>
+<link>https://academictorrents.com/details/ba051999301b109eab37d16f027b3f49ade2de13</link>
+<description>Reddit comments and submissions from 2005-06 to 2024-12 collected by pushshift and u/RaiderBDev. These are zstandard compressed ndjson files. Example python scripts for parsing the data can be found here https://github.com/Watchful1/PushshiftDumps The more recent dumps are collected by u/RaiderBDev License: No license specified, the work may be protected by copyright.</description>
+<size>3124743990853</size>
+</item><item>
+<title>Reddit comments/submissions 2026-07</title>
+<category>Dataset</category>
+<infohash>e04a4fda12826ab1d181eef6512b36aca63c70ff</infohash>
+<guid>https://academictorrents.com/details/e04a4fda12826ab1d181eef6512b36aca63c70ff</guid>
+<link>https://academictorrents.com/details/e04a4fda12826ab1d181eef6512b36aca63c70ff</link>
+<description>Reddit comments and submisReddit comments and submissions from 2026-07 Documentation, json schemas and more can be found at https://github.com/ArthurHeitmann/arctic_shift Helper scripts for processing files can be found at https://github.com/Watchful1/PushshiftDumpssions</description>
+<size>80272561702</size>
+</item><item>
+<title>What Should I Become? When LLMs Present a Slice of Opportunity as the Whole</title>
+<category>Dataset</category>
+<infohash>a77baccadceb644bed72cdbfb7cca22a08b493f7</infohash>
+<guid>https://academictorrents.com/details/a77baccadceb644bed72cdbfb7cca22a08b493f7</guid>
+<link>https://academictorrents.com/details/a77baccadceb644bed72cdbfb7cca22a08b493f7</link>
+<description>Large language models (LLMs) are increasingly consulted for life-path guidance, yet the distribution of options they surface has gone largely unexamined. We characterize occupational-category visibility across 165,000 LLM responses spanning 100 user profiles, 15 prompts (grouped into seven framings), 11 models across seven families, two role framings, and five temperatures, with keywords derived automatically from Bureau of Labor Statistics (BLS) occupation titles. Trades &amp; Labor occupations, roughly 40% of projected job openings, account for only 6% of surfaced visibility, the largest gap in the data, while Education and STEM are over-visible (31% and 14%) relative to their labor-market shares, and Business is under-visible (19% vs. 31%). Re-weighting by entry-level education exposes a sharper credentialing skew, in which LLM-implied openings at the Bachelor s-or-above level reach 44.8% against a BLS share of 20.6%, and this skew tracks socioeconomic profile signals. This signal is conditional: Low-Income responses discuss an education tier far more often than Wealthy/Privileged ones (28.9% vs. 4.1%), and among tier-mentioning responses Bachelor s-or-above is far rarer for Low-Income profiles (8.3% vs. 73.4% of mentions), carrying a 50% education-implied wage gap that the occupational-category channel does not produce. Across all responses, however, the two groups reach Bachelor s-or-above guidance at comparable rates (4.2% vs. 3.1%). The aggregate distribution lies closest (Jensen–Shannon divergence 0.021) to open-web "General Advice / Blogs" content and far from the BLS labor-market structure, consistent with web-text mirroring. The skew is stable across model families and temperatures, though prompt framing shifts which categories surface.</description>
+<size>151257088</size>
+</item><item>
+<title>Reddit comments/submissions 2026-06</title>
+<category>Dataset</category>
+<infohash>3bac8bd352bbb74bbb23df4273cf3da5d66ee5a5</infohash>
+<guid>https://academictorrents.com/details/3bac8bd352bbb74bbb23df4273cf3da5d66ee5a5</guid>
+<link>https://academictorrents.com/details/3bac8bd352bbb74bbb23df4273cf3da5d66ee5a5</link>
+<description>Reddit comments and submisReddit comments and submissions from 2026-06 Documentation, json schemas and more can be found at https://github.com/ArthurHeitmann/arctic_shift Helper scripts for processing files can be found at https://github.com/Watchful1/PushshiftDumpssions</description>
+<size>70377849294</size>
+</item><item>
+<title>LUMINOUS Database: Lumbar Multifidus Muscle Segmentation From Ultrasound</title>
+<category>Dataset</category>
+<infohash>cab7744573688b0b39c521ef66453435785762ac</infohash>
+<guid>https://academictorrents.com/details/cab7744573688b0b39c521ef66453435785762ac</guid>
+<link>https://academictorrents.com/details/cab7744573688b0b39c521ef66453435785762ac</link>
+<description>This database provides the US ground truth of the left and right LM muscles at the L5 level (in prone and standing positions) of 109 US datasets of young athletic adult volunteers (64 males, 45 females, age: 21.1 ± 1.7). The LUMINOUS database contains the US images with their corresponding manually segmented binary masks, serving as the ground truth. The purpose of the database is to enable development and validation of deep learning algorithms used for automatic segmentation tasks related to the assessment of the LM cross-sectional area (CSA) and echo intensity (EI). The 109 athletes underwent a US procedure to obtain LM images at the L5 level in both the prone and standing positions. The LOGIQ e ultrasound machine (GE Healthcare, Milwaukee, WI) was used with a curvilinear probe with its imaging parameters maintained at the following values for all image acquisitions: frequency: 5 MHz, gain: 60, depth: 8.0 cm. To assess LM CSA, transverse US images were obtained bilaterally. For subjects with larger muscles, the right and left sides were imaged unilaterally. (a) B-mode image of subject 50 (acquired unilaterally) with corresponding segmentation of the left MF in the prone position shown in (b). (c) B-mode image of subject 50 (acquired unilaterally) with corresponding segmentation of the left MF in the standing position shown in (d) (a) B-mode image of subject 46 (acquired bilaterally) with corresponding segmentations of the left and right MF in the prone position shown in (b) The ground truth segmentations of LM CSA and LM EI measurements in prone and standing positions were performed on the acquired data using Fiji, a distribution of the ImageJ image processing software. The B-mode images and binary segmentation masks for each subject are deposited as *.tif files. https://users.encs.concordia.ca/~impact/wp-content/uploads/2020/07/1-550x400.png</description>
+<size>60553822</size>
+</item><item>
+<title>FALLMUD : FAscicle Lower Leg Muscle Ultrasound Dataset</title>
+<category>Dataset</category>
+<infohash>c0f740a1261fb1d646bf4df1395c86581399d879</infohash>
+<guid>https://academictorrents.com/details/c0f740a1261fb1d646bf4df1395c86581399d879</guid>
+<link>https://academictorrents.com/details/c0f740a1261fb1d646bf4df1395c86581399d879</link>
+<description>FAscicle Lower Leg Muscle Ultrasound Dataset is a dataset composed of 812 ultrasound images of lower leg muscles to analyze muscle weaknesses and prevent injuries. This dataset is presented in the article AW-Net: Automatic muscle structure analysis on B-mode ultrasound images for injury prevention. It combines the datasets provided by two articles, “Estimating Full Regional Skeletal Muscle Fibre Orientation from B-Mode Ultrasound Images Using Convolutional, Residual, and Deconvolutional Neural Networks” published by Ryan Cunningham et al. and “Automated Analysis of Musculoskeletal Ultrasound Images Using Deep Learning” published by Neil Cronin, with complementary annotations. The zip file contains the two datasets respectively separated into two folders named by their author. Each image of each dataset has one matching fascicle segmentation mask and one aponeurosis segmentation mask recognizable by name. Instructions for accessing the data set used in the paper "AW-Net: Automatic muscle structure analysis on B-mode ultrasound images for injury prevention". We have provided two folders RyanCunningham and NeilCronin that contain, respectively, the datasets provided in the articles "Estimating Full Regional Skeletal Muscle Fibre Orientation from B-Mode Ultrasound Images Using Convolutional, Residual, and Deconvolutional Neural Networks" published by Ryan Cunningham et al. and "Automated Analysis of Musculoskeletal Ultrasound Images Using Deep Learning" published by Neil Cronin. In each of these folders, you will find the folders : 1) images: contains the images of the dataset 2) fascicle_masks: contains the fascicle masks of the images 3) aponeurosis_masks: contains the aponeurosis masks of the images Note : The fascicle masks and aponeurosis masks can be matched with the corresponding image by using the names of these files.</description>
+<size>130725729</size>
+</item><item>
+<title>Wikipedia European languages 2026-06-01</title>
+<category>Dataset</category>
+<infohash>04c55531c1617744bd76a3b126a19c4ba48cb2a2</infohash>
+<guid>https://academictorrents.com/details/04c55531c1617744bd76a3b126a19c4ba48cb2a2</guid>
+<link>https://academictorrents.com/details/04c55531c1617744bd76a3b126a19c4ba48cb2a2</link>
+<description>Wikipedia database dumps of European language wikis of 10k articles or more. enwiki excluded. Wikipedia Multistream 2026-06-01. These 67 languages are included: Albanian, Alemannic, Aragonese, Asturian, Basque, Bavarian, Belarusian, Benetian, Bosnian, Breton, Bulgarian, Catalan, Croatian, Czech, Danish, Dutch, Emilian-Romagnol, Esperanto, Estonian, Faroese, Finnish, French, Galician, German, Greek, Hungarian, Icelandic, Irish, Italian, Ladin, Latin, Latvian, Ligurian, Limburgish, Lithuanian, Lombard, Low German, Macedonian, Maltese, Neapolitan, North Frisian, Norwegian, Nynorsk, Occitan, Piedmontese, Polish, Portuguese, Romanian, Romansh, Rusyn, Samogitian, Scots, Scottish Gaelic, Serbian, Serbo-Croatian, Sicilian, Silesian, Slovak, Slovenian, Spanish, Swedish, Ukrainian, Upper Sorbian, Walloon, Welsh, West Frisian, Yiddish.</description>
+<size>53381860475</size>
+</item><item>
+<title>Reddit comments/submissions 2026-05</title>
+<category>Dataset</category>
+<infohash>55199eff9368cde1f5c1262dd7c1af09f7503ea5</infohash>
+<guid>https://academictorrents.com/details/55199eff9368cde1f5c1262dd7c1af09f7503ea5</guid>
+<link>https://academictorrents.com/details/55199eff9368cde1f5c1262dd7c1af09f7503ea5</link>
+<description>Reddit comments and submisReddit comments and submissions from 2026-05 Documentation, json schemas and more can be found at https://github.com/ArthurHeitmann/arctic_shift Helper scripts for processing files can be found at https://github.com/Watchful1/PushshiftDumpssions</description>
+<size>71668069069</size>
+</item><item>
+<title>Crossref Event Data Archive</title>
+<category>Dataset</category>
+<infohash>16396475b640d8487a6b723eada8a440fb33d3ce</infohash>
+<guid>https://academictorrents.com/details/16396475b640d8487a6b723eada8a440fb33d3ce</guid>
+<link>https://academictorrents.com/details/16396475b640d8487a6b723eada8a440fb33d3ce</link>
+<description># Crossref Event Data archive This is an archive of all events collected by selected Crossref Event Data agents between its launch on 2017/02/17 and its deprecation on 2026/04/23. The DOI of this dataset is https://doi.org/10.13003/wjyr-rv9j ## File format The data are provided in [JSONL](https://jsonlines.org/) format. Each data file has a  .jsonl  file extension and contains up to 5000 entries (lines). Filenames follow this pattern:  agent-nnnn.jsonl  ## Structure of the archive The data are hierarchically grouped in directories by agent, year, month, day and a 4-digit directory ID. For example:    shell $ tree -L 6 data | head -n 18 data ├── crossref │   ├── 2021 │   │   ├── 01 │   │   │   └── 01 │   │   │       └── 0000 │   │   │           └── crossref-0001.jsonl │   │   ├── 04 │   │   │   ├── 28 │   │   │   │   └── 0000 │   │   │   │       └── crossref-0001.jsonl │   │   │   ├── 29 │   │   │   │   └── 0000 │   │   │   │       ├── crossref-0001.jsonl │   │   │   │       └── crossref-0002.jsonl │   │   │   └── 30 │   │   │       └── 0000 │   │   │           └── crossref-0001.jsonl     Each daily directory contains one or more 4 digit directories containing JSONL data files. There can be at most 1000 files within each 4 digit directory. ## Agents The export contains data for the following agents: | Agent name      | Description                                                                                                | | &amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;- | &amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash; | | crossref        | Relationships and references to datasets and DOI registration agencies other than Crossref (e.g. DataCite) | | f1000           | Recommendations of research publications                                                                   | | facultyopinions | Recommendations of research publications (formerly F1000)                                                  | | hypothesis      | Annotations in Hypothes\.is                                                                                | | newsfeed        | Discussed in blogs and media                                                                               | | reddit          | Discussed on Reddit                                                                                        | | reddit-links    | Discussed on sites linked to in subreddits                                                                 | | stackexchange   | Discussed on StackExchange sites                                                                           | | web             | Discussed on selected webpages                                                                             | | wikipedia       | References on Wikipedia pages                                                                              | | wordpressdotcom | Discussed on Wordpress\.com sites                                                                          | ## Event data structure The main purpose of each event is to capture a relationship between a subject and an object, a triplet of [subject, relationship, object]. The  event  data structure has a few properties but the most important ones are: | Property              | Description                                                                                                                                            | | &amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;- | &amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash;&amp;mdash; | | license               | The license per event. Different agents may have a different license and that may also change over time. It is best to consider the license per event. | | obj_id                | The id of the object                                                                                                                                   | | subj_id               | The id of the subject                                                                                                                                  | | occurred_at           | When was the event observed?                                                                                                                           | | id                    | A unique id, can be helpful when processing the archive                                                                                                | | subj:pid              | Same as subj_id                                                                                                                                        | | obj:pid               | Same as obj_id                                                                                                                                         | | subj:url              | The source of the event                                                                                                                                | | obj:url               | Same as obj:pid                                                                                                                                        | | subj:title            | Some agents (for example Wikipedia) capture a title for the subject s url                                                                              | | subj/obj:work_type_id | The type of the identified pid                                                                                                                         | | source_id             | The agent that captured this event                                                                                                                     | | relation_type_id      | The relation type of the relationship between the subject and the object                                                                               | One thing to note: Depending on the agent the  subj:url  may or may not be equal to the  subj:pid . In any case the  subj:url  should be treated as an independent value. An example of a Crossref agent event:    json  "license": "https://creativecommons.org/publicdomain/zero/1.0/", "obj_id": "https://doi.org/10.14383/cri.2017.12.2.149", "source_token": "36c35e23-8757-4a9d-aacf-345e9b7eb50d", "occurred_at": "2025-01-01T11:10:07.000Z", "subj_id": "https://doi.org/10.3390/vetsci11020090", "id": "9d5be3e3-3141-4965-836a-8831178726b2", "action": "add", "subj":  "pid": "https://doi.org/10.3390/vetsci11020090", "url": "https://doi.org/10.3390/vetsci11020090", "work_type_id": "journal-article" , "source_id": "crossref", "obj":  "pid": "https://doi.org/10.14383/cri.2017.12.2.149", "url": "https://doi.org/10.14383/cri.2017.12.2.149", "method": "doi-literal", "verification": "literal" , "relation_type_id": "references"      An example of a Wikipedia agent event:    json  "license": "https://creativecommons.org/publicdomain/zero/1.0/", "obj_id": "https://doi.org/10.2307/2128863", "source_token": "36c35e23-8757-4a9d-aacf-345e9b7eb50d", "occurred_at": "2025-01-01T17:02:25Z", "subj_id": "https://en.wikipedia.org/api/rest_v1/page/html/Mohammad_Reza_Pahlavi/1266654138", "id": "6618b137-da03-4f15-ac86-ca3283c28cb6", "action": "add", "subj":  "pid": "https://en.wikipedia.org/wiki/Mohammad_Reza_Pahlavi"</description>
+<size>107590238836</size>
+</item><item>
+<title>GTDB R09-RS220</title>
+<category>Dataset</category>
+<infohash>d4056fe87d24aaed9d366453f17abb08f7c4c62d</infohash>
+<guid>https://academictorrents.com/details/d4056fe87d24aaed9d366453f17abb08f7c4c62d</guid>
+<link>https://academictorrents.com/details/d4056fe87d24aaed9d366453f17abb08f7c4c62d</link>
+<description>Release 09-RS220 (24th April 2024) of the Genome Taxonomy Database (GTDB), an initiative to establish a standardised microbial taxonomy based on genome phylogeny.</description>
+<size>410496532480</size>
+</item><item>
+<title>GTDB R07-RS207</title>
+<category>Dataset</category>
+<infohash>13e25c59c31920abce5599a071991a8d8ca94e89</infohash>
+<guid>https://academictorrents.com/details/13e25c59c31920abce5599a071991a8d8ca94e89</guid>
+<link>https://academictorrents.com/details/13e25c59c31920abce5599a071991a8d8ca94e89</link>
+<description>Release 07-RS207 (8th April 2022) of the Genome Taxonomy Database (GTDB), an initiative to establish a standardised microbial taxonomy based on genome phylogeny.</description>
+<size>317416538112</size>
+</item><item>
+<title>GTDB R06-RS202</title>
+<category>Dataset</category>
+<infohash>4ad45a3bcd78a36f700530060ae7839638b09840</infohash>
+<guid>https://academictorrents.com/details/4ad45a3bcd78a36f700530060ae7839638b09840</guid>
+<link>https://academictorrents.com/details/4ad45a3bcd78a36f700530060ae7839638b09840</link>
+<description>Release 06-RS202 (27th April 2021) of the Genome Taxonomy Database (GTDB), an initiative to establish a standardised microbial taxonomy based on genome phylogeny.</description>
+<size>191990071296</size>
+</item><item>
+<title>GTDB R04-RS89</title>
+<category>Dataset</category>
+<infohash>fe8c256fd07464c365c2403b6f34be3ef510aae1</infohash>
+<guid>https://academictorrents.com/details/fe8c256fd07464c365c2403b6f34be3ef510aae1</guid>
+<link>https://academictorrents.com/details/fe8c256fd07464c365c2403b6f34be3ef510aae1</link>
+<description>Release 04-RS89 (19th June 2019) of the Genome Taxonomy Database (GTDB), an initiative to establish a standardised microbial taxonomy based on genome phylogeny.</description>
+<size>103494451200</size>
+</item><item>
+<title>GTDB R03-RS86.2</title>
+<category>Dataset</category>
+<infohash>937539d2e0c9d774c63625af5106c0e6d4bc5a7a</infohash>
+<guid>https://academictorrents.com/details/937539d2e0c9d774c63625af5106c0e6d4bc5a7a</guid>
+<link>https://academictorrents.com/details/937539d2e0c9d774c63625af5106c0e6d4bc5a7a</link>
+<description>Release 3-RS86.2 (15th January 2019) of the Genome Taxonomy Database (GTDB), an initiative to establish a standardised microbial taxonomy based on genome phylogeny.</description>
+<size>27277656064</size>
+</item><item>
+<title>GTDB R05-RS95</title>
+<category>Dataset</category>
+<infohash>4793809ff9e07b0217baed7a4fe6980a0444ac20</infohash>
+<guid>https://academictorrents.com/details/4793809ff9e07b0217baed7a4fe6980a0444ac20</guid>
+<link>https://academictorrents.com/details/4793809ff9e07b0217baed7a4fe6980a0444ac20</link>
+<description>Release 05-RS95 (17th July 2020) of the Genome Taxonomy Database (GTDB), an initiative to establish a standardised microbial taxonomy based on genome phylogeny.</description>
+<size>132191879168</size>
+</item></channel>
+</rss>

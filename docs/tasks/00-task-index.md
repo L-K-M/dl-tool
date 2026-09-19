@@ -170,7 +170,7 @@ The feed poller, the rule engine, dry-run and the RSS screens. Exit checkpoint: 
 |---|---|---|---|
 | [T065](T065-feed-store-and-crud.md) | Store RSS feeds and items and serve feed CRUD | T006, T007, T008 | done |
 | [T066](T066-feed-poller-and-backoff.md) | Poll feeds with conditional GET, jitter and the Sonarr backoff ladder | T012, T054, T065 | done |
-| [T067](T067-item-parser-and-uri-extraction.md) | Parse feed items and extract a download URI with the four-tier ladder | T015, T066 | todo |
+| [T067](T067-item-parser-and-uri-extraction.md) | Parse feed items and extract a download URI with the four-tier ladder | T015, T066 | done |
 | [T068](T068-rule-document-and-validator.md) | Validate rule documents and serve rule CRUD | T007, T008, T065 | todo |
 | [T069](T069-rule-matching-algorithm.md) | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | todo |
 | [T070](T070-rule-dry-run-endpoint.md) | Dry-run a rule and report a reason code for every evaluated item | T068, T069 | todo |
@@ -380,7 +380,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 |---|---|---|---|---|---|
 | T065 | Store RSS feeds and items and serve feed CRUD | T006, T007, T008 | no | done | [T065](T065-feed-store-and-crud.md) |
 | T066 | Poll feeds with conditional GET, jitter and the Sonarr backoff ladder | T012, T054, T065 | no | done | [T066](T066-feed-poller-and-backoff.md) |
-| T067 | Parse feed items and extract a download URI with the four-tier ladder | T015, T066 | yes | todo | [T067](T067-item-parser-and-uri-extraction.md) |
+| T067 | Parse feed items and extract a download URI with the four-tier ladder | T015, T066 | yes | done | [T067](T067-item-parser-and-uri-extraction.md) |
 | T068 | Validate rule documents and serve rule CRUD | T007, T008, T065 | no | todo | [T068](T068-rule-document-and-validator.md) |
 | T069 | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | yes | todo | [T069](T069-rule-matching-algorithm.md) |
 | T070 | Dry-run a rule and report a reason code for every evaluated item | T068, T069 | no | todo | [T070](T070-rule-dry-run-endpoint.md) |

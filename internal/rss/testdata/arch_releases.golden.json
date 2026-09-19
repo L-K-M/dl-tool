@@ -1,0 +1,39 @@
+{
+  "meta": {
+    "title": "Arch Linux: Releases",
+    "ttl_minutes": 0,
+    "implied_interval_s": 0
+  },
+  "items": [
+    {
+      "identity": "tag:archlinux.org,2026-09-01:/releng/releases/2026.09.01/",
+      "guid": "tag:archlinux.org,2026-09-01:/releng/releases/2026.09.01/",
+      "title": "2026.09.01",
+      "title_norm": "2026 09 01",
+      "link": "https://archlinux.org/releng/releases/2026.09.01/",
+      "download_url": "https://archlinux.org//releng/releases/2026.09.01/torrent/",
+      "size_bytes": 1608286208,
+      "published_at": 1788220800000
+    },
+    {
+      "identity": "tag:archlinux.org,2026-08-01:/releng/releases/2026.08.01/",
+      "guid": "tag:archlinux.org,2026-08-01:/releng/releases/2026.08.01/",
+      "title": "2026.08.01",
+      "title_norm": "2026 08 01",
+      "link": "https://archlinux.org/releng/releases/2026.08.01/",
+      "download_url": "https://archlinux.org//releng/releases/2026.08.01/torrent/",
+      "size_bytes": 1597014016,
+      "published_at": 1785542400000
+    },
+    {
+      "identity": "tag:archlinux.org,2026-07-01:/releng/releases/2026.07.01/",
+      "guid": "tag:archlinux.org,2026-07-01:/releng/releases/2026.07.01/",
+      "title": "2026.07.01",
+      "title_norm": "2026 07 01",
+      "link": "https://archlinux.org/releng/releases/2026.07.01/",
+      "download_url": "https://archlinux.org//releng/releases/2026.07.01/torrent/",
+      "size_bytes": 1583022080,
+      "published_at": 1782864000000
+    }
+  ]
+}
