@@ -226,7 +226,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/rss/...
-ok  	github.com/L-K-M/dl-tool/internal/rss	7.917s
+ok  	github.com/L-K-M/dl-tool/internal/rss	7.492s
 MATCH_OK
 ```
 

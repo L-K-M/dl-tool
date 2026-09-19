@@ -474,8 +474,8 @@ func (e *ruleEval) evaluateItem(ctx context.Context, item store.FeedItem, feed F
 	}
 	name, err := engine.Route(norm, nil)
 	if err != nil {
-		return Decision{}, nil, false, fmt.Errorf("rss: evaluate rule %s: item %s: route %s: %w",
-			e.rule.ID, item.Identity, norm.URI, err)
+		return Decision{}, nil, false, fmt.Errorf("rss: evaluate rule %s: item %s: route: %w",
+			e.rule.ID, item.Identity, err)
 	}
 
 	d.Matched, d.MatchedBy, d.Highlight = true, matchedBy, highlight
