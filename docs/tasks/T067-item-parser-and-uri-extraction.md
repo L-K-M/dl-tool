@@ -125,12 +125,12 @@ Size comes from `torznab:attr[@name="size"]` first, then an unprefixed `<size>`,
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestTierALastWins` asserts the magnet, not the earlier enclosure, is kept.
-- [ ] `TestTorznabCompoundTypeResolvesInTierA` passes.
-- [ ] `TestSynthesiseMagnetFromInfohash` asserts the exact magnet string above.
-- [ ] `TestItemWithoutURIIsDiscarded` asserts the item is absent from the returned slice.
-- [ ] `TestPermissiveDateFallback` and `TestNormaliseTitle` pass.
-- [ ] Every golden file regenerates unchanged under `-update`.
+- [x] `TestTierALastWins` asserts the magnet, not the earlier enclosure, is kept.
+- [x] `TestTorznabCompoundTypeResolvesInTierA` passes.
+- [x] `TestSynthesiseMagnetFromInfohash` asserts the exact magnet string above.
+- [x] `TestItemWithoutURIIsDiscarded` asserts the item is absent from the returned slice.
+- [x] `TestPermissiveDateFallback` and `TestNormaliseTitle` pass.
+- [x] Every golden file regenerates unchanged under `-update`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -163,7 +163,102 @@ never lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head, verbatim:
+
+```
+$ make lint && make test PKG=./internal/rss/... && echo PARSE_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/rss/...
+ok  	github.com/L-K-M/dl-tool/internal/rss	6.958s
+PARSE_OK
+```
+
+The named acceptance tests, run with the verbose reporter:
+
+```
+$ go test -count=1 -v -run 'TestTierALastWins|TestTorznabCompoundTypeResolvesInTierA|TestSynthesiseMagnetFromInfohash|TestItemWithoutURIIsDiscarded|TestPermissiveDateFallback|TestNormaliseTitle' ./internal/rss/
+=== RUN   TestTierALastWins
+--- PASS: TestTierALastWins (0.00s)
+=== RUN   TestTorznabCompoundTypeResolvesInTierA
+--- PASS: TestTorznabCompoundTypeResolvesInTierA (0.00s)
+=== RUN   TestSynthesiseMagnetFromInfohash
+--- PASS: TestSynthesiseMagnetFromInfohash (0.01s)
+=== RUN   TestItemWithoutURIIsDiscarded
+--- PASS: TestItemWithoutURIIsDiscarded (0.00s)
+=== RUN   TestPermissiveDateFallback
+--- PASS: TestPermissiveDateFallback (0.00s)
+=== RUN   TestNormaliseTitle
+--- PASS: TestNormaliseTitle (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/rss	0.024s
+```
+
+Golden regeneration is clean (`go test -count=1 -run TestParseFeedGolden
+./internal/rss/ -update` exits `ok` with no byte changes).
+
+Scope check — the prescribed working-tree listing:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/rss/parse.go
+internal/rss/parse_test.go
+internal/rss/testdata/README.md
+internal/rss/testdata/academic_torrents.golden.json
+internal/rss/testdata/academic_torrents.xml
+internal/rss/testdata/arch_releases.golden.json
+internal/rss/testdata/arch_releases.xml
+internal/rss/testdata/distrowatch_torrents.golden.json
+internal/rss/testdata/distrowatch_torrents.xml
+internal/rss/testdata/gutenberg_today.golden.json
+internal/rss/testdata/gutenberg_today.rss
+internal/rss/testdata/linuxtracker.golden.json
+internal/rss/testdata/linuxtracker.xml
+```
+
+Exactly the Files table. `go.mod`/`go.sum` are untouched: `gofeed v1.4.2`
+was already a direct require, and `internal/uri` is in-module.
+
+Implementation notes where the written spec needed an explicit reading:
+
+- Step 2's "through gofeed's extensions map" is inaccurate for unprefixed
+  elements (PLAN-REVIEW-FINDINGS F083): gofeed routes unnamespaced unknown
+  children to `Item.Custom`, keyed by original-case name. `<infohash>` and
+  `<size>` are read by local name from `Custom`, with the extension map as a
+  fallback for prefixed spellings; `torznab:attr`, `media:` and `torrent:`
+  elements use the extension map.
+- Tier A document order and `guid@isPermaLink` are outside gofeed's
+  universal model (F135). `ParseFeed` replays the body through
+  `encoding/xml` once to record, per item, the last tier-A write and the
+  `isPermaLink` flag, then adjusts the item handed to
+  `ExtractDownloadURI` — the pinned signature is unchanged and
+  `TestTierALastWins` asserts both orders.
+- Doc 08 section 3.1's tier-D row lists `<link>` without a gate, which F136
+  flags against FR-072 and this task's discard criterion. Tier D resolves
+  only download-looking candidates (`.torrent`/`.metalink`/`.meta4` path,
+  `magnet:`, or a URL carrying a 40- or 64-hex run); the hash
+  recognition qualifies the link but does not populate `info_hash`, so a
+  hash-carrying page link lands identity on step 3 exactly as doc 08
+  section 9 describes for feed 4.
+- The committed fixtures are real captures from 2026-09-19; upstream drift
+  since the doc's 2026-09-01 probe (linuxtracker's new feed shape, the
+  rotated-out Academic Torrents golden item) is recorded in
+  `internal/rss/testdata/README.md`. The discarded-item cases the drifted
+  fixtures can no longer supply are covered by inline XML in the tests.
+- `cmd/dl-tool/main.go` and `internal/api/server.go` still pass a nil
+  parser — both are outside the Files table. The poller reports "feed
+  parser is not wired yet (T067)" until a later task wires
+  `rss.NewParser`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

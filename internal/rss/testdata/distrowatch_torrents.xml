@@ -1,0 +1,184 @@
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+<title>DistroWatch - Torrents</title>
+<link>https://distrowatch.com/dwres.php?resource=bittorrent</link>
+<description>Latest torrents for source software releases</description>
+<atom:link href="https://distrowatch.com/news/torrents.xml" rel="self" type="application/rss+xml" />
+<item>
+<title>TUXEDO-OS-202609161651.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/TUXEDO-OS-202609161651.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/TUXEDO-OS-202609161651.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>NetBSD-10.2-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/NetBSD-10.2-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/NetBSD-10.2-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>raspios-2026-09-15-raspios-trixie-arm64.img.xz.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/raspios-2026-09-15-raspios-trixie-arm64.img.xz.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/raspios-2026-09-15-raspios-trixie-arm64.img.xz.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>xubuntu-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/xubuntu-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/xubuntu-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntu-unity-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntu-unity-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntu-unity-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntu-mate-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntu-mate-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntu-mate-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntukylin-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntukylin-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntukylin-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntucinnamon-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntucinnamon-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntucinnamon-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntu-budgie-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntu-budgie-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntu-budgie-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntu-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntu-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntu-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>lubuntu-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/lubuntu-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/lubuntu-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>kubuntu-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/kubuntu-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/kubuntu-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>edubuntu-24.04.5-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/edubuntu-24.04.5-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/edubuntu-24.04.5-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>TUXEDO-OS-202609101011.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/TUXEDO-OS-202609101011.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/TUXEDO-OS-202609101011.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntu-24.04.5-live-server-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntu-24.04.5-live-server-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntu-24.04.5-live-server-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>NetBSD-9.5-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/NetBSD-9.5-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/NetBSD-9.5-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>butterbian-xfce-0.4.1-trixie-20260831.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/butterbian-xfce-0.4.1-trixie-20260831.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/butterbian-xfce-0.4.1-trixie-20260831.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>EndeavourOS_Titan-Nova-2026.08.15.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/EndeavourOS_Titan-Nova-2026.08.15.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/EndeavourOS_Titan-Nova-2026.08.15.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>xubuntu-26.04.1-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/xubuntu-26.04.1-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/xubuntu-26.04.1-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntustudio-26.04.1-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntustudio-26.04.1-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntustudio-26.04.1-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntukylin-26.04.1-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntukylin-26.04.1-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntukylin-26.04.1-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntucinnamon-26.04.1-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntucinnamon-26.04.1-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntucinnamon-26.04.1-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntu-budgie-26.04.1-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntu-budgie-26.04.1-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntu-budgie-26.04.1-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>ubuntu-26.04.1-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/ubuntu-26.04.1-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/ubuntu-26.04.1-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+<item>
+<title>lubuntu-26.04.1-desktop-amd64.iso.torrent</title>
+<link>https://distrowatch.com/dwres/torrents/lubuntu-26.04.1-desktop-amd64.iso.torrent</link>
+<guid>https://distrowatch.com/dwres/torrents/lubuntu-26.04.1-desktop-amd64.iso.torrent</guid>
+<description/>
+<pubDate>Sat, 19 Sep 2026 03:58:00 +0000</pubDate>
+</item>
+</channel>
+</rss>
+
