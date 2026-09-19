@@ -106,6 +106,57 @@ func TestCreateTasksMarksBlockedTaskError(t *testing.T) {
 	assertNoEngineAdd(t, env)
 }
 
+// TestBlockedTaskCannotResume pins the terminal shape of a blocked row:
+// error -> queued is a legal transition, so without the actions gate a
+// resume would requeue the row and the admission pass would hand the
+// refused uri to an engine — the hole the preflight exists to close.
+// Every lifecycle action but remove is refused on an ssrf_blocked row.
+func TestBlockedTaskCannotResume(t *testing.T) {
+	env := newSSRFEnv(t)
+
+	resp := env.createTasks(t, map[string]any{"uris": []string{"http://blocked.example/f.iso"}})
+	assertProblem(t, resp, http.StatusForbidden, SlugSSRFBlocked)
+
+	var id string
+	if err := env.db.GetContext(t.Context(), &id, `SELECT id FROM tasks`); err != nil {
+		t.Fatalf("read blocked task id: %v", err)
+	}
+
+	for _, action := range []string{actionResume, actionPause, actionRecheck, actionForceComplete} {
+		response := env.api.Post("/tasks/actions",
+			map[string]any{"action": action, "ids": []string{id}},
+			"Authorization: Bearer "+env.bearer)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want %d; body %s", action, response.Code, http.StatusOK, response.Body.String())
+		}
+		want := ActionResult{ID: id, Ok: false, Type: SlugSSRFBlocked, Detail: detailSSRFBlockedAction}
+		if result := decodeActionsBody(t, response).Results[0]; result != want {
+			t.Errorf("%s: result = %+v, want %+v", action, result, want)
+		}
+	}
+
+	var state string
+	if err := env.db.GetContext(t.Context(), &state, `SELECT state FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if state != "error" {
+		t.Errorf("state = %q, want error", state)
+	}
+	assertNoEngineAdd(t, env)
+
+	// remove is the one action a blocked row still accepts — cleanup,
+	// never a requeue.
+	response := env.api.Post("/tasks/actions",
+		map[string]any{"action": actionRemove, "ids": []string{id}},
+		"Authorization: Bearer "+env.bearer)
+	if response.Code != http.StatusOK {
+		t.Fatalf("remove: status = %d, body %s", response.Code, response.Body.String())
+	}
+	if result := decodeActionsBody(t, response).Results[0]; !result.Ok {
+		t.Errorf("remove: result = %+v, want ok", result)
+	}
+}
+
 // TestCreateTasksMixedSubmission pins acceptance criterion 3: one blocked and
 // one public URI create exactly one task and one typed rejection.
 func TestCreateTasksMixedSubmission(t *testing.T) {
@@ -127,6 +178,20 @@ func TestCreateTasksMixedSubmission(t *testing.T) {
 	if body.Rejected[0].Type != SlugSSRFBlocked {
 		t.Errorf("rejected type = %q, want %q", body.Rejected[0].Type, SlugSSRFBlocked)
 	}
+}
+
+// TestCreateTasksBlockedAndJunk pins the boundary of the all-blocked 403:
+// a blocked URI beside a URI refused for another reason creates nothing
+// but is not "every URI blocked", so the answer stays the all-rejected
+// 422 of doc 05 section 5.2 with the first rejection's detail.
+func TestCreateTasksBlockedAndJunk(t *testing.T) {
+	env := newSSRFEnv(t)
+
+	resp := env.createTasks(t, map[string]any{
+		"uris": []string{"http://blocked.example/f.iso", "ed2k://|file|x|1|AA|/"},
+	})
+	assertProblem(t, resp, http.StatusUnprocessableEntity, SlugUnsupportedScheme)
+	assertNoEngineAdd(t, env)
 }
 
 // TestInspectBlocksBlockedHost pins acceptance criterion 4: a blocked host

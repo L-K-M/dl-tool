@@ -450,6 +450,11 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 	// or expired, distinct from resolved-then-refused ids, which keep the
 	// partial-success 201.
 	searchResultsResolved := false
+	// allURIsBlocked is the create contract's "every URI was blocked"
+	// case: every submitted URI earned an ssrf rejection, so the answer is
+	// the 403 problem. A blocked URI mixed with other refusals stays the
+	// all-rejected 422 of doc 05 section 5.2.
+	allURIsBlocked := false
 	if len(searchResultIDs) > 0 {
 		var resRejected []RejectedURI
 		planned, resRejected, searchResultsResolved, err = h.planSearchResults(
@@ -473,6 +478,14 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 		}
 		rejected = append(rejected, uriRejected...)
 		planned = append(uriPlanned, blobPlanned...)
+
+		ssrfRejections := 0
+		for _, r := range uriRejected {
+			if r.Type == SlugSSRFBlocked {
+				ssrfRejections++
+			}
+		}
+		allURIsBlocked = len(uris) > 0 && ssrfRejections == len(uris)
 	}
 
 	// select_files precedes every insert: a refusal creates nothing. The
@@ -536,9 +549,21 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 		created = append(created, dto)
 	}
 	if len(created) == 0 {
-		// Every planned task was a blocked URI: the whole submission was
-		// refused, and the answer is the 403 problem, not an empty 201.
-		return nil, Problem(SlugSSRFBlocked, http.StatusForbidden, ssrfAllBlockedDetail)
+		if allURIsBlocked {
+			// Every planned task was a blocked URI and nothing else went
+			// wrong: the whole submission was refused by the guard, and
+			// the answer is the 403 problem, not an empty 201.
+			return nil, Problem(SlugSSRFBlocked, http.StatusForbidden, ssrfAllBlockedDetail)
+		}
+		// created is empty but a URI was refused for another reason (an
+		// unsupported scheme, a routing miss): the submission shares the
+		// all-refused 422 shape of the len(planned) == 0 branch above.
+		detail := allRejectedDetail
+		if len(rejected) > 0 {
+			detail = rejected[0].Detail
+		}
+
+		return nil, Problem(SlugUnsupportedScheme, http.StatusUnprocessableEntity, detail)
 	}
 
 	output := &CreateTasksOutput{Status: http.StatusCreated}

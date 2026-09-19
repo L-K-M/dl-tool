@@ -47,6 +47,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/submission_test.go` | modify | *Widened mid-task:* `newCapableQBTEnv` injects the test resolver, keeping every submission-capable env consistent. |
 | `internal/api/tasks_actions_test.go` | modify | *Widened mid-task:* the direct `NewTaskHandlers` call gains the two new arguments (`nil, nil` — it never creates or inspects). |
 | `internal/api/tasks_files_test.go` | modify | *Widened mid-task:* the direct `NewTaskHandlers` call gains the two new arguments (`nil, nil` — it never creates or inspects). |
+|| `internal/api/tasks_actions.go` | modify | *Widened in review, see [`## Blocked`](#blocked):* `error_code` joins `actionTask`, and `applyAction` refuses every lifecycle action but `remove` on an `ssrf_blocked` row — otherwise `error → queued` via `resume` requeued the refused URI and the admission pass handed it to an engine. |
 
 No other file may be modified.
 
@@ -202,8 +203,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/secure/...
-ok  	github.com/L-K-M/dl-tool/internal/api	137.048s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.488s
+ok  	github.com/L-K-M/dl-tool/internal/api	130.954s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.650s
 SSRF_WIRED_OK
 ```
 
@@ -212,9 +213,11 @@ No `FAIL`, no `SKIP`. The nine named cases run under `internal/api` and pass:
 `TestCreateTasksMixedSubmission`, `TestInspectBlocksBlockedHost`,
 `TestPreflightIgnoresMagnet`, `TestPreflightBlocksNonStandardHTTPPort`,
 `TestPreflightAllowsSFTPOnPort2222`, `TestPreflightBlocksWhenOneAnswerIsPrivate`,
-`TestPreflightRedactsUserinfo`.
+`TestPreflightRedactsUserinfo`. The two review-driven cases pass with them:
+`TestBlockedTaskCannotResume` and `TestCreateTasksBlockedAndJunk`.
 
-Scope check `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+Scope check — the review fix landed on top of the task commit, so `git status` on the working tree
+shows only its delta; the cumulative branch diff against `origin/main` is the Files table exactly:
 
 ```
 internal/api/search.go
@@ -222,6 +225,7 @@ internal/api/search_test.go
 internal/api/server.go
 internal/api/submission_test.go
 internal/api/tasks.go
+internal/api/tasks_actions.go
 internal/api/tasks_actions_test.go
 internal/api/tasks_files_test.go
 internal/api/tasks_inspect.go
@@ -272,3 +276,15 @@ it between two writes. Preflight scope is the `uris` family as the Steps specify
 `search_result_ids` submission resolves server-stored provider sources, and whether those should also
 preflight is a plan-level question the task does not answer — flagged here for the plan owner rather
 than silently extrapolated.
+
+**The error row could be requeued through the actions endpoint.** The diff-review pass found that
+`error → queued` is a legal transition and `POST /tasks/actions` `resume` applied it unconditionally,
+so a blocked row's stored `source_uri` would reach `Engine.Add` through the admission pass — the very
+hole the guard exists to close. `tasks_actions.go` therefore loads `error_code` into `actionTask` and
+`applyAction` refuses every lifecycle action but `remove` on an `ssrf_blocked` row (the per-id outcome
+is `/problems/ssrf-blocked`). The `error_code` survives a `paused` stopover — only `disk_full` and
+`concurrency_limit` are ever cleared — so pause-then-resume is covered too, and `force_complete` is a
+dead end (`completed` has no edge back to `queued` and the row has no `engine_ref` for the reconciler).
+`TestBlockedTaskCannotResume` pins the gate and `TestCreateTasksBlockedAndJunk` pins the 403's boundary:
+it fires only when every submitted URI was blocked, matching "every URI in the submission is blocked"
+in the contract table and doc 05 §5.2's "every URI was rejected → 422".
