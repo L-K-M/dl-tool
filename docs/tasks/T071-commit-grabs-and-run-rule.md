@@ -5,12 +5,12 @@
 | **ID** | T071 |
 | **Milestone** | M5 |
 | **Status** | todo |
-| **Depends on** | T020, T024, T065, T066, T069, T070 |
+| **Depends on** | T020, T024, T065, T066, T067, T069, T070 |
 | **Blocks** | T073 |
-| **Parallel-safe** | no — extends `internal/rss/poll.go` and `internal/api/rules.go` |
+| **Parallel-safe** | no — extends `internal/rss/poll.go`, `internal/api/rules.go`, `internal/api/server.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-077](../02-requirements.md#fr-077-run-a-rule-against-existing-items) |
 | **Decisions** | [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md), [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |
-| **Est. size** | 2 new files, ~420 LOC plus the `matched_rules` join the T065 repair assigned here |
+| **Est. size** | 2 new files, ~420 LOC plus the `matched_rules` join the T065 repair assigned here and the composition-root wiring the F251 repair assigned here |
 
 ## Goal
 Steps 12 to 14 of the algorithm become real: a successful poll evaluates every enabled rule, the winner of
@@ -41,6 +41,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/store/feeds.go` | edit | Add `ListItemMatchedRules`, the `rule_matches` join that fills `matched_rules`. |
 | `internal/api/feeds.go` | edit | Render `matched_rules` in place of T065's interim `[]`. |
 | `internal/api/feeds_test.go` | edit | Pin the populated member. |
+| `internal/rss/poll_test.go` | edit | Pass the added `TaskCreator` argument at the two `NewPoller` call sites. |
+| `internal/api/server.go` | edit | Build the one `ruleTaskCreator`, hand it to `NewRuleHandlers` and `NewFeedHandlers`, expose it as `Server.RuleCreator`, and pass `rss.NewParser` as the feed parser. |
+| `cmd/dl-tool/main.go` | edit | Give the `rss_poll` poller `rss.NewParser` and `server.RuleCreator`. |
 
 No other file may be modified.
 
@@ -93,6 +96,11 @@ func RunRule(ctx context.Context, db *sqlx.DB, ruleID string, limit int,
 // feed. poll.go calls it after a successful fetch that added at least one item.
 func RunAllRules(ctx context.Context, db *sqlx.DB, feedID string, tc TaskCreator, now int64) error
 
+// NewPoller gains the TaskCreator the post-poll pass runs RunAllRules with; the Poller stores
+// it beside the parser. A nil creator disables the pass, which keeps the T066 poll tests
+// valid with a nil argument.
+func NewPoller(db *sqlx.DB, hc *http.Client, p ItemParser, tc TaskCreator, log *slog.Logger, now func() time.Time) *Poller
+
 // dbState is the State of T069 backed by rule_matches, rule_seen_episodes and tasks.
 type dbState struct{ /* db */ }
 ```
@@ -117,6 +125,14 @@ type RunRuleOutput struct {
 }
 
 func (h *RuleHandlers) RunRule(ctx context.Context, in *RunRuleInput) (*RunRuleOutput, error)
+
+// NewServer hoists NewTaskHandlers into a local, builds one ruleTaskCreator from it, and hands
+// it to NewRuleHandlers and NewFeedHandlers; the exported RuleCreator field carries the same
+// instance to cmd/dl-tool, which gives it to the rss_poll poller.
+RuleCreator rss.TaskCreator
+
+func NewRuleHandlers(db *sqlx.DB, tc rss.TaskCreator) *RuleHandlers
+func NewFeedHandlers(db *sqlx.DB, hc *http.Client, p rss.ItemParser, tc rss.TaskCreator, log *slog.Logger) *FeedHandlers
 ```
 
 A rule-created task goes through the ordinary creation path, so a grab counts against the concurrency
@@ -157,7 +173,16 @@ limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule i
     row represents a rule that matched the item, so no status filter applies. An empty `ids` slice
     returns an empty map without querying — an empty items page is a normal request, and skipping the
     query keeps that case independent of how the engine parses an empty `IN` list.
-12. Run the verification command and paste its output under `## Evidence`.
+12. Edit `internal/api/server.go`: hoist the `NewTaskHandlers` call into a `tasks` local above the
+    `Server` literal, build `ruleTaskCreator{tasks: tasks}` once, and set `tasks: tasks`,
+    `feeds: NewFeedHandlers(db, searchDeps.HTTP, rss.NewParser(time.Now), creator, log)`,
+    `rules: NewRuleHandlers(db, creator)` and `RuleCreator: creator` on the literal, importing
+    `internal/rss`. Edit `cmd/dl-tool/main.go` so the `rss_poll` job's poller is built with
+    `rss.NewParser(time.Now)` and `server.RuleCreator`. Update the two `NewPoller` calls in
+    `internal/rss/poll_test.go` for the added parameter. One creator instance then serves the
+    run endpoint, the refresh poller and the cron poller, and both parser injection points
+    close T067's nil-parser deferral in the same pass.
+13. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestRunRuleReportsEvaluatedAndGrabbed` asserts `evaluated=20` and three created tasks.
@@ -168,6 +193,10 @@ limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule i
 - [ ] Every task is created through `CreateForRule`; `internal/rss` contains no `INSERT INTO tasks`.
 - [ ] `TestFeedItemsMatchedRules` asserts an item with a committed `rule_matches` row lists that rule's
   `id` and `name`, and an unmatched item still renders `[]`.
+- [ ] `NewServer` hands one `ruleTaskCreator` to `NewRuleHandlers`, `NewFeedHandlers` and
+  `Server.RuleCreator`, and both production parser injection points — `NewFeedHandlers` in
+  `internal/api/server.go` and `NewPoller` in `cmd/dl-tool/main.go` — pass `rss.NewParser`, so a `200` that
+  adds items runs the rules pass in production (docs/14-conventions.md §8.3).
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -258,3 +287,14 @@ Remedy — the owner picks one:
 Which file should answer: this task's `## Files` table (remedy 1) or `docs/tasks/00-task-index.md`'s
 roster plus the new task file (remedy 2). The gap belongs in `PLAN-REVIEW-FINDINGS.md` during the
 repair; F342 already records the T083 twin.
+
+**Repair applied 2026-09-19.** The ruling picked remedy 1, the smallest interpretation consistent with
+the accepted ADRs and the merged code: this task's `## Files` table now carries
+`internal/api/server.go`, `cmd/dl-tool/main.go` and `internal/rss/poll_test.go`, and the contract pins
+the seams — `NewPoller`, `NewRuleHandlers` and `NewFeedHandlers` each take the `TaskCreator`,
+`Server.RuleCreator` exposes the one `ruleTaskCreator` so `cmd/dl-tool` can hand it to the `rss_poll`
+poller, and both parser injection points receive `rss.NewParser(time.Now)`, closing T067's nil-parser
+deferral in the same pass. A nil creator disables the post-poll pass so T066's poll tests stay valid.
+The injection-point half was already recorded plan finding F251; the nil-parser half is registered as
+F670, and both rows are marked resolved by this repair. The index row stays `todo`; the next loop
+iteration implements the task.
