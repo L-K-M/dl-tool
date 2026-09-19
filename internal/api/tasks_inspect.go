@@ -122,12 +122,16 @@ func (h *TaskHandlers) InspectTasks(ctx context.Context, in *InspectTasksInput) 
 		output.Body.Manifests = append(output.Body.Manifests, *manifest)
 	}
 
+	blockedURIs := 0
 	for _, raw := range rawURIs {
 		manifest, rejection, err := h.inspectURI(ctx, raw)
 		if err != nil {
 			return nil, err
 		}
 		if rejection != nil {
+			if rejection.Type == SlugSSRFBlocked {
+				blockedURIs++
+			}
 			output.Body.Rejected = append(output.Body.Rejected, *rejection)
 
 			continue
@@ -135,9 +139,15 @@ func (h *TaskHandlers) InspectTasks(ctx context.Context, in *InspectTasksInput) 
 		output.Body.Manifests = append(output.Body.Manifests, *manifest)
 	}
 
-	// Every entry refused is the create endpoint's behaviour mirrored: 422
-	// with the first rejection's reason (doc 05 section 5.3).
+	// Every entry refused is the create endpoint's behaviour mirrored. A
+	// submission whose every URI the SSRF guard refused answers the
+	// all-blocked 403; any other all-refused submission keeps the 422 with
+	// the first rejection's reason (doc 05 section 5.3).
 	if len(output.Body.Manifests) == 0 {
+		if len(rawURIs) > 0 && blockedURIs == len(rawURIs) && len(output.Body.Rejected) == blockedURIs {
+			return nil, Problem(SlugSSRFBlocked, http.StatusForbidden, ssrfAllBlockedDetail)
+		}
+
 		detail := allRejectedDetail
 		if len(output.Body.Rejected) > 0 {
 			detail = output.Body.Rejected[0].Detail
@@ -213,6 +223,14 @@ func (h *TaskHandlers) inspectURI(ctx context.Context, raw string) (*ManifestDTO
 	n, err := uri.Normalize(raw)
 	if err != nil {
 		rejection := rejectURI(raw, err)
+
+		return nil, &rejection, nil
+	}
+
+	// The SSRF preflight runs before any manifest work: a URI the guard
+	// refuses is never inspected further and never written to tasks.
+	if err := h.preflight(ctx, n.URI); err != nil {
+		rejection := ssrfRejection(raw)
 
 		return nil, &rejection, nil
 	}

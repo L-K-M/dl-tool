@@ -17,6 +17,7 @@ import (
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/fsx"
+	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
 	isync "github.com/L-K-M/dl-tool/internal/sync"
 	"github.com/L-K-M/dl-tool/internal/uri"
@@ -64,7 +65,13 @@ VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING`
 	unknownCategoryFormat     = "category %q does not exist"
 	engineUnavailableFmt      = "the %s engine is required for this submission but is not registered"
 	uriRejectedDetail         = "the uri scheme is not supported in v1"
-	engineRefusesURIFmt       = "engine %q does not accept this uri"
+	// errorCodeSSRFBlocked is the tasks.error_code vocabulary row of
+	// docs/04-data-model.md section 4.2 that a guard-blocked URI's task
+	// carries; its fixed message is ssrfBlockedMessage.
+	errorCodeSSRFBlocked = "ssrf_blocked"
+	ssrfBlockedMessage   = "blocked by the SSRF guard"
+	ssrfAllBlockedDetail = "every uri in the submission was refused by the ssrf guard"
+	engineRefusesURIFmt  = "engine %q does not accept this uri"
 	// duplicateDetail is the conflict detail of a duplicate torrent; the
 	// full detail names the live task that holds the identity.
 	duplicateDetail       = "a task for this torrent already exists"
@@ -244,6 +251,12 @@ type TaskHandlers struct {
 	settings *store.SettingsStore
 	engines  *engine.Registry
 	roots    []string
+	// guard and resolver are the SSRF preflight pair of T122: every
+	// user-submitted transport URI is checked through them before its task
+	// may reach an engine. server.go wires one shared guard built from
+	// cfg.SSRFAllowPrivate and net.DefaultResolver; a nil pair fails closed.
+	guard    *secure.Guard
+	resolver secure.Resolver
 }
 
 // NewTaskHandlers builds the task handlers. db is the store the task rows
@@ -252,13 +265,34 @@ type TaskHandlers struct {
 // so the signature and call site do not change; engines is the
 // routing-time availability table — a URI whose routed engine is not
 // registered answers 503; roots is DLTOOL_DATA_ROOTS in configured order.
-func NewTaskHandlers(db *sqlx.DB, engines *engine.Registry, roots []string) *TaskHandlers {
+// guard and resolver are the SSRF preflight pair: server.go passes one
+// guard built once per server and the process resolver.
+func NewTaskHandlers(db *sqlx.DB, engines *engine.Registry, roots []string, guard *secure.Guard, resolver secure.Resolver) *TaskHandlers {
 	return &TaskHandlers{
 		db:       db,
 		tasks:    store.NewTaskStore(db),
 		settings: store.NewSettingsStore(db),
 		engines:  engines,
 		roots:    roots,
+		guard:    guard,
+		resolver: resolver,
+	}
+}
+
+// preflight validates one submitted URI. It returns nil when the guard does
+// not govern the scheme, and a *secure.BlockedError otherwise.
+func (h *TaskHandlers) preflight(ctx context.Context, rawURI string) error {
+	return secure.PreflightURI(ctx, h.guard, h.resolver, rawURI)
+}
+
+// ssrfRejection is the rejected[] entry for a blocked URI. The detail carries
+// the redacted URL only: a resolved address or a matched prefix goes to the
+// log record, never to an API response.
+func ssrfRejection(rawURI string) RejectedURI {
+	return RejectedURI{
+		URI:    secure.RedactURL(rawURI),
+		Type:   SlugSSRFBlocked,
+		Detail: "the URL resolved to a blocked address range",
 	}
 }
 
@@ -330,6 +364,10 @@ type plannedTask struct {
 	// source_display_uri — "search-result:<res_id>" for a search-result
 	// submission, nil for every other family.
 	displaySource *string
+	// blocked marks a URI the SSRF preflight refused: its row is created
+	// already terminal in error state so the refusal is inspectable, and
+	// the URI joins rejected[], never created[].
+	blocked bool
 }
 
 // CreateTasks accepts up to 50 sources — payload uris, the lines of .txt
@@ -412,6 +450,11 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 	// or expired, distinct from resolved-then-refused ids, which keep the
 	// partial-success 201.
 	searchResultsResolved := false
+	// allURIsBlocked is the create contract's "every URI was blocked"
+	// case: every submitted URI earned an ssrf rejection, so the answer is
+	// the 403 problem. A blocked URI mixed with other refusals stays the
+	// all-rejected 422 of doc 05 section 5.2.
+	allURIsBlocked := false
 	if len(searchResultIDs) > 0 {
 		var resRejected []RejectedURI
 		planned, resRejected, searchResultsResolved, err = h.planSearchResults(
@@ -435,6 +478,17 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 		}
 		rejected = append(rejected, uriRejected...)
 		planned = append(uriPlanned, blobPlanned...)
+
+		ssrfRejections := 0
+		for _, r := range uriRejected {
+			if r.Type == SlugSSRFBlocked {
+				ssrfRejections++
+			}
+		}
+		// The 403 is honest only when SSRF is the whole refusal story: a
+		// blocked URI beside a rejected part or a routing miss keeps the
+		// all-rejected 422, since the problem response drops rejected[].
+		allURIsBlocked = len(uris) > 0 && ssrfRejections == len(uris) && len(rejected) == ssrfRejections
 	}
 
 	// select_files precedes every insert: a refusal creates nothing. The
@@ -490,7 +544,29 @@ func (h *TaskHandlers) CreateTasks(ctx context.Context, in *CreateTasksInput) (*
 		if err != nil {
 			return nil, err
 		}
+		// A blocked URI's row exists so the refusal is inspectable, but it
+		// is a rejection, not a creation: rejected[] already carries it.
+		if p.blocked {
+			continue
+		}
 		created = append(created, dto)
+	}
+	if len(created) == 0 {
+		if allURIsBlocked {
+			// Every planned task was a blocked URI and nothing else went
+			// wrong: the whole submission was refused by the guard, and
+			// the answer is the 403 problem, not an empty 201.
+			return nil, Problem(SlugSSRFBlocked, http.StatusForbidden, ssrfAllBlockedDetail)
+		}
+		// created is empty but a URI was refused for another reason (an
+		// unsupported scheme, a routing miss): the submission shares the
+		// all-refused 422 shape of the len(planned) == 0 branch above.
+		detail := allRejectedDetail
+		if len(rejected) > 0 {
+			detail = rejected[0].Detail
+		}
+
+		return nil, Problem(SlugUnsupportedScheme, http.StatusUnprocessableEntity, detail)
 	}
 
 	output := &CreateTasksOutput{Status: http.StatusCreated}
@@ -697,7 +773,9 @@ func selectionTarget(planned []plannedTask) (target int, engineName string, file
 		}
 	}
 	for i, p := range planned {
-		unknown := p.manifest == nil &&
+		// A blocked URI's task is terminal before it exists; its manifest
+		// can never resolve, so it cannot be the selection target.
+		unknown := !p.blocked && p.manifest == nil &&
 			(p.normalized.Kind == uri.KindMagnet || p.normalized.Kind == uri.KindTorrent || p.normalized.Kind == uri.KindMetalink)
 		if unknown {
 			return i, p.engine, -1, true
@@ -765,6 +843,26 @@ func (h *TaskHandlers) planURIs(
 
 		if _, ok := h.engines.Get(engineName); !ok {
 			return nil, nil, engineUnavailable(engineName)
+		}
+
+		// The SSRF preflight runs on the normalised URI — userinfo stripped,
+		// obfuscated inner URI already decoded — before the task is planned.
+		// A blocked URI still gets its row, created already terminal in
+		// error: the refusal stays inspectable, and because the row never
+		// sits in queued the admission pass can never hand it to an engine.
+		// Transport URIs carry no infohash, so markPlanned cannot dedupe a
+		// repeat — each resubmission leaves another inspectable refusal row,
+		// the same shape resubmitting any non-torrent URI already produces.
+		if err := h.preflight(ctx, n.URI); err != nil {
+			rejected = append(rejected, ssrfRejection(raw))
+			planned = append(planned, plannedTask{
+				normalized:  n,
+				engine:      engineName,
+				destination: destination,
+				blocked:     true,
+			})
+
+			continue
 		}
 
 		duplicate, err := h.duplicateRejection(ctx, n, seen, raw)
@@ -919,6 +1017,20 @@ func (h *TaskHandlers) insertPlanned(
 		state = string(engine.StatePaused)
 	}
 
+	// A URI the SSRF preflight refused lands directly in error with its
+	// stamp: creating it queued first would let the 1 Hz admission pass
+	// claim it between the two writes, and the engine must never see the
+	// URI (task step 5's insert-then-transition sketch predates the
+	// admission pass owning Engine.Add).
+	var errorCode, errorMessage *string
+	if p.blocked {
+		state = string(engine.StateError)
+		code := errorCodeSSRFBlocked
+		message := ssrfBlockedMessage
+		errorCode = &code
+		errorMessage = &message
+	}
+
 	// The stored source is the server-only engine/recovery source: it may
 	// embed the request's FTP credentials, which the admission pass puts
 	// into engine.AddRequest.Extra (docs/04-data-model.md section 3.3). The
@@ -968,6 +1080,8 @@ func (h *TaskHandlers) insertPlanned(
 		InfohashV1:       stringOrNil(n.InfohashV1),
 		InfohashV2:       stringOrNil(n.InfohashV2),
 		State:            state,
+		ErrorCode:        errorCode,
+		ErrorMessage:     errorMessage,
 		Destination:      p.destination,
 		CategoryID:       categoryID,
 		Sequential:       boolToInt(body.Sequential),

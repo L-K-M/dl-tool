@@ -499,9 +499,14 @@ func newCapableQBTEnv(t *testing.T, caps []engine.Capability) *tasksTestEnv {
 	// before the database they poll closes.
 	t.Cleanup(server.Shutdown)
 
+	// Same T122 note as newTasksTestEnv: fixture hostnames resolve nowhere,
+	// so the preflight resolver answers every host publicly.
+	server.tasks.resolver = permissiveResolver{}
+
 	env := &tasksTestEnv{
 		api:         humatest.Wrap(t, server.API),
 		db:          db,
+		server:      server,
 		logs:        &strings.Builder{},
 		aria2:       newRecordingEngine(engine.NameAria2, acceptsAria2Lanes),
 		qbittorrent: newRecordingEngine(engine.NameQBittorrent, acceptsBitTorrent),

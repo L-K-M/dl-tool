@@ -646,7 +646,7 @@ func TestImportRejectsUnsupportedContentType(t *testing.T) {
 // allow_private_network as the remedy.
 func TestCreateIndexerSSRFBlocked(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	env := newSearchTestEnv(t, secure.NewClient(secure.NewGuard(log, false)))
+	env := newSearchTestEnv(t, secure.NewClient(newSSRFGuard(log, false)))
 
 	resp := env.createIndexer(t, map[string]any{
 		"name": "private", "kind": "torznab", "url": "http://127.0.0.1:9117/api",
@@ -1044,7 +1044,7 @@ func (e *searchTestEnv) runSearchJob(ctx context.Context, job store.Job) error {
 		log,
 		nil, nil,
 		e.indexers,
-		secure.NewClient(secure.NewGuard(log, false)),
+		secure.NewClient(newSSRFGuard(log, false)),
 		"dl-tool/test",
 	)
 	return h(ctx, job)

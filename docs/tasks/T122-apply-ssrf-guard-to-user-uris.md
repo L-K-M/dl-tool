@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T122 |
 | **Milestone** | M4 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T020, T031, T123 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits the shared `internal/api/tasks.go` and `internal/api/server.go` |
@@ -40,6 +40,14 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/tasks_inspect.go` | modify | Preflight each submission before building a manifest. |
 | `internal/api/server.go` | modify | Build one `secure.Guard` from `cfg.SSRFAllowPrivate` and pass it to `NewTaskHandlers`. |
 | `internal/api/tasks_ssrf_test.go` | create | `humatest` cases for both endpoints plus the `PreflightURI` unit cases. |
+| `internal/api/search.go` | modify | *Widened mid-task, see [`## Blocked`](#blocked):* swap its two `secure.NewGuard` call sites for the `newSSRFGuard` helper in `server.go` — the acceptance grep requires the constructor's literal name in `server.go` only, and these calls landed after this file was written. |
+| `internal/api/search_test.go` | modify | *Widened mid-task:* same grep criterion — its two `secure.NewGuard` calls route through `newSSRFGuard`. |
+| `internal/api/tasks_test.go` | modify | *Widened mid-task:* the shared env and the late-resolution env inject the test resolver, and the late task is seeded through the store — its `127.0.0.1:<port>` stub URL is unfixably blocked by the port rule. |
+| `internal/api/tasks_inspect_test.go` | modify | *Widened mid-task:* the inspect env injects the test resolver. |
+| `internal/api/submission_test.go` | modify | *Widened mid-task:* `newCapableQBTEnv` injects the test resolver, keeping every submission-capable env consistent. |
+| `internal/api/tasks_actions_test.go` | modify | *Widened mid-task:* the direct `NewTaskHandlers` call gains the two new arguments (`nil, nil` — it never creates or inspects). |
+| `internal/api/tasks_files_test.go` | modify | *Widened mid-task:* the direct `NewTaskHandlers` call gains the two new arguments (`nil, nil` — it never creates or inspects). |
+| `internal/api/tasks_actions.go` | modify | *Widened in review, see [`## Blocked`](#blocked):* `error_code` joins `actionTask`, and `applyAction` refuses every lifecycle action but `remove` on an `ssrf_blocked` row — otherwise `error → queued` via `resume` requeued the refused URI and the admission pass handed it to an engine. |
 
 No other file may be modified.
 
@@ -136,13 +144,13 @@ Behaviour, exactly this:
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `POST /tasks` with `http://127.0.0.1:8080/x` returns `403` and the body `type` is `/problems/ssrf-blocked`.
-- [ ] The task created for a blocked URI ends in state `error` with `error_code = 'ssrf_blocked'`, and the fake engine recorded no `Add` for it.
-- [ ] A submission of one blocked and one public URI returns `201` with exactly one `created[]` and one `rejected[]` entry.
-- [ ] `POST /tasks/inspect` with a blocked host returns `403` and leaves `SELECT count(*) FROM tasks` unchanged.
-- [ ] `PreflightURI` returns nil for `magnet:?xt=urn:btih:…` and for a bare 40-hex infohash.
-- [ ] No response body or `rejected[]` entry contains a resolved IP, a matched prefix, a userinfo password or a query string.
-- [ ] `grep -rn "secure.NewGuard" internal/api` matches only `internal/api/server.go`.
+- [x] `POST /tasks` with `http://127.0.0.1:8080/x` returns `403` and the body `type` is `/problems/ssrf-blocked`.
+- [x] The task created for a blocked URI ends in state `error` with `error_code = 'ssrf_blocked'`, and the fake engine recorded no `Add` for it.
+- [x] A submission of one blocked and one public URI returns `201` with exactly one `created[]` and one `rejected[]` entry.
+- [x] `POST /tasks/inspect` with a blocked host returns `403` and leaves `SELECT count(*) FROM tasks` unchanged.
+- [x] `PreflightURI` returns nil for `magnet:?xt=urn:btih:…` and for a bare 40-hex infohash.
+- [x] No response body or `rejected[]` entry contains a resolved IP, a matched prefix, a userinfo password or a query string.
+- [x] `grep -rn "secure.NewGuard" internal/api` matches only `internal/api/server.go`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -157,8 +165,8 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the five paths in the Files table and nothing else. Use `git status`, not `git diff`: two
-of the five files are untracked, and `git diff --name-only` never lists an untracked file.
+Expected: exactly the paths in the Files table (widened rows included) and nothing else. Use `git status`,
+not `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT touch the Torznab client or `internal/search/`; T054 owns the indexer fetch path and its own guard
@@ -178,7 +186,125 @@ of the five files are untracked, and `git diff --name-only` never lists an untra
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG="./internal/api/... ./internal/secure/..." && echo SSRF_WIRED_OK`
+(exact command of the Verification block, run on the task branch's final tree):
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/secure/...
+ok  	github.com/L-K-M/dl-tool/internal/api	130.324s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.649s
+SSRF_WIRED_OK
+```
+
+No `FAIL`, no `SKIP`. The nine named cases run under `internal/api` and pass:
+`TestCreateTasksBlocksLoopbackURI`, `TestCreateTasksMarksBlockedTaskError`,
+`TestCreateTasksMixedSubmission`, `TestInspectBlocksBlockedHost`,
+`TestPreflightIgnoresMagnet`, `TestPreflightBlocksNonStandardHTTPPort`,
+`TestPreflightAllowsSFTPOnPort2222`, `TestPreflightBlocksWhenOneAnswerIsPrivate`,
+`TestPreflightRedactsUserinfo`. The review-driven cases pass with them:
+`TestBlockedTaskCannotResume`, `TestCreateTasksBlockedAndJunk`,
+`TestInspectBlockedAndJunk`, `TestPreflightBlocksUnparseable` and
+`TestTorrentURLCreatesIdentitylessTask`.
+
+Scope check — the review fix landed on top of the task commit, so `git status` on the working tree
+shows only its delta; the cumulative branch diff against `origin/main` is the Files table exactly:
+
+```
+internal/api/search.go
+internal/api/search_test.go
+internal/api/server.go
+internal/api/submission_test.go
+internal/api/tasks.go
+internal/api/tasks_actions.go
+internal/api/tasks_actions_test.go
+internal/api/tasks_files_test.go
+internal/api/tasks_inspect.go
+internal/api/tasks_inspect_test.go
+internal/api/tasks_ssrf_test.go
+internal/api/tasks_test.go
+internal/secure/preflight.go
+```
+
+Exactly the Files table (widened rows included) and nothing else. `grep -rn "secure.NewGuard" internal/api`
+matches `internal/api/server.go` only (verbatim output, final tree):
+
+```
+internal/api/server.go:310:	taskGuard := secure.NewGuard(log, cfg.SSRFAllowPrivate)
+internal/api/server.go:838:// newSSRFGuard wraps secure.NewGuard for the package's other call sites —
+internal/api/server.go:843:	return secure.NewGuard(log, allowPrivate)
+```
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+*Resolved by the Files-table widening recorded in the table itself — kept here because it forced edits
+outside the original five-row table, following the precedent T100 set for exactly this situation.*
+
+**The written contract predates three pieces of the tree it edits.**
+
+1. The `secure.NewGuard` grep criterion could not pass: `internal/api/search.go` gained two
+   `secure.NewGuard` call sites under T055/T061 — after this file was written — and
+   `internal/api/search_test.go` has two more. Deleting them would change search behavior (they build
+   per-request origin-scoped guards), so they route through `newSSRFGuard` in `server.go`, which keeps
+   the literal `secure.NewGuard(log, …)` in the composition root alone. Semantics are identical.
+2. `NewTaskHandlers` gained the two contracted arguments, which breaks its two direct test callers —
+   `tasks_actions_test.go` and `tasks_files_test.go`. Both only exercise actions/patches, so they pass
+   `nil, nil`; `PreflightURI` fails closed on a nil pair, which those paths never reach.
+3. `server.go` wires `net.DefaultResolver` as required, but the shared submission envs post fixture
+   hostnames (`releases.example.com`, `mirror.example.org`, …) that resolve nowhere in a test
+   environment — they were written before a lookup could run at all. The envs substitute a resolver
+   answering every host with one public address. `newLateResolutionEnv`'s submission is a real
+   `http://127.0.0.1:<port>` stub-daemon URL that the port rule refuses under every switch, so its
+   late task is seeded through the store in the same shape the endpoint wrote — the daemon fetch,
+   identity write-back and duplicate pause the test proves are unchanged.
+
+**Two contract adaptations, no scope change.** Step 5's insert-then-`Transition` sketch predates the
+admission pass owning `Engine.Add` (T098) and `Transition`'s current signature — its `code` argument
+is a task_events code and it never writes `tasks.error_code`. The blocked row is instead created
+directly in `error` with `error_code = 'ssrf_blocked'` via `CreateLogged` (which writes both at
+insert), which is strictly stronger: the row never sits in `queued` where the 1 Hz pass could claim
+it between two writes. Preflight scope is the `uris` family as the Steps specify; a
+`search_result_ids` submission resolves server-stored provider sources, and whether those should also
+preflight is a plan-level question the task does not answer — flagged here for the plan owner rather
+than silently extrapolated.
+
+**The error row could be requeued through the actions endpoint.** The diff-review pass found that
+`error → queued` is a legal transition and `POST /tasks/actions` `resume` applied it unconditionally,
+so a blocked row's stored `source_uri` would reach `Engine.Add` through the admission pass — the very
+hole the guard exists to close. `tasks_actions.go` therefore loads `error_code` into `actionTask` and
+`applyAction` refuses every lifecycle action but `remove` on an `ssrf_blocked` row (the per-id outcome
+is `/problems/ssrf-blocked`). The `error_code` survives a `paused` stopover — only `disk_full` and
+`concurrency_limit` are ever cleared — so pause-then-resume is covered too, and `force_complete` is a
+dead end (`completed` has no edge back to `queued` and the row has no `engine_ref` for the reconciler).
+`TestBlockedTaskCannotResume` pins the gate and `TestCreateTasksBlockedAndJunk` pins the 403's boundary:
+it fires only when every submitted URI was blocked and nothing else was refused — the contract table's
+"every URI in the submission is blocked" row. Doc 05 §5.2 lists `403` `/problems/ssrf-blocked` on this
+endpoint alongside the generic all-rejected `422`; the 403 applies exactly to the all-blocked case and
+the 422 keeps every other all-refused shape.
+
+**Review pass on the fix commit.** The automated review raised the parse-failure branch of
+`PreflightURI`, which now fails closed with `Reason: "parse"` (the enum comment in `ssrf.go` is one
+reason short — T123 owns that file, so the drift is recorded here rather than edited), the 403 detail's
+stale `rejected[]` reference, and the loopback test's port-rule-only coverage (now also exercising the
+address rule and `::1`). Declined, with reasons: the TOCTOU/rebinding and redirect findings are real
+but their remedy (pinning the resolved address through admission, or routing engine fetches through
+the T123 dialer) is a plan-level engine-design decision — recorded in `PreflightURI`'s doc comment and
+`server.go`; the `Deps`-based resolver injection and `newSSRFGuard` removal would add API surface to
+satisfy intent the written criterion (the grep) already meets — the env assignments run before any
+request is served; `resolve_temporary` retryable blocks contradict step 3's written contract
+("a lookup error or an empty answer returns a `*BlockedError` with `Reason` `resolve`") and are flagged
+here for the plan owner; decoding the obfuscated prefixes inside `PreflightURI` is unnecessary — both
+call sites pass the normalised URI by contract and the out-of-scope list forbids preflighting the raw
+forms; the `PATCH`/requeue concern was verified closed — `PatchTaskBody` has no state field and no other
+path transitions an `ssrf_blocked` row toward `queued`.

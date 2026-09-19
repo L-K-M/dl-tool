@@ -99,6 +99,10 @@ func newInspectTestEnv(t *testing.T) *inspectTestEnv {
 	// before the database they poll closes.
 	t.Cleanup(server.Shutdown)
 
+	// Same T122 note as newTasksTestEnv: the fixture hostnames resolve
+	// nowhere, so the preflight resolver answers every host publicly.
+	server.tasks.resolver = permissiveResolver{}
+
 	user := seedUser(t, db)
 	bearer := seedLiveAPIToken(t, db, user.ID)
 

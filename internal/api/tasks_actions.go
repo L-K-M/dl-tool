@@ -56,7 +56,7 @@ const (
 	operationTaskActions = "task-actions"
 	operationPatchTask   = "patch-task"
 
-	queryActionTasks = `SELECT id, engine, engine_ref, state FROM tasks WHERE id IN (?)`
+	queryActionTasks = `SELECT id, engine, engine_ref, state, error_code FROM tasks WHERE id IN (?)`
 
 	emptyIDsDetail      = "ids is required; send between 1 and 500 task ids"
 	tooManyIDsFormat    = "ids holds %d entries; send between 1 and %d"
@@ -68,6 +68,11 @@ const (
 	detailEngineFailed      = "the engine did not accept the action"
 	detailUnsupportedAction = "the engine does not support this action"
 	detailIllegalState      = "the task's state does not allow this action"
+	// detailSSRFBlockedAction is the per-id outcome for any lifecycle
+	// action but remove on a task whose uri the SSRF preflight refused:
+	// the refusal is terminal, and the only documented follow-up is
+	// removing the row and submitting a different uri.
+	detailSSRFBlockedAction = "the task's uri was refused by the ssrf guard; remove it and submit a different uri"
 	detailNotInQueue        = "the task is not in the queue"
 	detailActionFailed      = "the action could not be applied"
 
@@ -212,6 +217,7 @@ type actionTask struct {
 	Engine    string  `db:"engine"`
 	EngineRef *string `db:"engine_ref"`
 	State     string  `db:"state"`
+	ErrorCode *string `db:"error_code"`
 }
 
 // Actions serves POST /tasks/actions (FR-014): one of the nine actions
@@ -369,6 +375,16 @@ func (h *TaskHandlers) applyAction(
 	action string,
 	snap *concurrencySnapshot,
 ) ActionResult {
+	// A task the SSRF preflight refused is refused permanently: its error
+	// row exists so the rejection is inspectable, and remove is the only
+	// action it accepts. error -> queued is a legal edge, so a resume —
+	// directly, or after a pause, since the error_code rides along —
+	// would requeue the row and hand the blocked uri to an engine through
+	// the admission pass, the hole the guard exists to close.
+	if task.ErrorCode != nil && *task.ErrorCode == errorCodeSSRFBlocked && action != actionRemove {
+		return actionFailure(task.ID, SlugSSRFBlocked, detailSSRFBlockedAction)
+	}
+
 	// recheck rides the optional capability interface instead of the base
 	// Engine interface, and its transition happens only once an engine
 	// that can re-verify accepted the request.
@@ -462,7 +478,8 @@ func (h *TaskHandlers) pauseAction(ctx context.Context, task actionTask) ActionR
 	}
 
 	reloaded := actionTask{
-		ID: current.ID, Engine: current.Engine, EngineRef: current.EngineRef, State: current.State,
+		ID: current.ID, Engine: current.Engine, EngineRef: current.EngineRef,
+		State: current.State, ErrorCode: current.ErrorCode,
 	}
 
 	if reloaded.State != target {
