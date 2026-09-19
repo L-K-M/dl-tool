@@ -31,7 +31,7 @@ type DryRunRequest struct {
 	Rule        RuleDoc
 	FeedIDs     []string
 	Limit       int  // default 200, range 1..500
-	IgnoreState bool // default true
+	IgnoreState bool // HTTP default is true; false explicitly opts into stateful checks
 }
 
 // DryRunItem is one row of results[]. MatchedBy is present only when
