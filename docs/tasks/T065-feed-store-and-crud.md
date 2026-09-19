@@ -209,7 +209,8 @@ takes no body.
     feed's items; the item page is newest first and its cursor returns the next page without overlap; the
     feed object carries `priority`, `unread_count` and RFC 3339 fetch timestamps; a credential-bearing URL
     is redacted on read and a `__redacted__` PATCH leaves the stored URL untouched; `auto_download` is
-    `422`; `unread` filters to `read = 0` rows; `PATCH .../items` and `read-all` mark and count correctly.
+    `422` on both `POST` and `PATCH`; `unread` filters to `read = 0` rows; `PATCH .../items` and
+    `read-all` mark and count correctly.
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -228,7 +229,8 @@ takes no body.
 - [ ] `TestMarkFeedItemsRead` asserts `updated` counts only rows that changed state and that ids of a
   different feed are skipped.
 - [ ] `TestMarkAllFeedItemsReadIsIdempotent` asserts the second `read-all` call returns `{"updated":0}`.
-- [ ] `TestAutoDownloadIsRejectedUntilT068` asserts `POST /feeds` with `auto_download: true` is `422`.
+- [ ] `TestAutoDownloadIsRejectedUntilT068` asserts both `POST /feeds` and `PATCH /feeds/{id}` answer
+  `422` to an `auto_download` member.
 - [ ] No new column, table or index exists beyond doc 04 §3.5.
 
 ## Verification
