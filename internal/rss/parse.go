@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mmcdole/gofeed"
+	"golang.org/x/text/encoding/htmlindex"
 
 	"github.com/L-K-M/dl-tool/internal/store"
 	"github.com/L-K-M/dl-tool/internal/uri"
@@ -88,11 +90,17 @@ func (p *Parser) ParseFeed(feedID, baseURL string, body []byte) (FeedMeta, []sto
 	// item, so a successful Parse always yields the same item count.
 	raw := scanFeedBody(body)
 
+	// The raw hints only apply while both passes agree on item boundaries;
+	// on any count mismatch the gofeed view stands alone (magnet links win,
+	// no isPermaLink guard) rather than cross-wiring one item's hints into
+	// another.
+	aligned := len(raw.items) == len(feed.Items)
+
 	seen := make(map[string]struct{}, len(feed.Items))
 	items := make([]store.FeedItem, 0, len(feed.Items))
 	for i, it := range feed.Items {
 		probe := it
-		if i < len(raw.items) {
+		if aligned {
 			probe = adjustItem(it, raw.items[i])
 		}
 
@@ -195,7 +203,7 @@ func tierA(it *gofeed.Item) (uriStr, infoHash string, ok bool) {
 		if enc == nil || strings.TrimSpace(enc.URL) == "" {
 			continue
 		}
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(enc.Type)), enclosureTypeTorrent) {
+		if isTorrentMIME(enc.Type) {
 			slot = strings.TrimSpace(enc.URL)
 		}
 	}
@@ -271,7 +279,7 @@ func tierC(it *gofeed.Item) (uriStr, infoHash string, ok bool) {
 			continue
 		}
 		t := strings.TrimSpace(enc.Type)
-		if t == "" || strings.HasPrefix(strings.ToLower(t), enclosureTypeTorrent) {
+		if t == "" || isTorrentMIME(t) {
 			continue
 		}
 		if slices.Contains(itemLinks(it), strings.TrimSpace(enc.URL)) {
@@ -316,6 +324,15 @@ func isMagnetLink(s string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "magnet:")
 }
 
+// isTorrentMIME is the documented application/x-bittorrent prefix test
+// narrowed to the MIME-parameter boundary: the bare type and compound
+// values such as application/x-bittorrent;x-scheme-handler/magnet qualify,
+// an unrelated type merely sharing the leading characters does not.
+func isTorrentMIME(t string) bool {
+	t = strings.ToLower(strings.TrimSpace(t))
+	return t == enclosureTypeTorrent || strings.HasPrefix(t, enclosureTypeTorrent+";")
+}
+
 // hashFromMagnet returns the info hash of a magnet URI: the v1 btih when
 // present, else the v2 btmh — either width fits feed_items.info_hash.
 func hashFromMagnet(raw string) string {
@@ -327,9 +344,9 @@ func hashFromMagnet(raw string) string {
 		return ""
 	}
 	if m.InfohashV1 != "" {
-		return m.InfohashV1
+		return normaliseHash(m.InfohashV1)
 	}
-	return m.InfohashV2
+	return normaliseHash(m.InfohashV2)
 }
 
 // normaliseHash renders a recovered hash as lowercase hex: 40 hex chars for
@@ -449,14 +466,26 @@ func torrentChild(it *gofeed.Item, name string) string {
 }
 
 // mediaContent is tier C source 5: a media:content/@url ending in .torrent
-// wins outright, else a media:hash[@algo="sha1"] child (or standalone
-// element) synthesises a magnet.
+// wins outright — across every content element, not just the first — else a
+// media:hash[@algo="sha1"] child (or standalone element) synthesises a
+// magnet. Prefix order is sorted so multi-namespace feeds resolve
+// deterministically.
 func mediaContent(it *gofeed.Item) (uriStr, infoHash string, ok bool) {
-	for _, byName := range it.Extensions {
-		for _, e := range byName["content"] {
+	prefixes := make([]string, 0, len(it.Extensions))
+	for p := range it.Extensions {
+		prefixes = append(prefixes, p)
+	}
+	slices.Sort(prefixes)
+
+	for _, p := range prefixes {
+		for _, e := range it.Extensions[p]["content"] {
 			if u := strings.TrimSpace(e.Attrs["url"]); strings.HasSuffix(strings.ToLower(u), ".torrent") {
 				return u, "", true
 			}
+		}
+	}
+	for _, p := range prefixes {
+		for _, e := range it.Extensions[p]["content"] {
 			for _, child := range e.Children["hash"] {
 				if strings.EqualFold(strings.TrimSpace(child.Attrs["algo"]), "sha1") {
 					if h := normaliseHash(child.Value); h != "" {
@@ -465,7 +494,7 @@ func mediaContent(it *gofeed.Item) (uriStr, infoHash string, ok bool) {
 				}
 			}
 		}
-		for _, e := range byName["hash"] {
+		for _, e := range it.Extensions[p]["hash"] {
 			if strings.EqualFold(strings.TrimSpace(e.Attrs["algo"]), "sha1") {
 				if h := normaliseHash(e.Value); h != "" {
 					return synthesiseMagnet(h, it.Title), h, true
@@ -579,6 +608,16 @@ type rawScan struct {
 func scanFeedBody(body []byte) rawScan {
 	var res rawScan
 	dec := xml.NewDecoder(bytes.NewReader(body))
+	// Legacy tracker feeds often declare ISO-8859-1 or windows-1252; without
+	// a CharsetReader the decoder fails on the declaration and every hint
+	// is lost even though gofeed accepted the body.
+	dec.CharsetReader = func(label string, r io.Reader) (io.Reader, error) {
+		enc, err := htmlindex.Get(label)
+		if err != nil {
+			return r, nil
+		}
+		return enc.NewDecoder().Reader(r), nil
+	}
 	var stack []string
 	var inItem bool
 	var textEl string
@@ -606,7 +645,10 @@ func scanFeedBody(body []byte) rawScan {
 				cur := &res.items[len(res.items)-1]
 				switch name {
 				case "enclosure":
-					if strings.HasPrefix(strings.ToLower(strings.TrimSpace(attr(t, "type"))), enclosureTypeTorrent) {
+					// An enclosure without a usable url cannot win the
+					// tier-A slot; recording it would strip magnet links
+					// the item still needs.
+					if strings.TrimSpace(attr(t, "url")) != "" && isTorrentMIME(attr(t, "type")) {
 						cur.lastTierA = tierAEnclosure
 					}
 				case "link":
@@ -614,7 +656,7 @@ func scanFeedBody(body []byte) rawScan {
 						// Atom links carry the URI in href; rel defaults to
 						// "alternate" per RFC 4287.
 						if strings.EqualFold(attr(t, "rel"), "enclosure") {
-							if strings.HasPrefix(strings.ToLower(strings.TrimSpace(attr(t, "type"))), enclosureTypeTorrent) {
+							if strings.TrimSpace(attr(t, "href")) != "" && isTorrentMIME(attr(t, "type")) {
 								cur.lastTierA = tierAEnclosure
 							}
 						} else if isMagnetLink(attr(t, "href")) {
@@ -752,11 +794,18 @@ func feedMeta(feed *gofeed.Feed, ch rawChannelHints) FeedMeta {
 		if err != nil || freq <= 0 {
 			freq = 1
 		}
-		m.ImpliedIntervalS = seconds / freq
+		// Floored at the doc 08 section 2.2 minimum poll interval so a
+		// large updateFrequency cannot collapse the hint to 0 (absent).
+		m.ImpliedIntervalS = max(seconds/freq, 300)
 	}
 
+	seenHours := make(map[int]struct{}, len(ch.skipHours))
 	for _, h := range ch.skipHours {
 		if n, err := strconv.Atoi(h); err == nil && n >= 0 && n <= 23 {
+			if _, dup := seenHours[n]; dup {
+				continue
+			}
+			seenHours[n] = struct{}{}
 			m.SkipHours = append(m.SkipHours, n)
 		}
 	}
@@ -765,8 +814,13 @@ func feedMeta(feed *gofeed.Feed, ch rawChannelHints) FeedMeta {
 		"thursday": time.Thursday, "friday": time.Friday, "saturday": time.Saturday,
 		"sunday": time.Sunday,
 	}
+	seenDays := make(map[time.Weekday]struct{}, len(ch.skipDays))
 	for _, d := range ch.skipDays {
 		if w, ok := weekdays[strings.ToLower(d)]; ok {
+			if _, dup := seenDays[w]; dup {
+				continue
+			}
+			seenDays[w] = struct{}{}
 			m.SkipDays = append(m.SkipDays, w)
 		}
 	}

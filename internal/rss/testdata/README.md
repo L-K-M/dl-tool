@@ -27,3 +27,16 @@ Upstream drift since the doc's 2026-09-01 probe:
 - `gutenberg_today.rss` items are plain ebook pages: under the tier-D
   download gate every item is discarded, so its golden carries an empty
   `items` array.
+
+Verbatim means verbatim — these upstream quirks are part of the capture and
+must not be "fixed" in the fixture:
+
+- `academic_torrents.xml` descriptions for the Reddit dump items contain
+  upstream-mangled text (`…comments and submisReddit comments and
+  submissions…`, `…/PushshiftDumpssions`), confirmed present in the live
+  body on 2026-09-19.
+- `arch_releases.xml` enclosure URLs carry a literal `//` after the host,
+  exactly as upstream emits them.
+- `linuxtracker.xml` arrives minified onto a single line.
+- `gutenberg_today.rss` declares RSS 0.91 yet carries 16 items (the spec
+  caps at 15); upstream overflows the same way.

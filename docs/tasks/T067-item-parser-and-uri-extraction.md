@@ -180,7 +180,7 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/rss/...
-ok  	github.com/L-K-M/dl-tool/internal/rss	6.958s
+ok  	github.com/L-K-M/dl-tool/internal/rss	7.007s
 PARSE_OK
 ```
 
@@ -201,11 +201,21 @@ $ go test -count=1 -v -run 'TestTierALastWins|TestTorznabCompoundTypeResolvesInT
 === RUN   TestNormaliseTitle
 --- PASS: TestNormaliseTitle (0.00s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/rss	0.024s
+ok  	github.com/L-K-M/dl-tool/internal/rss	0.026s
 ```
 
-Golden regeneration is clean (`go test -count=1 -run TestParseFeedGolden
-./internal/rss/ -update` exits `ok` with no byte changes).
+Golden regeneration is byte-identical — the `-update` run followed by a
+testdata status check shows no rewritten files:
+
+```
+$ go test -count=1 -run TestParseFeedGolden ./internal/rss/ -update
+ok  	github.com/L-K-M/dl-tool/internal/rss	0.041s
+$ git status --porcelain=v1 -- internal/rss/testdata
+ M internal/rss/testdata/README.md
+```
+
+(The `README.md` modification is the capture-notes edit of this change, not
+a golden rewrite; no `.golden.json` appears.)
 
 Scope check — the prescribed working-tree listing:
 

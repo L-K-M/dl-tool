@@ -128,7 +128,7 @@ func TestParseFeedGolden(t *testing.T) {
 			}
 			want, err := os.ReadFile(golden)
 			require.NoError(t, err)
-			if diff := cmp.Diff(string(want), string(got)); diff != "" {
+			if diff := cmp.Diff(strings.Split(string(want), "\n"), strings.Split(string(got), "\n")); diff != "" {
 				t.Fatalf("mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -208,6 +208,25 @@ func TestTierALastWins(t *testing.T) {
 	require.NotNil(t, second.DownloadURL)
 	require.Equal(t, "https://example.com/b.torrent", *second.DownloadURL,
 		"the later enclosure must beat the earlier magnet link")
+}
+
+// TestUrllessEnclosureDoesNotSuppressMagnet: an x-bittorrent enclosure with
+// no usable url cannot win the tier-A slot — it must not strip the magnet
+// link that would otherwise resolve the item.
+func TestUrllessEnclosureDoesNotSuppressMagnet(t *testing.T) {
+	magnet := "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+	body := []byte(`<rss version="2.0"><channel><title>t</title>
+<item><title>magnet survives</title>
+<link>` + magnet + `</link>
+<enclosure type="application/x-bittorrent"/>
+</item>
+</channel></rss>`)
+
+	_, items, err := NewParser(func() time.Time { return testNow }).ParseFeed("fed_t", "https://example.com/feed", body)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.NotNil(t, items[0].DownloadURL)
+	require.Equal(t, magnet, *items[0].DownloadURL)
 }
 
 // TestTorznabCompoundTypeResolvesInTierA: the torznab compound enclosure
@@ -417,6 +436,42 @@ func TestLinuxtrackerFixture(t *testing.T) {
 		require.NotNil(t, it.GUID)
 		require.Equal(t, *it.GUID, it.Identity)
 	}
+}
+
+// TestFeedMetaSkipWindowsAndFloor: skipHours/skipDays arrive trimmed,
+// validated and deduplicated, and the sy implied interval is floored at the
+// doc 08 section 2.2 minimum so a huge updateFrequency cannot zero it out.
+func TestFeedMetaSkipWindowsAndFloor(t *testing.T) {
+	body := []byte(`<rss version="2.0" xmlns:sy="http://purl.org/rss/1.0/modules/syndication/">
+<channel><title>t</title>
+<sy:updatePeriod>hourly</sy:updatePeriod>
+<sy:updateFrequency>7200</sy:updateFrequency>
+<skipHours><hour>0</hour><hour> 23 </hour><hour>0</hour><hour>25</hour><hour>x</hour></skipHours>
+<skipDays><day>Monday</day><day> friday </day><day>Monday</day><day>funday</day></skipDays>
+<item><title>i</title><link>https://example.com/x.torrent</link></item>
+</channel></rss>`)
+
+	meta, _, err := NewParser(func() time.Time { return testNow }).ParseFeed("fed_t", "https://example.com/feed", body)
+	require.NoError(t, err)
+	require.Equal(t, 300, meta.ImpliedIntervalS, "hourly/7200 floors at five minutes, not 0")
+	require.Equal(t, []int{0, 23}, meta.SkipHours)
+	require.Equal(t, []time.Weekday{time.Monday, time.Friday}, meta.SkipDays)
+}
+
+// TestLegacyDeclaredEncodingKeepsHints: a body declaring ISO-8859-1 still
+// feeds the raw hint pass — here the isPermaLink guard drops the
+// .torrent-shaped guid so the item resolves nothing.
+func TestLegacyDeclaredEncodingKeepsHints(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="ISO-8859-1"?>
+<rss version="2.0"><channel><title>t</title>
+<item><title>latin1 item</title>
+<guid isPermaLink="false">https://example.com/files/x.torrent</guid>
+</item>
+</channel></rss>`)
+
+	_, items, err := NewParser(func() time.Time { return testNow }).ParseFeed("fed_t", "https://example.com/feed", body)
+	require.NoError(t, err)
+	require.Empty(t, items, "the isPermaLink hint must survive a non-UTF-8 declaration")
 }
 
 // TestIdentitiesDedupWithinFetch: a repeated identity inside one fetch keeps
