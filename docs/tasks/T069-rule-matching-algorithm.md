@@ -203,4 +203,47 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+This task cannot run as written: `match.fields` documents `title | description | category`
+(`docs/08-rss-automation.md` §4.2, and T068's merged `Validate` admits all three), and step 4 of
+this task builds the haystack from those fields — but the pinned input type `store.FeedItem`
+carries only `title`. `feed_items` has no `description` or `category` column
+(`docs/04-data-model.md` §3.5, `internal/store/migrations/00001_init.sql`), the `raw_json` column
+§3.5 calls "the full parsed item" is never populated by T067's parser (`feedItem` in
+`internal/rss/parse.go` sets `FeedID`, `Identity`, `Title`, `TitleNorm`, `DownloadURL` and,
+conditionally, `GUID`, `Link`, `InfoHash`, `SizeBytes`, `PublishedAt` — `RawJSON` is never
+written) and has no documented shape, and the §10.1 item object exposes neither field. A rule
+scoped to `description` or `category` therefore can never match: two of the three documented enum
+values are unservable inside this `## Files` table, and every remedy lives outside it or needs an
+owner decision. This is recorded plan finding F369 (`PLAN-REVIEW-FINDINGS.md`). Recorded rather
+than silently narrowed — an empty contribution would make a documented field a silent dead
+feature, and inventing a `raw_json` schema would write dead code — matching the
+record-then-repair workflow of T046, T049, T050, T052, T057, T058, T063, T064 and T065.
+
+Remedy — the owner picks one; each repairs a different layer:
+
+1. Store the fields: a new migration adding `feed_items` columns for `description`/`categories`,
+   `internal/rss/parse.go` filling them and `internal/store/feeds.go` carrying them — all outside
+   this table (T065 and T067 files).
+2. Define and populate `raw_json`: amend doc 04 §3.5 to pin its shape, amend
+   `internal/rss/parse.go` to write it, and let `match.go` decode it for `description` and
+   `category`.
+3. Narrow the vocabulary: amend doc 08 §4.2 to drop `description`/`category` from `match.fields`
+   and tighten the `matchField*` enum in the merged `internal/rss/ruledoc.go` (T068's file).
+
+While the repair is open, three smaller divergences in this same contract deserve a ruling; none
+blocks on its own because the contract pins an answer, but each silently differs from doc 08:
+
+1. Steps item 4 says "steps 1 to 3 as pre-filters that return no `Decision`", yet §5.1 assigns
+   `cooldown` to step 2, the interface comment says "Steps 1 and 3 … produce no `Decision`", and
+   `TestEveryReasonCodeIsProduced` requires all ten codes — the wording should read steps 1 and 3
+   (F362).
+2. Doc 08 step 13 sorts each `content_key` group by `(score DESC, rule.priority ASC,
+   feed_priority ASC, published_at DESC)`, but `Candidate` carries no feed priority and `Resolve`
+   specifies only the other three keys — either add the field or amend the documented sort.
+3. `Candidate.ContentKey` is the bare episode key (`1x5`) checked globally, so two shows sharing a
+   season/episode number collide as `already_have`; doc 08 §7's own example is
+   `tv:the-show:s01e05`, which the contract as written cannot produce (F138, F361).
+
+Which file should answer: `docs/04-data-model.md` §3.5 for the carrier decision (remedy 1 or 2),
+or `docs/08-rss-automation.md` §4.2 for the vocabulary reduction (remedy 3).
