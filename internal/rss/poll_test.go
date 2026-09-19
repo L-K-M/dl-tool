@@ -537,6 +537,16 @@ func TestConcurrentPollSameFeedSkipped(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
+	defer func() {
+		// A failed require Goexits before the explicit close below;
+		// without this guard srv.Close() would block forever on the
+		// handler's <-release.
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
 
 	feed := newFeed(t, db, srv.URL+"/feed")
 	poller := testPoller(t, db, srv, stubParser{})
