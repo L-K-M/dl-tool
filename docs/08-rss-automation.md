@@ -461,8 +461,10 @@ qBittorrent's per-filter seen list has. Cross-rule contention for the same episo
 info-hash rung (step 10's `duplicate_infohash`), not by this key — and only when the candidate item
 carries a hash: a `.torrent`-URL item has none until the post-grab back-fill lands, and the back-fill
 §7 scopes to `rule_matches.info_hash` would not help it — the rung compares the candidate's own
-`feed_items.info_hash` — so hash-less candidates get no cross-rule arbitration until the back-fill also
-stamps `feed_items` or resolves prior grabs by `feed_item_id` (F380).
+`feed_items.info_hash` — so episode-keyed hash-less candidates get no cross-rule arbitration until the
+back-fill also stamps `feed_items` or resolves prior grabs by `feed_item_id` (F380); a candidate with
+no staged episode key still dedups globally, since its `info_hash`/`identity` key carries no
+`ep:<rule_id>:` namespace.
 
 The DDL, indices and retention policy for `feeds`, `feed_items`, `rules`, `rule_matches` and
 `rule_seen_episodes` are owned by [`04-data-model.md`](04-data-model.md#35-rss); do not restate them here.
