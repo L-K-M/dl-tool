@@ -220,6 +220,16 @@ than silently narrowed — an empty contribution would make a documented field a
 feature, and inventing a `raw_json` schema would write dead code — matching the
 record-then-repair workflow of T046, T049, T050, T052, T057, T058, T063, T064 and T065.
 
+Evidence to rerun before ruling, observed on this branch:
+
+- `grep -n "RawJSON" internal/rss/parse.go` prints nothing — the parser never writes the column.
+- The `feed_items` DDL (`internal/store/migrations/00001_init.sql`, the `CREATE TABLE` at line 217)
+  lists `id, feed_id, guid, identity, title, title_norm, link, download_url, info_hash,
+  size_bytes, published_at, first_seen_at, read, raw_json, created_at, updated_at` — no
+  `description` or `category`.
+- `docs/08-rss-automation.md` §4.2 names `match.fields` as "Any of `title`, `description`,
+  `category`", and `internal/rss/ruledoc.go`'s `Validate` admits all three.
+
 Remedy — the owner picks one; each repairs a different layer:
 
 1. Store the fields: a new migration adding `feed_items` columns for `description`/`categories`,
@@ -231,19 +241,12 @@ Remedy — the owner picks one; each repairs a different layer:
 3. Narrow the vocabulary: amend doc 08 §4.2 to drop `description`/`category` from `match.fields`
    and tighten the `matchField*` enum in the merged `internal/rss/ruledoc.go` (T068's file).
 
-While the repair is open, three smaller divergences in this same contract deserve a ruling; none
-blocks on its own because the contract pins an answer, but each silently differs from doc 08:
-
-1. Steps item 4 says "steps 1 to 3 as pre-filters that return no `Decision`", yet §5.1 assigns
-   `cooldown` to step 2, the interface comment says "Steps 1 and 3 … produce no `Decision`", and
-   `TestEveryReasonCodeIsProduced` requires all ten codes — the wording should read steps 1 and 3
-   (F362).
-2. Doc 08 step 13 sorts each `content_key` group by `(score DESC, rule.priority ASC,
-   feed_priority ASC, published_at DESC)`, but `Candidate` carries no feed priority and `Resolve`
-   specifies only the other three keys — either add the field or amend the documented sort.
-3. `Candidate.ContentKey` is the bare episode key (`1x5`) checked globally, so two shows sharing a
-   season/episode number collide as `already_have`; doc 08 §7's own example is
-   `tv:the-show:s01e05`, which the contract as written cannot produce (F138, F361).
+Three smaller divergences in this contract need a ruling during the same repair, but none gates
+this task: the "steps 1 to 3" wording versus the `cooldown` code §5.1 assigns to step 2 (F362);
+the step-13 `feed_priority` sort key, which `Candidate` cannot carry — unrecorded in
+`PLAN-REVIEW-FINDINGS.md`, so register it during the repair rather than dropping it here; and the
+bare episode key `1x5` as global `content_key` versus doc 08 §7's `tv:the-show:s01e05` example
+(F138, F361).
 
 Which file should answer: `docs/04-data-model.md` §3.5 for the carrier decision (remedy 1 or 2),
 or `docs/08-rss-automation.md` §4.2 for the vocabulary reduction (remedy 3).
