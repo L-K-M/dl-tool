@@ -5,12 +5,12 @@
 | **ID** | T071 |
 | **Milestone** | M5 |
 | **Status** | todo |
-| **Depends on** | T020, T024, T066, T069, T070 |
+| **Depends on** | T020, T024, T065, T066, T069, T070 |
 | **Blocks** | T073 |
 | **Parallel-safe** | no — extends `internal/rss/poll.go` and `internal/api/rules.go` |
 | **Implements** | [FR-077](../02-requirements.md#fr-077-run-a-rule-against-existing-items) |
 | **Decisions** | [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md), [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md) |
-| **Est. size** | 2 new files, ~370 LOC |
+| **Est. size** | 2 new files, ~420 LOC plus the `matched_rules` join the T065 repair assigned here |
 
 ## Goal
 Steps 12 to 14 of the algorithm become real: a successful poll evaluates every enabled rule, the winner of
@@ -38,6 +38,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/rss/poll.go` | edit | Evaluate every enabled rule after a successful poll. |
 | `internal/api/rules.go` | edit | Add `POST /rules/{id}/run` and the `TaskCreator` adapter. |
 | `internal/api/rules_test.go` | edit | The endpoint's report and its status codes. |
+| `internal/store/feeds.go` | edit | Add `ListItemMatchedRules`, the `rule_matches` join that fills `matched_rules`. |
+| `internal/api/feeds.go` | edit | Render `matched_rules` in place of T065's interim `[]`. |
+| `internal/api/feeds_test.go` | edit | Pin the populated member. |
 
 No other file may be modified.
 
@@ -146,7 +149,15 @@ limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule i
    `RunRule` over unchanged items creates nothing.
 10. Edit `internal/api/rules_test.go` for the endpoint: `200` with `created_task_ids`, `404` for an unknown
     id, and `created_task_ids` shorter than `matched` when dedup suppressed a grab.
-11. Run the verification command and paste its output under `## Evidence`.
+11. Add `ListItemMatchedRules(ctx, db, ids []string)` to `internal/store/feeds.go` — one join over
+    `rule_matches` to `rules` returning each item's matching rules as `{id, name}` pairs, so
+    `GET /feeds/{id}/items` renders the `matched_rules` member of doc 05 §10.1 instead of the interim `[]`
+    T065 ships: wire the map into `internal/api/feeds.go`, defaulting items with no matches to `[]`, and
+    pin it with `TestFeedItemsMatchedRules` in `internal/api/feeds_test.go`. Every stored `rule_matches`
+    row represents a rule that matched the item, so no status filter applies. An empty `ids` slice
+    returns an empty map without querying — an empty items page is a normal request, and skipping the
+    query keeps that case independent of how the engine parses an empty `IN` list.
+12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestRunRuleReportsEvaluatedAndGrabbed` asserts `evaluated=20` and three created tasks.
@@ -155,6 +166,8 @@ limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule i
 - [ ] `TestSecondRunIsIdempotent` asserts no second task and no second `rule_matches` row.
 - [ ] A `304` poll runs no rule.
 - [ ] Every task is created through `CreateForRule`; `internal/rss` contains no `INSERT INTO tasks`.
+- [ ] `TestFeedItemsMatchedRules` asserts an item with a committed `rule_matches` row lists that rule's
+  `id` and `name`, and an unmatched item still renders `[]`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".

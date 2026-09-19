@@ -174,8 +174,8 @@ The feed poller, the rule engine, dry-run and the RSS screens. Exit checkpoint: 
 | [T068](T068-rule-document-and-validator.md) | Validate rule documents and serve rule CRUD | T007, T008, T065 | todo |
 | [T069](T069-rule-matching-algorithm.md) | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | todo |
 | [T070](T070-rule-dry-run-endpoint.md) | Dry-run a rule and report a reason code for every evaluated item | T068, T069 | todo |
-| [T071](T071-commit-grabs-and-run-rule.md) | Commit rule matches as tasks and run a rule against existing items | T020, T024, T066, T069, T070 | todo |
-| [T072](T072-rss-feeds-screen.md) | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066 | todo |
+| [T071](T071-commit-grabs-and-run-rule.md) | Commit rule matches as tasks and run a rule against existing items | T020, T024, T065, T066, T069, T070 | todo |
+| [T072](T072-rss-feeds-screen.md) | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066, T068, T071 | todo |
 | [T073](T073-rule-editor-and-live-preview.md) | Build the rule editor with the live dry-run preview | T047, T050, T068, T070, T071, T072 | todo |
 
 ## M6 — Post-processing, automation and the account
@@ -239,6 +239,8 @@ reason and the task that will carry it.
 | M1 exit: the owner decision on the disk-full cycle counter | [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) | The "backoff ladder or cycle counter" risk row defers rate-limiting the resume→pause cycle to an owner decision; this exit row — the same convention as the "M0 exit:" rows — puts that decision on the M1 exit review's agenda structurally, instead of relying on the review reading the register's carried-by cell (the report-after-milestone mechanism of IMPLEMENTING.md names no register walk). Until it lands, T127 (operator pause authority) is the only operator brake on the cycle; both are M1 tasks, so they land in the same milestone and the exit review verifies that sequencing. | M1 exit review; T127 as interim brake — no operator-facing release may ship T126's routing before T127 (or the owner-decided counter) lands |
 | The admission pass serialises a task's release with an operator pause and claims a parked candidate before it touches the engine | [FR-048](../02-requirements.md#fr-048-never-destroy-partial-data-when-a-filesystem-fills) | T127 needs its hold-stamp clear to precede a release or follow it through a bounded lease wait, never race the engine call or report false success. No shared task-operation lease or claim exists: `Admitter.release` calls `Engine.Resume` before its first guarded row write, and no store method reports whether `state = 'paused' AND error_code = 'disk_full'` still matches. The registry and pass files are outside T127's Files table; the claim also lands in `internal/store/tasks.go`, which T127 lists for its distinct clear, so T128 owns the claim write to keep the two changes separate (the T099→T126 pattern). | T127, T128 |
 | Populating row 3 of the routing table, so a yt-dlp URL reaches the media lane | [FR-002](../02-requirements.md#fr-002-route-each-uri-to-an-engine-by-scheme) | The mechanism T088 assumed does not exist in yt-dlp, and 284 of its 1702 patterns do not compile with Go `regexp` ([`06-download-engines.md`](../06-download-engines.md#72-routing-check) §7.2). T016 still ships the routing table and its `mediaMatch` hook; only the hook's data source is deferred, and a nil hook routes such a URL to aria2 rather than mis-routing it. Needs an ADR. | T088, after the ADR |
+| The `auto_download` member of `POST`/`PATCH /feeds` and the `auto:<feed_id>` rule lifecycle it drives | [FR-070](../02-requirements.md#fr-070-manage-feeds-and-refresh-on-demand) | A valid `definition_json` needs T068's `RuleDoc` and the `rules` store, so T065 ships the feed writes without the member: it is absent from both schemas and a sender gets `422` under `additionalProperties: false`, never a silent no-op. The feed object carries no `auto_download` member on read, so the read side needs no interim. T068 adds the member and the create/delete lifecycle, and T072's dependency edge keeps the add-dialog checkbox behind it. | T068 |
+| Populating `matched_rules` on the `GET /feeds/{id}/items` item object | [FR-070](../02-requirements.md#fr-070-manage-feeds-and-refresh-on-demand) | The member reads `rule_matches`, which T071 owns; T065 renders `"matched_rules":[]` and T071's `ListItemMatchedRules` fills it. | T071 |
 | M3 exit: the eight remaining settings sections | brief §8 | T053 ships the settings shell with General and Connection and lists the rest in `IMPLEMENTED`; each remaining section needs endpoints that do not exist in M3. | T116, T117, T118, T119, T120, T121 |
 
 ## A note on identifier order
@@ -382,8 +384,8 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T068 | Validate rule documents and serve rule CRUD | T007, T008, T065 | no | todo | [T068](T068-rule-document-and-validator.md) |
 | T069 | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | yes | todo | [T069](T069-rule-matching-algorithm.md) |
 | T070 | Dry-run a rule and report a reason code for every evaluated item | T068, T069 | no | todo | [T070](T070-rule-dry-run-endpoint.md) |
-| T071 | Commit rule matches as tasks and run a rule against existing items | T020, T024, T066, T069, T070 | no | todo | [T071](T071-commit-grabs-and-run-rule.md) |
-| T072 | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066 | no | todo | [T072](T072-rss-feeds-screen.md) |
+| T071 | Commit rule matches as tasks and run a rule against existing items | T020, T024, T065, T066, T069, T070 | no | todo | [T071](T071-commit-grabs-and-run-rule.md) |
+| T072 | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066, T068, T071 | no | todo | [T072](T072-rss-feeds-screen.md) |
 | T073 | Build the rule editor with the live dry-run preview | T047, T050, T068, T070, T071, T072 | no | todo | [T073](T073-rule-editor-and-live-preview.md) |
 
 ### M6
