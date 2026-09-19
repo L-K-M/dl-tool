@@ -224,7 +224,7 @@ Evidence to rerun before ruling, observed on this branch:
 
 - `grep -niE 'raw_?json' internal/rss/parse.go` prints nothing — the parser never writes the
   column.
-- `grep -n 'CREATE TABLE feed_items' -A 40 internal/store/migrations/00001_init.sql` lists
+- `grep -n 'CREATE TABLE.*feed_items' -A 40 internal/store/migrations/00001_init.sql` lists
   `id, feed_id, guid, identity, title, title_norm, link, download_url, info_hash, size_bytes,
   published_at, first_seen_at, read, raw_json, created_at, updated_at` — no `description` or
   `category`.
