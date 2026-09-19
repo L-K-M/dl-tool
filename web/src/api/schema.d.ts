@@ -540,6 +540,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/rules/test": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Dry-run a rule
+     * @description Evaluates an unsaved rule document against the stored items of the named feeds and returns every evaluated item — matched and unmatched — with its score, the clause that matched, or a reason code and the clause index responsible. Nothing is created or stored, so the editor can call it on a 250 ms debounce. 404 when a named feed id does not exist; 422 when the document fails validation, with one errors[] entry per member.
+     */
+    post: operations["test-rule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/rules/{id}": {
     parameters: {
       query?: never;
@@ -1053,6 +1073,31 @@ export interface components {
         [key: string]: unknown;
       };
       tasks_removed: string[] | null;
+    };
+    DryRunItem: {
+      download_url: string;
+      feed: string;
+      feed_id: string;
+      matched: boolean;
+      matched_by?: {
+        [key: string]: string;
+      };
+      published_at: string | null;
+      reason?: string;
+      reason_detail?: string;
+      /** Format: int64 */
+      score?: number;
+      title: string;
+      would_do?: components["schemas"]["WouldDo"];
+    };
+    DryRunReport: {
+      /** Format: int64 */
+      elapsed_ms: number;
+      /** Format: int64 */
+      evaluated: number;
+      /** Format: int64 */
+      matched: number;
+      results: components["schemas"]["DryRunItem"][] | null;
     };
     EngineDTO: {
       /** @description The declared set of the engine's adapter, never a guess */
@@ -1768,6 +1813,23 @@ export interface components {
       ok: boolean;
       server: string;
     };
+    TestRuleInputBody: {
+      /** @description Feed ids; the default is rule.feeds resolved by url, else every enabled feed */
+      feeds?: string[] | null;
+      /**
+       * @description Default true: bypass rule_matches and rule_seen_episodes so the preview repeats byte for byte
+       * @default true
+       */
+      ignore_state: boolean;
+      /**
+       * Format: int64
+       * @description Items per feed, newest first
+       * @default 200
+       */
+      limit: number;
+      /** @description The full rule document, unsaved */
+      rule: unknown;
+    };
     ThrottleSpec: {
       /** Format: int64 */
       cooldown_days?: number;
@@ -1804,6 +1866,11 @@ export interface components {
       locale: string;
       /** @description Account username */
       username: string;
+    };
+    WouldDo: {
+      category: string;
+      destination: string;
+      paused: boolean;
     };
   };
   responses: never;
@@ -2940,6 +3007,39 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["RuleDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "test-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TestRuleInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DryRunReport"];
         };
       };
       /** @description Error */
