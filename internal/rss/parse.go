@@ -231,13 +231,13 @@ func tierC(it *gofeed.Item) (uriStr, infoHash string, ok bool) {
 		return v, hashFromMagnet(v), true
 	}
 	// 2. torznab:attr[@name="infohash"]/@value.
-	if h := NormaliseHash(torznabAttr(it, "infohash")); h != "" {
+	if h := normaliseHash(torznabAttr(it, "infohash")); h != "" {
 		return synthesiseMagnet(h, it.Title), h, true
 	}
 	// 3. An unprefixed <infohash> child (Academic Torrents): gofeed routes
 	// unnamespaced unknown elements to Item.Custom; a prefixed variant would
 	// surface as an extension element instead — check both by local name.
-	if h := NormaliseHash(firstNonEmpty(customValue(it, "infohash"), extValue(it, "infohash"))); h != "" {
+	if h := normaliseHash(firstNonEmpty(customValue(it, "infohash"), extValue(it, "infohash"))); h != "" {
 		return synthesiseMagnet(h, it.Title), h, true
 	}
 	// 4. BEP 36 <torrent>/<magneturi> or <torrent>/<infohash>. A prefixed
@@ -246,14 +246,14 @@ func tierC(it *gofeed.Item) (uriStr, infoHash string, ok bool) {
 	if v := firstNonEmpty(extValue(it, "magneturi"), torrentChild(it, "magneturi")); v != "" {
 		return v, hashFromMagnet(v), true
 	}
-	if h := NormaliseHash(torrentChild(it, "infohash")); h != "" {
+	if h := normaliseHash(torrentChild(it, "infohash")); h != "" {
 		return synthesiseMagnet(h, it.Title), h, true
 	}
 	if v := strings.TrimSpace(customValue(it, "torrent")); v != "" {
 		if isMagnetLink(v) {
 			return v, hashFromMagnet(v), true
 		}
-		if h := NormaliseHash(v); h != "" {
+		if h := normaliseHash(v); h != "" {
 			return synthesiseMagnet(h, it.Title), h, true
 		}
 	}
@@ -332,10 +332,10 @@ func hashFromMagnet(raw string) string {
 	return m.InfohashV2
 }
 
-// NormaliseHash renders a recovered hash as lowercase hex: 40 hex chars for
+// normaliseHash renders a recovered hash as lowercase hex: 40 hex chars for
 // v1, 64 for v2, and a 32-char base32 v1 value decoded to 20 bytes first
 // (doc 06 section 3.5). A v2 hash is never truncated. "" means unrecoverable.
-func NormaliseHash(s string) string {
+func normaliseHash(s string) string {
 	s = strings.TrimSpace(s)
 	switch len(s) {
 	case 40, 64:
@@ -459,7 +459,7 @@ func mediaContent(it *gofeed.Item) (uriStr, infoHash string, ok bool) {
 			}
 			for _, child := range e.Children["hash"] {
 				if strings.EqualFold(strings.TrimSpace(child.Attrs["algo"]), "sha1") {
-					if h := NormaliseHash(child.Value); h != "" {
+					if h := normaliseHash(child.Value); h != "" {
 						return synthesiseMagnet(h, it.Title), h, true
 					}
 				}
@@ -467,7 +467,7 @@ func mediaContent(it *gofeed.Item) (uriStr, infoHash string, ok bool) {
 		}
 		for _, e := range byName["hash"] {
 			if strings.EqualFold(strings.TrimSpace(e.Attrs["algo"]), "sha1") {
-				if h := NormaliseHash(e.Value); h != "" {
+				if h := normaliseHash(e.Value); h != "" {
 					return synthesiseMagnet(h, it.Title), h, true
 				}
 			}
