@@ -130,6 +130,9 @@ type Server struct {
 	// feeds owns the /feeds operations of doc 05 section 10.1.
 	feeds *FeedHandlers
 
+	// rules owns the /rules operations of doc 05 section 10.2.
+	rules *RuleHandlers
+
 	// SSE owns the live-update endpoints: GET /events and GET /sync, and
 	// the hub they read from. It is exported for the composition root in
 	// cmd/dl-tool, which owns the *obs.Metrics instance whose
@@ -331,6 +334,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		// fan-out; its item parser is nil until T067 lands parse.go — the
 		// poller reports that as a fetch failure rather than panic.
 		feeds:    NewFeedHandlers(db, searchDeps.HTTP, nil, log),
+		rules:    NewRuleHandlers(db),
 		SSE:      sseHandlers,
 		bgCancel: bgCancel,
 	}
@@ -493,6 +497,7 @@ func (s *Server) registerOperations() {
 	s.fs.Register(s.API)
 	RegisterSearchRoutes(s.API, s.search)
 	s.feeds.Register(s.API)
+	s.rules.Register(s.API)
 	s.SSE.RegisterOperations(s.API)
 
 	// The bulk-action and patch operations of docs/05-api-contract.md

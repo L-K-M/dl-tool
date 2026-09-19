@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T068 |
 | **Milestone** | M5 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T007, T008, T065 |
 | **Blocks** | T069, T070, T073, T117 |
 | **Parallel-safe** | no — registers a second operation group on T007's Huma API |
@@ -221,24 +221,24 @@ Statuses, exactly doc 05 §10.2: `200` · `201` · `204` · `404` · `409 /probl
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestEpisodeFilterMissingSemicolonIsRejected` asserts the `422` and the exact location string.
-- [ ] `TestEmptyPatternInNoneOfIsRejected` passes — `none_of: ["web-dl", ""]` never reaches the store.
-- [ ] `TestParseEpisodeFilterNormalisesSeason` asserts `01x05;` parses to season `1`.
-- [ ] `TestValidateReportsEveryProblem` asserts a document with three faults yields three `errors[]`.
-- [ ] `TestRuleListOrderedByPriorityThenName` passes.
-- [ ] Stored `definition_json` round-trips through `RuleDoc` unchanged.
-- [ ] `TestAutoDownloadCreatesAutoRule` asserts `POST /feeds` with `auto_download: true` stores a rule
+- [x] `TestEpisodeFilterMissingSemicolonIsRejected` asserts the `422` and the exact location string.
+- [x] `TestEmptyPatternInNoneOfIsRejected` passes — `none_of: ["web-dl", ""]` never reaches the store.
+- [x] `TestParseEpisodeFilterNormalisesSeason` asserts `01x05;` parses to season `1`.
+- [x] `TestValidateReportsEveryProblem` asserts a document with three faults yields three `errors[]`.
+- [x] `TestRuleListOrderedByPriorityThenName` passes.
+- [x] Stored `definition_json` round-trips through `RuleDoc` unchanged.
+- [x] `TestAutoDownloadCreatesAutoRule` asserts `POST /feeds` with `auto_download: true` stores a rule
   named `auto:<feed_id>` — enabled, scoped to the feed's URL, with an empty `match`.
-- [ ] `TestPatchAutoDownloadFalseDeletesAutoRule` passes, and a repeated `auto_download: true` PATCH is
+- [x] `TestPatchAutoDownloadFalseDeletesAutoRule` passes, and a repeated `auto_download: true` PATCH is
   idempotent — one `auto:` rule, never two.
-- [ ] `TestPatchOmittingAutoDownloadKeepsRule` asserts a PATCH that omits the member — a rename, an
+- [x] `TestPatchOmittingAutoDownloadKeepsRule` asserts a PATCH that omits the member — a rename, an
   `enabled` toggle — leaves the existing `auto:` rule untouched.
-- [ ] `TestAutoPrefixNameRejected` asserts `POST /rules` answers `422` to an `auto:`-prefixed `name`,
+- [x] `TestAutoPrefixNameRejected` asserts `POST /rules` answers `422` to an `auto:`-prefixed `name`,
   `PATCH /rules` answers `422` to one that differs from the stored name, and accepts both a PATCH that
   echoes an `auto:` rule's own name and one that omits `name` entirely — an `enabled` toggle.
-- [ ] `TestAutoRuleDeletesLikeAnyOther` asserts `DELETE /rules/{id}` on an `auto:` rule is `204` — the
+- [x] `TestAutoRuleDeletesLikeAnyOther` asserts `DELETE /rules/{id}` on an `auto:` rule is `204` — the
   operator's way to disable auto-download — and a later `PATCH auto_download: true` recreates it.
-- [ ] `TestDeleteFeedRemovesAutoRule` asserts the `auto:<feed_id>` rule is gone after `DELETE`.
+- [x] `TestDeleteFeedRemovesAutoRule` asserts the `auto:<feed_id>` rule is gone after `DELETE`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -271,7 +271,63 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head, verbatim:
+
+```
+$ make lint && make test PKG="./internal/api/... ./internal/rss/... ./internal/store/..." && echo RULEDOC_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/rss/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	145.827s
+ok  	github.com/L-K-M/dl-tool/internal/rss	7.030s
+ok  	github.com/L-K-M/dl-tool/internal/store	77.548s
+RULEDOC_OK
+```
+
+The acceptance-criteria tests, from the same head under `go test -race -count=1 -v`:
+
+```
+--- PASS: TestAutoDownloadCreatesAutoRule (0.37s)
+--- PASS: TestPatchAutoDownloadFalseDeletesAutoRule (0.41s)
+--- PASS: TestPatchOmittingAutoDownloadKeepsRule (0.43s)
+--- PASS: TestDeleteFeedRemovesAutoRule (0.37s)
+--- PASS: TestEpisodeFilterMissingSemicolonIsRejected (0.37s)
+--- PASS: TestEmptyPatternInNoneOfIsRejected (0.38s)
+--- PASS: TestParseEpisodeFilterNormalisesSeason (0.00s)
+--- PASS: TestValidateReportsEveryProblem (0.38s)
+--- PASS: TestRuleListOrderedByPriorityThenName (0.40s)
+--- PASS: TestAutoPrefixNameRejected (0.41s)
+--- PASS: TestAutoRuleDeletesLikeAnyOther (0.40s)
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/feeds.go
+internal/api/feeds_test.go
+internal/api/rules.go
+internal/api/rules_test.go
+internal/api/server.go
+internal/rss/ruledoc.go
+internal/store/rules.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are regenerated by `make gen` — implicitly part of the
+Files table under docs/13-testing-and-verification.md §7.1, since this task registers a second
+operation group on the Huma API and adds `auto_download` to the feed write schemas.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

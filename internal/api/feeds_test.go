@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/L-K-M/dl-tool/internal/rss"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
@@ -564,8 +566,8 @@ func TestUpsertFeedItemsIsIdempotent(t *testing.T) {
 }
 
 // TestFeedObjectShape pins the section 10.1 feed object: priority and
-// unread_count ride along, the fetch timestamps render RFC 3339, and no
-// auto_download member exists on the wire until T068 adds it.
+// unread_count ride along, the fetch timestamps render RFC 3339, and the
+// write-only auto_download member never appears on the read object.
 func TestFeedObjectShape(t *testing.T) {
 	env := newTasksTestEnv(t)
 
@@ -859,19 +861,181 @@ func TestMarkAllFeedItemsReadIsIdempotent(t *testing.T) {
 	assertProblem(t, response, http.StatusNotFound, SlugNotFound)
 }
 
-// TestAutoDownloadIsRejectedUntilT068 pins the interim wire behaviour of
-// the deferral register: auto_download is absent from both write schemas,
-// so a sender gets 422 under additionalProperties: false on POST and on
-// PATCH — never a silent no-op.
-func TestAutoDownloadIsRejectedUntilT068(t *testing.T) {
+// autoRuleDocument decodes the stored definition_json of the
+// auto:<feed_id> rule, so a test can assert the document the lifecycle
+// built rather than only the mirrored columns.
+func (e *tasksTestEnv) autoRuleDocument(t *testing.T, feedID string) rss.RuleDoc {
+	t.Helper()
+
+	rule, err := store.RuleByName(t.Context(), e.db, autoRuleName(feedID))
+	if err != nil {
+		t.Fatalf("resolve %s: %v", autoRuleName(feedID), err)
+	}
+	var doc rss.RuleDoc
+	if err := json.Unmarshal([]byte(rule.DefinitionJSON), &doc); err != nil {
+		t.Fatalf("decode definition_json of %s: %v", rule.ID, err)
+	}
+
+	return doc
+}
+
+// TestAutoDownloadCreatesAutoRule pins the doc 05 section 10.1 lifecycle:
+// POST /feeds with auto_download: true stores an enabled rule named
+// auto:<feed_id>, scoped to the feed's url, with an empty match block that
+// passes every item and an omitted action.destination — while the feed
+// object itself still carries no auto_download member on read.
+func TestAutoDownloadCreatesAutoRule(t *testing.T) {
 	env := newTasksTestEnv(t)
 
 	response := env.createFeed(t, map[string]any{
 		"url": "https://archlinux.org/feeds/releases/", "auto_download": true,
 	})
-	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "auto_download") {
+		t.Errorf("feed object carries the write-only member on read: %s", response.Body.String())
+	}
+	feedID := decodeFeedBody(t, response).ID
+
+	rule, err := store.RuleByName(t.Context(), env.db, autoRuleName(feedID))
+	if err != nil {
+		t.Fatalf("resolve %s: %v", autoRuleName(feedID), err)
+	}
+	if !rule.Enabled || rule.Priority != 0 {
+		t.Errorf("rule = %+v, want enabled with priority 0", rule)
+	}
+
+	doc := env.autoRuleDocument(t, feedID)
+	if len(doc.Feeds) != 1 || doc.Feeds[0] != "https://archlinux.org/feeds/releases/" {
+		t.Errorf("feeds = %v, want the rule scoped to the feed's url", doc.Feeds)
+	}
+	if doc.Match.Mode != rss.MatchModeWildcard ||
+		len(doc.Match.AnyOf) != 0 || len(doc.Match.NoneOf) != 0 ||
+		doc.Action.Destination != "" {
+		t.Errorf("doc = %+v, want an empty match block and an omitted destination", doc)
+	}
+
+	// A feed created without the member gets no rule.
+	plainID := env.seedFeed(t, "https://debian.org/feeds/")
+	if _, err := store.RuleByName(t.Context(), env.db, autoRuleName(plainID)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("plain feed gained an auto rule: %v", err)
+	}
+}
+
+// TestPatchAutoDownloadFalseDeletesAutoRule pins the PATCH half of the
+// lifecycle: true creates the rule when none carries the name — idempotent
+// across repeats and scoped to the post-patch url — and an explicit false
+// deletes it, so a misticked box is undone without deleting the feed.
+func TestPatchAutoDownloadFalseDeletesAutoRule(t *testing.T) {
+	env := newTasksTestEnv(t)
+	ctx := t.Context()
 
 	feedID := env.seedFeed(t, "https://archlinux.org/feeds/releases/")
+	response := env.patchFeed(t, feedID, map[string]any{"auto_download": true})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if _, err := store.RuleByName(ctx, env.db, autoRuleName(feedID)); err != nil {
+		t.Fatalf("auto rule missing after auto_download: true: %v", err)
+	}
+
+	// A repeated true is idempotent: one auto: rule, never two.
+	response = env.patchFeed(t, feedID, map[string]any{"auto_download": true})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var count int
+	if err := env.db.GetContext(
+		ctx, &count, `SELECT COUNT(*) FROM rules WHERE name = ?`, autoRuleName(feedID),
+	); err != nil {
+		t.Fatalf("count auto rules: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("%d rules named %s, want exactly one", count, autoRuleName(feedID))
+	}
+
 	response = env.patchFeed(t, feedID, map[string]any{"auto_download": false})
-	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if _, err := store.RuleByName(ctx, env.db, autoRuleName(feedID)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("auto rule survived auto_download: false: %v", err)
+	}
+
+	// A false against no rule is a no-op, and a url change in the same
+	// request as true scopes the new rule to the post-patch url.
+	response = env.patchFeed(t, feedID, map[string]any{"auto_download": false})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	response = env.patchFeed(t, feedID, map[string]any{
+		"url": "https://debian.org/feeds/", "auto_download": true,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	doc := env.autoRuleDocument(t, feedID)
+	if len(doc.Feeds) != 1 || doc.Feeds[0] != "https://debian.org/feeds/" {
+		t.Errorf("feeds = %v, want the rule scoped to the post-patch url", doc.Feeds)
+	}
+}
+
+// TestPatchOmittingAutoDownloadKeepsRule pins the pointer semantics of the
+// member: a PATCH that omits auto_download — a rename, an enabled toggle —
+// leaves an existing auto: rule untouched. A plain bool would read every
+// unrelated PATCH as false and delete it.
+func TestPatchOmittingAutoDownloadKeepsRule(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.createFeed(t, map[string]any{
+		"url": "https://archlinux.org/feeds/releases/", "auto_download": true,
+	})
+	feedID := decodeFeedBody(t, response).ID
+	before := env.autoRuleDocument(t, feedID)
+
+	response = env.patchFeed(t, feedID, map[string]any{"title": "renamed", "enabled": false})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	rule, err := store.RuleByName(t.Context(), env.db, autoRuleName(feedID))
+	if err != nil {
+		t.Fatalf("auto rule lost to an unrelated PATCH: %v", err)
+	}
+	if rule.DefinitionJSON != mustMarshalRuleDoc(t, before) {
+		t.Error("an auto_download-omitting PATCH rewrote the auto rule document")
+	}
+}
+
+// mustMarshalRuleDoc re-encodes a decoded document for a byte comparison
+// against the stored column.
+func mustMarshalRuleDoc(t *testing.T, doc rss.RuleDoc) string {
+	t.Helper()
+
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal rule document: %v", err)
+	}
+
+	return string(raw)
+}
+
+// TestDeleteFeedRemovesAutoRule pins the delete order of doc 05 section
+// 10.1: the auto:<feed_id> rule is gone after DELETE /feeds/{id} — no
+// orphaned auto: rule can outlive its feed.
+func TestDeleteFeedRemovesAutoRule(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.createFeed(t, map[string]any{
+		"url": "https://archlinux.org/feeds/releases/", "auto_download": true,
+	})
+	feedID := decodeFeedBody(t, response).ID
+
+	response = env.deleteFeed(t, feedID)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusNoContent, response.Body.String())
+	}
+	if _, err := store.RuleByName(t.Context(), env.db, autoRuleName(feedID)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("auto rule outlived its feed: %v", err)
+	}
 }

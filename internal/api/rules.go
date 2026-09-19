@@ -1,0 +1,373 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/jmoiron/sqlx"
+
+	"github.com/L-K-M/dl-tool/internal/rss"
+	"github.com/L-K-M/dl-tool/internal/store"
+)
+
+const (
+	operationListRules  = "list-rules"
+	operationCreateRule = "create-rule"
+	operationPatchRule  = "patch-rule"
+	operationDeleteRule = "delete-rule"
+
+	ruleConflictDetail = "a rule with that name already exists"
+	ruleNameDetail     = "definition.name must equal the request's name"
+	ruleAutoNameDetail = "names beginning auto: are reserved for the feed auto-download lifecycle"
+
+	// autoRulePrefix is the reserved name prefix of doc 05 section 10.1's
+	// feed lifecycle: auto:<feed_id> rules are created and removed by the
+	// /feeds write paths, so a user-authored rule can never carry the name
+	// and be silently adopted.
+	autoRulePrefix = "auto:"
+)
+
+// RuleDTO is the rule object of docs/05-api-contract.md section 10.2:
+// name, enabled and priority are the mirrored columns, definition is the
+// stored document, and the timestamps render RFC 3339 or null.
+type RuleDTO struct {
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	Enabled     bool        `json:"enabled"`
+	Priority    int         `json:"priority"`
+	Definition  rss.RuleDoc `json:"definition"`
+	LastMatchAt *string     `json:"last_match_at" format:"date-time"`
+	CreatedAt   string      `json:"created_at"    format:"date-time"`
+	UpdatedAt   string      `json:"updated_at"    format:"date-time"`
+}
+
+// CreateRuleInput is the JSON body of POST /rules: the document in the
+// definition member, never a YAML string (doc 05 section 10.2).
+type CreateRuleInput struct {
+	Body struct {
+		Name       string      `json:"name"       required:"true" minLength:"1" doc:"Unique rule name; names beginning auto: are reserved"`
+		Definition rss.RuleDoc `json:"definition" required:"true"               doc:"The rule document; its name must equal the body's name"`
+	}
+}
+
+// PatchRuleInput addresses one rule by id. The body fields are pointers: an
+// omitted field is nil and stays untouched. A provided definition replaces
+// the whole document; provided name, enabled and priority members merge
+// onto it so the stored document and the mirrored columns cannot diverge.
+type PatchRuleInput struct {
+	ID   string `path:"id" doc:"The rul_ id of the rule"`
+	Body struct {
+		Name       *string      `json:"name,omitempty"       doc:"Rename; a duplicate is 409 and an auto: rename is 422"`
+		Enabled    *bool        `json:"enabled,omitempty"`
+		Priority   *int         `json:"priority,omitempty"`
+		Definition *rss.RuleDoc `json:"definition,omitempty" doc:"Replacement rule document"`
+	}
+}
+
+// DeleteRuleInput addresses one rule by id.
+type DeleteRuleInput struct {
+	ID string `path:"id" doc:"The rul_ id of the rule"`
+}
+
+// ListRulesOutput is the GET /rules body.
+type ListRulesOutput struct {
+	Body struct {
+		Rules []RuleDTO `json:"rules"`
+	}
+}
+
+// RuleOutput carries 201 from Create and 200 from Patch.
+type RuleOutput struct {
+	Status int `json:"-"`
+	Body   RuleDTO
+}
+
+// RuleHandlers owns the rule CRUD of docs/05-api-contract.md section 10.2
+// over the rules table.
+type RuleHandlers struct {
+	db *sqlx.DB
+}
+
+// NewRuleHandlers builds the rule handlers over db.
+func NewRuleHandlers(db *sqlx.DB) *RuleHandlers {
+	return &RuleHandlers{db: db}
+}
+
+// Register mounts the four operations on the Huma API;
+// Server.registerOperations is the call site.
+func (h *RuleHandlers) Register(hapi huma.API) {
+	huma.Register(hapi, huma.Operation{
+		OperationID: operationListRules,
+		Method:      http.MethodGet,
+		Path:        "/rules",
+		Summary:     "List the rules",
+		Description: "Every rule ordered by (priority, name) — the evaluation order — each carrying its stored rule document.",
+		Tags:        []string{"rules"},
+		Security:    credentialRequired,
+		// Same strictness as every other operation: a mistyped query key
+		// is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, h.List)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID:   operationCreateRule,
+		Method:        http.MethodPost,
+		Path:          "/rules",
+		DefaultStatus: http.StatusCreated,
+		Summary:       "Create a rule",
+		Description:   "Stores one validated rule document; every malformed member is rejected at save time with an errors[] entry naming it — a malformed episode.filter is never accepted and silently ignored at match time. A duplicate name is 409 /problems/conflict and an auto:-prefixed name is 422: the prefix is the feed lifecycle's.",
+		Tags:          []string{"rules"},
+		Security:      credentialRequired,
+		// Same strictness as every other operation: a mistyped query key
+		// is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, h.Create)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: operationPatchRule,
+		Method:      http.MethodPatch,
+		Path:        "/rules/{id}",
+		Summary:     "Update a rule",
+		Description: "Partial update of name, enabled, priority and definition; omitted fields are untouched. A provided definition is re-validated like a create's, so a malformed document can never replace a stored one. Renaming onto an existing name is 409 /problems/conflict; renaming onto an auto:-prefixed name is 422.",
+		Tags:        []string{"rules"},
+		Security:    credentialRequired,
+		// Same strictness as every other operation: a mistyped query key
+		// is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, h.Patch)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID:   operationDeleteRule,
+		Method:        http.MethodDelete,
+		Path:          "/rules/{id}",
+		DefaultStatus: http.StatusNoContent,
+		Summary:       "Delete a rule",
+		Description:   "Removes the rule row. An auto:<feed_id> rule deletes like any other — this is how an operator disables a feed's auto-download without touching the feed.",
+		Tags:          []string{"rules"},
+		Security:      credentialRequired,
+		// Same strictness as every other operation: a mistyped query key
+		// is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, h.Delete)
+}
+
+// List serves GET /rules: every rule in evaluation order, definition
+// decoded from its stored JSON.
+func (h *RuleHandlers) List(ctx context.Context, _ *struct{}) (*ListRulesOutput, error) {
+	rows, err := store.ListRules(ctx, h.db, false)
+	if err != nil {
+		return nil, internalFailure(ctx, "list rules", err)
+	}
+
+	output := &ListRulesOutput{}
+	output.Body.Rules = make([]RuleDTO, 0, len(rows))
+	for _, row := range rows {
+		dto, err := ruleDTO(row)
+		if err != nil {
+			return nil, internalFailure(ctx, "decode rule", err)
+		}
+		output.Body.Rules = append(output.Body.Rules, dto)
+	}
+
+	return output, nil
+}
+
+// Create serves POST /rules. The name checks run before the document's:
+// an auto: prefix is the feed lifecycle's and a definition.name must equal
+// the body's name, so a stored rule and its document can never carry two
+// names. Then ApplyDefaults and Validate produce one errors[] entry per
+// malformed member, and the stored definition_json is the compact marshal
+// of the defaulted document — so what round-trips is exactly what was
+// validated.
+func (h *RuleHandlers) Create(ctx context.Context, in *CreateRuleInput) (*RuleOutput, error) {
+	if strings.HasPrefix(in.Body.Name, autoRulePrefix) {
+		return nil, ruleFieldProblem("body.name", ruleAutoNameDetail)
+	}
+	doc := in.Body.Definition
+	if doc.Name != in.Body.Name {
+		return nil, ruleFieldProblem("body.definition.name", ruleNameDetail)
+	}
+
+	doc.ApplyDefaults()
+	if errs := doc.Validate(); len(errs) > 0 {
+		return nil, ruleValidationProblem(errs)
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return nil, internalFailure(ctx, "encode rule document", err)
+	}
+
+	rule := store.Rule{
+		ID:             store.NewID(store.PrefixRule),
+		Name:           in.Body.Name,
+		Enabled:        *doc.Enabled,
+		Priority:       doc.Priority,
+		DefinitionJSON: string(raw),
+	}
+	if err := store.CreateRule(ctx, h.db, rule); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return nil, Problem(SlugConflict, http.StatusConflict, ruleConflictDetail)
+		}
+
+		return nil, internalFailure(ctx, "create rule", err)
+	}
+
+	// Read back so the answer carries the timestamps the insert stamped.
+	created, err := store.RuleByID(ctx, h.db, rule.ID)
+	if err != nil {
+		return nil, internalFailure(ctx, "read back rule", err)
+	}
+	dto, err := ruleDTO(created)
+	if err != nil {
+		return nil, internalFailure(ctx, "decode rule", err)
+	}
+
+	return &RuleOutput{Status: http.StatusCreated, Body: dto}, nil
+}
+
+// Patch serves PATCH /rules/{id}. The effective document is the submitted
+// definition or the stored one; the provided top-level members then merge
+// onto it — name, enabled and priority are the mirrored columns, so the
+// stored document is rewritten to match them before Validate. Renaming
+// onto an auto:-prefixed name is 422 while echoing an auto: rule's own
+// name stays legal: the reservation covers creates and renames, never
+// edits.
+func (h *RuleHandlers) Patch(ctx context.Context, in *PatchRuleInput) (*RuleOutput, error) {
+	rule, err := store.RuleByID(ctx, h.db, in.ID)
+	if err != nil {
+		return nil, FromStore(err)
+	}
+
+	var doc rss.RuleDoc
+	if err := json.Unmarshal([]byte(rule.DefinitionJSON), &doc); err != nil {
+		return nil, internalFailure(ctx, "decode stored rule", err)
+	}
+	if in.Body.Definition != nil {
+		doc = *in.Body.Definition
+		if in.Body.Name != nil && doc.Name != *in.Body.Name {
+			return nil, ruleFieldProblem("body.definition.name", ruleNameDetail)
+		}
+	}
+
+	effectiveName := rule.Name
+	switch {
+	case in.Body.Name != nil:
+		effectiveName = *in.Body.Name
+	case in.Body.Definition != nil:
+		effectiveName = doc.Name
+	}
+	if effectiveName != rule.Name && strings.HasPrefix(effectiveName, autoRulePrefix) {
+		return nil, ruleFieldProblem("body.name", ruleAutoNameDetail)
+	}
+
+	doc.ApplyDefaults()
+	doc.Name = effectiveName
+	if in.Body.Enabled != nil {
+		*doc.Enabled = *in.Body.Enabled
+	}
+	if in.Body.Priority != nil {
+		doc.Priority = *in.Body.Priority
+	}
+	if errs := doc.Validate(); len(errs) > 0 {
+		return nil, ruleValidationProblem(errs)
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return nil, internalFailure(ctx, "encode rule document", err)
+	}
+
+	rule.Name = effectiveName
+	rule.Enabled = *doc.Enabled
+	rule.Priority = doc.Priority
+	rule.DefinitionJSON = string(raw)
+	if err := store.UpdateRule(ctx, h.db, rule); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return nil, Problem(SlugConflict, http.StatusConflict, ruleConflictDetail)
+		}
+
+		return nil, FromStore(err)
+	}
+
+	// Read back so the answer carries the updated_at the write stamped.
+	updated, err := store.RuleByID(ctx, h.db, in.ID)
+	if err != nil {
+		return nil, internalFailure(ctx, "read back rule", err)
+	}
+	dto, err := ruleDTO(updated)
+	if err != nil {
+		return nil, internalFailure(ctx, "decode rule", err)
+	}
+
+	return &RuleOutput{Status: http.StatusOK, Body: dto}, nil
+}
+
+// Delete serves DELETE /rules/{id}: the row goes — an auto:<feed_id> rule
+// deletes like any other (doc 09 section 8.1), which is how an operator
+// disables a feed's auto-download without touching the feed.
+func (h *RuleHandlers) Delete(ctx context.Context, in *DeleteRuleInput) (*struct{}, error) {
+	if err := store.DeleteRule(ctx, h.db, in.ID); err != nil {
+		return nil, FromStore(err)
+	}
+
+	return nil, nil
+}
+
+// ruleValidationProblem renders the 422 of doc 05 section 10.2: one
+// errors[] entry per FieldError, its location prefixed into the definition
+// member — episode.filter arrives as body.definition.episode.filter.
+func ruleValidationProblem(errs []rss.FieldError) error {
+	details := make([]*huma.ErrorDetail, 0, len(errs))
+	for _, fieldErr := range errs {
+		details = append(details, &huma.ErrorDetail{
+			Message:  fieldErr.Message,
+			Location: "body.definition." + fieldErr.Location,
+		})
+	}
+
+	return &huma.ErrorModel{
+		Type:   SlugValidationFailed,
+		Title:  http.StatusText(http.StatusUnprocessableEntity),
+		Status: http.StatusUnprocessableEntity,
+		Detail: "the rule document is invalid",
+		Errors: details,
+	}
+}
+
+// ruleFieldProblem is the single-member 422 the name checks produce: it
+// rides the same validation slug so a client reads one error shape.
+func ruleFieldProblem(location, detail string) error {
+	return &huma.ErrorModel{
+		Type:   SlugValidationFailed,
+		Title:  http.StatusText(http.StatusUnprocessableEntity),
+		Status: http.StatusUnprocessableEntity,
+		Detail: detail,
+		Errors: []*huma.ErrorDetail{{Message: detail, Location: location}},
+	}
+}
+
+// ruleDTO renders one store row into the section 10.2 rule object: the
+// definition member is the stored document decoded, and the millisecond
+// columns become RFC 3339 or null.
+func ruleDTO(r store.Rule) (RuleDTO, error) {
+	var doc rss.RuleDoc
+	if err := json.Unmarshal([]byte(r.DefinitionJSON), &doc); err != nil {
+		return RuleDTO{}, fmt.Errorf("decode definition of rule %s: %w", r.ID, err)
+	}
+
+	return RuleDTO{
+		ID:          r.ID,
+		Name:        r.Name,
+		Enabled:     r.Enabled,
+		Priority:    r.Priority,
+		Definition:  doc,
+		LastMatchAt: unixMilliToRFC3339(r.LastMatchAt),
+		CreatedAt:   time.UnixMilli(r.CreatedAt).UTC().Format(time.RFC3339),
+		UpdatedAt:   time.UnixMilli(r.UpdatedAt).UTC().Format(time.RFC3339),
+	}, nil
+}

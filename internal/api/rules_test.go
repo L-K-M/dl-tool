@@ -1,0 +1,529 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/L-K-M/dl-tool/internal/rss"
+	"github.com/L-K-M/dl-tool/internal/store"
+)
+
+// createRule posts one rule with the test bearer credential.
+func (e *tasksTestEnv) createRule(t *testing.T, body any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Post("/rules", body, "Authorization: Bearer "+e.bearer)
+}
+
+// getRules calls GET /rules with the test bearer credential.
+func (e *tasksTestEnv) getRules(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Get("/rules", "Authorization: Bearer "+e.bearer)
+}
+
+// patchRule patches one rule by id with the test bearer credential.
+func (e *tasksTestEnv) patchRule(t *testing.T, id string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Patch("/rules/"+id, body, "Authorization: Bearer "+e.bearer)
+}
+
+// deleteRule deletes one rule by id with the test bearer credential.
+func (e *tasksTestEnv) deleteRule(t *testing.T, id string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Delete("/rules/"+id, "Authorization: Bearer "+e.bearer)
+}
+
+// decodeRuleBody decodes the flat rule object POST and PATCH return.
+func decodeRuleBody(t *testing.T, recorder *httptest.ResponseRecorder) RuleDTO {
+	t.Helper()
+
+	var body RuleDTO
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body %q: %v", recorder.Body.String(), err)
+	}
+
+	return body
+}
+
+// decodeRuleList decodes the GET /rules envelope.
+func decodeRuleList(t *testing.T, recorder *httptest.ResponseRecorder) []RuleDTO {
+	t.Helper()
+
+	var body struct {
+		Rules []RuleDTO `json:"rules"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body %q: %v", recorder.Body.String(), err)
+	}
+
+	return body.Rules
+}
+
+// validRuleBody is one legal POST /rules body; mutate the returned maps to
+// build the invalid cases.
+func validRuleBody(name string) map[string]any {
+	return map[string]any{
+		"name": name,
+		"definition": map[string]any{
+			"name":   name,
+			"match":  map[string]any{"any_of": []string{"ubuntu *desktop*"}},
+			"action": map[string]any{"paused": true},
+		},
+	}
+}
+
+// TestRuleCrud pins doc 05 section 10.2: create returns 201 with the rule
+// object and its defaults applied, patch merges the provided members and
+// re-validates, delete is 204, and a repeated delete is 404.
+func TestRuleCrud(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.createRule(t, validRuleBody("Ubuntu LTS ISOs"))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	created := decodeRuleBody(t, response)
+	if !strings.HasPrefix(created.ID, store.PrefixRule) ||
+		created.Name != "Ubuntu LTS ISOs" ||
+		!created.Enabled ||
+		created.Priority != 0 {
+		t.Errorf("created = %+v, want the submitted fields with enabled by default", created)
+	}
+	if created.Definition.Match.Mode != rss.MatchModeWildcard ||
+		len(created.Definition.Match.Fields) != 1 ||
+		created.Definition.Match.Fields[0] != "title" ||
+		created.Definition.Enabled == nil || !*created.Definition.Enabled {
+		t.Errorf("definition = %+v, want ApplyDefaults filled mode, fields and enabled", created.Definition)
+	}
+	if created.LastMatchAt != nil {
+		t.Errorf("last_match_at = %v, want null before the first grab", *created.LastMatchAt)
+	}
+	if _, err := time.Parse(time.RFC3339, created.CreatedAt); err != nil {
+		t.Errorf("created_at = %q, want RFC 3339: %v", created.CreatedAt, err)
+	}
+
+	// The patch merges: a priority-only write keeps the stored document
+	// and mirrors the new column into it.
+	response = env.patchRule(t, created.ID, map[string]any{"priority": 10})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	patched := decodeRuleBody(t, response)
+	if patched.Priority != 10 || patched.Definition.Priority != 10 {
+		t.Errorf("patched = %+v, want priority 10 mirrored into the document", patched)
+	}
+	if !patched.Enabled || len(patched.Definition.Match.AnyOf) != 1 {
+		t.Errorf("patched = %+v, want enabled and the stored match block untouched", patched)
+	}
+
+	response = env.deleteRule(t, created.ID)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusNoContent, response.Body.String())
+	}
+	response = env.deleteRule(t, created.ID)
+	assertProblem(t, response, http.StatusNotFound, SlugNotFound)
+	response = env.patchRule(t, created.ID, map[string]any{"enabled": false})
+	assertProblem(t, response, http.StatusNotFound, SlugNotFound)
+}
+
+// TestEpisodeFilterMissingSemicolonIsRejected pins FR-074 and the doc 08
+// section 6.3 row: "1x01" — no trailing ';' — is 422 at save time with
+// errors[0].location naming the member, never a stored rule that silently
+// matches nothing. The accepted twin "1x01-;" stores, and a PATCH carrying
+// the malformed filter is re-validated exactly like a create.
+func TestEpisodeFilterMissingSemicolonIsRejected(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	body := validRuleBody("shows")
+	body["definition"].(map[string]any)["episode"] = map[string]any{"filter": "1x01"}
+	response := env.createRule(t, body)
+	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if len(problem.Errors) == 0 || problem.Errors[0].Location != "body.definition.episode.filter" {
+		t.Fatalf("errors = %+v, want errors[0].location body.definition.episode.filter", problem.Errors)
+	}
+
+	body["definition"].(map[string]any)["episode"] = map[string]any{"filter": "1x01-;"}
+	response = env.createRule(t, body)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	ruleID := decodeRuleBody(t, response).ID
+
+	response = env.patchRule(t, ruleID, map[string]any{
+		"definition": map[string]any{
+			"name":    "shows",
+			"match":   map[string]any{},
+			"action":  map[string]any{},
+			"episode": map[string]any{"filter": "2x03"},
+		},
+	})
+	problem = assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if len(problem.Errors) == 0 || problem.Errors[0].Location != "body.definition.episode.filter" {
+		t.Fatalf("patch errors = %+v, want errors[0].location body.definition.episode.filter", problem.Errors)
+	}
+}
+
+// TestEmptyPatternInNoneOfIsRejected pins the doc 08 section 4.3 trap: an
+// empty string inside none_of is qBittorrent's reject-everything typo, so
+// it is 422 at save time and never reaches the store.
+func TestEmptyPatternInNoneOfIsRejected(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	body := validRuleBody("no-daily")
+	body["definition"].(map[string]any)["match"] = map[string]any{
+		"none_of": []string{"web-dl", ""},
+	}
+	response := env.createRule(t, body)
+	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if len(problem.Errors) != 1 || problem.Errors[0].Location != "body.definition.match.none_of[1]" {
+		t.Fatalf("errors = %+v, want one entry at body.definition.match.none_of[1]", problem.Errors)
+	}
+
+	if rules := decodeRuleList(t, env.getRules(t)); len(rules) != 0 {
+		t.Errorf("rules = %+v, want the rejected document never stored", rules)
+	}
+}
+
+// TestParseEpisodeFilterNormalisesSeason pins the doc 08 section 6.1
+// normalisation qBittorrent lacks: "01x05;" parses to season 1, the three
+// token forms of section 6.2 parse, and an inverted range is skipped — not
+// an error.
+func TestParseEpisodeFilterNormalisesSeason(t *testing.T) {
+	filter, err := rss.ParseEpisodeFilter("01x05;")
+	if err != nil {
+		t.Fatalf("ParseEpisodeFilter: %v", err)
+	}
+	if filter.Season != 1 {
+		t.Errorf("season = %d, want 1 — leading zeros stripped at parse time", filter.Season)
+	}
+	if len(filter.Tokens) != 1 || filter.Tokens[0].From != 5 || filter.Tokens[0].To != 0 || filter.Tokens[0].Open {
+		t.Errorf("tokens = %+v, want one single-number token 5", filter.Tokens)
+	}
+
+	filter, err = rss.ParseEpisodeFilter("2x5;09;12-14;14-12;01-;")
+	if err != nil {
+		t.Fatalf("ParseEpisodeFilter: %v", err)
+	}
+	want := []rss.EpisodeToken{
+		{From: 5},
+		{From: 9}, // leading zeros stripped from every token
+		{From: 12, To: 14},
+		{From: 1, To: -1, Open: true},
+	}
+	if len(filter.Tokens) != len(want) {
+		t.Fatalf("tokens = %+v, want %+v — the inverted range skipped", filter.Tokens, want)
+	}
+	for i, token := range want {
+		if filter.Tokens[i] != token {
+			t.Errorf("tokens[%d] = %+v, want %+v", i, filter.Tokens[i], token)
+		}
+	}
+
+	// The empty filter is a no-op, and "1x;" parses — every token empty —
+	// because rejecting it is the matcher's job, not the parser's.
+	for _, s := range []string{"", "1x;"} {
+		if _, err := rss.ParseEpisodeFilter(s); err != nil {
+			t.Errorf("ParseEpisodeFilter(%q): %v, want nil", s, err)
+		}
+	}
+	if _, err := rss.ParseEpisodeFilter("1x01"); err == nil {
+		t.Error(`ParseEpisodeFilter("1x01") = nil error, want the missing-';' rejection`)
+	}
+}
+
+// TestValidateReportsEveryProblem pins the validator's all-at-once
+// contract: a document with three faults — a bad mode, an empty none_of
+// entry and a malformed episode.filter — yields three errors[] entries, so
+// the editor can highlight every clause in one round trip.
+func TestValidateReportsEveryProblem(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	body := validRuleBody("broken")
+	body["definition"].(map[string]any)["match"] = map[string]any{
+		"mode":    "glob",
+		"none_of": []string{""},
+	}
+	body["definition"].(map[string]any)["episode"] = map[string]any{"filter": "1x01"}
+	response := env.createRule(t, body)
+	problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	if len(problem.Errors) != 3 {
+		t.Fatalf("errors = %+v, want one entry per fault — mode, none_of[0], episode.filter", problem.Errors)
+	}
+	locations := []string{
+		problem.Errors[0].Location, problem.Errors[1].Location, problem.Errors[2].Location,
+	}
+	for _, want := range []string{
+		"body.definition.match.mode", "body.definition.match.none_of[0]", "body.definition.episode.filter",
+	} {
+		found := false
+		for _, location := range locations {
+			if location == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("errors = %+v, want an entry at %s", problem.Errors, want)
+		}
+	}
+}
+
+// TestRuleDocumentValidation pins the remaining 422s of the validator's
+// contract: an uncompilable regex, a pattern past the 1024-byte cap, a
+// score.formats list past 32 entries, an unparseable size or
+// published_after, and a content_layout outside its enum — each with the
+// field path that caused it.
+func TestRuleDocumentValidation(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	longPattern := strings.Repeat("a", 1025)
+	tooManyFormats := make([]map[string]any, 33)
+	for i := range tooManyFormats {
+		tooManyFormats[i] = map[string]any{"name": fmt.Sprintf("f%d", i), "pattern": "x", "weight": 1}
+	}
+
+	cases := []struct {
+		name     string
+		match    map[string]any
+		extra    map[string]any
+		location string
+	}{
+		{"uncompilable regex", map[string]any{"mode": "regex", "any_of": []string{"a["}}, nil, "body.definition.match.any_of[0]"},
+		{"regex in none_of", map[string]any{"mode": "regex", "none_of": []string{"(*"}}, nil, "body.definition.match.none_of[0]"},
+		{"overlong pattern", map[string]any{"any_of": []string{longPattern}}, nil, "body.definition.match.any_of[0]"},
+		{"bad min_size", map[string]any{"min_size": "1024"}, nil, "body.definition.match.min_size"},
+		{"bad max_size", map[string]any{"max_size": "8 gigs"}, nil, "body.definition.match.max_size"},
+		{"bad published_after", map[string]any{"published_after": "2026-01-01"}, nil, "body.definition.match.published_after"},
+		{"bad field", map[string]any{"fields": []string{"title", "comment"}}, nil, "body.definition.match.fields[1]"},
+		{"empty any_of entry", map[string]any{"any_of": []string{""}}, nil, "body.definition.match.any_of[0]"},
+		{"too many formats", map[string]any{}, map[string]any{"score": map[string]any{"formats": tooManyFormats}}, "body.definition.score.formats"},
+		{"bad score pattern", map[string]any{}, map[string]any{"score": map[string]any{"formats": []map[string]any{{"name": "x", "pattern": "a[", "weight": 1}}}}, "body.definition.score.formats[0].pattern"},
+		{"bad content_layout", map[string]any{}, map[string]any{"action": map[string]any{"content_layout": "flat"}}, "body.definition.action.content_layout"},
+	}
+	for _, tc := range cases {
+		body := validRuleBody("case-" + tc.name)
+		definition := body["definition"].(map[string]any)
+		definition["match"] = tc.match
+		for key, value := range tc.extra {
+			definition[key] = value
+		}
+		response := env.createRule(t, body)
+		problem := assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+		if len(problem.Errors) == 0 || problem.Errors[0].Location != tc.location {
+			t.Errorf("%s: errors = %+v, want an entry at %s", tc.name, problem.Errors, tc.location)
+		}
+	}
+
+	// The documented boundary values pass: every enum value, an IEC size
+	// of each unit, a 1024-byte pattern and exactly 32 formats.
+	formats := make([]map[string]any, 32)
+	for i := range formats {
+		formats[i] = map[string]any{"name": fmt.Sprintf("f%d", i), "pattern": "x", "weight": 1}
+	}
+	body := validRuleBody("boundary")
+	body["definition"].(map[string]any)["match"] = map[string]any{
+		"mode": "plain", "fields": []string{"title", "description", "category"},
+		"any_of":   []string{strings.Repeat("a", 1024)},
+		"min_size": "1KiB", "max_size": "8GiB", "published_after": "2026-01-01T00:00:00Z",
+	}
+	body["definition"].(map[string]any)["score"] = map[string]any{"minimum": -10, "formats": formats}
+	body["definition"].(map[string]any)["action"] = map[string]any{"content_layout": "no_subfolder"}
+	body["definition"].(map[string]any)["episode"] = map[string]any{"filter": "1x01-;", "smart": true}
+	body["definition"].(map[string]any)["throttle"] = map[string]any{"cooldown_days": 3, "max_per_run": 5}
+	response := env.createRule(t, body)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+}
+
+// TestDuplicateRuleNameConflicts pins the 409 of doc 05 section 10.2: a
+// name already taken conflicts on create and on rename — never a silent
+// merge.
+func TestDuplicateRuleNameConflicts(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.createRule(t, validRuleBody("taken"))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	second := decodeRuleBody(t, env.createRule(t, validRuleBody("second")))
+
+	response = env.createRule(t, validRuleBody("taken"))
+	assertProblem(t, response, http.StatusConflict, SlugConflict)
+
+	response = env.patchRule(t, second.ID, map[string]any{"name": "taken"})
+	assertProblem(t, response, http.StatusConflict, SlugConflict)
+
+	if rules := decodeRuleList(t, env.getRules(t)); len(rules) != 2 {
+		t.Errorf("rules = %+v, want both rows intact", rules)
+	}
+}
+
+// TestRuleListOrderedByPriorityThenName pins the evaluation order of doc
+// 08 section 5: priority ascending, name ascending inside a tie.
+func TestRuleListOrderedByPriorityThenName(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	for _, seed := range []struct {
+		name     string
+		priority int
+	}{
+		{"zebra", 0}, {"alpha", 10}, {"middle", 10}, {"first", -5},
+	} {
+		body := validRuleBody(seed.name)
+		body["definition"].(map[string]any)["priority"] = seed.priority
+		response := env.createRule(t, body)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("seed %s: status = %d; body %s", seed.name, response.Code, response.Body.String())
+		}
+	}
+
+	rules := decodeRuleList(t, env.getRules(t))
+	if len(rules) != 4 {
+		t.Fatalf("rules = %+v, want the four seeds", rules)
+	}
+	order := []string{rules[0].Name, rules[1].Name, rules[2].Name, rules[3].Name}
+	if order[0] != "first" || order[1] != "zebra" || order[2] != "alpha" || order[3] != "middle" {
+		t.Errorf("order = %v, want [first(-5) zebra(0) alpha(10) middle(10)]", order)
+	}
+}
+
+// TestStoredDefinitionRoundTrips pins the storage contract: what lands in
+// rules.definition_json is the compact marshal of the validated document,
+// so reading it back through RuleDoc and re-encoding it is a fixed point —
+// no field silently drops or mutates.
+func TestStoredDefinitionRoundTrips(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.createRule(t, validRuleBody("roundtrip"))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	ruleID := decodeRuleBody(t, response).ID
+
+	var stored string
+	if err := env.db.GetContext(
+		t.Context(), &stored, `SELECT definition_json FROM rules WHERE id = ?`, ruleID,
+	); err != nil {
+		t.Fatalf("read definition_json: %v", err)
+	}
+	var doc rss.RuleDoc
+	if err := json.Unmarshal([]byte(stored), &doc); err != nil {
+		t.Fatalf("stored definition_json does not decode: %v", err)
+	}
+	reencoded, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if string(reencoded) != stored {
+		t.Errorf("round trip changed the document: stored %s, re-encoded %s", stored, reencoded)
+	}
+}
+
+// TestRuleNameMismatchRejected pins the mirrored-name rule of the task:
+// definition.name must equal the request's name, so a document smuggling a
+// second name is 422 on create and on patch.
+func TestRuleNameMismatchRejected(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	body := validRuleBody("outer")
+	body["definition"].(map[string]any)["name"] = "inner"
+	response := env.createRule(t, body)
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	ruleID := decodeRuleBody(t, env.createRule(t, validRuleBody("outer"))).ID
+	response = env.patchRule(t, ruleID, map[string]any{
+		"name":       "outer-renamed",
+		"definition": map[string]any{"name": "different"},
+	})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+}
+
+// TestAutoPrefixNameRejected pins the reserved namespace of doc 05 section
+// 10.1: POST /rules answers 422 to an auto:-prefixed name, PATCH answers
+// 422 to one that differs from the stored name — covering creates and
+// renames — while echoing an auto: rule's own name or omitting name
+// entirely stays legal.
+func TestAutoPrefixNameRejected(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	response := env.createRule(t, validRuleBody("auto:fed_01JKQ7AAAA"))
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	ruleID := decodeRuleBody(t, env.createRule(t, validRuleBody("mine"))).ID
+	response = env.patchRule(t, ruleID, map[string]any{"name": "auto:fed_01JKQ7BBBB"})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	response = env.patchRule(t, ruleID, map[string]any{
+		"definition": map[string]any{"name": "auto:fed_01JKQ7CCCC"},
+	})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	// A rule that already carries an auto: name — seeded by the feed
+	// lifecycle — is edited like any other: echoing its own name and
+	// omitting name entirely both stay legal.
+	feedResponse := env.createFeed(t, map[string]any{
+		"url": "https://archlinux.org/feeds/releases/", "auto_download": true,
+	})
+	feedID := decodeFeedBody(t, feedResponse).ID
+	autoRule, err := store.RuleByName(t.Context(), env.db, autoRuleName(feedID))
+	if err != nil {
+		t.Fatalf("resolve auto rule: %v", err)
+	}
+
+	response = env.patchRule(t, autoRule.ID, map[string]any{"name": autoRuleName(feedID)})
+	if response.Code != http.StatusOK {
+		t.Fatalf("echo status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	response = env.patchRule(t, autoRule.ID, map[string]any{"enabled": false})
+	if response.Code != http.StatusOK {
+		t.Fatalf("toggle status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if patched := decodeRuleBody(t, response); patched.Enabled {
+		t.Error("enabled toggle on an auto: rule did not apply")
+	}
+}
+
+// TestAutoRuleDeletesLikeAnyOther pins doc 09 section 8.1: DELETE
+// /rules/{id} on an auto: rule is 204 — the operator's way to disable
+// auto-download without touching the feed — and a later PATCH
+// auto_download: true recreates it.
+func TestAutoRuleDeletesLikeAnyOther(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	feedResponse := env.createFeed(t, map[string]any{
+		"url": "https://archlinux.org/feeds/releases/", "auto_download": true,
+	})
+	feedID := decodeFeedBody(t, feedResponse).ID
+	autoRule, err := store.RuleByName(t.Context(), env.db, autoRuleName(feedID))
+	if err != nil {
+		t.Fatalf("resolve auto rule: %v", err)
+	}
+
+	response := env.deleteRule(t, autoRule.ID)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusNoContent, response.Body.String())
+	}
+	if _, err := store.RuleByName(t.Context(), env.db, autoRuleName(feedID)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("auto rule survived its delete: %v", err)
+	}
+
+	response = env.patchFeed(t, feedID, map[string]any{"auto_download": true})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	recreated, err := store.RuleByName(t.Context(), env.db, autoRuleName(feedID))
+	if err != nil {
+		t.Fatalf("auto rule not recreated: %v", err)
+	}
+	if recreated.ID == autoRule.ID {
+		t.Error("recreated rule kept the deleted row's id, want a fresh rul_ id")
+	}
+}

@@ -516,6 +516,54 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/rules": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the rules
+     * @description Every rule ordered by (priority, name) — the evaluation order — each carrying its stored rule document.
+     */
+    get: operations["list-rules"];
+    put?: never;
+    /**
+     * Create a rule
+     * @description Stores one validated rule document; every malformed member is rejected at save time with an errors[] entry naming it — a malformed episode.filter is never accepted and silently ignored at match time. A duplicate name is 409 /problems/conflict and an auto:-prefixed name is 422: the prefix is the feed lifecycle's.
+     */
+    post: operations["create-rule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/rules/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete a rule
+     * @description Removes the rule row. An auto:<feed_id> rule deletes like any other — this is how an operator disables a feed's auto-download without touching the feed.
+     */
+    delete: operations["delete-rule"];
+    options?: never;
+    head?: never;
+    /**
+     * Update a rule
+     * @description Partial update of name, enabled, priority and definition; omitted fields are untouched. A provided definition is re-validated like a create's, so a malformed document can never replace a stored one. Renaming onto an existing name is 409 /problems/conflict; renaming onto an auto:-prefixed name is 422.
+     */
+    patch: operations["patch-rule"];
+    trace?: never;
+  };
   "/search": {
     parameters: {
       query?: never;
@@ -812,6 +860,13 @@ export interface components {
       /** @description A problem slug; set only when ok is false */
       type?: string;
     };
+    ActionSpec: {
+      category?: string;
+      content_layout?: string;
+      destination?: string;
+      engine?: string;
+      paused?: boolean;
+    };
     ActionsInputBody: {
       /**
        * @description The action applied to every id
@@ -871,6 +926,8 @@ export interface components {
       save_path: string;
     };
     CreateFeedInputBody: {
+      /** @description true creates the auto:<feed_id> rule that grabs every item of this feed */
+      auto_download?: boolean;
       /** @description Default true */
       enabled?: boolean;
       /**
@@ -920,6 +977,12 @@ export interface components {
        * @description Torznab/Newznab base URL
        */
       url?: string;
+    };
+    CreateRuleInputBody: {
+      /** @description The rule document; its name must equal the body's name */
+      definition: components["schemas"]["RuleDoc"];
+      /** @description Unique rule name; names beginning auto: are reserved */
+      name: string;
     };
     CreateTasksBody: {
       /** @description Category name; must already exist */
@@ -1028,6 +1091,11 @@ export interface components {
       name: string;
       path: string;
       writable: boolean;
+    };
+    EpisodeSpec: {
+      allow_repack_proper?: boolean;
+      filter?: string;
+      smart?: boolean;
     };
     ErrorDetail: {
       /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -1228,6 +1296,9 @@ export interface components {
     ListIndexersOutputBody: {
       indexers: components["schemas"]["IndexerDTO"][] | null;
     };
+    ListRulesOutputBody: {
+      rules: components["schemas"]["RuleDTO"][] | null;
+    };
     ListTagsOutputBody: {
       tags: components["schemas"]["TagDTO"][] | null;
     };
@@ -1309,6 +1380,16 @@ export interface components {
       /** @description true marks read, false marks unread */
       read: boolean | null;
     };
+    MatchSpec: {
+      any_of?: string[] | null;
+      case_sensitive?: boolean;
+      fields?: string[] | null;
+      max_size?: string;
+      min_size?: string;
+      mode?: string;
+      none_of?: string[] | null;
+      published_after?: string;
+    };
     MkdirInputBody: {
       /** @description Single new path component — never a path itself */
       name: string;
@@ -1326,6 +1407,8 @@ export interface components {
       save_path?: string;
     };
     PatchFeedInputBody: {
+      /** @description true creates the auto:<feed_id> rule, false deletes it */
+      auto_download?: boolean;
       enabled?: boolean;
       /** Format: int64 */
       item_cap?: number;
@@ -1353,6 +1436,15 @@ export interface components {
       };
       /** Format: uri */
       url?: string;
+    };
+    PatchRuleInputBody: {
+      /** @description Replacement rule document */
+      definition?: components["schemas"]["RuleDoc"];
+      enabled?: boolean;
+      /** @description Rename; a duplicate is 409 and an auto: rename is 422 */
+      name?: string;
+      /** Format: int64 */
+      priority?: number;
     };
     PatchTaskBody: {
       /** @description Category name; must already exist */
@@ -1419,6 +1511,43 @@ export interface components {
     };
     RootsOutputBody: {
       roots: components["schemas"]["FSRoot"][] | null;
+    };
+    RuleDTO: {
+      /** Format: date-time */
+      created_at: string;
+      definition: components["schemas"]["RuleDoc"];
+      enabled: boolean;
+      id: string;
+      /** Format: date-time */
+      last_match_at: string | null;
+      name: string;
+      /** Format: int64 */
+      priority: number;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    RuleDoc: {
+      action: components["schemas"]["ActionSpec"];
+      enabled?: boolean;
+      episode?: components["schemas"]["EpisodeSpec"];
+      feeds?: string[] | null;
+      match: components["schemas"]["MatchSpec"];
+      name: string;
+      /** Format: int64 */
+      priority?: number;
+      score?: components["schemas"]["ScoreSpec"];
+      throttle?: components["schemas"]["ThrottleSpec"];
+    };
+    ScoreFormat: {
+      name: string;
+      pattern: string;
+      /** Format: int64 */
+      weight: number;
+    };
+    ScoreSpec: {
+      formats?: components["schemas"]["ScoreFormat"][] | null;
+      /** Format: int64 */
+      minimum?: number;
     };
     SearchJobOutputBody: {
       /** @description One entry per selected indexer: queued, searching, done or error */
@@ -1632,6 +1761,12 @@ export interface components {
       error: string | null;
       ok: boolean;
       server: string;
+    };
+    ThrottleSpec: {
+      /** Format: int64 */
+      cooldown_days?: number;
+      /** Format: int64 */
+      max_per_run?: number;
     };
     TrackerDTO: {
       message: string;
@@ -2737,6 +2872,134 @@ export interface operations {
           "application/json": {
             [key: string]: unknown;
           };
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-rules": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListRulesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateRuleInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RuleDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The rul_ id of the rule */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The rul_ id of the rule */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PatchRuleInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RuleDTO"];
         };
       };
       /** @description Error */
