@@ -345,6 +345,15 @@ func TestDryRunPagesPastTheStorePageLimit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 250, report.Evaluated)
+	require.Len(t, report.Results, 250)
+	// Every seeded item exactly once: a boundary skip or a mid-page
+	// duplicate would both pass the endpoint-only assertions.
+	seen := make(map[string]bool, len(report.Results))
+	for _, row := range report.Results {
+		require.False(t, seen[row.Title], "item %q appears more than once", row.Title)
+		seen[row.Title] = true
+	}
+	require.Len(t, seen, 250)
 	// Newest first across the merged pages.
 	require.Equal(t, "ubuntu p249", report.Results[0].Title)
 	require.Equal(t, "ubuntu p0", report.Results[249].Title)
