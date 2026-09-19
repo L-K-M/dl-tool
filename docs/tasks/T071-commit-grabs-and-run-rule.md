@@ -226,9 +226,11 @@ Evidence to rerun before ruling, observed on this branch:
   `rss_poll` job's poller; `internal/api/feeds.go` builds the refresh endpoint's. The feeds.go
   site is editable but `NewFeedHandlers(db, hc, parser, log)` receives no `*TaskHandlers` and its
   own call site is server.go, so even it cannot construct `ruleTaskCreator`.
-- `grep -n "server.go\|main.go" docs/tasks/T07*.md` — within M5, T072 and T073 are web-only and
+- `grep -n "server.go\|main.go" docs/tasks/T*.md` — within M5, T072 and T073 are web-only and
   own neither file; the first `main.go` owners are T074/T076/T077/T079 and the first `server.go`
-  owners T080+, all in later milestones. So inside M5 the wiring has no carrier, and the M5 exit
+  owners T080+, all in later milestones. Read ownership from `## Files` tables only — prose
+  mentions (this file's `## Blocked` section included) also match the grep. So inside M5 the
+  wiring has no carrier, and the M5 exit
   checkpoint itself — docs/00-INDEX.md, "a rule auto-downloads the Arch Linux release feed" —
   cannot pass until it lands. Same defect class as the recorded findings F342 (T083's
   `TaskCreator`), F087, F162 and F263 — unwired constructors the plan review already counts as
@@ -244,9 +246,10 @@ Remedy — the owner picks one:
 1. Widen this task's `## Files` table with `internal/api/server.go` and `cmd/dl-tool/main.go`:
    hoist `NewTaskHandlers` into a local before the `Server` literal so `NewRuleHandlers` (for
    `RunRule`) and `NewFeedHandlers` (for the refresh poller's creator) can receive it or a
-   `ruleTaskCreator` built from it, and in main.go pass `rss.NewParser(time.Now)` plus the
-   creator — e.g. an exported accessor on `*api.Server` — to `NewPoller`. One pass then closes
-   T067's parser deferral and this task's wiring together.
+   `ruleTaskCreator` built from it, and pass `rss.NewParser(time.Now)` at both `NewPoller` call
+   sites — server.go's `NewFeedHandlers` argument and main.go's `rss_poll` job — plus the
+   creator, e.g. an exported accessor on `*api.Server`, to the main.go poller. One pass then
+   closes both halves of T067's parser deferral and this task's wiring together.
 2. Keep the table and name a new carrier task owning server.go and main.go that lands before the
    M5 exit checkpoint; T071 would then ship the seams nil-gated and documented as unwired like
    T067's parser — but the nil-creator behaviour of the registered `POST /rules/{id}/run` still
