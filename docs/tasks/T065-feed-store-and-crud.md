@@ -285,8 +285,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	140.669s
-ok  	github.com/L-K-M/dl-tool/internal/store	78.188s
+ok  	github.com/L-K-M/dl-tool/internal/api	149.843s
+ok  	github.com/L-K-M/dl-tool/internal/store	78.896s
 FEEDS_OK
 ```
 
@@ -297,19 +297,19 @@ The named acceptance tests, run with the verbose reporter:
 
 ```
 $ go test -count=1 -v -run 'TestFeedCrud|TestDuplicateFeedURLConflicts|TestFeedValidation|TestFeedItemsPagingNewestFirst|TestDeleteFeedCascadesItems|TestUpsertFeedItemsIsIdempotent|TestFeedObjectShape|TestCredentialFeedURLIsRedacted|TestUnreadFilterMatchesReadColumn|TestMarkFeedItemsRead|TestMarkAllFeedItemsReadIsIdempotent|TestAutoDownloadIsRejectedUntilT068' ./internal/api/
---- PASS: TestFeedCrud (0.37s)
---- PASS: TestDuplicateFeedURLConflicts (0.14s)
---- PASS: TestFeedValidation (0.06s)
+--- PASS: TestFeedCrud (0.08s)
+--- PASS: TestDuplicateFeedURLConflicts (0.03s)
+--- PASS: TestFeedValidation (0.05s)
 --- PASS: TestFeedItemsPagingNewestFirst (0.03s)
---- PASS: TestDeleteFeedCascadesItems (0.03s)
+--- PASS: TestDeleteFeedCascadesItems (0.04s)
 --- PASS: TestUpsertFeedItemsIsIdempotent (0.03s)
---- PASS: TestFeedObjectShape (0.05s)
+--- PASS: TestFeedObjectShape (0.03s)
 --- PASS: TestCredentialFeedURLIsRedacted (0.03s)
 --- PASS: TestUnreadFilterMatchesReadColumn (0.03s)
 --- PASS: TestMarkFeedItemsRead (0.03s)
 --- PASS: TestMarkAllFeedItemsReadIsIdempotent (0.03s)
 --- PASS: TestAutoDownloadIsRejectedUntilT068 (0.03s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.912s
+ok  	github.com/L-K-M/dl-tool/internal/api	0.487s
 ```
 
 Scope check — the prescribed working-tree listing, plus the branch-relative diff that covers

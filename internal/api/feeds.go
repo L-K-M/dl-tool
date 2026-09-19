@@ -98,7 +98,7 @@ type CreateFeedInput struct {
 type PatchFeedInput struct {
 	ID   string `path:"id" doc:"The fed_ id of the feed"`
 	Body struct {
-		URL              *string `json:"url,omitempty"              minLength:"1"`
+		URL              *string `json:"url,omitempty"              minLength:"1" doc:"http or https feed URL; resubmitting a __redacted__ rendering leaves the stored url unchanged"`
 		Title            *string `json:"title,omitempty"`
 		Enabled          *bool   `json:"enabled,omitempty"`
 		RefreshIntervalS *int    `json:"refresh_interval_s,omitempty" minimum:"0"`
@@ -552,7 +552,7 @@ func feedDTO(f store.Feed) FeedDTO {
 // secure.RedactError; this is the read-side backstop for any error that
 // still carries the raw address.
 func scrubFeedLastError(lastError *string, rawURL string) *string {
-	if lastError == nil || !strings.Contains(*lastError, rawURL) {
+	if lastError == nil || rawURL == "" || !strings.Contains(*lastError, rawURL) {
 		return lastError
 	}
 

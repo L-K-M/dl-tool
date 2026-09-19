@@ -1314,6 +1314,7 @@ export interface components {
       /** Format: int64 */
       refresh_interval_s?: number;
       title?: string;
+      /** @description http or https feed URL; resubmitting a __redacted__ rendering leaves the stored url unchanged */
       url?: string;
     };
     PatchIndexerInputBody: {

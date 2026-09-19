@@ -666,6 +666,23 @@ func TestCredentialFeedURLIsRedacted(t *testing.T) {
 		t.Errorf("stored url = %q after a redacted PATCH, want it untouched", stored)
 	}
 
+	// A redacted url rendered by a different feed is the same non-address:
+	// the PATCH is a no-op, never a verbatim store of the sentinel.
+	response = env.patchFeed(t, userinfo, map[string]any{
+		"url": "https://tracker.example.com/feed.xml?apikey=" + redactedValue + "&genre=iso",
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if err := env.db.GetContext(
+		t.Context(), &stored, `SELECT url FROM feeds WHERE id = ?`, userinfo,
+	); err != nil {
+		t.Fatalf("re-read stored url after foreign echo: %v", err)
+	}
+	if stored != "https://user:pass@tracker.example.com/feed.xml" {
+		t.Errorf("stored url = %q after a foreign redacted PATCH, want it untouched", stored)
+	}
+
 	// A stored fetch error that embeds the raw url — a *url.Error string
 	// carries it verbatim — is scrubbed like the url member, so the
 	// secret cannot round-trip out through last_error.
