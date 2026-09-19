@@ -74,14 +74,22 @@ type Decision struct {
 
 // Candidate is an accepted item, ready for step 13 and then for the grab in T071.
 type Candidate struct {
-	Item       store.FeedItem
-	FeedURL    string
-	Score      int
-	ContentKey string // episode key when the rule has one, else the info hash, else identity
-	EpisodeKey string // "" when episode.smart is off or no key was parsed
-	Engine     string // engine.Route result: aria2 | qbittorrent | ytdlp
-	Norm       uri.Normalized
-	MatchedBy  map[string]string
+	Item         store.FeedItem
+	FeedURL      string
+	FeedPriority int    // feeds.priority — step 13's second sort key
+	Score        int
+	ContentKey   string // "ep:<rule_id>:<episode key>" when the rule stages one, else the info hash, else the identity (08 §7)
+	EpisodeKey   string // "" when episode.smart is off or no key was parsed
+	Engine       string // engine.Route result: aria2 | qbittorrent | ytdlp
+	Norm         uri.Normalized
+	MatchedBy    map[string]string
+}
+
+// FeedRef is what steps 1 and 13 need from a candidate's feed: the URL the
+// rule's feed scope compares against, and feeds.priority for the group sort.
+type FeedRef struct {
+	URL      string
+	Priority int
 }
 
 // State answers the dedup ladder's questions. T070 passes a no-op implementation when
@@ -98,14 +106,14 @@ type State interface {
 }
 
 // Evaluate runs steps 1 to 11 for one rule. Items are the candidate set, already newest-first.
-// It is side-effect free and safe to call concurrently.
+// feedByID is keyed on feed_items.feed_id. It is side-effect free and safe to call concurrently.
 func Evaluate(ctx context.Context, doc RuleDoc, rule store.Rule, items []store.FeedItem,
-	feedURLByID map[string]string, st State, now int64) ([]Decision, []Candidate, error)
+	feedByID map[string]FeedRef, st State, now int64) ([]Decision, []Candidate, error)
 
 // Resolve is step 13: group by ContentKey, sort each group by
-// (score DESC, rule priority ASC, published_at DESC) and return the winner of each group first.
+// (score DESC, feed priority ASC, published_at DESC) and return the winner of each group first.
 // Losers keep their order and become rule_matches rows with status 'fallback' in T071.
-func Resolve(cands []Candidate, rulePriority int) (winners, losers []Candidate)
+func Resolve(cands []Candidate) (winners, losers []Candidate)
 ```
 
 ```go
@@ -136,10 +144,11 @@ func RepackVariants(key, title string) []string
 2. Implement the three token forms of doc 08 §6.2: a single number compiles
    `\b(?:s0?{S}[ -_\.]?e0?{E}|{S}x0?{E})(?:\D|\b)`; a range parses the title and compares within the
    season; the open form also matches every later season. Skip an inverted range.
-3. Create `internal/rss/match.go` with the reason constants, `Decision`, `Candidate`, `State`, `Evaluate`
-   and `Resolve`.
-4. Implement steps 1 to 3 as pre-filters that return no `Decision`, then build the haystack from
-   `match.fields` joined with `\n`, lowercasing both sides unless `case_sensitive`.
+3. Create `internal/rss/match.go` with the reason constants, `Decision`, `Candidate`, `FeedRef`,
+   `State`, `Evaluate` and `Resolve`.
+4. Implement steps 1 and 3 as pre-filters that return no `Decision` and step 2's cooldown as a
+   `cooldown` rejection carrying the §5.1 detail, then build the haystack from `match.fields` joined
+   with `\n`, lowercasing both sides unless `case_sensitive`.
 5. Evaluate `none_of` **before** `any_of` and report `excluded` with the entry index; then `any_of`,
    splitting an entry on `\s+` into AND-ed tokens in `wildcard` and `plain` mode only, and reporting
    `no_match` with the offending token.
@@ -251,3 +260,21 @@ from this list; and the bare episode key `1x5` as global `content_key` versus do
 
 Which file should answer: `docs/04-data-model.md` §3.5 for the carrier decision (remedy 1 or 2),
 or `docs/08-rss-automation.md` §4.2 for the vocabulary reduction (remedy 3).
+
+**Repair applied 2026-09-19.** The ruling picked remedy 3, the smallest interpretation consistent with
+the accepted ADRs and the merged store: `match.fields` is narrowed to `title` in doc 08 §4.1/§4.2 — the
+only field `feed_items` carries — and T068's merged `Validate` is tightened to match, so a rule scoped
+to `description` or `category` is rejected `422` at save time instead of silently never matching.
+Remedies 1 and 2 stay documented above as the paths to re-widen the vocabulary when the store gains
+carriers. The three smaller divergences are ruled on in the same pass: this file's step 4 now reads
+"steps 1 and 3" so the `cooldown` code §5.1 assigns to step 2 is emitted as a `Decision` (F362);
+`Candidate` gained `FeedPriority` and `Evaluate` takes `map[string]FeedRef`, restoring the step-13 sort
+key the contract could not carry — the gap is registered in `PLAN-REVIEW-FINDINGS.md` as F669; and
+`content_key` construction is pinned in doc 08 §7 — an episode-derived key is namespaced per rule as
+`ep:<rule_id>:<episode_key>` so the global check no longer collides different shows across rules; one
+rule spanning several shows still shares bare episode numbers, the documented limit of the four-regex
+vocabulary (F138); an item with no staged episode key uses its `info_hash`, else its `identity`,
+closing the doc's open question,
+and step 13's grouping is ruled per-rule with the step-10 global `content_key` check arbitrating
+cross-rule contention under the `(priority ASC, name ASC)` pass order, so `Resolve` drops the constant
+`rulePriority` parameter (F361). The index row stays `todo`; the next loop iteration implements it.

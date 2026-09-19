@@ -21,9 +21,9 @@ const (
 	contentLayoutSubfolder   = "subfolder"
 	contentLayoutNoSubfolder = "no_subfolder"
 
-	matchFieldTitle       = "title"
-	matchFieldDescription = "description"
-	matchFieldCategory    = "category"
+	// title is the only field feed_items stores; section 4.2 readmits
+	// description and category only when the store gains carriers.
+	matchFieldTitle = "title"
 )
 
 // The regex-safety caps of docs/08-rss-automation.md section 5.2: RE2
@@ -54,7 +54,7 @@ type RuleDoc struct {
 type MatchSpec struct {
 	Mode           string   `json:"mode,omitempty"`           // wildcard | regex | plain, default wildcard
 	CaseSensitive  bool     `json:"case_sensitive,omitempty"` // default false
-	Fields         []string `json:"fields,omitempty"`         // title | description | category, default [title]
+	Fields         []string `json:"fields,omitempty"`         // title only in v1, default [title]
 	AnyOf          []string `json:"any_of,omitempty"`
 	NoneOf         []string `json:"none_of,omitempty"`
 	MinSize        string   `json:"min_size,omitempty"        doc:"IEC size such as 1GiB or 700MiB"`
@@ -150,10 +150,8 @@ func (d RuleDoc) Validate() []FieldError {
 		add("match.mode", "want one of wildcard, regex or plain, got %q", d.Match.Mode)
 	}
 	for i, field := range d.Match.Fields {
-		switch field {
-		case matchFieldTitle, matchFieldDescription, matchFieldCategory:
-		default:
-			add(fmt.Sprintf("match.fields[%d]", i), "want one of title, description or category, got %q", field)
+		if field != matchFieldTitle {
+			add(fmt.Sprintf("match.fields[%d]", i), "want %q, the only field feed_items stores, got %q", matchFieldTitle, field)
 		}
 	}
 	for i, entry := range d.Match.AnyOf {

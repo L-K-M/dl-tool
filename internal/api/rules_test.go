@@ -303,6 +303,7 @@ func TestRuleDocumentValidation(t *testing.T) {
 		{"bad max_size", map[string]any{"max_size": "8 gigs"}, nil, "body.definition.match.max_size"},
 		{"bad published_after", map[string]any{"published_after": "2026-01-01"}, nil, "body.definition.match.published_after"},
 		{"bad field", map[string]any{"fields": []string{"title", "comment"}}, nil, "body.definition.match.fields[1]"},
+		{"unservable field", map[string]any{"fields": []string{"description"}}, nil, "body.definition.match.fields[0]"},
 		{"empty any_of entry", map[string]any{"any_of": []string{""}}, nil, "body.definition.match.any_of[0]"},
 		{"too many formats", map[string]any{}, map[string]any{"score": map[string]any{"formats": tooManyFormats}}, "body.definition.score.formats"},
 		{"bad score pattern", map[string]any{}, map[string]any{"score": map[string]any{"formats": []map[string]any{{"name": "x", "pattern": "a[", "weight": 1}}}}, "body.definition.score.formats[0].pattern"},
@@ -337,7 +338,7 @@ func TestRuleDocumentValidation(t *testing.T) {
 	}
 	body := validRuleBody("boundary")
 	body["definition"].(map[string]any)["match"] = map[string]any{
-		"mode": "plain", "fields": []string{"title", "description", "category"},
+		"mode": "plain", "fields": []string{"title"},
 		"any_of":   []string{strings.Repeat("a", 1024)},
 		"min_size": "1KiB", "max_size": "8GiB", "published_after": "2026-01-01T00:00:00Z",
 	}

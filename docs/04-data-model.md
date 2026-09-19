@@ -473,7 +473,7 @@ CREATE TABLE rule_matches (
   feed_item_id TEXT REFERENCES feed_items(id) ON DELETE SET NULL,
   task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   info_hash TEXT,                       -- back-filled after the .torrent is fetched; 40 or 64 lowercase hex
-  content_key TEXT,                     -- e.g. 'tv:the-show:s01e05'
+  content_key TEXT,                     -- 'ep:<rule_id>:1x5', an info hash, or a feed_item identity
   title TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued','sent','failed','rejected','fallback')),
   reason TEXT,                          -- rejection reason code; vocabulary in 08-rss-automation.md
@@ -857,3 +857,4 @@ new table added by a later migration must be added to this list in the same chan
 | 2026-09-02 | Review pass: added `notification_channels.last_send_at` and `.last_error`, which four consumers already read; removed the orphaned `rules.owner_id` comment block left inside `CREATE TABLE rules` by the multi-user cut, which T006 would otherwise have transcribed into `00001_init.sql`; corrected §4.2's count of the dl-tool `error_code` additions from seven to six. |
 | 2026-09-02 | Made the initial migration executable: corrected the post-account-removal settings count, defined host-independent seed values and stable IDs, supplied the 168-cell insert, kept explanatory prose outside the SQL fence, defined version zero without accepting foreign databases, filtered the version probe to applied rows, pinned integrity-check cadence and success, pinned and logged the backup path, and verified goose's version-table name against v3.27.3. |
 | 2026-09-16 | Added `tasks.admission_pending` (migration 00003): the admission pass's persisted ownership of a queued row mid-release, replacing `engine_ref IS NOT NULL` as the counted/exempt marker — an ordinary resume requeues a task still holding its stopped handle, so the handle alone could bypass the hold gates. §4.7's counted set restated. |
+| 2026-09-19 | T069 repair: the `rule_matches.content_key` comment example now matches the construction `08-rss-automation.md` §7 pins — `ep:<rule_id>:<episode_key>` for a staged episode key, else the item's `info_hash`, else its `identity`. No DDL change. |
