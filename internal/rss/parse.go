@@ -329,8 +329,8 @@ func isMagnetLink(s string) bool {
 // values such as application/x-bittorrent;x-scheme-handler/magnet qualify,
 // an unrelated type merely sharing the leading characters does not.
 func isTorrentMIME(t string) bool {
-	t = strings.ToLower(strings.TrimSpace(t))
-	return t == enclosureTypeTorrent || strings.HasPrefix(t, enclosureTypeTorrent+";")
+	base, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(t)), ";")
+	return strings.TrimSpace(base) == enclosureTypeTorrent
 }
 
 // hashFromMagnet returns the info hash of a magnet URI: the v1 btih when
