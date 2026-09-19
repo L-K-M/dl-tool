@@ -21,6 +21,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/config"
 	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/obs"
+	"github.com/L-K-M/dl-tool/internal/rss"
 	"github.com/L-K-M/dl-tool/internal/search"
 	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
@@ -102,6 +103,7 @@ func main() {
 			}
 
 			api.Version = version
+			rss.Version = version
 
 			// The process-wide search collaborators, in the order the task
 			// contract fixes: the SSRF guard and its outbound client, then
@@ -159,12 +161,27 @@ func main() {
 			worker.Register(jobs.JobKindSearch, jobs.NewSearchHandler(
 				db, logger, defs, runner, indexers, searchHTTP, userAgent,
 			))
+			// The feed poller shares the SSRF-guarded client with the search
+			// fan-out and the refresh endpoint; its item parser is nil until
+			// T067 lands parse.go, which polls report as a fetch failure.
+			poller := rss.NewPoller(db, searchHTTP, nil, logger, time.Now)
+			worker.Register(jobs.JobKindRSSPoll, poller.PollDue)
 			runDone.Add(1)
 			go func() {
 				defer runDone.Done()
 				if err := worker.Run(runCtx); err != nil {
 					logger.Error("job worker failed", "err", err)
 				}
+			}()
+
+			// The cron scheduler enqueues the periodic jobs (rss_poll now,
+			// T081/T083/T091 extend it later). Start blocks until runCtx is
+			// cancelled in OnStop, then drains the in-flight entry.
+			scheduler := jobs.NewScheduler(db, logger)
+			runDone.Add(1)
+			go func() {
+				defer runDone.Done()
+				scheduler.Start(runCtx)
 			}()
 
 			metrics := obs.NewMetrics()

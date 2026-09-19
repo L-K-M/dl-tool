@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jmoiron/sqlx"
 
+	"github.com/L-K-M/dl-tool/internal/rss"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
@@ -22,6 +24,7 @@ const (
 	operationListFeedItems        = "list-feed-items"
 	operationMarkFeedItems        = "mark-feed-items"
 	operationMarkAllFeedItemsRead = "mark-all-feed-items-read"
+	operationRefreshFeed          = "refresh-feed"
 
 	feedURLDetail              = "the url must be an absolute http or https URL"
 	feedRefreshIntervalDetail  = "refresh_interval_s is 0 for the global RSS interval or at least 300 seconds"
@@ -139,6 +142,11 @@ type MarkAllFeedItemsReadInput struct {
 	ID string `path:"id" doc:"The fed_ id of the feed"`
 }
 
+// RefreshFeedInput addresses one feed by id; the operation takes no body.
+type RefreshFeedInput struct {
+	ID string `path:"id" doc:"The fed_ id of the feed"`
+}
+
 // ListFeedsOutput is the GET /feeds body.
 type ListFeedsOutput struct {
 	Body struct {
@@ -170,19 +178,37 @@ type FeedItemsUpdatedOutput struct {
 	}
 }
 
+// RefreshFeedOutput is the poll Result of POST /feeds/{id}/refresh —
+// fetched, not_modified, items_added, elapsed_ms and an optional error
+// (docs/05-api-contract.md section 10.1).
+type RefreshFeedOutput struct {
+	Body rss.Result
+}
+
 // FeedHandlers owns the feed operations of docs/05-api-contract.md section
 // 10.1 over the feeds and feed_items tables.
 type FeedHandlers struct {
-	db *sqlx.DB
+	db     *sqlx.DB
+	poller *rss.Poller
 }
 
-// NewFeedHandlers builds the feed handlers over db, exactly like
-// NewPrefsHandlers wraps the same handle.
-func NewFeedHandlers(db *sqlx.DB) *FeedHandlers {
-	return &FeedHandlers{db: db}
+// NewFeedHandlers builds the feed handlers over db and wires the poller the
+// refresh endpoint and the rss_poll job share: the guarded client hc and the
+// item parser arrive from the composition root, so the endpoint and the job
+// poll through the same SSRF-guarded client (docs/14-conventions.md section
+// 8.3). The parser is nil until T067 lands parse.go; the poller reports that
+// as a fetch failure rather than panic. A nil db or hc — the document-only
+// builds — leaves poller nil and refresh answers 503.
+func NewFeedHandlers(db *sqlx.DB, hc *http.Client, parser rss.ItemParser, log *slog.Logger) *FeedHandlers {
+	h := &FeedHandlers{db: db}
+	if db != nil && hc != nil {
+		h.poller = rss.NewPoller(db, hc, parser, log, time.Now)
+	}
+
+	return h
 }
 
-// Register mounts the seven operations on the Huma API;
+// Register mounts the eight operations on the Huma API;
 // Server.registerOperations is the call site.
 func (h *FeedHandlers) Register(hapi huma.API) {
 	huma.Register(hapi, huma.Operation{
@@ -277,6 +303,19 @@ func (h *FeedHandlers) Register(hapi huma.API) {
 		// is 422, never silently ignored.
 		RejectUnknownQueryParameters: true,
 	}, h.MarkAllRead)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: operationRefreshFeed,
+		Method:      http.MethodPost,
+		Path:        "/feeds/{id}/refresh",
+		Summary:     "Poll the feed now",
+		Description: "Forces one conditional GET now, bypassing disabled_till and the backoff ladder, and reports the poll outcome. A fetch failure is still 200 with error set; 404 means the feed id addresses no row.",
+		Tags:        []string{"feeds"},
+		Security:    credentialRequired,
+		// Same strictness as every other operation: a mistyped query key
+		// is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, h.Refresh)
 }
 
 // List serves GET /feeds: every feed, unread_count included, the url
@@ -474,6 +513,31 @@ func (h *FeedHandlers) MarkAllRead(ctx context.Context, in *MarkAllFeedItemsRead
 	output.Body.Updated = updated
 
 	return output, nil
+}
+
+// Refresh serves POST /feeds/{id}/refresh: one forced conditional GET
+// through the shared poller, bypassing the ladder (docs/05-api-contract.md
+// section 10.1). The outcome — including a fetch failure — is the 200 body;
+// only a missing feed or a bookkeeping failure is an error response.
+func (h *FeedHandlers) Refresh(ctx context.Context, in *RefreshFeedInput) (*RefreshFeedOutput, error) {
+	// The guard precedes the store call: a nil db — the document-only
+	// builds that leave poller nil — must answer 503, not panic inside
+	// sqlx before the configured check ever runs.
+	if h.poller == nil {
+		return nil, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the feed poller is not configured")
+	}
+
+	feed, err := store.FeedByID(ctx, h.db, in.ID)
+	if err != nil {
+		return nil, FromStore(err)
+	}
+
+	result, err := h.poller.Poll(ctx, feed, true)
+	if err != nil {
+		return nil, internalFailure(ctx, "refresh feed", err)
+	}
+
+	return &RefreshFeedOutput{Body: result}, nil
 }
 
 // feedItemsProblem maps the store's list error onto the registered
