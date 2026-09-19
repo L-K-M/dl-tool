@@ -192,6 +192,98 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/feeds": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the feeds
+     * @description Every feed ordered by title, each carrying its unread item count. A credential-bearing url is returned member-redacted: userinfo and the apikey, token and passkey query values render as __redacted__.
+     */
+    get: operations["list-feeds"];
+    put?: never;
+    /**
+     * Create a feed
+     * @description Creates one RSS feed; next_fetch_at is now, so the next poll pass picks it up. A duplicate url is 409 /problems/conflict. The url must be http or https; refresh_interval_s is 0 for the global interval or at least 300; item_cap is non-negative.
+     */
+    post: operations["create-feed"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/feeds/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete a feed
+     * @description Removes the feed row; its stored items go with it through ON DELETE CASCADE.
+     */
+    delete: operations["delete-feed"];
+    options?: never;
+    head?: never;
+    /**
+     * Update a feed
+     * @description Partial update of url, title, enabled, refresh_interval_s, item_cap and priority; omitted fields are untouched. A url that still contains __redacted__ leaves the stored url unchanged. Renaming onto an existing url is 409 /problems/conflict. The fetch-state columns are the poller's and survive the write.
+     */
+    patch: operations["patch-feed"];
+    trace?: never;
+  };
+  "/feeds/{id}/items": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List a feed's items
+     * @description Cursor-paginated, newest first, with an optional unread filter. A cursor is bound to the feed and filter that issued it — reusing it under another filter is 422.
+     */
+    get: operations["list-feed-items"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Mark feed items read or unread
+     * @description Marks the listed items of this one feed read or unread and reports how many rows changed state. Ids of another feed, or of no row, are skipped, so the call is idempotent.
+     */
+    patch: operations["mark-feed-items"];
+    trace?: never;
+  };
+  "/feeds/{id}/items/read-all": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Mark every item of the feed read
+     * @description Marks every unread item of the feed read and reports how many rows changed state; a second call answers {"updated":0}. Takes no body.
+     */
+    post: operations["mark-all-feed-items-read"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/fs/browse": {
     parameters: {
       query?: never;
@@ -758,6 +850,28 @@ export interface components {
       /** @description Default destination of tasks created in this category; must resolve inside a configured data root */
       save_path: string;
     };
+    CreateFeedInputBody: {
+      /** @description Default true */
+      enabled?: boolean;
+      /**
+       * Format: int64
+       * @description Retained items per feed; default 50
+       */
+      item_cap?: number;
+      /**
+       * Format: int64
+       * @description Rule-engine per-run tie-break; lower wins; default 0
+       */
+      priority?: number;
+      /**
+       * Format: int64
+       * @description Seconds between polls; 0 uses the global RSS interval, otherwise at least 300
+       */
+      refresh_interval_s?: number;
+      title?: string;
+      /** @description http or https feed URL; userinfo and passkey-style query secrets are stored but never returned */
+      url: string;
+    };
     CreateIndexerInputBody: {
       /** @description Lift the SSRF private-range denial for this indexer's origin */
       allow_private_network?: boolean;
@@ -948,6 +1062,69 @@ export interface components {
       password: string;
       username: string;
     };
+    FeedDTO: {
+      /** Format: date-time */
+      disabled_till: string | null;
+      enabled: boolean;
+      /** Format: int64 */
+      escalation_level: number;
+      id: string;
+      /**
+       * Format: int64
+       * @description Retained feed_items rows for this feed
+       */
+      item_cap: number;
+      last_error: string | null;
+      /** Format: date-time */
+      last_fetch_at: string | null;
+      /** Format: date-time */
+      last_success_at: string | null;
+      /** Format: date-time */
+      next_fetch_at: string;
+      /**
+       * Format: int64
+       * @description Per-run tie-break of the rule engine; lower wins
+       */
+      priority: number;
+      /**
+       * Format: int64
+       * @description Seconds between polls; 0 uses the global RSS interval
+       */
+      refresh_interval_s: number;
+      title: string | null;
+      /**
+       * Format: int64
+       * @description Items of this feed with read = false
+       */
+      unread_count: number;
+      /** @description The feed URL; userinfo and apikey/token/passkey query values render as __redacted__ */
+      url: string;
+    };
+    FeedItemDTO: {
+      download_url: string | null;
+      feed_id: string;
+      id: string;
+      info_hash: string | null;
+      link: string | null;
+      matched_rules: components["schemas"]["FeedItemMatchedRuleDTO"][] | null;
+      /** Format: date-time */
+      published_at: string | null;
+      read: boolean;
+      /** Format: int64 */
+      size_bytes: number | null;
+      title: string;
+    };
+    FeedItemMatchedRuleDTO: {
+      id: string;
+      name: string;
+    };
+    FeedItemsUpdatedOutputBody: {
+      /**
+       * Format: int64
+       * @description Rows whose read state changed
+       */
+      updated: number;
+    };
     FileSelection: {
       /**
        * Format: int64
@@ -1014,6 +1191,19 @@ export interface components {
     };
     ListEnginesOutputBody: {
       engines: components["schemas"]["EngineDTO"][] | null;
+    };
+    ListFeedItemsOutputBody: {
+      items: components["schemas"]["FeedItemDTO"][] | null;
+      /** @description Token for the next page; null on the last page */
+      next_cursor: string | null;
+      /**
+       * Format: int64
+       * @description Rows matching the filter, ignoring the cursor
+       */
+      total: number;
+    };
+    ListFeedsOutputBody: {
+      feeds: components["schemas"]["FeedDTO"][] | null;
     };
     ListIndexersOutputBody: {
       indexers: components["schemas"]["IndexerDTO"][] | null;
@@ -1093,6 +1283,12 @@ export interface components {
       /** Format: int64 */
       size: number | null;
     };
+    MarkFeedItemsInputBody: {
+      /** @description itm_ ids of this feed's items */
+      ids: string[] | null;
+      /** @description true marks read, false marks unread */
+      read: boolean | null;
+    };
     MkdirInputBody: {
       /** @description Single new path component — never a path itself */
       name: string;
@@ -1108,6 +1304,17 @@ export interface components {
       new_name?: string;
       /** @description New default destination; must resolve inside a configured data root */
       save_path?: string;
+    };
+    PatchFeedInputBody: {
+      enabled?: boolean;
+      /** Format: int64 */
+      item_cap?: number;
+      /** Format: int64 */
+      priority?: number;
+      /** Format: int64 */
+      refresh_interval_s?: number;
+      title?: string;
+      url?: string;
     };
     PatchIndexerInputBody: {
       allow_private_network?: boolean;
@@ -1797,6 +2004,241 @@ export interface operations {
                 retry?: number;
               }
           )[];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-feeds": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListFeedsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-feed": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateFeedInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FeedDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-feed": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The fed_ id of the feed */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-feed": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The fed_ id of the feed */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PatchFeedInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FeedDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-feed-items": {
+    parameters: {
+      query?: {
+        /** @description Page size */
+        limit?: number;
+        /** @description Opaque page token from a previous response */
+        cursor?: string;
+        /** @description Only items with read = false */
+        unread?: boolean;
+      };
+      header?: never;
+      path: {
+        /** @description The fed_ id of the feed */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListFeedItemsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "mark-feed-items": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The fed_ id of the feed */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MarkFeedItemsInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FeedItemsUpdatedOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "mark-all-feed-items-read": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The fed_ id of the feed */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FeedItemsUpdatedOutputBody"];
         };
       };
       /** @description Error */

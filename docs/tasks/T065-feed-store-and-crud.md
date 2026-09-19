@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T065 |
 | **Milestone** | M5 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T006, T007, T008 |
 | **Blocks** | T066, T068, T072, T117 |
 | **Parallel-safe** | no — it also edits the shared file `internal/api/server.go` |
@@ -215,25 +215,25 @@ takes no body.
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestFeedCrud`, `TestDuplicateFeedURLConflicts` and `TestFeedValidation` pass.
-- [ ] `TestFeedItemsPagingNewestFirst` asserts no row appears on two pages.
-- [ ] `TestDeleteFeedCascadesItems` asserts zero `feed_items` rows survive.
-- [ ] `TestUpsertFeedItemsIsIdempotent` asserts a second upsert of the same batch adds `0` rows and keeps
+- [x] `TestFeedCrud`, `TestDuplicateFeedURLConflicts` and `TestFeedValidation` pass.
+- [x] `TestFeedItemsPagingNewestFirst` asserts no row appears on two pages.
+- [x] `TestDeleteFeedCascadesItems` asserts zero `feed_items` rows survive.
+- [x] `TestUpsertFeedItemsIsIdempotent` asserts a second upsert of the same batch adds `0` rows and keeps
   `read` untouched.
-- [ ] `TestFeedObjectShape` asserts the feed object carries `priority`, `unread_count` and RFC 3339
+- [x] `TestFeedObjectShape` asserts the feed object carries `priority`, `unread_count` and RFC 3339
   `next_fetch_at`, and no `auto_download` member.
-- [ ] `TestCredentialFeedURLIsRedacted` asserts a `user:pass@` URL returns `__redacted__` userinfo on
+- [x] `TestCredentialFeedURLIsRedacted` asserts a `user:pass@` URL returns `__redacted__` userinfo on
   read, that every name `isSecretQueryParameter` recognises is masked (one case per name), and that a
   PATCH echoing the redacted URL leaves the stored URL unchanged.
-- [ ] `TestUnreadFilterMatchesReadColumn` asserts `unread=true` returns only `read = 0` rows and
+- [x] `TestUnreadFilterMatchesReadColumn` asserts `unread=true` returns only `read = 0` rows and
   `unread_count` tracks the same predicate, and that `total` counts every row matching the filter,
   ignoring the cursor and the limit — it drops under `unread=true`.
-- [ ] `TestMarkFeedItemsRead` asserts `updated` counts only rows that changed state and that ids of a
+- [x] `TestMarkFeedItemsRead` asserts `updated` counts only rows that changed state and that ids of a
   different feed are skipped.
-- [ ] `TestMarkAllFeedItemsReadIsIdempotent` asserts the second `read-all` call returns `{"updated":0}`.
-- [ ] `TestAutoDownloadIsRejectedUntilT068` asserts both `POST /feeds` and `PATCH /feeds/{id}` answer
+- [x] `TestMarkAllFeedItemsReadIsIdempotent` asserts the second `read-all` call returns `{"updated":0}`.
+- [x] `TestAutoDownloadIsRejectedUntilT068` asserts both `POST /feeds` and `PATCH /feeds/{id}` answer
   `422` to an `auto_download` member.
-- [ ] No new column, table or index exists beyond doc 04 §3.5.
+- [x] No new column, table or index exists beyond doc 04 §3.5.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -268,7 +268,64 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head, verbatim:
+
+```
+$ make lint && make test PKG="./internal/api/... ./internal/store/..." && echo FEEDS_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	147.205s
+ok  	github.com/L-K-M/dl-tool/internal/store	79.973s
+FEEDS_OK
+```
+
+The named acceptance tests, run with the verbose reporter:
+
+```
+$ go test -count=1 -v -run 'TestFeedCrud|TestDuplicateFeedURLConflicts|TestFeedValidation|TestFeedItemsPagingNewestFirst|TestDeleteFeedCascadesItems|TestUpsertFeedItemsIsIdempotent|TestFeedObjectShape|TestCredentialFeedURLIsRedacted|TestUnreadFilterMatchesReadColumn|TestMarkFeedItemsRead|TestMarkAllFeedItemsReadIsIdempotent|TestAutoDownloadIsRejectedUntilT068' ./internal/api/
+--- PASS: TestFeedCrud (0.08s)
+--- PASS: TestDuplicateFeedURLConflicts (0.07s)
+--- PASS: TestFeedValidation (0.08s)
+--- PASS: TestFeedItemsPagingNewestFirst (0.08s)
+--- PASS: TestDeleteFeedCascadesItems (0.07s)
+--- PASS: TestUpsertFeedItemsIsIdempotent (0.09s)
+--- PASS: TestFeedObjectShape (0.08s)
+--- PASS: TestCredentialFeedURLIsRedacted (0.08s)
+--- PASS: TestUnreadFilterMatchesReadColumn (0.07s)
+--- PASS: TestMarkFeedItemsRead (0.06s)
+--- PASS: TestMarkAllFeedItemsReadIsIdempotent (0.08s)
+--- PASS: TestAutoDownloadIsRejectedUntilT068 (0.06s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	0.965s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/feeds.go
+internal/api/feeds_test.go
+internal/api/server.go
+internal/store/feeds.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are the two generated files that
+`docs/13-testing-and-verification.md` §7.1 makes an implicit part of the Files table of any
+task that registers a Huma operation — both regenerated by `make gen`, not hand-edited. The rest
+is exactly the Files table.
 
 ## Blocked
 

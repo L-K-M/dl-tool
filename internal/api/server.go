@@ -127,6 +127,9 @@ type Server struct {
 	// search owns the /indexers and /search operations of doc 05 section 9.
 	search *SearchHandlers
 
+	// feeds owns the /feeds operations of doc 05 section 10.1.
+	feeds *FeedHandlers
+
 	// SSE owns the live-update endpoints: GET /events and GET /sync, and
 	// the hub they read from. It is exported for the composition root in
 	// cmd/dl-tool, which owns the *obs.Metrics instance whose
@@ -324,6 +327,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		categories: NewCategoryHandlers(db, cfg.DataRoots),
 		fs:         NewFSHandlers(cfg.DataRoots),
 		search:     NewSearchHandlers(log, searchDeps),
+		feeds:      NewFeedHandlers(db),
 		SSE:        sseHandlers,
 		bgCancel:   bgCancel,
 	}
@@ -485,6 +489,7 @@ func (s *Server) registerOperations() {
 	s.categories.Register(s.API)
 	s.fs.Register(s.API)
 	RegisterSearchRoutes(s.API, s.search)
+	s.feeds.Register(s.API)
 	s.SSE.RegisterOperations(s.API)
 
 	// The bulk-action and patch operations of docs/05-api-contract.md
