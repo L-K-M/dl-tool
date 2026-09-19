@@ -94,7 +94,7 @@ type TestRuleInput struct {
 		Rule        json.RawMessage `json:"rule"                    required:"true"             doc:"The full rule document, unsaved"`
 		Feeds       []string        `json:"feeds,omitempty"         doc:"Feed ids; the default is rule.feeds resolved by url, else every enabled feed"`
 		Limit       int             `json:"limit,omitempty"         minimum:"1" maximum:"500" default:"200" doc:"Items per feed, newest first"`
-		IgnoreState *bool           `json:"ignore_state,omitempty"  doc:"Default true: bypass rule_matches and rule_seen_episodes so the preview repeats byte for byte"`
+		IgnoreState *bool           `json:"ignore_state,omitempty"  default:"true" doc:"Default true: bypass rule_matches and rule_seen_episodes so the preview repeats byte for byte"`
 	}
 }
 

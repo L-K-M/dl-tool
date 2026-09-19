@@ -322,3 +322,47 @@ func TestDryRunFeedSelection(t *testing.T) {
 	require.Equal(t, 1, report.Evaluated)
 	require.Equal(t, disabled.ID, report.Results[0].FeedID)
 }
+
+// TestDryRunPagesPastTheStorePageLimit exercises the cursor continuation
+// of newestFeedItems: a limit above the 200-row store page must collect
+// across pages without losing or repeating an item.
+func TestDryRunPagesPastTheStorePageLimit(t *testing.T) {
+	db := newTestDB(t)
+	feed := newFeed(t, db, "https://example.com/pages.xml")
+
+	items := make([]store.FeedItem, 250)
+	for i := range items {
+		items[i] = dryRunItem(feed.ID, fmt.Sprintf("p-%03d", i),
+			fmt.Sprintf("ubuntu p%d", i), int64(i))
+	}
+	seedDryRunItems(t, db, items)
+
+	report, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule:        dryRunDoc(),
+		FeedIDs:     []string{feed.ID},
+		Limit:       250,
+		IgnoreState: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 250, report.Evaluated)
+	// Newest first across the merged pages.
+	require.Equal(t, "ubuntu p249", report.Results[0].Title)
+	require.Equal(t, "ubuntu p0", report.Results[249].Title)
+}
+
+// TestDryRunItemWithoutDownloadURL pins the store-invariant breach: the
+// parser only stores items carrying a download URI, so a NULL download_url
+// row aborts the run with an error rather than vanishing or matching —
+// the same contract TestUnroutableItemErrors pins on Evaluate.
+func TestDryRunItemWithoutDownloadURL(t *testing.T) {
+	db := newTestDB(t)
+	feed := newFeed(t, db, "https://example.com/nourl.xml")
+	item := dryRunItem(feed.ID, "nourl", "ubuntu release", 1)
+	item.DownloadURL = nil
+	seedDryRunItems(t, db, []store.FeedItem{item})
+
+	_, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule: dryRunDoc(), FeedIDs: []string{feed.ID}, IgnoreState: true,
+	})
+	require.Error(t, err)
+}

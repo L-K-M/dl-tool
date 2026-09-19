@@ -135,6 +135,10 @@ func (s dryRunState) BestScoreForContentKey(ctx context.Context, key string) (in
 // no transaction and writes nothing. ErrNotFound is returned when a named
 // feed id does not exist.
 func DryRun(ctx context.Context, db *sqlx.DB, req DryRunRequest) (DryRunReport, error) {
+	// Idempotent and safe on the value copy: a direct caller's bare
+	// document gets the documented defaults the handler already applied.
+	req.Rule.ApplyDefaults()
+
 	limit := req.Limit
 	if limit <= 0 {
 		limit = dryRunDefaultLimit

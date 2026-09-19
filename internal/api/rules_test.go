@@ -822,3 +822,34 @@ func TestTestRuleReturnsEveryItem(t *testing.T) {
 		t.Errorf("body %s, want elapsed_ms present", response.Body.String())
 	}
 }
+
+// TestTestRuleIgnoreStateFalseIsAccepted pins the handler's explicit-false
+// branch: body.ignore_state=false must dereference through the pointer,
+// reach rss.DryRun as false, and still return 200 with every item.
+func TestTestRuleIgnoreStateFalseIsAccepted(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	feedID := env.seedFeed(t, "https://example.com/ignore-state.xml")
+	published := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	downloadURL := "https://example.com/t/x.torrent"
+	items := []store.FeedItem{
+		{FeedID: feedID, Identity: "i1", Title: "ubuntu 26.04 desktop amd64", TitleNorm: "ubuntu 26.04 desktop amd64", DownloadURL: &downloadURL, PublishedAt: &published},
+	}
+	if _, err := store.UpsertFeedItems(t.Context(), env.db, items, published); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+
+	body := validTestRuleBody()
+	body["ignore_state"] = false
+	response := env.testRule(t, body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var report rss.DryRunReport
+	if err := json.Unmarshal(response.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode response body %q: %v", response.Body.String(), err)
+	}
+	if report.Evaluated != 1 || len(report.Results) != 1 {
+		t.Fatalf("report = %+v, want evaluated=1 with the item in results", report)
+	}
+}

@@ -193,8 +193,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/rss/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/rss	10.962s
-ok  	github.com/L-K-M/dl-tool/internal/api	157.393s
+ok  	github.com/L-K-M/dl-tool/internal/rss	11.925s
+ok  	github.com/L-K-M/dl-tool/internal/api	149.219s
 DRYRUN_OK
 ```
 
@@ -202,16 +202,19 @@ The acceptance-criteria and endpoint tests, from the same head under
 `go test -race -count=1 -v -run 'TestDryRun|TestTestRule'`:
 
 ```
---- PASS: TestDryRunReturnsEveryEvaluatedItem (0.74s)
---- PASS: TestDryRunReasonEnumIsClosed (0.60s)
---- PASS: TestDryRunIsReproducibleWithIgnoreState (0.45s)
---- PASS: TestDryRunWritesNothing (0.38s)
---- PASS: TestDryRunLimitIsPerFeed (0.47s)
---- PASS: TestDryRunUnknownFeedIsNotFound (0.41s)
---- PASS: TestDryRunFeedSelection (0.46s)
---- PASS: TestTestRuleMalformedFilterIsRejected (0.58s)
---- PASS: TestTestRuleUnknownFeedIsNotFound (0.45s)
---- PASS: TestTestRuleReturnsEveryItem (0.53s)
+--- PASS: TestDryRunReturnsEveryEvaluatedItem (0.71s)
+--- PASS: TestDryRunReasonEnumIsClosed (0.39s)
+--- PASS: TestDryRunIsReproducibleWithIgnoreState (0.38s)
+--- PASS: TestDryRunWritesNothing (0.40s)
+--- PASS: TestDryRunLimitIsPerFeed (0.44s)
+--- PASS: TestDryRunUnknownFeedIsNotFound (0.37s)
+--- PASS: TestDryRunFeedSelection (0.37s)
+--- PASS: TestDryRunPagesPastTheStorePageLimit (0.71s)
+--- PASS: TestDryRunItemWithoutDownloadURL (0.40s)
+--- PASS: TestTestRuleMalformedFilterIsRejected (0.38s)
+--- PASS: TestTestRuleUnknownFeedIsNotFound (0.39s)
+--- PASS: TestTestRuleReturnsEveryItem (0.42s)
+--- PASS: TestTestRuleIgnoreStateFalseIsAccepted (0.40s)
 ```
 
 Scope check:

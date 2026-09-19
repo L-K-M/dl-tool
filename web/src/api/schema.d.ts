@@ -1816,8 +1816,11 @@ export interface components {
     TestRuleInputBody: {
       /** @description Feed ids; the default is rule.feeds resolved by url, else every enabled feed */
       feeds?: string[] | null;
-      /** @description Default true: bypass rule_matches and rule_seen_episodes so the preview repeats byte for byte */
-      ignore_state?: boolean;
+      /**
+       * @description Default true: bypass rule_matches and rule_seen_episodes so the preview repeats byte for byte
+       * @default true
+       */
+      ignore_state: boolean;
       /**
        * Format: int64
        * @description Items per feed, newest first
