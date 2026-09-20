@@ -1,11 +1,12 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useState,
   type FormEvent,
   type JSX,
 } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Rss } from "lucide-react";
@@ -80,6 +81,8 @@ const CONFLICT = 409;
 const feedsKey = ["rss-feeds"] as const;
 const itemsKey = "rss-items";
 const missing = "—";
+/** Only http(s) links may be opened from feed-provided data. */
+const HTTP_URL = /^https?:\/\//i;
 const GLYPHS: Record<FeedState, string> = {
   ok: "●",
   loading: "◐",
@@ -125,12 +128,16 @@ function toItemRow(item: FeedItemDTO): ItemRow {
   };
 }
 
-/** The feed list plus the two refresh actions. Exported for the test and for
- *  T073's reuse of the feed list. */
+/** The feed list, the two refresh actions and the list query's error state.
+ *  Exported for the test and for T073's reuse of the feed list; isError and
+ *  refetch extend the task's contract so an errored list never renders as
+ *  the empty state. */
 export function useFeeds(): {
   feeds: FeedRow[];
   refresh: (id: string) => Promise<void>;
   refreshAll: () => Promise<void>;
+  isError: boolean;
+  refetch: () => void;
 } {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -177,7 +184,10 @@ export function useFeeds(): {
           return next;
         });
         await queryClient.invalidateQueries({ queryKey: feedsKey });
-        await queryClient.invalidateQueries({ queryKey: [itemsKey] });
+        // Item queries are per feed; one refresh refetches only its own list.
+        await queryClient.invalidateQueries({
+          queryKey: [itemsKey, id],
+        });
       }
     },
     [queryClient, t],
@@ -207,21 +217,26 @@ export function useFeeds(): {
     [query.data, refreshing],
   );
 
-  return { feeds, refresh, refreshAll };
+  return {
+    feeds,
+    refresh,
+    refreshAll,
+    isError: query.isError,
+    refetch: () => void query.refetch(),
+  };
 }
 
 /** Every stored item of the named feeds, newest first. The endpoint is
- *  per-feed and cursor-paginated, so the hook walks each feed's pages and
- *  merges the results. */
+ *  per-feed and cursor-paginated, so each feed gets its own query (one
+ *  refresh then refetches only that feed's pages) and the hook merges the
+ *  results. */
 function useFeedItems(feedIds: string[], unreadOnly: boolean) {
   const { t } = useTranslation();
-  const sorted = useMemo(() => [...feedIds].sort(), [feedIds]);
-  return useQuery({
-    queryKey: [itemsKey, sorted, unreadOnly],
-    enabled: sorted.length > 0,
-    queryFn: async ({ signal }): Promise<ItemRow[]> => {
-      const rows: ItemRow[] = [];
-      for (const feedId of sorted) {
+  const results = useQueries({
+    queries: feedIds.map((feedId) => ({
+      queryKey: [itemsKey, feedId, unreadOnly] as const,
+      queryFn: async ({ signal }): Promise<ItemRow[]> => {
+        const rows: ItemRow[] = [];
         let cursor: string | null = null;
         do {
           // An explicit annotation keeps the cursor-walking loop out of the
@@ -246,13 +261,28 @@ function useFeedItems(feedIds: string[], unreadOnly: boolean) {
           rows.push(...(page.data.items ?? []).map(toItemRow));
           cursor = page.data.next_cursor;
         } while (cursor !== null);
-      }
-      rows.sort((a, b) =>
-        (b.published_at ?? "").localeCompare(a.published_at ?? ""),
-      );
-      return rows;
-    },
+        return rows;
+      },
+    })),
   });
+  const items = useMemo(
+    () =>
+      results
+        .flatMap((result) => result.data ?? [])
+        // Date.parse keeps mixed RFC 3339 offset styles chronological; NaN
+        // (a missing or invalid timestamp) sorts last via `|| 0`.
+        .sort(
+          (a, b) =>
+            (Date.parse(b.published_at ?? "") || 0) -
+            (Date.parse(a.published_at ?? "") || 0),
+        ),
+    [results],
+  );
+  return {
+    items,
+    isPending: results.some((result) => result.isPending),
+    error: results.find((result) => result.error)?.error ?? null,
+  };
 }
 
 /** One-line text dialog for the context menu's Rename… and Edit URL… entries. */
@@ -275,6 +305,8 @@ function FeedFieldDialog({
   const [busy, setBusy] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    // Enter can re-fire while the submit button is mid-request.
+    if (busy) return;
     setBusy(true);
     const problem = await onSubmit(value.trim());
     setBusy(false);
@@ -319,7 +351,7 @@ export function FeedsScreen(): JSX.Element {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const queryClient = useQueryClient();
-  const { feeds, refresh, refreshAll } = useFeeds();
+  const { feeds, refresh, refreshAll, isError, refetch } = useFeeds();
   const [selectedFeedId, setSelectedFeedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -345,22 +377,32 @@ export function FeedsScreen(): JSX.Element {
     () => (activeFeedId !== null ? [activeFeedId] : feeds.map((f) => f.id)),
     [activeFeedId, feeds],
   );
-  const itemsQuery = useFeedItems(itemFeedIds, unreadOnly);
+  const itemsResult = useFeedItems(itemFeedIds, unreadOnly);
   const feedNames = useMemo(
     () => new Map(feeds.map((feed) => [feed.id, feed.title ?? feed.url])),
     [feeds],
   );
   const items = useMemo(() => {
-    const all = itemsQuery.data ?? [];
     const needle = filter.trim().toLowerCase();
-    if (needle === "") return all;
-    return all.filter((item) => item.title.toLowerCase().includes(needle));
-  }, [itemsQuery.data, filter]);
+    if (needle === "") return itemsResult.items;
+    return itemsResult.items.filter((item) =>
+      item.title.toLowerCase().includes(needle),
+    );
+  }, [itemsResult.items, filter]);
   const byId = useMemo(
-    () => new Map((itemsQuery.data ?? []).map((item) => [item.id, item])),
-    [itemsQuery.data],
+    () => new Map(itemsResult.items.map((item) => [item.id, item])),
+    [itemsResult.items],
   );
   const focused = focusId !== null ? (byId.get(focusId) ?? null) : null;
+
+  // Items that leave the loaded set (feed switch, unread filter, refresh)
+  // must not stay selected — the toolbar would keep offering no-op actions.
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => byId.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [byId]);
 
   const invalidateAll = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: feedsKey });
@@ -395,14 +437,19 @@ export function FeedsScreen(): JSX.Element {
         } catch {
           fail(undefined);
         }
+        await queryClient.invalidateQueries({
+          queryKey: [itemsKey, feedId],
+        });
       }
-      await invalidateAll();
+      await queryClient.invalidateQueries({ queryKey: feedsKey });
     },
-    [byId, fail, invalidateAll],
+    [byId, fail, queryClient],
   );
 
-  const markAllRead = useCallback(async () => {
-    for (const feedId of itemFeedIds) {
+  /** POST /feeds/{id}/items/read-all for one feed; shared by the toolbar's
+   *  "Mark all read" and the feed context menu. */
+  const markFeedAllRead = useCallback(
+    async (feedId: string) => {
       try {
         const { error } = await api.POST("/feeds/{id}/items/read-all", {
           params: { path: { id: feedId } },
@@ -411,9 +458,17 @@ export function FeedsScreen(): JSX.Element {
       } catch {
         fail(undefined);
       }
-    }
-    await invalidateAll();
-  }, [itemFeedIds, fail, invalidateAll]);
+      await queryClient.invalidateQueries({
+        queryKey: [itemsKey, feedId],
+      });
+      await queryClient.invalidateQueries({ queryKey: feedsKey });
+    },
+    [fail, queryClient],
+  );
+
+  const markAllRead = useCallback(async () => {
+    for (const feedId of itemFeedIds) await markFeedAllRead(feedId);
+  }, [itemFeedIds, markFeedAllRead]);
 
   /** POST /tasks with the items' download_url values. One toast per rejected
    *  URI; on success only the created-count toast (task step 6). */
@@ -422,6 +477,10 @@ export function FeedsScreen(): JSX.Element {
       const uris = list
         .map((item) => item.download_url)
         .filter((uri) => uri !== "");
+      if (uris.length < list.length)
+        toast.info(
+          t("rss:toast.itemsSkipped", { count: list.length - uris.length }),
+        );
       if (uris.length === 0) return;
       const { data, error } = await api
         .POST("/tasks", { body: { uris } })
@@ -494,6 +553,15 @@ export function FeedsScreen(): JSX.Element {
       }
       setRemoveFeed(null);
       if (selectedFeedId === feed.id) setSelectedFeedId(null);
+      // Drop the feed's folder assignment so the localStorage map cannot
+      // accumulate orphaned ids across add/remove cycles.
+      setFolders((prev) => {
+        if (!(feed.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[feed.id];
+        storeFolders(next);
+        return next;
+      });
       await invalidateAll();
     },
     [fail, invalidateAll, selectedFeedId],
@@ -523,6 +591,7 @@ export function FeedsScreen(): JSX.Element {
   const submitAdd = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
+      if (addBusy) return;
       setAddBusy(true);
       setAddError(null);
       let data: FeedDTO | undefined;
@@ -568,7 +637,7 @@ export function FeedsScreen(): JSX.Element {
       setAddAuto(false);
       await queryClient.invalidateQueries({ queryKey: feedsKey });
     },
-    [addUrl, addName, addFolder, addAuto, queryClient, t],
+    [addUrl, addName, addFolder, addAuto, addBusy, queryClient, t],
   );
 
   const toggleItem = useCallback((id: string, on: boolean) => {
@@ -654,21 +723,7 @@ export function FeedsScreen(): JSX.Element {
           {t("rss:feeds.menu.editUrl")}
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem
-          onSelect={() =>
-            void (async () => {
-              try {
-                const { error } = await api.POST("/feeds/{id}/items/read-all", {
-                  params: { path: { id: feed.id } },
-                });
-                if (error) fail(error.detail ?? error.title);
-              } catch {
-                fail(undefined);
-              }
-              await invalidateAll();
-            })()
-          }
-        >
+        <ContextMenuItem onSelect={() => void markFeedAllRead(feed.id)}>
           {t("rss:feeds.menu.markAllRead")}
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => void copyFeedUrl(feed)}>
@@ -695,7 +750,16 @@ export function FeedsScreen(): JSX.Element {
           </Button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
-          {feeds.length === 0 ? (
+          {isError ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+              <p role="alert" className="text-sm text-destructive">
+                {t("rss:feeds.loadError")}
+              </p>
+              <Button size="sm" variant="outline" onClick={() => refetch()}>
+                {t("rss:feeds.retry")}
+              </Button>
+            </div>
+          ) : feeds.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
               <Rss
                 aria-hidden="true"
@@ -784,15 +848,17 @@ export function FeedsScreen(): JSX.Element {
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto">
-          {itemsQuery.isError ? (
+          {itemsResult.error !== null ? (
             <p role="alert" className="p-4 text-sm text-destructive">
-              {itemsQuery.error.message}
+              {itemsResult.error.message}
             </p>
           ) : items.length === 0 ? (
             <p className="p-4 text-sm text-muted-foreground">
-              {itemsQuery.isPending
-                ? t("auth.loading")
-                : t("rss:feeds.emptyItems")}
+              {itemsResult.isPending
+                ? t("rss:items.loading")
+                : filter.trim() !== ""
+                  ? t("rss:items.noMatches")
+                  : t("rss:items.empty")}
             </p>
           ) : (
             <table className="w-full text-sm">
@@ -823,9 +889,16 @@ export function FeedsScreen(): JSX.Element {
                 {items.map((item) => (
                   <tr
                     key={item.id}
+                    tabIndex={0}
                     onClick={() => setFocusId(item.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setFocusId(item.id);
+                      }
+                    }}
                     className={cn(
-                      "cursor-pointer border-b last:border-0 hover:bg-muted/50",
+                      "cursor-pointer border-b last:border-0 hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none",
                       focusId === item.id && "bg-accent/50",
                     )}
                   >
@@ -851,6 +924,11 @@ export function FeedsScreen(): JSX.Element {
                       title={item.title}
                     >
                       <span aria-hidden="true">{item.read ? "○" : "●"}</span>{" "}
+                      <span className="sr-only">
+                        {item.read
+                          ? t("rss:items.read")
+                          : t("rss:items.unread")}
+                      </span>{" "}
                       {item.title}
                     </td>
                     <td className="truncate px-2 py-1">
@@ -929,9 +1007,13 @@ export function FeedsScreen(): JSX.Element {
                 >
                   {t("rss:items.markRead")}
                 </Button>
-                {focused.link !== null && (
+                {focused.link !== null && HTTP_URL.test(focused.link) && (
                   <Button size="sm" variant="outline" asChild>
-                    <a href={focused.link} target="_blank" rel="noreferrer">
+                    <a
+                      href={focused.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
                       {t("rss:items.openLink")}
                     </a>
                   </Button>

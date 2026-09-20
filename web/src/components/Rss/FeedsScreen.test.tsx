@@ -155,6 +155,7 @@ beforeEach(() => {
   );
   localStorage.clear();
   const base = document.createElement("base");
+  base.dataset.test = "feeds-screen";
   base.href = "/";
   document.head.appendChild(base);
 });
@@ -163,7 +164,8 @@ afterEach(() => {
   qc.clear();
   server.resetHandlers();
   vi.restoreAllMocks();
-  document.querySelector("base")?.remove();
+  // Only the base tag this suite appended — an App-provided one is not ours.
+  document.querySelector('base[data-test="feeds-screen"]')?.remove();
   window.history.replaceState(null, "", "/");
 });
 afterAll(() => server.close());
@@ -204,6 +206,8 @@ test("TestFeedListRendersStatesAndCounts", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Update" }));
   await waitFor(() => expect(within(arch).getByText("◐")).toBeTruthy());
   gate.release?.();
+  // Let the mutation settle so the test does not end mid-refresh.
+  await waitFor(() => expect(within(arch).queryByText("◐")).toBeNull());
 });
 
 test("TestRefreshShowsItemsAdded", async () => {
@@ -307,6 +311,50 @@ test("TestItemPageLoadsAndPaginates", async () => {
   expect(itemUrls[0].searchParams.get("limit")).toBe("500");
   expect(itemUrls[0].searchParams.get("cursor")).toBeNull();
   expect(itemUrls[1].searchParams.get("cursor")).toBe("c2");
+});
+
+test("TestFeedListErrorShowsRetryNotEmptyState", async () => {
+  server.use(
+    http.get("*/api/v1/feeds", () =>
+      HttpResponse.json(
+        { type: "/problems/internal", title: "Internal", detail: "boom" },
+        { status: 500 },
+      ),
+    ),
+  );
+  mount();
+  expect(await screen.findByText("Could not load the feed list.")).toBeTruthy();
+  expect(screen.queryByText(/Add an RSS feed/)).toBeNull();
+  server.use(http.get("*/api/v1/feeds", () => HttpResponse.json({ feeds })));
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await screen.findByRole("button", { name: /Arch/ });
+});
+
+test("TestItemRowKeyboardActivatesPreview", async () => {
+  mount();
+  const title = await screen.findByText("archlinux-2026.09.01-x86_64.iso");
+  const row = title.closest("tr");
+  expect(row).not.toBeNull();
+  fireEvent.keyDown(row as Element, { key: "Enter" });
+  const preview = screen.getByRole("region", { name: "Preview" });
+  await within(preview).findByText("archlinux-2026.09.01-x86_64.iso");
+});
+
+test("TestNonHttpItemLinkIsNotRendered", async () => {
+  itemsByFeed.fed_arch = [
+    item({
+      id: "itm_js",
+      title: "scripted item",
+      link: "javascript:alert(1)",
+      download_url: "https://arch.example/js.torrent",
+    }),
+  ];
+  mount();
+  const title = await screen.findByText("scripted item");
+  fireEvent.click(title.closest("tr") as Element);
+  const preview = screen.getByRole("region", { name: "Preview" });
+  await within(preview).findByText("scripted item");
+  expect(within(preview).queryByRole("link", { name: "Open link" })).toBeNull();
 });
 
 test("TestRssFeedsRouteResolvesAndSidebarMarksCurrent", async () => {

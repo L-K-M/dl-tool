@@ -37,7 +37,8 @@
       "removeBody": "Remove {{name}} and its stored items? This cannot be undone.",
       "remove": "Remove"
     },
-    "emptyItems": "No items to show yet."
+    "loadError": "Could not load the feed list.",
+    "retry": "Retry"
   },
   "items": {
     "listLabel": "Items",
@@ -58,7 +59,12 @@
     "downloadUrl": "Download URL",
     "download": "Download",
     "openLink": "Open link",
-    "noSelection": "Select an item to preview it."
+    "noSelection": "Select an item to preview it.",
+    "loading": "Loading items…",
+    "noMatches": "No items match the current filter.",
+    "empty": "No items to show yet.",
+    "read": "Read",
+    "unread": "Unread"
   },
   "toast": {
     "itemsAdded_one": "{{count}} new item",
@@ -68,7 +74,9 @@
     "tasksCreated_other": "{{count}} tasks created",
     "itemRejected": "Could not add {{title}}: {{detail}}",
     "copied": "Feed URL copied",
-    "requestFailed": "Request failed: {{detail}}"
+    "requestFailed": "Request failed: {{detail}}",
+    "itemsSkipped_one": "{{count}} selected item has no download link and was skipped",
+    "itemsSkipped_other": "{{count}} selected items have no download link and were skipped"
   },
   "rules": {
     "screenTitle": "RSS rules",

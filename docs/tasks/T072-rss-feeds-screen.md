@@ -175,44 +175,41 @@ cd web && npx vitest run
 
  RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t072-3-1789887101/web
 
- ✓ src/eslint.test.ts (1 test) 1075ms
- ✓ src/store/useUiPrefs.test.ts (17 tests) 1067ms
- ✓ src/main.test.ts (1 test) 1821ms
- ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 1349ms
- ✓ src/store/useTasks.test.ts (17 tests) 148ms
- ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests) 1561ms
- ✓ src/components/Settings/IndexersSection.test.tsx (6 tests) 1723ms
- ✓ src/components/Rss/FeedsScreen.test.tsx (6 tests) 1798ms
-   ✓ TestFeedListRendersStatesAndCounts  462ms
-   ✓ TestDuplicateFeedShowsConflictMessage  355ms
-   ✓ TestRssFeedsRouteResolvesAndSidebarMarksCurrent  304ms
- ✓ src/i18n.test.ts (4 tests) 43ms
- ✓ src/lib/format.test.ts (6 tests) 66ms
- ✓ src/api/client.test.ts (12 tests) 16ms
- ✓ src/sw.test.ts (2 tests) 12ms
- ✓ src/api/events.test.ts (16 tests) 116ms
- ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests) 2618ms
- ✓ src/lib/theme.test.ts (9 tests) 2924ms
- ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 3069ms
- ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3101ms
- ✓ src/components/Shell/Shell.test.tsx (13 tests) 3396ms
- ✓ src/components/Search/SearchScreen.test.tsx (10 tests) 6073ms
- ✓ src/App.test.tsx (55 tests) 5938ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests) 10412ms
+ ✓ src/eslint.test.ts (1 test) 1021ms
+ ✓ src/store/useUiPrefs.test.ts (17 tests) 993ms
+ ✓ src/main.test.ts (1 test) 1823ms
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 1306ms
+ ✓ src/api/events.test.ts (16 tests) 130ms
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests) 1437ms
+ ✓ src/components/Settings/IndexersSection.test.tsx (6 tests) 1569ms
+ ✓ src/lib/format.test.ts (6 tests) 54ms
+ ✓ src/i18n.test.ts (4 tests) 47ms
+ ✓ src/api/client.test.ts (12 tests) 22ms
+ ✓ src/sw.test.ts (2 tests) 9ms
+ ✓ src/store/useTasks.test.ts (17 tests) 92ms
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests) 2341ms
+ ✓ src/components/Rss/FeedsScreen.test.tsx (9 tests) 2370ms
+ ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 2831ms
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3048ms
+ ✓ src/lib/theme.test.ts (9 tests) 2904ms
+ ✓ src/components/Shell/Shell.test.tsx (13 tests) 3229ms
+ ✓ src/components/Search/SearchScreen.test.tsx (10 tests) 5938ms
+ ✓ src/App.test.tsx (55 tests) 5833ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests) 10244ms
 
  Test Files  21 passed (21)
-      Tests  266 passed (266)
-   Duration  12.60s (transform 5.16s, setup 0ms, import 21.12s, tests 48.33s, environment 11.05s)
+      Tests  269 passed (269)
+   Duration  12.35s (transform 5.84s, setup 0ms, import 20.30s, tests 47.24s, environment 10.54s)
 
 RSS_FEEDS_OK
 ```
 
-The `FeedsScreen.test.tsx` vitest line reports only three individual tests in the output above
-because vitest truncates per-test lines for fast files; the file runs six tests —
-`TestFeedListRendersStatesAndCounts`, `TestRefreshShowsItemsAdded`,
+`FeedsScreen.test.tsx` runs nine tests — the six from the initial commit
+(`TestFeedListRendersStatesAndCounts`, `TestRefreshShowsItemsAdded`,
 `TestDownloadSelectedPostsDownloadUrls`, `TestDuplicateFeedShowsConflictMessage`,
-`TestItemPageLoadsAndPaginates` and `TestRssFeedsRouteResolvesAndSidebarMarksCurrent` — all passing
-(`(6 tests)` in the file line).
+`TestItemPageLoadsAndPaginates`, `TestRssFeedsRouteResolvesAndSidebarMarksCurrent`) plus three
+added while addressing review (`TestFeedListErrorShowsRetryNotEmptyState`,
+`TestItemRowKeyboardActivatesPreview`, `TestNonHttpItemLinkIsNotRendered`).
 
 Scope check:
 
