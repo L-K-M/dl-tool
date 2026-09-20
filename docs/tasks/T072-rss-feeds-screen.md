@@ -175,41 +175,42 @@ cd web && npx vitest run
 
  RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t072-3-1789887101/web
 
- ✓ src/eslint.test.ts (1 test) 1036ms
- ✓ src/store/useUiPrefs.test.ts (17 tests) 1031ms
- ✓ src/main.test.ts (1 test) 1720ms
- ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 1323ms
- ✓ src/components/Settings/IndexersSection.test.tsx (6 tests) 1539ms
- ✓ src/store/useTasks.test.ts (17 tests) 135ms
- ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests) 1532ms
- ✓ src/i18n.test.ts (4 tests) 80ms
- ✓ src/lib/format.test.ts (6 tests) 107ms
+ ✓ src/eslint.test.ts (1 test) 955ms
+ ✓ src/store/useUiPrefs.test.ts (17 tests) 1051ms
+ ✓ src/main.test.ts (1 test) 1961ms
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 1282ms
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests) 1330ms
+ ✓ src/components/Settings/IndexersSection.test.tsx (6 tests) 1599ms
+ ✓ src/api/events.test.ts (16 tests) 182ms
+ ✓ src/lib/format.test.ts (6 tests) 52ms
+ ✓ src/i18n.test.ts (4 tests) 44ms
+ ✓ src/api/client.test.ts (12 tests) 18ms
  ✓ src/sw.test.ts (2 tests) 12ms
- ✓ src/api/client.test.ts (12 tests) 23ms
- ✓ src/components/Rss/FeedsScreen.test.tsx (9 tests) 2249ms
- ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests) 2722ms
- ✓ src/api/events.test.ts (16 tests) 155ms
- ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 3003ms
- ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3165ms
- ✓ src/lib/theme.test.ts (9 tests) 3238ms
- ✓ src/components/Shell/Shell.test.tsx (13 tests) 3755ms
- ✓ src/components/Search/SearchScreen.test.tsx (10 tests) 6971ms
- ✓ src/App.test.tsx (55 tests) 8411ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests) 14466ms
+ ✓ src/store/useTasks.test.ts (17 tests) 106ms
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests) 2495ms
+ ✓ src/components/Rss/FeedsScreen.test.tsx (10 tests) 2434ms
+ ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 2970ms
+ ✓ src/lib/theme.test.ts (9 tests) 2889ms
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 2999ms
+ ✓ src/components/Shell/Shell.test.tsx (13 tests) 3152ms
+ ✓ src/components/Search/SearchScreen.test.tsx (10 tests) 5867ms
+ ✓ src/App.test.tsx (55 tests) 5853ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests) 10403ms
 
  Test Files  21 passed (21)
-      Tests  269 passed (269)
-   Duration  16.84s (transform 5.89s, setup 0ms, import 21.92s, tests 56.67s, environment 11.73s)
+      Tests  270 passed (270)
+   Duration  12.53s (transform 5.72s, setup 0ms, import 20.78s, tests 47.65s, environment 10.51s)
 
 RSS_FEEDS_OK
 ```
 
-`FeedsScreen.test.tsx` runs nine tests — the six from the initial commit
+`FeedsScreen.test.tsx` runs ten tests — the six from the initial commit
 (`TestFeedListRendersStatesAndCounts`, `TestRefreshShowsItemsAdded`,
 `TestDownloadSelectedPostsDownloadUrls`, `TestDuplicateFeedShowsConflictMessage`,
-`TestItemPageLoadsAndPaginates`, `TestRssFeedsRouteResolvesAndSidebarMarksCurrent`) plus three
+`TestItemPageLoadsAndPaginates`, `TestRssFeedsRouteResolvesAndSidebarMarksCurrent`) plus four
 added while addressing review (`TestFeedListErrorShowsRetryNotEmptyState`,
-`TestItemRowKeyboardActivatesPreview`, `TestNonHttpItemLinkIsNotRendered`).
+`TestItemRowKeyboardActivatesPreview`, `TestNonHttpItemLinkIsNotRendered`,
+`TestRemoveFeedClearsFolderAssignment`).
 
 Scope check:
 

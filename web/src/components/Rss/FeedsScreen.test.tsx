@@ -357,6 +357,35 @@ test("TestNonHttpItemLinkIsNotRendered", async () => {
   expect(within(preview).queryByRole("link", { name: "Open link" })).toBeNull();
 });
 
+test("TestRemoveFeedClearsFolderAssignment", async () => {
+  const deleted: string[] = [];
+  server.use(
+    http.delete("*/api/v1/feeds/:id", ({ params }) => {
+      deleted.push(String(params.id));
+      feeds = feeds.filter((f) => f.id !== params.id);
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+  // Seed the map before mount so the screen hydrates it.
+  localStorage.setItem(
+    "dl.rss.folders.v1",
+    JSON.stringify({ fed_arch: "linux" }),
+  );
+  mount();
+  const arch = await screen.findByRole("button", { name: /Arch/ });
+  fireEvent.contextMenu(arch);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Remove" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: /Arch/ })).toBeNull(),
+  );
+  expect(deleted).toEqual(["fed_arch"]);
+  expect(JSON.parse(localStorage.getItem("dl.rss.folders.v1") ?? "{}")).toEqual(
+    {},
+  );
+});
+
 test("TestRssFeedsRouteResolvesAndSidebarMarksCurrent", async () => {
   server.use(
     http.get("*/api/v1/auth/me", () => HttpResponse.json(session)),
