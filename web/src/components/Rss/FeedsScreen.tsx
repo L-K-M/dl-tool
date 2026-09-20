@@ -6,7 +6,12 @@ import {
   type FormEvent,
   type JSX,
 } from "react";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Rss } from "lucide-react";
@@ -232,7 +237,26 @@ export function useFeeds(): {
  *  results. */
 function useFeedItems(feedIds: string[], unreadOnly: boolean) {
   const { t } = useTranslation();
-  const results = useQueries({
+  // combine is memoized via structural sharing, so the merged list keeps a
+  // stable identity across renders — a plain `useQueries` result array is
+  // rebuilt every render and would churn every downstream memo.
+  const combine = useCallback(
+    (results: UseQueryResult<ItemRow[], Error>[]) => ({
+      items: results
+        .flatMap((result) => result.data ?? [])
+        // Date.parse keeps mixed RFC 3339 offset styles chronological; NaN
+        // (a missing or invalid timestamp) sorts last via `|| 0`.
+        .sort(
+          (a, b) =>
+            (Date.parse(b.published_at ?? "") || 0) -
+            (Date.parse(a.published_at ?? "") || 0),
+        ),
+      isPending: results.some((result) => result.isPending),
+      error: results.find((result) => result.error)?.error ?? null,
+    }),
+    [],
+  );
+  return useQueries({
     queries: feedIds.map((feedId) => ({
       queryKey: [itemsKey, feedId, unreadOnly] as const,
       queryFn: async ({ signal }): Promise<ItemRow[]> => {
@@ -264,25 +288,8 @@ function useFeedItems(feedIds: string[], unreadOnly: boolean) {
         return rows;
       },
     })),
+    combine,
   });
-  const items = useMemo(
-    () =>
-      results
-        .flatMap((result) => result.data ?? [])
-        // Date.parse keeps mixed RFC 3339 offset styles chronological; NaN
-        // (a missing or invalid timestamp) sorts last via `|| 0`.
-        .sort(
-          (a, b) =>
-            (Date.parse(b.published_at ?? "") || 0) -
-            (Date.parse(a.published_at ?? "") || 0),
-        ),
-    [results],
-  );
-  return {
-    items,
-    isPending: results.some((result) => result.isPending),
-    error: results.find((result) => result.error)?.error ?? null,
-  };
 }
 
 /** One-line text dialog for the context menu's Rename… and Edit URL… entries. */
@@ -554,17 +561,17 @@ export function FeedsScreen(): JSX.Element {
       setRemoveFeed(null);
       if (selectedFeedId === feed.id) setSelectedFeedId(null);
       // Drop the feed's folder assignment so the localStorage map cannot
-      // accumulate orphaned ids across add/remove cycles.
-      setFolders((prev) => {
-        if (!(feed.id in prev)) return prev;
-        const next = { ...prev };
+      // accumulate orphaned ids across add/remove cycles. The write lives
+      // outside the state updater, which must stay pure.
+      if (feed.id in folders) {
+        const next = { ...folders };
         delete next[feed.id];
         storeFolders(next);
-        return next;
-      });
+        setFolders(next);
+      }
       await invalidateAll();
     },
-    [fail, invalidateAll, selectedFeedId],
+    [fail, folders, invalidateAll, selectedFeedId],
   );
 
   const patchFeed = useCallback(

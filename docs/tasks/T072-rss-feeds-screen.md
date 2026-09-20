@@ -175,31 +175,31 @@ cd web && npx vitest run
 
  RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t072-3-1789887101/web
 
- ✓ src/eslint.test.ts (1 test) 1021ms
- ✓ src/store/useUiPrefs.test.ts (17 tests) 993ms
- ✓ src/main.test.ts (1 test) 1823ms
- ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 1306ms
- ✓ src/api/events.test.ts (16 tests) 130ms
- ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests) 1437ms
- ✓ src/components/Settings/IndexersSection.test.tsx (6 tests) 1569ms
- ✓ src/lib/format.test.ts (6 tests) 54ms
- ✓ src/i18n.test.ts (4 tests) 47ms
- ✓ src/api/client.test.ts (12 tests) 22ms
- ✓ src/sw.test.ts (2 tests) 9ms
- ✓ src/store/useTasks.test.ts (17 tests) 92ms
- ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests) 2341ms
- ✓ src/components/Rss/FeedsScreen.test.tsx (9 tests) 2370ms
- ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 2831ms
- ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3048ms
- ✓ src/lib/theme.test.ts (9 tests) 2904ms
- ✓ src/components/Shell/Shell.test.tsx (13 tests) 3229ms
- ✓ src/components/Search/SearchScreen.test.tsx (10 tests) 5938ms
- ✓ src/App.test.tsx (55 tests) 5833ms
- ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests) 10244ms
+ ✓ src/eslint.test.ts (1 test) 1036ms
+ ✓ src/store/useUiPrefs.test.ts (17 tests) 1031ms
+ ✓ src/main.test.ts (1 test) 1720ms
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 1323ms
+ ✓ src/components/Settings/IndexersSection.test.tsx (6 tests) 1539ms
+ ✓ src/store/useTasks.test.ts (17 tests) 135ms
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests) 1532ms
+ ✓ src/i18n.test.ts (4 tests) 80ms
+ ✓ src/lib/format.test.ts (6 tests) 107ms
+ ✓ src/sw.test.ts (2 tests) 12ms
+ ✓ src/api/client.test.ts (12 tests) 23ms
+ ✓ src/components/Rss/FeedsScreen.test.tsx (9 tests) 2249ms
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests) 2722ms
+ ✓ src/api/events.test.ts (16 tests) 155ms
+ ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 3003ms
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3165ms
+ ✓ src/lib/theme.test.ts (9 tests) 3238ms
+ ✓ src/components/Shell/Shell.test.tsx (13 tests) 3755ms
+ ✓ src/components/Search/SearchScreen.test.tsx (10 tests) 6971ms
+ ✓ src/App.test.tsx (55 tests) 8411ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests) 14466ms
 
  Test Files  21 passed (21)
       Tests  269 passed (269)
-   Duration  12.35s (transform 5.84s, setup 0ms, import 20.30s, tests 47.24s, environment 10.54s)
+   Duration  16.84s (transform 5.89s, setup 0ms, import 21.92s, tests 56.67s, environment 11.73s)
 
 RSS_FEEDS_OK
 ```
