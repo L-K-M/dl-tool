@@ -123,7 +123,9 @@ Wire rules the editor depends on:
 - A `titles` request is bounded — at most 50 titles of 500 UTF-8 bytes each, an empty array is a `422` —
   and ignores `feeds`, `limit` and `ignore_state` (synthesized items evaluate statelessly); the one
   result per title carries `feed_id`, `feed`, `download_url` and `published_at` as JSON `null`, which
-  `DryRunItem`'s `FeedID`, `Feed` and `DownloadURL` becoming `*string` expresses.
+  `DryRunItem`'s `FeedID`, `Feed` and `DownloadURL` becoming `*string` expresses; `PublishedAt` is
+  already `*string`, stays nil for synthesized items, and none of the four members carries `omitempty`,
+  so a nil marshals as `null`, never an absent key.
 - `limit` is per feed (doc 05 §10.3), so a rule scoped to several feeds can return more than
   `PREVIEW_LIMIT` rows. The editor renders only the newest `PREVIEW_LIMIT` — the merged results arrive
   newest-first — and the headline's `N` counts matches among the displayed rows, so
@@ -160,7 +162,8 @@ The headline reads exactly `matches N of the last 50 items`.
    `Decision.Highlight` only when `Matched` and the span is non-empty, and add `Titles` to
    `DryRunRequest`: when non-empty, `DryRun` synthesizes one `store.FeedItem` per title — `Title` set,
    `ID` and `Identity` carrying a distinct synthetic value so the decision join and dedup keys stay
-   correct, every other field at its zero value — evaluates them with `StatelessState`, and skips the
+   correct, every other field at its zero value (`PublishedAt` nil maps to `null` through the existing
+   `unixMilliPtrRFC3339`) — evaluates them with `StatelessState`, and skips the
    stored-item selection entirely (`feeds`, `limit` and `ignore_state` do not apply; more than 50
    titles, a title over 500 bytes or an empty array is a `422`). Add `Titles` to `TestRuleInput.Body`
    and forward it in `internal/api/rules.go`.
