@@ -94,7 +94,7 @@ type DryRunItem struct {
 	Feed        *string `json:"feed"`         // same
 	DownloadURL *string `json:"download_url"` // same
 	// ...existing members... (PublishedAt is already *string)
-	Highlight *[2]int `json:"highlight,omitempty"` // [start,end) UTF-8 byte offsets into Title; nil unless Matched
+	Highlight *[2]int `json:"highlight,omitempty"` // [start,end) UTF-8 byte offsets into Title; nil unless Matched and the span is non-empty
 }
 
 type WouldDo struct {
