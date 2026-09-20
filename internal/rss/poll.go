@@ -280,8 +280,15 @@ func (p *Poller) completeFetch(ctx context.Context, f store.Feed, resp *http.Res
 	// failure is logged, never a poll error — the ladder answers for the
 	// fetch alone.
 	if added > 0 && p.creator != nil {
-		if err := RunAllRules(ctx, p.db, f.ID, p.creator, now); err != nil {
-			p.log.WarnContext(ctx, "rule pass failed",
+		// The items and validators recordSuccess stored are already
+		// durable, and the next poll answers 304 — so the pass must not
+		// die with a poll context cancelled mid-grab (a refresh client
+		// gone, a shutdown boundary). Detach from cancellation only; the
+		// engine hand-offs keep their own per-call deadlines, so the
+		// detached pass stays bounded.
+		rctx := context.WithoutCancel(ctx)
+		if err := RunAllRules(rctx, p.db, f.ID, p.creator, now); err != nil {
+			p.log.WarnContext(rctx, "rule pass failed",
 				"feed_id", f.ID, "err", err)
 		}
 	}

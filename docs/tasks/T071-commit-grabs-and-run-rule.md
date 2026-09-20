@@ -244,26 +244,33 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/rss/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/rss	15.795s
-ok  	github.com/L-K-M/dl-tool/internal/api	160.192s
+ok  	github.com/L-K-M/dl-tool/internal/rss	15.090s
+ok  	github.com/L-K-M/dl-tool/internal/api	149.296s
 GRAB_OK
 ```
 
 The acceptance-criteria tests, from the same head under `go test -race -count=1 -v`:
 
 ```
---- PASS: TestRunRuleReportsEvaluatedAndGrabbed (0.52s)
---- PASS: TestContentKeyContestCreatesOneTaskAndOneFallback (0.44s)
---- PASS: TestMaxPerRunCaps (0.45s)
---- PASS: TestDuplicateInfoHashAcrossFeeds (0.45s)
---- PASS: TestFailedHandoffDoesNotStageEpisodeKey (0.41s)
---- PASS: TestSecondRunIsIdempotent (0.42s)
+--- PASS: TestRunRuleReportsEvaluatedAndGrabbed (0.48s)
+--- PASS: TestContentKeyContestCreatesOneTaskAndOneFallback (0.43s)
+--- PASS: TestMaxPerRunCaps (0.39s)
+--- PASS: TestDuplicateInfoHashAcrossFeeds (0.43s)
+--- PASS: TestFailedHandoffDoesNotStageEpisodeKey (0.43s)
+--- PASS: TestSecondRunIsIdempotent (0.41s)
+--- PASS: TestPollRulePassSurvivesPollContextCancel (0.44s)
 --- PASS: TestPoll304RunsNoRule (0.44s)
---- PASS: TestFeedItemsMatchedRules (0.43s)
+--- PASS: TestFeedItemsMatchedRules (0.46s)
 --- PASS: TestRunRuleCommitsGrabsAsTasks (0.47s)
---- PASS: TestRunRuleUnknownIsNotFound (0.40s)
---- PASS: TestRunRuleCreatedIDsShorterThanMatched (0.48s)
+--- PASS: TestRunRuleUnknownIsNotFound (0.38s)
+--- PASS: TestRunRuleCreatedIDsShorterThanMatched (0.47s)
 ```
+
+`TestPollRulePassSurvivesPollContextCancel` is the round-2 review fix: the rule pass now runs on
+`context.WithoutCancel(ctx)`, because `recordSuccess` has already stored the validators that make the
+next poll answer 304 — a poll context cancelled mid-grab (refresh client gone, shutdown boundary)
+stranded the remaining grabs until the feed changed again. The engine hand-offs keep their own
+per-call deadlines, so the detached pass stays bounded.
 
 Scope check:
 

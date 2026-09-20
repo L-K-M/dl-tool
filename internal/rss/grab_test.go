@@ -369,6 +369,68 @@ func TestSecondRunIsIdempotent(t *testing.T) {
 	require.Len(t, matchRows(t, db), 2)
 }
 
+// cancelFirstCreator cancels the poll context during the first grab, then
+// delegates: the stand-in for a refresh client that walks away mid-pass.
+type cancelFirstCreator struct {
+	recordingCreator
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (c *cancelFirstCreator) CreateForRule(ctx context.Context, g GrabRequest) (string, error) {
+	c.once.Do(c.cancel)
+
+	return c.recordingCreator.CreateForRule(ctx, g)
+}
+
+// TestPollRulePassSurvivesPollContextCancel: the rule pass commits grabs
+// the fetch already paid for, and recordSuccess has stored the validators
+// that make the next poll answer 304 — so a poll context cancelled mid-pass
+// (a refresh client gone, a shutdown boundary) must not abort the hand-offs,
+// or the stored items sit unevaluated until the feed changes again.
+func TestPollRulePassSurvivesPollContextCancel(t *testing.T) {
+	db := newTestDB(t)
+
+	const etag = `"v1"`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	feed := newFeed(t, db, srv.URL+"/feed")
+	seedRule(t, db, RuleDoc{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	creator := &cancelFirstCreator{
+		recordingCreator: recordingCreator{tasks: store.NewTaskStore(db)},
+		cancel:           cancel,
+	}
+	parser := stubParser{items: []store.FeedItem{
+		grabItem(feed.ID, "id-1", "release one", testNow.UnixMilli()),
+		grabItem(feed.ID, "id-2", "release two", testNow.UnixMilli()),
+	}}
+
+	origin, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	client := secure.NewClient(secure.NewGuard(discardLog(), true).ForOrigin(origin))
+	client.Timeout = 10 * time.Second
+	poller := NewPoller(db, client, parser, creator, discardLog(), func() time.Time { return testNow })
+	poller.startedAt = testNow.Add(-time.Hour)
+
+	res, err := poller.Poll(ctx, feed, false)
+	require.NoError(t, err)
+	require.Equal(t, 2, res.ItemsAdded)
+	require.Equal(t, 2, creator.count(), "the pass must finish its grabs after the poll context ends")
+
+	rows := matchRows(t, db)
+	require.Len(t, rows, 2)
+	for _, row := range rows {
+		require.Equal(t, matchSent, row.Status,
+			"a cancelled poll context must not strand a grab at %q", row.Status)
+	}
+}
+
 // TestPoll304RunsNoRule: a 304 poll runs no rule — the creator sees no
 // new grab — while the 200 that added the item did run the pass.
 func TestPoll304RunsNoRule(t *testing.T) {
