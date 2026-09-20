@@ -107,7 +107,7 @@ type GrabRequest struct {
 }
 
 // internal/api/rules.go — TestRuleInput.Body gains the member doc 05 §10.3 lists.
-	Titles []string `json:"titles,omitempty" doc:"Arbitrary titles evaluated in place of stored items; feeds and limit do not apply"`
+	Titles []string `json:"titles,omitempty" doc:"Arbitrary titles evaluated statelessly in place of stored items; feeds, limit and ignore_state do not apply"`
 ```
 
 Wire rules the editor depends on:
@@ -116,11 +116,14 @@ Wire rules the editor depends on:
   `body.definition.` (F255's recorded conflict, pinned in doc 05 §10.3). Strip either prefix before
   mapping the remainder — `episode.filter` → **Episode filter**, `match.any_of` → **Must contain**,
   `match.none_of` → **Must not contain** — onto the same control.
-- `highlight` arrives as UTF-8 byte offsets into `title`. Convert to UTF-16 code-unit indices before
-  slicing: walk the title accumulating `encoder.encode(title.slice(0, i)).length` (or equivalent), never
-  `title.slice(start, end)` on the raw values.
-- A `titles` dry run ignores `feeds` and `limit`; the one result per title carries empty `feed_id`,
-  `feed` and `download_url` and `published_at: null`.
+- `highlight` arrives as `[start,end)` — half-open, `end` exclusive — UTF-8 byte offsets into `title`.
+  Convert to UTF-16 code-unit indices before slicing: walk the title accumulating
+  `encoder.encode(title.slice(0, i)).length` (or equivalent), never `title.slice(start, end)` on the
+  raw values.
+- A `titles` request is bounded — at most 50 titles of 500 UTF-8 bytes each, an empty array is a `422` —
+  and ignores `feeds`, `limit` and `ignore_state` (synthesized items evaluate statelessly); the one
+  result per title carries `feed_id`, `feed`, `download_url` and `published_at` as JSON `null`, which
+  `DryRunItem`'s `FeedID`, `Feed` and `DownloadURL` becoming `*string` expresses.
 - `limit` is per feed (doc 05 §10.3), so a rule scoped to several feeds can return more than
   `PREVIEW_LIMIT` rows. The editor renders only the newest `PREVIEW_LIMIT` — the merged results arrive
   newest-first — and the headline's `N` counts matches among the displayed rows, so
@@ -157,8 +160,10 @@ The headline reads exactly `matches N of the last 50 items`.
    `Decision.Highlight` only when `Matched` and the span is non-empty, and add `Titles` to
    `DryRunRequest`: when non-empty, `DryRun` synthesizes one `store.FeedItem` per title — `Title` set,
    `ID` and `Identity` carrying a distinct synthetic value so the decision join and dedup keys stay
-   correct, every other field at its zero value — and skips the stored-item selection entirely
-   (`feeds` and `limit` do not apply). Add `Titles` to `TestRuleInput.Body` and forward it in `internal/api/rules.go`.
+   correct, every other field at its zero value — evaluates them with `StatelessState`, and skips the
+   stored-item selection entirely (`feeds`, `limit` and `ignore_state` do not apply; more than 50
+   titles, a title over 500 bytes or an empty array is a `422`). Add `Titles` to `TestRuleInput.Body`
+   and forward it in `internal/api/rules.go`.
    Then `make gen` so `api/openapi.json` and `web/src/api/schema.d.ts` carry the new members.
 2. Create `web/src/components/Rss/RuleEditor.tsx` with the three columns of doc 09 §8.2: the rules list
    with `[+] [⧉] [🗑]` and the *Import / export rules* buttons, the form, and the preview.
@@ -176,7 +181,7 @@ The headline reads exactly `matches N of the last 50 items`.
 7. Bind the *Ignore already-downloaded* toggle to `ignore_state`, defaulting to on, and show `evaluated`,
    `matched` and `elapsed_ms` beneath the list.
 8. Implement the docked test panel: a title input and `Test`, which posts a one-item dry run —
-   `{rule, titles: [title], ignore_state}` — and renders `✓ MATCH` or the reason, naming the clause
+   `{rule, titles: [title]}` — and renders `✓ MATCH` or the reason, naming the clause
    that decided it.
 9. Add the `(?)` popover beside the mode toggle carrying the two qBittorrent help sentences of doc 09 §8.2
    verbatim, stored as two keys in `rss.json`.
@@ -184,7 +189,8 @@ The headline reads exactly `matches N of the last 50 items`.
     `POST /rules/{id}/run`, confirming first and reporting `evaluated`, `matched` and the created count.
 11. Wire the toolbar's *Import / export rules* (F317's owner): export downloads a JSON array of the
     `{"name","definition"}` pairs of `GET /rules`; import reads such a file — a single object or an
-    array — and posts each entry to `POST /rules`, reporting per-name failures. No new endpoint.
+    array — and posts each entry to `POST /rules`, skipping a name that already exists (`POST /rules`
+    answers a duplicate with `409`) and reporting skipped names and per-name failures. No new endpoint.
 12. Use T047's folder browser for `Destination` and T050's category list for `Category`; add no new picker.
 13. Edit `web/src/locales/en/rss.json` with the labels, the ten reason sentences and the help text, then
     edit `web/src/App.tsx` to route `/rss/rules`.
@@ -225,9 +231,10 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, plus `api/openapi.json` and
-`web/src/api/schema.d.ts` from `make gen`, and nothing else. Use `git status`, not `git diff`: a file
-this task creates is untracked, and `git diff --name-only` never lists an untracked file.
+Expected: exactly the paths in the Files table plus `api/openapi.json` and `web/src/api/schema.d.ts`
+from `make gen`, and nothing else — the command sorts, so the output order will not match the table's
+row order. Use `git status`, not `git diff`: a file this task creates is untracked, and
+`git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT implement the matching algorithm in TypeScript. Every verdict, score and highlight offset comes
@@ -329,22 +336,25 @@ interpretation consistent with the accepted ADRs, the merged code and doc 09 §1
 which advertises the docked test field, the live preview and first-class tags — plus remedy 4 in full:
 
 - F116: `DryRunItem` gains `Highlight *[2]int` (`json:"highlight,omitempty"`), filled from
-  `Decision.Highlight` only when `Matched` and the span is non-empty. Doc 05 §10.3 now pins that the
-  offsets are UTF-8 bytes the editor converts to UTF-16 code-unit indices before slicing, and its
-  example carries a non-ASCII title (`täysi ubuntu-…`, `[7,13]` bytes vs `[6,12]` code units) so the
-  two index systems diverge.
+  `Decision.Highlight` only when `Matched` and the span is non-empty. Doc 05 §10.3 now pins the
+  `[start,end)` half-open UTF-8 byte offsets and that the editor converts them to UTF-16 code-unit
+  indices before slicing, and its example carries a non-ASCII title (`täysi ubuntu-…`, `[7,13]` bytes
+  vs `[6,12]` code units) so the two index systems diverge.
 - F115: `POST /rules/test` gains `titles: string[]` — doc 05 §10.3's body table,
-  `TestRuleInput.Body.Titles` and `DryRunRequest.Titles` — evaluated in place of stored items, one
-  synthesized `store.FeedItem` per title (`feed_id`, `feed`, `download_url` empty, `published_at`
-  null, request order preserved), `feeds` and `limit` inapplicable. Step 8 cites the member.
+  `TestRuleInput.Body.Titles` and `DryRunRequest.Titles` — evaluated statelessly in place of stored
+  items, one synthesized `store.FeedItem` per title (`feed_id`, `feed`, `download_url` and
+  `published_at` all JSON `null`, request order preserved), `feeds`, `limit` and `ignore_state`
+  inapplicable, bounded at 50 titles of 500 UTF-8 bytes each with an empty array a `422`. Step 8 cites
+  the member.
 - F379: `ActionSpec` gains `Tags` (doc 08 §4.1/§4.2's `action.tags`, created on demand like
   `POST /tasks`' `tags`), `GrabRequest` gains `Tags`, `Commit` populates it and
   `ruleTaskCreator.CreateForRule` forwards it into the `POST /tasks` body — which already accepts
   `tags`. The field-mapping table gains the `Tags` row.
 - Remedy 4: doc 05 §10.3 now pins both `errors[].location` prefixes (`body.rule.` dry run,
   `body.definition.` save) and the editor maps both onto the same control — F255 resolved. F317's
-  import/export is assigned here: step 11 wires it through `GET /rules` + `POST /rules`, no new
-  endpoint. Two adjacent rows closed in the same pass: F315's second half (**Add stopped** is a
+  import/export is assigned here: step 11 wires it through `GET /rules` + `POST /rules`, skipping
+  names that already exist (a duplicate name is `409`) and reporting the skips — no new endpoint.
+  Two adjacent rows closed in the same pass: F315's second half (**Add stopped** is a
   checkbox bound to `action.paused` — no global add-stopped setting exists, so `Use global ▾` was a
   wireframe artifact) and F316 (the editor renders only the newest `PREVIEW_LIMIT` merged rows and
   counts the headline's `N` among them, so "the last 50 items" is literal).
