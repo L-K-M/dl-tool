@@ -190,4 +190,45 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+RAR is absent from the `7zz` the runtime image ships, so the `.rar` acceptance criterion cannot pass.
+The task says to stop here rather than weaken it.
+
+The image installs Alpine's `7zip` package (`Dockerfile`: `apk add --no-cache ... 7zip` on
+`alpine:3.22`), which resolves to `7zip-24.09-r0` from `v3.22/main/x86_64`. With no Docker daemon
+available the image itself could not be built, so the check ran against that exact `.apk` — the same
+binary the build would install — executed under its own musl loader:
+
+```bash
+curl -sO https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/APKINDEX.tar.gz
+tar xzf APKINDEX.tar.gz APKINDEX && grep -A2 '^P:7zip$' APKINDEX   # V:24.09-r0
+# fetch 7zip-24.09-r0.apk plus its musl/libgcc/libstdc++ deps, then:
+./lib/ld-musl-x86_64.so.1 --library-path usr/lib:lib ./usr/bin/7zz i | grep -i rar
+# (no output — exit 1)
+```
+
+`7zz i` on `7zip-24.09-r0` lists 59 format lines — `7z`, `tar`, `gzip` (which covers `.gz` and `.tgz`)
+and `zip` are all present — but neither `Rar` nor `Rar5` appears anywhere in Formats or Codecs. The
+codec is compiled out of Alpine's build, not missing a loadable module: Alpine v3.22 has no `unrar`
+or codec package in either `main` or `community` (`grep -E '^P:(7zip|unrar|rar)'` over both
+APKINDEX files finds only `clamav-libunrar`, a ClamAV-internal library nothing can plug into `7zz`).
+Upstream's official `7z2603-linux-x64` build does carry RAR (`Rar`, `Rar5` formats; `Rar1`–`Rar5`
+codecs), so the capability exists — Alpine's packaging is what drops it, matching the suspicion
+recorded in the open question.
+
+This is the open question of [`docs/06-download-engines.md`](../06-download-engines.md#open-questions)
+coming due, and per [`IMPLEMENTING.md`](../../IMPLEMENTING.md) it is one of the two items that need an
+ADR from the repository owner before the task can run. The answer belongs in a new ADR under
+`docs/decisions/`, and depending on it, in files outside this task's `## Files` table:
+
+- **Keep `.rar`:** the image needs a RAR-capable `7zz` — e.g. pin and hash-verify upstream's
+  `7z<ver>-linux-x64.tar.xz` musl-compatible binary the way ADR-0018 pins yt-dlp — which means editing
+  `Dockerfile` (and `docs/10-deployment-and-compose.md` §5's package list). That also settles
+  `DLTOOL_SEVENZIP_PATH`'s target.
+- **Drop `.rar`:** FR-100 in `docs/02-requirements.md`, §7 of `docs/06-download-engines.md`, this
+  task's goal/Files/acceptance criteria and T075/T076's fixture lists all name the six formats and
+  would need to say five.
+
+One secondary wrinkle either way: a `.rar` *fixture* cannot be produced by `7zz` itself (RAR
+compression is proprietary and write-side), so `TestExtractsAllSixFormats` would need a checked-in or
+generated-elsewhere fixture if `.rar` stays.
