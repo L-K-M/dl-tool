@@ -175,7 +175,7 @@ The feed poller, the rule engine, dry-run and the RSS screens. Exit checkpoint: 
 | [T069](T069-rule-matching-algorithm.md) | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | done |
 | [T070](T070-rule-dry-run-endpoint.md) | Dry-run a rule and report a reason code for every evaluated item | T068, T069 | done |
 | [T071](T071-commit-grabs-and-run-rule.md) | Commit rule matches as tasks and run a rule against existing items | T020, T024, T065, T066, T067, T069, T070 | done |
-| [T072](T072-rss-feeds-screen.md) | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066, T068, T071 | todo |
+| [T072](T072-rss-feeds-screen.md) | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066, T068, T071 | done |
 | [T073](T073-rule-editor-and-live-preview.md) | Build the rule editor with the live dry-run preview | T047, T050, T068, T070, T071, T072 | todo |
 
 ## M6 — Post-processing, automation and the account
@@ -385,7 +385,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T069 | Evaluate rules with the fourteen-step algorithm and the reason-code enum | T015, T016, T067, T068 | yes | done | [T069](T069-rule-matching-algorithm.md) |
 | T070 | Dry-run a rule and report a reason code for every evaluated item | T068, T069 | no | done | [T070](T070-rule-dry-run-endpoint.md) |
 | T071 | Commit rule matches as tasks and run a rule against existing items | T020, T024, T065, T066, T067, T069, T070 | no | done | [T071](T071-commit-grabs-and-run-rule.md) |
-| T072 | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066, T068, T071 | no | todo | [T072](T072-rss-feeds-screen.md) |
+| T072 | Build the RSS feeds and items screen | T014, T040, T044, T052, T065, T066, T068, T071 | no | done | [T072](T072-rss-feeds-screen.md) |
 | T073 | Build the rule editor with the live dry-run preview | T047, T050, T068, T070, T071, T072 | no | todo | [T073](T073-rule-editor-and-live-preview.md) |
 
 ### M6

@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T072 |
 | **Milestone** | M5 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T014, T040, T044, T052, T065, T066, T068, T071 |
 | **Blocks** | T073 |
 | **Parallel-safe** | no — adds a route to T040's `web/src/App.tsx` |
@@ -113,12 +113,12 @@ Fixed labels, verbatim from doc 09 §8.1: the Add-feed dialog is **URL**, **Name
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestFeedListRendersStatesAndCounts` and `TestRefreshShowsItemsAdded` pass.
-- [ ] `TestDownloadSelectedPostsDownloadUrls` asserts the request body's `uris[]` exactly.
-- [ ] `TestDuplicateFeedShowsConflictMessage` passes.
-- [ ] The route `/rss/feeds` resolves and the sidebar `RSS → Feeds` node marks itself `aria-current`.
-- [ ] No component in `web/src/components/Rss/` calls `fetch` directly.
-- [ ] Every size, rate and date renders through `Intl`.
+- [x] `TestFeedListRendersStatesAndCounts` and `TestRefreshShowsItemsAdded` pass.
+- [x] `TestDownloadSelectedPostsDownloadUrls` asserts the request body's `uris[]` exactly.
+- [x] `TestDuplicateFeedShowsConflictMessage` passes.
+- [x] The route `/rss/feeds` resolves and the sidebar `RSS → Feeds` node marks itself `aria-current`.
+- [x] No component in `web/src/components/Rss/` calls `fetch` directly.
+- [x] Every size, rate and date renders through `Intl`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -152,7 +152,75 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head. The vitest output interleaves `msw` unhandled-request stacks from
+`App.test.tsx` routes mounted without screen handlers (pre-existing noise — `/search` and
+`/settings/*` do the same); those stack lines are elided here, every test line is verbatim.
+
+```
+$ make lint && make typecheck && make test-web && echo RSS_FEEDS_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t072-3-1789887101/web
+
+ ✓ src/eslint.test.ts (1 test) 955ms
+ ✓ src/store/useUiPrefs.test.ts (17 tests) 1051ms
+ ✓ src/main.test.ts (1 test) 1961ms
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 1282ms
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests) 1330ms
+ ✓ src/components/Settings/IndexersSection.test.tsx (6 tests) 1599ms
+ ✓ src/api/events.test.ts (16 tests) 182ms
+ ✓ src/lib/format.test.ts (6 tests) 52ms
+ ✓ src/i18n.test.ts (4 tests) 44ms
+ ✓ src/api/client.test.ts (12 tests) 18ms
+ ✓ src/sw.test.ts (2 tests) 12ms
+ ✓ src/store/useTasks.test.ts (17 tests) 106ms
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests) 2495ms
+ ✓ src/components/Rss/FeedsScreen.test.tsx (10 tests) 2434ms
+ ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 2970ms
+ ✓ src/lib/theme.test.ts (9 tests) 2889ms
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 2999ms
+ ✓ src/components/Shell/Shell.test.tsx (13 tests) 3152ms
+ ✓ src/components/Search/SearchScreen.test.tsx (10 tests) 5867ms
+ ✓ src/App.test.tsx (55 tests) 5853ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests) 10403ms
+
+ Test Files  21 passed (21)
+      Tests  270 passed (270)
+   Duration  12.53s (transform 5.72s, setup 0ms, import 20.78s, tests 47.65s, environment 10.51s)
+
+RSS_FEEDS_OK
+```
+
+`FeedsScreen.test.tsx` runs ten tests — the six from the initial commit
+(`TestFeedListRendersStatesAndCounts`, `TestRefreshShowsItemsAdded`,
+`TestDownloadSelectedPostsDownloadUrls`, `TestDuplicateFeedShowsConflictMessage`,
+`TestItemPageLoadsAndPaginates`, `TestRssFeedsRouteResolvesAndSidebarMarksCurrent`) plus four
+added while addressing review (`TestFeedListErrorShowsRetryNotEmptyState`,
+`TestItemRowKeyboardActivatesPreview`, `TestNonHttpItemLinkIsNotRendered`,
+`TestRemoveFeedClearsFolderAssignment`).
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+web/src/App.tsx
+web/src/components/Rss/FeedsScreen.test.tsx
+web/src/components/Rss/FeedsScreen.tsx
+web/src/locales/en/rss.json
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
