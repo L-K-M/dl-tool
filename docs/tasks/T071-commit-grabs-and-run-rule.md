@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T071 |
 | **Milestone** | M5 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T020, T024, T065, T066, T067, T069, T070 |
 | **Blocks** | T073 |
 | **Parallel-safe** | no — extends `internal/rss/poll.go`, `internal/api/rules.go`, `internal/api/server.go` and `cmd/dl-tool/main.go` |
@@ -185,15 +185,15 @@ limits exactly like a manual add. Statuses: `200` · `404` for an unknown rule i
 13. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestRunRuleReportsEvaluatedAndGrabbed` asserts `evaluated=20` and three created tasks.
-- [ ] `TestContentKeyContestCreatesOneTaskAndOneFallback` passes.
-- [ ] `TestMaxPerRunCaps` and `TestFailedHandoffDoesNotStageEpisodeKey` pass.
-- [ ] `TestSecondRunIsIdempotent` asserts no second task and no second `rule_matches` row.
-- [ ] A `304` poll runs no rule.
-- [ ] Every task is created through `CreateForRule`; `internal/rss` contains no `INSERT INTO tasks`.
-- [ ] `TestFeedItemsMatchedRules` asserts an item with a committed `rule_matches` row lists that rule's
+- [x] `TestRunRuleReportsEvaluatedAndGrabbed` asserts `evaluated=20` and three created tasks.
+- [x] `TestContentKeyContestCreatesOneTaskAndOneFallback` passes.
+- [x] `TestMaxPerRunCaps` and `TestFailedHandoffDoesNotStageEpisodeKey` pass.
+- [x] `TestSecondRunIsIdempotent` asserts no second task and no second `rule_matches` row.
+- [x] A `304` poll runs no rule.
+- [x] Every task is created through `CreateForRule`; `internal/rss` contains no `INSERT INTO tasks`.
+- [x] `TestFeedItemsMatchedRules` asserts an item with a committed `rule_matches` row lists that rule's
   `id` and `name`, and an unmatched item still renders `[]`.
-- [ ] `NewServer` hands one `ruleTaskCreator` to `NewRuleHandlers`, `NewFeedHandlers` and
+- [x] `NewServer` hands one `ruleTaskCreator` to `NewRuleHandlers`, `NewFeedHandlers` and
   `Server.RuleCreator`, and both production parser injection points — `NewFeedHandlers` in
   `internal/api/server.go` and `NewPoller` in `cmd/dl-tool/main.go` — pass `rss.NewParser`, so a `200` that
   adds items runs the rules pass in production (docs/14-conventions.md §8.3).
@@ -227,7 +227,74 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head, verbatim:
+
+```
+$ make lint && make test PKG="./internal/rss/... ./internal/api/..." && echo GRAB_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/rss/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/rss	15.090s
+ok  	github.com/L-K-M/dl-tool/internal/api	149.296s
+GRAB_OK
+```
+
+The acceptance-criteria tests, from the same head under `go test -race -count=1 -v`:
+
+```
+--- PASS: TestRunRuleReportsEvaluatedAndGrabbed (0.48s)
+--- PASS: TestContentKeyContestCreatesOneTaskAndOneFallback (0.43s)
+--- PASS: TestMaxPerRunCaps (0.39s)
+--- PASS: TestDuplicateInfoHashAcrossFeeds (0.43s)
+--- PASS: TestFailedHandoffDoesNotStageEpisodeKey (0.43s)
+--- PASS: TestSecondRunIsIdempotent (0.41s)
+--- PASS: TestPollRulePassSurvivesPollContextCancel (0.44s)
+--- PASS: TestPoll304RunsNoRule (0.44s)
+--- PASS: TestFeedItemsMatchedRules (0.46s)
+--- PASS: TestRunRuleCommitsGrabsAsTasks (0.47s)
+--- PASS: TestRunRuleUnknownIsNotFound (0.38s)
+--- PASS: TestRunRuleCreatedIDsShorterThanMatched (0.47s)
+```
+
+`TestPollRulePassSurvivesPollContextCancel` is the round-2 review fix: the rule pass now runs on
+`context.WithoutCancel(ctx)`, because `recordSuccess` has already stored the validators that make the
+next poll answer 304 — a poll context cancelled mid-grab (refresh client gone, shutdown boundary)
+stranded the remaining grabs until the feed changed again. The engine hand-offs keep their own
+per-call deadlines, so the detached pass stays bounded.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+internal/api/feeds.go
+internal/api/feeds_test.go
+internal/api/rules.go
+internal/api/rules_test.go
+internal/api/server.go
+internal/rss/grab.go
+internal/rss/grab_test.go
+internal/rss/poll.go
+internal/rss/poll_test.go
+internal/store/feeds.go
+```
+
+plus the regenerated `api/openapi.json` and `web/src/api/schema.d.ts` `make gen` emits for the new
+`POST /rules/{id}/run` operation — the same generated-artifact exemption T070's merge recorded.
+
+The `internal/rss` tree contains no `INSERT INTO tasks`: every grab lands through
+`TaskCreator.CreateForRule`, implemented in `internal/api` as `ruleTaskCreator` calling
+`TaskHandlers.CreateTasks`.
 
 ## Blocked
 

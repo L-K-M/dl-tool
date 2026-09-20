@@ -584,6 +584,26 @@ export interface paths {
     patch: operations["patch-rule"];
     trace?: never;
   };
+  "/rules/{id}/run": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Run a rule against stored items
+     * @description Evaluates the saved rule over the items already stored for its feeds — including a disabled rule, which the poller skips — and commits every accepted candidate through the ordinary task-creation path. created_task_ids can be shorter than matched: contested content_keys and the throttle cap both commit fewer tasks than matches. 404 for an unknown rule id; 503 /problems/engine-unavailable when the engine refuses every grab.
+     */
+    post: operations["run-rule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/search": {
     parameters: {
       query?: never;
@@ -1588,6 +1608,15 @@ export interface components {
       priority?: number;
       score?: components["schemas"]["ScoreSpec"];
       throttle?: components["schemas"]["ThrottleSpec"];
+    };
+    RunRuleOutputBody: {
+      created_task_ids: string[] | null;
+      /** Format: int64 */
+      elapsed_ms: number;
+      /** Format: int64 */
+      evaluated: number;
+      /** Format: int64 */
+      matched: number;
     };
     ScoreFormat: {
       name: string;
@@ -3106,6 +3135,38 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["RuleDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "run-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The rul_ id of the rule */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunRuleOutputBody"];
         };
       };
       /** @description Error */

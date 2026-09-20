@@ -105,7 +105,7 @@ func testPollerClock(t *testing.T, db *sqlx.DB, srv *httptest.Server, parser Ite
 	// Fail fast rather than ride the shared client's 120 s budget.
 	client.Timeout = 10 * time.Second
 
-	p := NewPoller(db, client, parser, discardLog(), now)
+	p := NewPoller(db, client, parser, nil, discardLog(), now)
 	p.startedAt = testNow.Add(-time.Hour)
 
 	return p
@@ -458,7 +458,7 @@ func TestStartupGraceKeepsPolling(t *testing.T) {
 	origin, err := url.Parse(srv.URL)
 	require.NoError(t, err)
 	poller := NewPoller(db, secure.NewClient(secure.NewGuard(discardLog(), true).ForOrigin(origin)),
-		stubParser{}, discardLog(), func() time.Time { return testNow })
+		stubParser{}, nil, discardLog(), func() time.Time { return testNow })
 	// startedAt defaults to now(): inside the grace.
 
 	res, err := poller.Poll(t.Context(), feed, false)

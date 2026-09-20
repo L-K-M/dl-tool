@@ -1,6 +1,7 @@
 // Package rss owns feed polling: the conditional GET, the Sonarr backoff
 // ladder and the scheduling writes of docs/08-rss-automation.md section 2.
-// Item parsing (T067) and rule evaluation (T071) plug in behind it.
+// Item parsing (parse.go) and rule evaluation (match.go, grab.go) plug in
+// behind it.
 package rss
 
 import (
@@ -101,6 +102,7 @@ type Poller struct {
 	db        *sqlx.DB
 	hc        *http.Client
 	parser    ItemParser
+	creator   TaskCreator
 	log       *slog.Logger
 	now       func() time.Time
 	startedAt time.Time
@@ -118,8 +120,10 @@ type Poller struct {
 var inFlightPolls sync.Map
 
 // NewPoller takes the shared SSRF-guarded client built in internal/secure;
-// the poller never constructs an http.Client of its own.
-func NewPoller(db *sqlx.DB, hc *http.Client, p ItemParser, log *slog.Logger, now func() time.Time) *Poller {
+// the poller never constructs an http.Client of its own. tc is the
+// TaskCreator the post-poll pass hands grabs to; a nil creator disables
+// the pass.
+func NewPoller(db *sqlx.DB, hc *http.Client, p ItemParser, tc TaskCreator, log *slog.Logger, now func() time.Time) *Poller {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -127,7 +131,7 @@ func NewPoller(db *sqlx.DB, hc *http.Client, p ItemParser, log *slog.Logger, now
 		now = time.Now
 	}
 
-	return &Poller{db: db, hc: hc, parser: p, log: log, now: now, startedAt: now()}
+	return &Poller{db: db, hc: hc, parser: p, creator: tc, log: log, now: now, startedAt: now()}
 }
 
 // Jitter is deterministic per feed:
@@ -266,7 +270,30 @@ func (p *Poller) completeFetch(ctx context.Context, f store.Feed, resp *http.Res
 		f.TTLMinutes = nil
 	}
 
-	return *res, p.recordSuccess(ctx, f, now, globalS, meta)
+	if err := p.recordSuccess(ctx, f, now, globalS, meta); err != nil {
+		return *res, err
+	}
+
+	// Steps 12-14 of the rule algorithm: a 200 that stored new items runs
+	// every enabled rule over the feed's stored set. A 304 added nothing
+	// and never reaches here. The pass is post-poll bookkeeping: its
+	// failure is logged, never a poll error — the ladder answers for the
+	// fetch alone.
+	if added > 0 && p.creator != nil {
+		// The items and validators recordSuccess stored are already
+		// durable, and the next poll answers 304 — so the pass must not
+		// die with a poll context cancelled mid-grab (a refresh client
+		// gone, a shutdown boundary). Detach from cancellation only; the
+		// engine hand-offs keep their own per-call deadlines, so the
+		// detached pass stays bounded.
+		rctx := context.WithoutCancel(ctx)
+		if err := RunAllRules(rctx, p.db, f.ID, p.creator, now); err != nil {
+			p.log.WarnContext(rctx, "rule pass failed",
+				"feed_id", f.ID, "err", err)
+		}
+	}
+
+	return *res, nil
 }
 
 // request builds the conditional GET of doc 08 section 2.3: the three

@@ -583,6 +583,48 @@ func SetFeedItemsRead(ctx context.Context, db *sqlx.DB, feedID string, ids []str
 	return rows, nil
 }
 
+// ItemMatchedRule is one {id, name} pair of an item's matched_rules
+// member (docs/05-api-contract.md section 10.1).
+type ItemMatchedRule struct {
+	ID   string `db:"id"`
+	Name string `db:"name"`
+}
+
+// ListItemMatchedRules returns, per feed_items id, the rules that matched
+// it: every stored rule_matches row names one, joined to rules for the
+// display name — no status filter, since queued, sent, failed and
+// fallback rows all represent a match. Rules list in evaluation order
+// (priority ASC, name ASC). An empty ids slice answers an empty map
+// without querying: an empty items page is a normal request, and skipping
+// the query keeps that case independent of how the engine parses an empty
+// IN list.
+func ListItemMatchedRules(ctx context.Context, db *sqlx.DB, ids []string) (map[string][]ItemMatchedRule, error) {
+	matched := make(map[string][]ItemMatchedRule, len(ids))
+	if len(ids) == 0 {
+		return matched, nil
+	}
+
+	var rows []struct {
+		FeedItemID string `db:"feed_item_id"`
+		ID         string `db:"id"`
+		Name       string `db:"name"`
+	}
+	query, args, err := sqlx.In(`SELECT m.feed_item_id, r.id, r.name
+FROM rule_matches m JOIN rules r ON r.id = m.rule_id
+WHERE m.feed_item_id IN (?) ORDER BY r.priority, r.name`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("store: list matched rules: %w", err)
+	}
+	if err := db.SelectContext(ctx, &rows, query, args...); err != nil {
+		return nil, fmt.Errorf("store: list matched rules: %w", err)
+	}
+	for _, row := range rows {
+		matched[row.FeedItemID] = append(matched[row.FeedItemID], ItemMatchedRule{ID: row.ID, Name: row.Name})
+	}
+
+	return matched, nil
+}
+
 // MarkAllFeedItemsRead marks every unread item of one feed read and returns the count.
 func MarkAllFeedItemsRead(ctx context.Context, db *sqlx.DB, feedID string, now int64) (int64, error) {
 	result, err := db.ExecContext(

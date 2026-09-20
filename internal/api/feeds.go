@@ -58,16 +58,16 @@ type FeedDTO struct {
 }
 
 // FeedItemMatchedRuleDTO is one entry of the item object's matched_rules
-// member. T071 populates it from rule_matches; until then the member renders
-// [] (deferral register).
+// member: the {id, name} pair of a rule whose committed rule_matches row
+// names the item.
 type FeedItemMatchedRuleDTO struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
 // FeedItemDTO renders the item object of docs/05-api-contract.md section
-// 10.1: published_at is RFC 3339 or null and matched_rules is [] until T071
-// joins rule_matches.
+// 10.1: published_at is RFC 3339 or null and matched_rules is the
+// rule_matches join, [] when nothing matched.
 type FeedItemDTO struct {
 	ID           string                   `json:"id"`
 	FeedID       string                   `json:"feed_id"`
@@ -199,16 +199,16 @@ type FeedHandlers struct {
 }
 
 // NewFeedHandlers builds the feed handlers over db and wires the poller the
-// refresh endpoint and the rss_poll job share: the guarded client hc and the
-// item parser arrive from the composition root, so the endpoint and the job
-// poll through the same SSRF-guarded client (docs/14-conventions.md section
-// 8.3). The parser is nil until T067 lands parse.go; the poller reports that
-// as a fetch failure rather than panic. A nil db or hc — the document-only
-// builds — leaves poller nil and refresh answers 503.
-func NewFeedHandlers(db *sqlx.DB, hc *http.Client, parser rss.ItemParser, log *slog.Logger) *FeedHandlers {
+// refresh endpoint and the rss_poll job share: the guarded client hc, the
+// item parser and the rule-grab creator arrive from the composition root,
+// so the endpoint and the job poll through the same SSRF-guarded client
+// and hand grabs to the same task-creation path (docs/14-conventions.md
+// section 8.3). A nil db or hc — the document-only builds — leaves poller
+// nil and refresh answers 503.
+func NewFeedHandlers(db *sqlx.DB, hc *http.Client, parser rss.ItemParser, tc rss.TaskCreator, log *slog.Logger) *FeedHandlers {
 	h := &FeedHandlers{db: db}
 	if db != nil && hc != nil {
-		h.poller = rss.NewPoller(db, hc, parser, log, time.Now)
+		h.poller = rss.NewPoller(db, hc, parser, tc, log, time.Now)
 	}
 
 	return h
@@ -513,10 +513,19 @@ func (h *FeedHandlers) Items(ctx context.Context, in *ListFeedItemsInput) (*List
 		return nil, internalFailure(ctx, "list feed items", err)
 	}
 
+	ids := make([]string, len(rows))
+	for i, row := range rows {
+		ids[i] = row.ID
+	}
+	matched, err := store.ListItemMatchedRules(ctx, h.db, ids)
+	if err != nil {
+		return nil, internalFailure(ctx, "list matched rules", err)
+	}
+
 	output := &ListFeedItemsOutput{}
 	output.Body.Items = make([]FeedItemDTO, 0, len(rows))
 	for _, row := range rows {
-		output.Body.Items = append(output.Body.Items, feedItemDTO(row))
+		output.Body.Items = append(output.Body.Items, feedItemDTO(row, matched[row.ID]))
 	}
 	output.Body.Total = total
 	if nextCursor != "" {
@@ -799,9 +808,15 @@ func keepAutoRuleScoped(ctx context.Context, db *sqlx.DB, feed store.Feed) error
 	return nil
 }
 
-// feedItemDTO renders one feed_items row into the section 10.1 item object;
-// matched_rules is [] until T071 populates it from rule_matches.
-func feedItemDTO(item store.FeedItem) FeedItemDTO {
+// feedItemDTO renders one feed_items row into the section 10.1 item
+// object; matched is the item's ListItemMatchedRules result — nil renders
+// matched_rules as [], never null.
+func feedItemDTO(item store.FeedItem, matched []store.ItemMatchedRule) FeedItemDTO {
+	rules := make([]FeedItemMatchedRuleDTO, 0, len(matched))
+	for _, rule := range matched {
+		rules = append(rules, FeedItemMatchedRuleDTO{ID: rule.ID, Name: rule.Name})
+	}
+
 	return FeedItemDTO{
 		ID:           item.ID,
 		FeedID:       item.FeedID,
@@ -812,7 +827,7 @@ func feedItemDTO(item store.FeedItem) FeedItemDTO {
 		SizeBytes:    item.SizeBytes,
 		PublishedAt:  unixMilliToRFC3339(item.PublishedAt),
 		Read:         item.Read,
-		MatchedRules: []FeedItemMatchedRuleDTO{},
+		MatchedRules: rules,
 	}
 }
 

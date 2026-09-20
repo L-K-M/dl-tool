@@ -883,3 +883,156 @@ func TestTestRuleIgnoreStateFalseIsAccepted(t *testing.T) {
 		t.Errorf("default report = %+v, want the stateless run matching the item", report)
 	}
 }
+
+// runRule posts to POST /rules/{id}/run with the test bearer credential.
+func (e *tasksTestEnv) runRule(t *testing.T, id string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Post("/rules/"+id+"/run", "Authorization: Bearer "+e.bearer)
+}
+
+// runRuleBody is the decoded POST /rules/{id}/run report.
+type runRuleBody struct {
+	Evaluated      int      `json:"evaluated"`
+	Matched        int      `json:"matched"`
+	CreatedTaskIDs []string `json:"created_task_ids"`
+	ElapsedMS      int64    `json:"elapsed_ms"`
+}
+
+// decodeRunRuleBody decodes the run report envelope.
+func decodeRunRuleBody(t *testing.T, recorder *httptest.ResponseRecorder) runRuleBody {
+	t.Helper()
+
+	var body runRuleBody
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body %q: %v", recorder.Body.String(), err)
+	}
+
+	return body
+}
+
+// seedRunItems upserts routable .torrent items on one feed — the same
+// fixture shape the dry-run tests use, because RunRule reads the stored
+// items exactly like DryRun does.
+func (e *tasksTestEnv) seedRunItems(t *testing.T, feedID string, items []store.FeedItem) {
+	t.Helper()
+
+	if _, err := store.UpsertFeedItems(t.Context(), e.db, items, time.Now().UnixMilli()); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+}
+
+// runItem is one stored item carrying a routable .torrent download URL.
+func runItem(feedID, identity, title, hash string, published int64) store.FeedItem {
+	item := store.FeedItem{
+		FeedID:      feedID,
+		Identity:    identity,
+		Title:       title,
+		TitleNorm:   title,
+		DownloadURL: strPtrAPI("https://example.com/t/" + identity + ".torrent"),
+		PublishedAt: &published,
+	}
+	if hash != "" {
+		item.InfoHash = &hash
+	}
+
+	return item
+}
+
+func strPtrAPI(s string) *string { return &s }
+
+// TestRunRuleCommitsGrabsAsTasks pins the doc 05 section 10.2 run report:
+// the saved rule evaluates the stored items, commits every winner through
+// the ordinary create path and answers evaluated, matched and the created
+// task ids.
+func TestRunRuleCommitsGrabsAsTasks(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	feedID := env.seedFeed(t, "https://example.com/run.xml")
+	published := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	env.seedRunItems(t, feedID, []store.FeedItem{
+		runItem(feedID, "i1", "ubuntu 26.04 desktop amd64", "", published),
+		runItem(feedID, "i2", "debian 13 netinst", "", published+1),
+	})
+
+	response := env.createRule(t, validRuleBody("Ubuntu desktops"))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	rule := decodeRuleBody(t, response)
+
+	response = env.runRule(t, rule.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	report := decodeRunRuleBody(t, response)
+	if report.Evaluated != 2 || report.Matched != 1 || len(report.CreatedTaskIDs) != 1 {
+		t.Fatalf("report = %+v, want evaluated=2 matched=1 and one created task", report)
+	}
+	if env.countTasks(t) != 1 {
+		t.Errorf("countTasks = %d, want the one committed grab", env.countTasks(t))
+	}
+
+	// The committed match row names the created task and carries 'sent'.
+	var status, taskID string
+	if err := env.db.QueryRowContext(t.Context(),
+		`SELECT status, task_id FROM rule_matches WHERE rule_id = ?`, rule.ID).
+		Scan(&status, &taskID); err != nil {
+		t.Fatalf("read rule_matches: %v", err)
+	}
+	if status != "sent" || taskID != report.CreatedTaskIDs[0] {
+		t.Errorf("rule_matches = (%s, %s), want sent row naming %s", status, taskID, report.CreatedTaskIDs[0])
+	}
+
+	// A second run over unchanged items creates nothing and reports [].
+	response = env.runRule(t, rule.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if body := decodeRunRuleBody(t, response); len(body.CreatedTaskIDs) != 0 {
+		t.Errorf("second run report = %+v, want no created task ids", body)
+	}
+	if !strings.Contains(response.Body.String(), `"created_task_ids":[]`) {
+		t.Errorf("second run body %s, want created_task_ids serialised as []", response.Body.String())
+	}
+}
+
+// TestRunRuleUnknownIsNotFound pins the 404 of POST /rules/{id}/run.
+func TestRunRuleUnknownIsNotFound(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	assertProblem(t, env.runRule(t, "rul_01JKQ8Z9YV6M3P0R2S4T6V8W0X"), http.StatusNotFound, SlugNotFound)
+}
+
+// TestRunRuleCreatedIDsShorterThanMatched pins the dedup row of the
+// contract: two releases sharing one content key are both matched, but
+// only the winner grabs — created_task_ids is shorter than matched.
+func TestRunRuleCreatedIDsShorterThanMatched(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	feedID := env.seedFeed(t, "https://example.com/dedup.xml")
+	published := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	hash := "dcb9178653b651c7ca4526e11fa8e22f74e2fd7a"
+	env.seedRunItems(t, feedID, []store.FeedItem{
+		runItem(feedID, "i1", "ubuntu 26.04 desktop amd64", hash, published+100),
+		runItem(feedID, "i2", "ubuntu 26.04 desktop i386", hash, published),
+	})
+
+	response := env.createRule(t, validRuleBody("Ubuntu desktops"))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	rule := decodeRuleBody(t, response)
+
+	response = env.runRule(t, rule.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	report := decodeRunRuleBody(t, response)
+	if report.Evaluated != 2 || report.Matched != 2 || len(report.CreatedTaskIDs) != 1 {
+		t.Fatalf("report = %+v, want evaluated=2 matched=2 with one created task", report)
+	}
+	if env.countTasks(t) != 1 {
+		t.Errorf("countTasks = %d, want the one winner's task", env.countTasks(t))
+	}
+}
