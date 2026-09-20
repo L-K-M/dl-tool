@@ -7,10 +7,10 @@
 | **Status** | todo |
 | **Depends on** | T047, T050, T068, T070, T071, T072 |
 | **Blocks** | — |
-| **Parallel-safe** | no — adds a route to T040's `web/src/App.tsx` and extends T072's `rss.json` |
+| **Parallel-safe** | no — adds a route to T040's `web/src/App.tsx`, extends T072's `rss.json` and edits `internal/rss` and `internal/api` files of T068–T071 |
 | **Implements** | — (renders [FR-073](../02-requirements.md#fr-073-evaluate-rules-with-the-documented-algorithm), [FR-075](../02-requirements.md#fr-075-dry-run-a-rule-and-explain-every-item) and [FR-077](../02-requirements.md#fr-077-run-a-rule-against-existing-items), covered by T069, T070 and T071) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0009](../decisions/0009-native-cross-protocol-rss-rules.md) |
-| **Est. size** | 2 new files, ~420 LOC |
+| **Est. size** | 2 new files, ~420 LOC, plus the `highlight`/`titles`/`tags` members the F115/F116/F379 repair assigned here |
 
 ## Goal
 `/rss/rules` renders the three-column rule editor. Every keystroke re-posts the in-progress document to
@@ -28,7 +28,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
    and `POST /rules/{id}/run`.
 4. [`docs/08-rss-automation.md` §5.1 Rejection reason codes](../08-rss-automation.md#51-rejection-reason-codes)
    — the ten codes each need one sentence in the `rss` namespace.
-5. [`docs/09-web-ui-spec.md` §4.1 Server-side folder browser](../09-web-ui-spec.md#41-server-side-folder-browser)
+5. [`docs/08-rss-automation.md` §4 The rule document](../08-rss-automation.md#4-the-rule-document) — the
+   schema `internal/rss/ruledoc.go` encodes, including the `action.tags` member this task adds.
+6. [`docs/09-web-ui-spec.md` §4.1 Server-side folder browser](../09-web-ui-spec.md#41-server-side-folder-browser)
    — the `Destination` field reuses T047's browser unchanged.
 
 ## Files
@@ -38,8 +40,16 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/Rss/RuleEditor.test.tsx` | create | Debounce, preview, inline regex error and save cases. |
 | `web/src/locales/en/rss.json` | edit | Field labels, the ten reason sentences and the help popover. |
 | `web/src/App.tsx` | edit | Route `/rss/rules` to the editor. |
+| `internal/rss/dryrun.go` | edit | Carry `highlight` on `DryRunItem` and evaluate `titles` in place of stored items. |
+| `internal/rss/dryrun_test.go` | edit | Pin the offsets, the UTF-8 basis and the `titles` path. |
+| `internal/rss/ruledoc.go` | edit | Add `Tags` to `ActionSpec` (doc 08 §4.2's `action.tags`). |
+| `internal/rss/grab.go` | edit | Add `Tags` to `GrabRequest` and populate it in `Commit`. |
+| `internal/rss/grab_test.go` | edit | Pin `GrabRequest.Tags` reaching the creator. |
+| `internal/api/rules.go` | edit | Accept `titles` on `POST /rules/test`; pass `g.Tags` in `ruleTaskCreator.CreateForRule`. |
+| `internal/api/rules_test.go` | edit | Pin the `titles` dry run and `tags` in the created `POST /tasks` body. |
 
-No other file may be modified.
+No other file may be modified. `api/openapi.json` and `web/src/api/schema.d.ts` regenerate with
+`make gen` per doc 13 §7.1 — `titles`, `highlight` and `tags` all change the schema.
 
 ## Interface contract
 
@@ -72,6 +82,51 @@ export const PREVIEW_DEBOUNCE_MS = 250;
 export const PREVIEW_LIMIT = 50;   // "matches N of the last 50 items"
 ```
 
+```go
+// internal/rss/dryrun.go — the members F115 and F116 add to the dry run.
+type DryRunRequest struct {
+	// ...existing members...
+	Titles []string // evaluated in place of stored items when non-empty
+}
+
+type DryRunItem struct {
+	// ...existing members...
+	Highlight *[2]int `json:"highlight,omitempty"` // UTF-8 byte offsets into Title; nil unless Matched
+}
+
+// internal/rss/ruledoc.go — F379's member, doc 08 §4.2's action.tags.
+type ActionSpec struct {
+	// ...existing members...
+	Tags []string `json:"tags,omitempty"`
+}
+
+// internal/rss/grab.go — the tag list rides the grab so the created task carries it.
+type GrabRequest struct {
+	// ...existing members...
+	Tags []string
+}
+
+// internal/api/rules.go — TestRuleInput.Body gains the member doc 05 §10.3 lists.
+	Titles []string `json:"titles,omitempty" doc:"Arbitrary titles evaluated in place of stored items; feeds and limit do not apply"`
+```
+
+Wire rules the editor depends on:
+
+- `errors[].location` from the dry run is prefixed `body.rule.`; from `POST`/`PATCH /rules` it is
+  `body.definition.` (F255's recorded conflict, pinned in doc 05 §10.3). Strip either prefix before
+  mapping the remainder — `episode.filter` → **Episode filter**, `match.any_of` → **Must contain**,
+  `match.none_of` → **Must not contain** — onto the same control.
+- `highlight` arrives as UTF-8 byte offsets into `title`. Convert to UTF-16 code-unit indices before
+  slicing: walk the title accumulating `encoder.encode(title.slice(0, i)).length` (or equivalent), never
+  `title.slice(start, end)` on the raw values.
+- A `titles` dry run ignores `feeds` and `limit`; the one result per title carries empty `feed_id`,
+  `feed` and `download_url` and `published_at: null`.
+- `limit` is per feed (doc 05 §10.3), so a rule scoped to several feeds can return more than
+  `PREVIEW_LIMIT` rows. The editor renders only the newest `PREVIEW_LIMIT` — the merged results arrive
+  newest-first — and the headline's `N` counts matches among the displayed rows, so
+  `matches N of the last 50 items` is literal (F316). `evaluated`/`matched`/`elapsed_ms` beneath the
+  list still show the server counters.
+
 Form controls, in this order and with these labels, verbatim from doc 09 §8.2: **Enabled** ·
 **Use regular expressions** · **Must contain** · **Must not contain** · **Episode filter** ·
 **Use smart episode filter** · **Apply to feeds** · **Destination** · **Category** · **Tags** ·
@@ -88,46 +143,71 @@ Field-to-document mapping — the editor writes the document of doc 08 §4, not 
 | Use smart episode filter | `episode.smart` |
 | Apply to feeds | `feeds[]` as feed URLs |
 | Destination / Category | `action.destination` / `action.category` |
-| Add stopped | `action.paused` |
+| Tags | `action.tags[]` — created on demand, like `POST /tasks`' `tags` |
+| Add stopped | `action.paused` — a checkbox; no global add-stopped setting exists (doc 05 §11.1), so the wireframe's `Use global ▾` is an artifact (F315) |
 | Ignore subsequent matches for … days | `throttle.cooldown_days` |
 
 The headline reads exactly `matches N of the last 50 items`.
 
 ## Steps
-1. Create `web/src/components/Rss/RuleEditor.tsx` with the three columns of doc 09 §8.2: the rules list
-   with `[+] [⧉] [🗑]`, the form, and the preview.
-2. Implement `useRulePreview` with a 250 ms debounce and an `AbortController` so an in-flight dry run is
+1. Land the wire members the editor builds on. In `internal/rss/ruledoc.go` add `Tags` to `ActionSpec`;
+   in `internal/rss/grab.go` add `Tags` to `GrabRequest`, populate it from `doc.Action.Tags` in `Commit`,
+   and pass `g.Tags` through `ruleTaskCreator.CreateForRule` into the `POST /tasks` body in
+   `internal/api/rules.go`. In `internal/rss/dryrun.go` add `Highlight` to `DryRunItem`, filled from
+   `Decision.Highlight` only when `Matched` and the span is non-empty, and add `Titles` to
+   `DryRunRequest`: when non-empty, `DryRun` synthesizes one `store.FeedItem` per title — `Title` set,
+   every other field at its zero value — and skips the stored-item selection entirely (`feeds` and
+   `limit` do not apply). Add `Titles` to `TestRuleInput.Body` and forward it in `internal/api/rules.go`.
+   Then `make gen` so `api/openapi.json` and `web/src/api/schema.d.ts` carry the new members.
+2. Create `web/src/components/Rss/RuleEditor.tsx` with the three columns of doc 09 §8.2: the rules list
+   with `[+] [⧉] [🗑]` and the *Import / export rules* buttons, the form, and the preview.
+3. Implement `useRulePreview` with a 250 ms debounce and an `AbortController` so an in-flight dry run is
    cancelled when the user types again; never queue two requests.
-3. Post `{rule, feeds, limit: 50, ignore_state}` to `POST /rules/test` and render `results[]` in order:
-   matches with `✓`, non-matches greyed with `✗` and the reason sentence from the `rss` namespace, keyed
-   by `reason` and interpolating `reason_detail`.
-4. Highlight the matched substring in a matched title using the offsets the response carries; never
-   re-run the pattern in the browser.
-5. Render a `422` inline under the responsible control by mapping `errors[].location` — for example
-   `body.definition.episode.filter` — to the field, and keep the previous preview visible.
-6. Bind the *Ignore already-downloaded* toggle to `ignore_state`, defaulting to on, and show `evaluated`,
+4. Post `{rule, feeds, limit: 50, ignore_state}` to `POST /rules/test` and render the newest
+   `PREVIEW_LIMIT` rows of `results[]` in order: matches with `✓`, non-matches greyed with `✗` and the
+   reason sentence from the `rss` namespace, keyed by `reason` and interpolating `reason_detail`.
+5. Highlight the matched substring in a matched title using the `highlight` offsets the response
+   carries — UTF-8 byte offsets converted to UTF-16 code-unit indices before slicing; never re-run the
+   pattern in the browser.
+6. Render a `422` inline under the responsible control by mapping `errors[].location` — for example
+   `body.rule.episode.filter` from the dry run or `body.definition.episode.filter` from save — to the
+   field, and keep the previous preview visible.
+7. Bind the *Ignore already-downloaded* toggle to `ignore_state`, defaulting to on, and show `evaluated`,
    `matched` and `elapsed_ms` beneath the list.
-7. Implement the docked test panel: a title input and `Test`, which posts a one-item dry run and renders
-   `✓ MATCH` or the reason, naming the clause that decided it.
-8. Add the `(?)` popover beside the mode toggle carrying the two qBittorrent help sentences of doc 09 §8.2
+8. Implement the docked test panel: a title input and `Test`, which posts a one-item dry run —
+   `{rule, titles: [title], ignore_state}` — and renders `✓ MATCH` or the reason, naming the clause
+   that decided it.
+9. Add the `(?)` popover beside the mode toggle carrying the two qBittorrent help sentences of doc 09 §8.2
    verbatim, stored as two keys in `rss.json`.
-9. Wire `Save` to `POST /rules` or `PATCH /rules/{id}`, and *Run rule against existing items* to
-   `POST /rules/{id}/run`, confirming first and reporting `evaluated`, `matched` and the created count.
-10. Use T047's folder browser for `Destination` and T050's category list for `Category`; add no new picker.
-11. Edit `web/src/locales/en/rss.json` with the labels, the ten reason sentences and the help text, then
+10. Wire `Save` to `POST /rules` or `PATCH /rules/{id}`, and *Run rule against existing items* to
+    `POST /rules/{id}/run`, confirming first and reporting `evaluated`, `matched` and the created count.
+11. Wire the toolbar's *Import / export rules* (F317's owner): export downloads a JSON array of the
+    `{"name","definition"}` pairs of `GET /rules`; import reads such a file — a single object or an
+    array — and posts each entry to `POST /rules`, reporting per-name failures. No new endpoint.
+12. Use T047's folder browser for `Destination` and T050's category list for `Category`; add no new picker.
+13. Edit `web/src/locales/en/rss.json` with the labels, the ten reason sentences and the help text, then
     edit `web/src/App.tsx` to route `/rss/rules`.
-12. Create `web/src/components/Rss/RuleEditor.test.tsx` with `msw`: typing fires exactly one dry run after
+14. Create `web/src/components/Rss/RuleEditor.test.tsx` with `msw`: typing fires exactly one dry run after
     250 ms; the headline reads `matches 7 of the last 50 items`; a non-match renders its `✗` row and the
     reason sentence; a `422` on an unterminated group renders inline under **Must contain** and the
     previous preview survives; toggling *Ignore already-downloaded* re-posts with `ignore_state: false`;
-    `Save` sends the mapped document; `Run` posts to `/rules/{id}/run`.
-13. Run the verification command and paste its output under `## Evidence`.
+    `Save` sends the mapped document; `Run` posts to `/rules/{id}/run`. Add a case per new member: a
+    matched row with a non-ASCII title and a `highlight` pair marks the right substring; the docked
+    panel posts `titles`; `Save` sends `action.tags`.
+15. Extend `internal/rss/dryrun_test.go`, `internal/rss/grab_test.go` and `internal/api/rules_test.go` to
+    pin the members of step 1: `DryRunItem.Highlight` carries `Decision.Highlight`, a `titles` request
+    never touches `feed_items`, and a grab lands `action.tags` in the created task's `tags`.
+16. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `TestPreviewDebouncesToOneRequest` asserts one call for five keystrokes inside 250 ms.
 - [ ] `TestPreviewListsNonMatchesWithReason` asserts the `✗` row and its sentence.
 - [ ] `TestInvalidRegexShowsInlineErrorAndKeepsPreview` passes.
 - [ ] `TestSaveSendsMappedDocument` asserts `match.any_of` is an array of lines, never a `|`-joined string.
+- [ ] `TestHighlightConvertsUtf8Offsets` marks the matched substring of a non-ASCII title correctly —
+      slicing the raw byte offsets would select the wrong span.
+- [ ] `TestTitlePanelPostsTitles` asserts the docked panel's request body carries `titles` and no `feeds`.
+- [ ] `TestSaveSendsMappedDocument` also asserts `action.tags` is the entered list.
 - [ ] The thirteen labels appear character for character as doc 09 §8.2 gives them.
 - [ ] The headline string is `matches N of the last 50 items`.
 
@@ -144,8 +224,9 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
-`git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
+Expected: exactly the paths in the Files table, in that order, plus `api/openapi.json` and
+`web/src/api/schema.d.ts` from `make gen`, and nothing else. Use `git status`, not `git diff`: a file
+this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT implement the matching algorithm in TypeScript. Every verdict, score and highlight offset comes
@@ -241,3 +322,35 @@ Remedies, mirroring the findings' suggested fixes:
 4. In all cases pin the `errors[].location` prefixes the editor maps: `body.rule.` from the dry
    run, `body.definition.` from save. F317's toolbar import/export still has no owning task —
    assign one or record it Out-of-scope before T073 can close.
+
+**Repair applied 2026-09-20.** The ruling took the additive half of remedies 1–3 — the smallest
+interpretation consistent with the accepted ADRs, the merged code and doc 09 §1's comparison table,
+which advertises the docked test field, the live preview and first-class tags — plus remedy 4 in full:
+
+- F116: `DryRunItem` gains `Highlight *[2]int` (`json:"highlight,omitempty"`), filled from
+  `Decision.Highlight` only when `Matched` and the span is non-empty. Doc 05 §10.3 now pins that the
+  offsets are UTF-8 bytes the editor converts to UTF-16 code-unit indices before slicing, and its
+  example carries a non-ASCII title (`täysi ubuntu-…`, `[7,13]` bytes vs `[6,12]` code units) so the
+  two index systems diverge.
+- F115: `POST /rules/test` gains `titles: string[]` — doc 05 §10.3's body table,
+  `TestRuleInput.Body.Titles` and `DryRunRequest.Titles` — evaluated in place of stored items, one
+  synthesized `store.FeedItem` per title (`feed_id`, `feed`, `download_url` empty, `published_at`
+  null, request order preserved), `feeds` and `limit` inapplicable. Step 8 cites the member.
+- F379: `ActionSpec` gains `Tags` (doc 08 §4.1/§4.2's `action.tags`, created on demand like
+  `POST /tasks`' `tags`), `GrabRequest` gains `Tags`, `Commit` populates it and
+  `ruleTaskCreator.CreateForRule` forwards it into the `POST /tasks` body — which already accepts
+  `tags`. The field-mapping table gains the `Tags` row.
+- Remedy 4: doc 05 §10.3 now pins both `errors[].location` prefixes (`body.rule.` dry run,
+  `body.definition.` save) and the editor maps both onto the same control — F255 resolved. F317's
+  import/export is assigned here: step 11 wires it through `GET /rules` + `POST /rules`, no new
+  endpoint. Two adjacent rows closed in the same pass: F315's second half (**Add stopped** is a
+  checkbox bound to `action.paused` — no global add-stopped setting exists, so `Use global ▾` was a
+  wireframe artifact) and F316 (the editor renders only the newest `PREVIEW_LIMIT` merged rows and
+  counts the headline's `N` among them, so "the last 50 items" is literal).
+- The `## Files` table carries `internal/rss/dryrun.go`, `internal/rss/dryrun_test.go`,
+  `internal/rss/ruledoc.go`, `internal/rss/grab.go`, `internal/rss/grab_test.go`,
+  `internal/api/rules.go` and `internal/api/rules_test.go`; `api/openapi.json` and
+  `web/src/api/schema.d.ts` stay implicitly in scope via doc 13 §7.1.
+
+F115, F116, F255, F315, F316, F317 and F379 are marked resolved in `PLAN-REVIEW-FINDINGS.md`. The index
+row stays `todo`; the next loop iteration implements the task.

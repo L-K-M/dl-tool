@@ -1094,6 +1094,7 @@ unmatched, each with the reason it was rejected. Nothing is created, nothing is 
 | `feeds` | string[] | no | `rule.feeds`, else every enabled feed | Feed ids (`fed_…`). |
 | `limit` | integer | no | `200` | Items per feed, newest first; range `1..500`. |
 | `ignore_state` | boolean | no | `true` | Ignore the grab and seen-episode tables so the preview is reproducible while the user edits. |
+| `titles` | string[] | no | — | Arbitrary titles evaluated **in place of** stored items — the editor's docked test panel sends exactly one. When it is present, `feeds` and `limit` do not apply. |
 
 ```http
 POST /api/v1/rules/test
@@ -1112,10 +1113,10 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 {"evaluated":200,"matched":3,"elapsed_ms":41,
  "results":[
   {"feed_id":"fed_01JKQ7...","feed":"DistroWatch",
-   "title":"xubuntu-26.04.1-desktop-amd64.iso.torrent","published_at":"2026-09-01T03:58:00Z",
-   "download_url":"https://distrowatch.com/dwres/torrents/xubuntu-26.04.1-desktop-amd64.iso.torrent",
+   "title":"täysi ubuntu-26.04.1-desktop-amd64.iso","published_at":"2026-09-01T03:58:00Z",
+   "download_url":"https://distrowatch.com/dwres/torrents/taysi-ubuntu-26.04.1-desktop-amd64.iso.torrent",
    "matched":true,"score":20,
-   "matched_by":{"any_of":"ubuntu *desktop* amd64"},
+   "matched_by":{"any_of":"ubuntu *desktop* amd64"},"highlight":[7,13],
    "would_do":{"destination":"/data/iso","category":"linux","paused":false}},
   {"feed_id":"fed_01JKQ7...","feed":"DistroWatch",
    "title":"ubuntu-26.10-daily-desktop-amd64.iso.torrent","published_at":"2026-08-31T22:04:00Z",
@@ -1131,13 +1132,21 @@ Contract details the UI depends on:
   home is [`08-rss-automation.md`](08-rss-automation.md).
 - `reason_detail` names the exact clause and index responsible, so the editor can highlight it.
 - `matched_by` is present only when `matched` is `true`; `reason`/`reason_detail` only when it is `false`.
+- `highlight` is `[start,end]` — **UTF-8 byte** offsets into `title` — present only when `matched` is
+  `true` and the span is non-empty. A JavaScript consumer converts them to UTF-16 code-unit indices before
+  slicing: the example above is `[7,13]` in bytes but `[6,12]` in code units (`ä` is two bytes, one code
+  unit). The two index systems coincide only for ASCII titles.
+- `titles` results carry the echoed `title` with empty `feed_id`, `feed` and `download_url` and a null
+  `published_at`, in request order, and `evaluated` counts them.
 - `evaluated`, `matched` and `elapsed_ms` are always present, so a pathological regex is visible at once.
 - The endpoint is called on every keystroke behind a 250 ms debounce: it must stay side-effect free and be
   safe to call with an invalid rule.
 
 `200` whatever the per-item outcomes · `404` (a named feed id does not exist) · `422` when the rule document
 fails schema validation, including an unparseable regex or a malformed `episode.filter`, with
-`errors[].location` pointing at the offending member.
+`errors[].location` pointing at the offending member under `body.rule.` — the dry run's body member is
+`rule`, while `POST`/`PATCH /rules` report the same document members under `body.definition.` (§10.2); a
+client that shows them inline maps both prefixes onto the same control.
 
 ---
 

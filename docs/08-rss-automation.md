@@ -259,6 +259,7 @@ score:                        # optional Sonarr-style additive preferences
 action:
   destination: "/data/iso"
   category: "linux"
+  tags: ["iso"]                 # created on demand, like POST /tasks' tags
   paused: false
   content_layout: original    # original | subfolder | no_subfolder
   engine: "eng_01JKQ4..."     # optional; omit to use the routing table in 06
@@ -293,6 +294,7 @@ throttle:
 | `score.formats[].weight` | int | — | Added once when the pattern matches. Negative values are outright vetoes when large enough to sink the total below `minimum`. |
 | `action.destination` | string | the global default destination | Absolute path under a configured data root; an omitted value resolves to the global default destination, and the resolved value must still lie inside the roots. Validated at save time and again at grab time ([`05-api-contract.md`](05-api-contract.md) §10.2). |
 | `action.category` | string | `""` | Category name; must exist. |
+| `action.tags` | string[] | `[]` | Tag names the created task carries; created on demand, exactly like `POST /tasks`' `tags` ([`05-api-contract.md`](05-api-contract.md#52-post-tasks) §5.2). |
 | `action.paused` | bool | `false` | Create the task in `paused` state. |
 | `action.content_layout` | enum | `original` | `original` \| `subfolder` \| `no_subfolder`. |
 | `action.engine` | string | unset | Engine id. Omitted ⇒ the routing table in [`06-download-engines.md`](06-download-engines.md#2-routing-table) chooses. |
