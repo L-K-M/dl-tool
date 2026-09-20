@@ -156,8 +156,9 @@ The headline reads exactly `matches N of the last 50 items`.
    `internal/api/rules.go`. In `internal/rss/dryrun.go` add `Highlight` to `DryRunItem`, filled from
    `Decision.Highlight` only when `Matched` and the span is non-empty, and add `Titles` to
    `DryRunRequest`: when non-empty, `DryRun` synthesizes one `store.FeedItem` per title — `Title` set,
-   every other field at its zero value — and skips the stored-item selection entirely (`feeds` and
-   `limit` do not apply). Add `Titles` to `TestRuleInput.Body` and forward it in `internal/api/rules.go`.
+   `ID` and `Identity` carrying a distinct synthetic value so the decision join and dedup keys stay
+   correct, every other field at its zero value — and skips the stored-item selection entirely
+   (`feeds` and `limit` do not apply). Add `Titles` to `TestRuleInput.Body` and forward it in `internal/api/rules.go`.
    Then `make gen` so `api/openapi.json` and `web/src/api/schema.d.ts` carry the new members.
 2. Create `web/src/components/Rss/RuleEditor.tsx` with the three columns of doc 09 §8.2: the rules list
    with `[+] [⧉] [🗑]` and the *Import / export rules* buttons, the form, and the preview.
