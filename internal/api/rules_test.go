@@ -945,9 +945,17 @@ func TestTestRuleTitlesBounds(t *testing.T) {
 	titlesBody := validTestRuleBody()
 	titlesBody["titles"] = []string{"ubuntu desktop"}
 	titlesBody["feeds"] = []string{"fed_does_not_exist"}
-	if response := env.testRule(t, titlesBody); response.Code != http.StatusOK {
+	response := env.testRule(t, titlesBody)
+	if response.Code != http.StatusOK {
 		t.Fatalf("titles + unknown feed status = %d, want %d; body %s",
 			response.Code, http.StatusOK, response.Body.String())
+	}
+	var titlesReport rss.DryRunReport
+	if err := json.Unmarshal(response.Body.Bytes(), &titlesReport); err != nil {
+		t.Fatalf("decode titles body %q: %v", response.Body.String(), err)
+	}
+	if len(titlesReport.Results) != 1 {
+		t.Fatalf("titles + unknown feed verdicts = %d, want 1", len(titlesReport.Results))
 	}
 
 	cases := map[string][]string{
