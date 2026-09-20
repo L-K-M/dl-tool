@@ -40,7 +40,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/Rss/RuleEditor.test.tsx` | create | Debounce, preview, inline regex error and save cases. |
 | `web/src/locales/en/rss.json` | edit | Field labels, the ten reason sentences and the help popover. |
 | `web/src/App.tsx` | edit | Route `/rss/rules` to the editor. |
-| `internal/rss/dryrun.go` | edit | Carry `highlight` on `DryRunItem` and evaluate `titles` in place of stored items. |
+| `internal/rss/dryrun.go` | edit | Carry `highlight` on `DryRunItem`, widen `FeedID`/`Feed`/`DownloadURL` to `*string`, add `Tags` to `WouldDo`, and evaluate `titles` in place of stored items. |
 | `internal/rss/dryrun_test.go` | edit | Pin the offsets, the UTF-8 basis and the `titles` path. |
 | `internal/rss/ruledoc.go` | edit | Add `Tags` to `ActionSpec` (doc 08 §4.2's `action.tags`). |
 | `internal/rss/grab.go` | edit | Add `Tags` to `GrabRequest` and populate it in `Commit`. |
@@ -90,8 +90,16 @@ type DryRunRequest struct {
 }
 
 type DryRunItem struct {
+	FeedID      *string `json:"feed_id"`      // nil on titles rows; no omitempty, nil marshals null
+	Feed        *string `json:"feed"`         // same
+	DownloadURL *string `json:"download_url"` // same
+	// ...existing members... (PublishedAt is already *string)
+	Highlight *[2]int `json:"highlight,omitempty"` // [start,end) UTF-8 byte offsets into Title; nil unless Matched
+}
+
+type WouldDo struct {
 	// ...existing members...
-	Highlight *[2]int `json:"highlight,omitempty"` // UTF-8 byte offsets into Title; nil unless Matched
+	Tags []string `json:"tags,omitempty"` // echoes action.tags so the preview shows them
 }
 
 // internal/rss/ruledoc.go — F379's member, doc 08 §4.2's action.tags.
@@ -159,7 +167,9 @@ The headline reads exactly `matches N of the last 50 items`.
    in `internal/rss/grab.go` add `Tags` to `GrabRequest`, populate it from `doc.Action.Tags` in `Commit`,
    and pass `g.Tags` through `ruleTaskCreator.CreateForRule` into the `POST /tasks` body in
    `internal/api/rules.go`. In `internal/rss/dryrun.go` add `Highlight` to `DryRunItem`, filled from
-   `Decision.Highlight` only when `Matched` and the span is non-empty, and add `Titles` to
+   `Decision.Highlight` only when `Matched` and the span is non-empty; widen `FeedID`, `Feed` and
+   `DownloadURL` to `*string` with no `omitempty` so a nil marshals as `null` on titles rows; and add
+   `Tags` to `WouldDo`, echoed from `req.Rule.Action.Tags`. Then add `Titles` to
    `DryRunRequest`: when non-empty, `DryRun` synthesizes one `store.FeedItem` per title — `Title` set,
    `ID` and `Identity` carrying a distinct synthetic value so the decision join and dedup keys stay
    correct, every other field at its zero value (`PublishedAt` nil maps to `null` through the existing
@@ -206,7 +216,8 @@ The headline reads exactly `matches N of the last 50 items`.
     panel posts `titles`; `Save` sends `action.tags`.
 15. Extend `internal/rss/dryrun_test.go`, `internal/rss/grab_test.go` and `internal/api/rules_test.go` to
     pin the members of step 1: `DryRunItem.Highlight` carries `Decision.Highlight`, a `titles` request
-    never touches `feed_items`, and a grab lands `action.tags` in the created task's `tags`.
+    never touches `feed_items`, a titles row marshals all four absent members as `null`, and a grab
+    lands `action.tags` in the created task's `tags`.
 16. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -352,7 +363,8 @@ which advertises the docked test field, the live preview and first-class tags �
 - F379: `ActionSpec` gains `Tags` (doc 08 §4.1/§4.2's `action.tags`, created on demand like
   `POST /tasks`' `tags`), `GrabRequest` gains `Tags`, `Commit` populates it and
   `ruleTaskCreator.CreateForRule` forwards it into the `POST /tasks` body — which already accepts
-  `tags`. The field-mapping table gains the `Tags` row.
+  `tags`. `WouldDo` gains `Tags` so the dry-run preview echoes them. The field-mapping table gains the
+  `Tags` row.
 - Remedy 4: doc 05 §10.3 now pins both `errors[].location` prefixes (`body.rule.` dry run,
   `body.definition.` save) and the editor maps both onto the same control — F255 resolved. F317's
   import/export is assigned here: step 11 wires it through `GET /rules` + `POST /rules`, skipping
