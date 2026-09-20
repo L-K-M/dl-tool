@@ -222,11 +222,11 @@ ADR from the repository owner before the task can run. The answer belongs in a n
 `docs/decisions/`, and depending on it, in files outside this task's `## Files` table:
 
 - **Keep `.rar`:** the image needs a RAR-capable `7zz` — e.g. download upstream's
-  `7z<ver>-linux-x64.tar.xz`, verify the tarball's checksum, and pin the extracted static `7zzs` the
-  way ADR-0018 pins yt-dlp (the tarball's default `7zz` is glibc-linked and would not run on
-  `alpine:3.22`; verified here by `ldd`) — which means editing `Dockerfile` (and
-  `docs/10-deployment-and-compose.md` §5's package list). That also settles `DLTOOL_SEVENZIP_PATH`'s
-  target.
+  `7z<ver>-linux-x64.tar.xz`, verify it against a checksum pinned in the Dockerfile the way ADR-0018
+  pins yt-dlp's version and hash, and install the tarball's static `7zzs` (the default `7zz` is
+  glibc-linked and would not run on `alpine:3.22`; verified here by `ldd`) — which means editing
+  `Dockerfile` (and `docs/10-deployment-and-compose.md` §5's package list). That also settles
+  `DLTOOL_SEVENZIP_PATH`'s target.
 - **Drop `.rar`:** FR-100 in `docs/02-requirements.md`, §7 of `docs/06-download-engines.md`, this
   task's goal/Files/acceptance criteria and T075/T076's fixture lists all name the six formats and
   would need to say five.
