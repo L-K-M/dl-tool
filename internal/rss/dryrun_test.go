@@ -1,6 +1,7 @@
 package rss
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -90,10 +91,13 @@ func TestDryRunReturnsEveryEvaluatedItem(t *testing.T) {
 			require.Nil(t, row.WouldDo)
 			require.Empty(t, row.MatchedBy, "reason and matched_by are never both present")
 		}
-		require.Equal(t, feed.ID, row.FeedID)
-		require.NotEmpty(t, row.Feed)
+		require.NotNil(t, row.FeedID)
+		require.Equal(t, feed.ID, *row.FeedID)
+		require.NotNil(t, row.Feed)
+		require.NotEmpty(t, *row.Feed)
 		require.NotNil(t, row.PublishedAt)
-		require.NotEmpty(t, row.DownloadURL)
+		require.NotNil(t, row.DownloadURL)
+		require.NotEmpty(t, *row.DownloadURL)
 	}
 	require.Equal(t, report.Matched, report.Evaluated-rejected)
 	require.Equal(t, 100, report.Matched)
@@ -253,7 +257,7 @@ func TestDryRunLimitIsPerFeed(t *testing.T) {
 
 	perFeed := map[string][]string{}
 	for _, row := range report.Results {
-		perFeed[row.FeedID] = append(perFeed[row.FeedID], row.Title)
+		perFeed[*row.FeedID] = append(perFeed[*row.FeedID], row.Title)
 	}
 	require.Equal(t, 5, len(perFeed[feedA.ID]))
 	require.Equal(t, 5, len(perFeed[feedB.ID]))
@@ -300,7 +304,7 @@ func TestDryRunFeedSelection(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Evaluated)
-	require.Equal(t, enabled.ID, report.Results[0].FeedID)
+	require.Equal(t, enabled.ID, *report.Results[0].FeedID)
 
 	// rule.feeds scopes by URL: the disabled feed is still excluded here
 	// because its URL is not listed.
@@ -311,7 +315,7 @@ func TestDryRunFeedSelection(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Evaluated)
-	require.Equal(t, enabled.ID, report.Results[0].FeedID)
+	require.Equal(t, enabled.ID, *report.Results[0].FeedID)
 
 	// A named feed id selects the feed directly — even a disabled one —
 	// while the rule's own feed scope still applies at evaluation step 1.
@@ -320,7 +324,7 @@ func TestDryRunFeedSelection(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Evaluated)
-	require.Equal(t, disabled.ID, report.Results[0].FeedID)
+	require.Equal(t, disabled.ID, *report.Results[0].FeedID)
 }
 
 // TestDryRunPagesPastTheStorePageLimit exercises the cursor continuation
@@ -374,4 +378,163 @@ func TestDryRunItemWithoutDownloadURL(t *testing.T) {
 		Rule: dryRunDoc(), FeedIDs: []string{feed.ID}, IgnoreState: true,
 	})
 	require.Error(t, err)
+}
+
+// TestDryRunTitlesEvaluateInRequestOrder pins the docked-test contract of
+// doc 05 section 10.3: titles replaces stored items — request order kept,
+// feed_id, feed, download_url and published_at null on every row, and the
+// usual matched/unmatched split. A stored item on a matching feed proves
+// the titles path does not read the item tables.
+func TestDryRunTitlesEvaluateInRequestOrder(t *testing.T) {
+	db := newTestDB(t)
+	feed := newFeed(t, db, "https://example.com/titles.xml")
+	seedDryRunItems(t, db, []store.FeedItem{
+		dryRunItem(feed.ID, "stored", "ubuntu stored item", 1),
+	})
+
+	doc := dryRunDoc()
+	doc.Action.Tags = []string{"iso", "linux"}
+	report, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule:   doc,
+		Titles: []string{"debian netinst", "ubuntu desktop", "arch iso"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, report.Evaluated)
+	require.Equal(t, 1, report.Matched)
+	require.Len(t, report.Results, 3)
+
+	titles := []string{}
+	for i, row := range report.Results {
+		titles = append(titles, row.Title)
+		require.Nil(t, row.FeedID, "titles row %d carries no feed_id", i)
+		require.Nil(t, row.Feed, "titles row %d carries no feed name", i)
+		require.Nil(t, row.DownloadURL, "titles row %d carries no download_url", i)
+		require.Nil(t, row.PublishedAt, "titles row %d carries no published_at", i)
+	}
+	require.Equal(t, []string{"debian netinst", "ubuntu desktop", "arch iso"}, titles,
+		"results stay in request order")
+
+	match := report.Results[1]
+	require.True(t, match.Matched)
+	require.NotNil(t, match.WouldDo)
+	require.Equal(t, []string{"iso", "linux"}, match.WouldDo.Tags,
+		"would_do echoes the rule's action.tags")
+	require.Equal(t, ReasonNoMatch, report.Results[0].Reason)
+	require.Equal(t, ReasonNoMatch, report.Results[2].Reason)
+
+	// The nulls are wire-visible, not just nil pointers.
+	raw, err := json.Marshal(match)
+	require.NoError(t, err)
+	for _, key := range []string{`"feed_id":null`, `"feed":null`, `"download_url":null`, `"published_at":null`} {
+		require.Contains(t, string(raw), key)
+	}
+}
+
+// TestDryRunTitlesIgnoreFeedAndSizeClauses pins the two non-title clauses
+// the synthesized rows must not trip: feed scope — the rule's feeds list
+// is no membership test for a title — and the size bounds, which pass a
+// size-unknown item per doc 08 section 5 step 7. A nonexistent feeds
+// member also proves the path never resolves feed ids.
+func TestDryRunTitlesIgnoreFeedAndSizeClauses(t *testing.T) {
+	db := newTestDB(t)
+
+	doc := dryRunDoc()
+	doc.Feeds = []string{"https://example.com/never-stored.xml"}
+	doc.Match.MinSize = "1GiB"
+	doc.Match.MaxSize = "2GiB"
+	report, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule:    doc,
+		FeedIDs: []string{"fed_does_not_exist"},
+		Limit:   1,
+		Titles:  []string{"ubuntu desktop"},
+	})
+	require.NoError(t, err, "feeds, limit and an unknown feed id do not apply to titles")
+	require.Len(t, report.Results, 1)
+	require.True(t, report.Results[0].Matched,
+		"size-unknown synthesized items pass min/max: %s %s",
+		report.Results[0].Reason, report.Results[0].ReasonDetail)
+}
+
+// TestDryRunHighlightIsUTF8ByteOffsets pins the wire contract the editor
+// slices with: the offsets are byte positions into the title, so a
+// two-byte rune shifts them past the rune index, and a matched row whose
+// span is empty — here the clauseless rule — omits the member.
+func TestDryRunHighlightIsUTF8ByteOffsets(t *testing.T) {
+	db := newTestDB(t)
+
+	doc := dryRunDoc()
+	doc.Match.Mode = MatchModeRegex
+	doc.Match.AnyOf = []string{"ubuntu"}
+	report, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule:   doc,
+		Titles: []string{"é ubuntu desktop"},
+	})
+	require.NoError(t, err)
+	require.Len(t, report.Results, 1)
+	row := report.Results[0]
+	require.True(t, row.Matched)
+	require.NotNil(t, row.Highlight)
+	// 'é' is two UTF-8 bytes, so the match opens at byte 3, not rune 2.
+	require.Equal(t, [2]int{3, 9}, *row.Highlight)
+	require.Equal(t, "ubuntu", row.Title[row.Highlight[0]:row.Highlight[1]],
+		"the span slices the title at byte offsets")
+
+	bare := dryRunDoc()
+	bare.Match.AnyOf = nil
+	report, err = DryRun(t.Context(), db, DryRunRequest{
+		Rule: bare, Titles: []string{"anything"},
+	})
+	require.NoError(t, err)
+	require.True(t, report.Results[0].Matched)
+	require.Nil(t, report.Results[0].Highlight,
+		"an empty span leaves highlight absent")
+}
+
+// TestDryRunTitlesAreBounded pins the internal re-check of the contract's
+// titles bound: the handler 422s past 50, and DryRun refuses an oversized
+// slice for every other caller so a dry run never runs unbounded work.
+func TestDryRunTitlesAreBounded(t *testing.T) {
+	db := newTestDB(t)
+
+	_, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule:   dryRunDoc(),
+		Titles: make([]string, dryRunMaxTitles+1),
+	})
+	require.Error(t, err)
+
+	report, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule:   dryRunDoc(),
+		Titles: make([]string, dryRunMaxTitles),
+	})
+	require.NoError(t, err)
+	require.Len(t, report.Results, dryRunMaxTitles)
+}
+
+// TestDryRunTitlesEvaluatesStatelessly pins the IgnoreState bypass of the
+// titles path: a committed rule_matches row over the same synthesized
+// content still lets the title match — the panel never reads the state
+// tables. The synthesized item carries no InfoHash, so its content key is
+// its identity "titles:0"; the seeded row's unbeatable score would reject
+// it with already_have if state were consulted.
+func TestDryRunTitlesEvaluatesStatelessly(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, store.CreateRule(t.Context(), db, store.Rule{
+		ID: testRuleID, Name: "grabbed", Enabled: true, DefinitionJSON: "{}",
+	}))
+	_, err := db.ExecContext(t.Context(),
+		`INSERT INTO rule_matches
+		(id, rule_id, content_key, title, status, score, matched_at, created_at, updated_at)
+		VALUES ('rm_titles', ?, 'titles:0', 'ubuntu desktop', 'sent', 9999, ?, ?, ?)`,
+		testRuleID, testNow.UnixMilli(), testNow.UnixMilli(), testNow.UnixMilli())
+	require.NoError(t, err)
+
+	report, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule:        dryRunDoc(),
+		Titles:      []string{"ubuntu desktop"},
+		IgnoreState: false,
+	})
+	require.NoError(t, err)
+	require.Len(t, report.Results, 1)
+	require.True(t, report.Results[0].Matched,
+		"titles are stateless even when ignore_state is false: %s", report.Results[0].Reason)
 }

@@ -83,14 +83,15 @@ type ScoreFormat struct {
 	Weight  int    `json:"weight"`
 }
 
-// ActionSpec is what a matched item becomes: destination, category, queue
-// state, layout and an optional engine pin.
+// ActionSpec is what a matched item becomes: destination, category, tags,
+// queue state, layout and an optional engine pin.
 type ActionSpec struct {
-	Destination   string `json:"destination,omitempty"`
-	Category      string `json:"category,omitempty"`
-	Paused        bool   `json:"paused,omitempty"`
-	ContentLayout string `json:"content_layout,omitempty"` // original | subfolder | no_subfolder
-	Engine        string `json:"engine,omitempty"`
+	Destination   string   `json:"destination,omitempty"`
+	Category      string   `json:"category,omitempty"`
+	Tags          []string `json:"tags,omitempty"` // created on demand, like POST /tasks' tags
+	Paused        bool     `json:"paused,omitempty"`
+	ContentLayout string   `json:"content_layout,omitempty"` // original | subfolder | no_subfolder
+	Engine        string   `json:"engine,omitempty"`
 }
 
 // ThrottleSpec is the per-rule rate limit: the cooldown against

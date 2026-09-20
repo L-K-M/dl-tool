@@ -50,6 +50,7 @@ import {
 import { SettingsScreen } from "./components/Settings/SettingsScreen";
 import { SearchScreen } from "./components/Search/SearchScreen";
 import { FeedsScreen } from "./components/Rss/FeedsScreen";
+import { RuleEditor } from "./components/Rss/RuleEditor";
 import { Sidebar } from "./components/Shell/Sidebar";
 import { ReconnectBanner } from "./components/Shell/ReconnectBanner";
 import { StatusBar } from "./components/Shell/StatusBar";
@@ -386,10 +387,7 @@ export default function App() {
                 <Route path="/tasks/tag" element={<TasksRoute group="tag" />} />
                 <Route path="/search" element={<SearchScreen />} />
                 <Route path="/rss/feeds" element={<FeedsScreen />} />
-                <Route
-                  path="/rss/rules"
-                  element={<Placeholder screen="rss-rules" />}
-                />
+                <Route path="/rss/rules" element={<RuleEditor />} />
                 <Route
                   path="/settings"
                   element={<Navigate to="/settings/general" replace />}

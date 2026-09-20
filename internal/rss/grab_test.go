@@ -201,6 +201,27 @@ func TestRunRuleReportsEvaluatedAndGrabbed(t *testing.T) {
 	require.Equal(t, now, *ruleByID(t, db, rule.ID).LastMatchAt)
 }
 
+// TestGrabCarriesRuleTags pins the action.tags hand-off of doc 04 section
+// 5: a committed grab forwards the rule's tag list to the task creator so
+// the created task carries them verbatim.
+func TestGrabCarriesRuleTags(t *testing.T) {
+	db := newTestDB(t)
+	feed := newFeed(t, db, testFeedURL)
+	now := testNow.UnixMilli()
+
+	seedItems(t, db, grabItem(feed.ID, "id-t", "ubuntu desktop tagged", now))
+	rule := seedRule(t, db, RuleDoc{
+		Action: ActionSpec{Tags: []string{"iso", "linux"}},
+	})
+	creator := &recordingCreator{tasks: store.NewTaskStore(db)}
+
+	report, err := RunRule(t.Context(), db, rule.ID, 0, creator, now)
+	require.NoError(t, err)
+	require.Len(t, report.CreatedTaskIDs, 1)
+	require.Len(t, creator.grabs, 1)
+	require.Equal(t, []string{"iso", "linux"}, creator.grabs[0].Tags)
+}
+
 // TestContentKeyContestCreatesOneTaskAndOneFallback: two releases sharing a
 // content_key — here the same info hash — commit one task and one
 // 'fallback' row, the runner-up a later run can retry with.
