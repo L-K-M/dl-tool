@@ -1401,12 +1401,10 @@ live in [`13-testing-and-verification.md`](13-testing-and-verification.md).
   media download quietly caps below the quality the site offers. Either add `ffmpeg` to the image — a
   dependency, so it needs an ADR under [`decisions/`](decisions/) — or pin an explicit single-stream
   `--format` here and say in §7 that merged formats are out of scope for v1. Decide before T087.]
-- [NEEDS CLARIFICATION: **whether Alpine's `7zip` package carries the RAR codec.** RAR extraction is not
-  redistributable under 7-Zip's own licence terms and distributions routinely build without it. T074's
-  acceptance criterion asserts a `.rar` extracts, and [FR-100](02-requirements.md#fr-100-auto-extract-the-supported-archive-formats)
-  lists `.rar` as a supported format, so if the codec is absent that criterion cannot pass. T074 must run
-  `7zz i` against the built image and, if RAR is missing, either add a codec package with an ADR or drop
-  `.rar` from FR-100 and from §7. Do not discover this at the acceptance-criterion stage.]
+- [RESOLVED: **Alpine's `7zip` package does not carry the RAR codec** — `7zz i` on `7zip-24.09-r0`
+  lists 59 formats with neither `Rar` nor `Rar5`, verified against the apk binary on 2026-09-17.
+  The image ships upstream's RAR-capable static `7zzs`, pinned by version and hash and installed
+  as `/usr/local/bin/7zz`; see [ADR-0021](decisions/0021-pin-7zz-by-version-and-hash.md).]
 - [NEEDS CLARIFICATION: T101 must confirm the qBittorrent queueing-limit preference key names against
   `GET /api/v2/app/preferences` on `release-5.2.3` before §9.1 names them.]
 - [NEEDS CLARIFICATION: T113 must confirm the yt-dlp rate-limit flag used by the fan-out in §10.1.]
