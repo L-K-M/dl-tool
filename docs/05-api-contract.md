@@ -1094,6 +1094,7 @@ unmatched, each with the reason it was rejected. Nothing is created, nothing is 
 | `feeds` | string[] | no | `rule.feeds`, else every enabled feed | Feed ids (`fed_…`). |
 | `limit` | integer | no | `200` | Items per feed, newest first; range `1..500`. |
 | `ignore_state` | boolean | no | `true` | Ignore the grab and seen-episode tables so the preview is reproducible while the user edits. |
+| `titles` | string[] | no | — | Arbitrary titles evaluated **in place of** stored items — the editor's docked test panel sends exactly one. At most `50` titles of at most `500` UTF-8 bytes each; an empty array, more than `50` entries, or a title over `500` bytes is a `422` (location `body.titles`). When it is present, `feeds`, `limit` and `ignore_state` do not apply — synthesized items are evaluated statelessly. |
 
 ```http
 POST /api/v1/rules/test
@@ -1104,7 +1105,7 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
          "match":{"mode":"wildcard","case_sensitive":false,"fields":["title"],
                   "any_of":["ubuntu *desktop* amd64"],"none_of":["daily","*beta*"],
                   "min_size":"1GiB","max_size":"8GiB"},
-         "action":{"destination":"/data/iso","category":"linux","paused":false}},
+         "action":{"destination":"/data/iso","category":"linux","tags":["iso"],"paused":false}},
  "feeds":["fed_01JKQ7..."],"limit":200,"ignore_state":true}
 ```
 
@@ -1112,11 +1113,11 @@ X-DLTOOL-CSRF: K7sB2h1QpVmNc0aZ
 {"evaluated":200,"matched":3,"elapsed_ms":41,
  "results":[
   {"feed_id":"fed_01JKQ7...","feed":"DistroWatch",
-   "title":"xubuntu-26.04.1-desktop-amd64.iso.torrent","published_at":"2026-09-01T03:58:00Z",
-   "download_url":"https://distrowatch.com/dwres/torrents/xubuntu-26.04.1-desktop-amd64.iso.torrent",
+   "title":"täysi ubuntu-26.04.1-desktop-amd64.iso","published_at":"2026-09-01T03:58:00Z",
+   "download_url":"https://distrowatch.com/dwres/torrents/taysi-ubuntu-26.04.1-desktop-amd64.iso.torrent",
    "matched":true,"score":20,
-   "matched_by":{"any_of":"ubuntu *desktop* amd64"},
-   "would_do":{"destination":"/data/iso","category":"linux","paused":false}},
+   "matched_by":{"any_of":"ubuntu *desktop* amd64"},"highlight":[7,13],
+   "would_do":{"destination":"/data/iso","category":"linux","tags":["iso"],"paused":false}},
   {"feed_id":"fed_01JKQ7...","feed":"DistroWatch",
    "title":"ubuntu-26.10-daily-desktop-amd64.iso.torrent","published_at":"2026-08-31T22:04:00Z",
    "download_url":"https://distrowatch.com/dwres/torrents/ubuntu-26.10-daily-desktop-amd64.iso.torrent",
@@ -1131,13 +1132,27 @@ Contract details the UI depends on:
   home is [`08-rss-automation.md`](08-rss-automation.md).
 - `reason_detail` names the exact clause and index responsible, so the editor can highlight it.
 - `matched_by` is present only when `matched` is `true`; `reason`/`reason_detail` only when it is `false`.
+- `highlight` is `[start,end)` — half-open, `end` exclusive, like a Go or JavaScript slice — **UTF-8
+  byte** offsets into `title`, present only when `matched` is `true` and the span is non-empty. When the
+  clause `matched_by` names matches in several places, `highlight` is the leftmost span of its first
+  matching token. A JavaScript consumer converts them to UTF-16 code-unit indices before slicing: the
+  example above is `[7,13]` in bytes but `[6,12]` in code units (`ä` is two bytes, one code unit). The
+  two index systems coincide only for ASCII titles.
+- `titles` results carry the echoed `title` with `null` `feed_id`, `feed`, `download_url` and
+  `published_at`, in request order, and `evaluated` counts them. Synthesized items carry no size, so
+  `match.min_size`/`max_size` pass exactly as they do for any item without `size_bytes`
+  ([`08-rss-automation.md`](08-rss-automation.md) §5 step 7) — the panel's verdict tests the title
+  clauses, and `reason_detail` never cites a size clause for a synthesized item.
 - `evaluated`, `matched` and `elapsed_ms` are always present, so a pathological regex is visible at once.
 - The endpoint is called on every keystroke behind a 250 ms debounce: it must stay side-effect free and be
   safe to call with an invalid rule.
 
 `200` whatever the per-item outcomes · `404` (a named feed id does not exist) · `422` when the rule document
 fails schema validation, including an unparseable regex or a malformed `episode.filter`, with
-`errors[].location` pointing at the offending member.
+`errors[].location` pointing at the offending member under `body.rule.` — or at `body.titles` when
+`titles` itself is invalid — the dry run's body member is `rule`, while `POST`/`PATCH /rules` report the
+same document members under `body.definition.` (§10.2); a client that shows them inline maps both
+prefixes onto the same control.
 
 ---
 
