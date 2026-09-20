@@ -117,9 +117,11 @@ yourself:
   assumed does not exist — see
   [`docs/06-download-engines.md` §7.2](docs/06-download-engines.md#72-routing-check).
   Until it is decided, `MediaMatcher` stays nil and such URLs route to aria2.
-- **`ffmpeg` in the runtime image**, and whether Alpine's `7zip` carries the RAR
-  codec — both open questions in
-  [`docs/06-download-engines.md`](docs/06-download-engines.md#open-questions).
+- **`ffmpeg` in the runtime image** — an open question in
+  [`docs/06-download-engines.md`](docs/06-download-engines.md#open-questions). (The sibling
+  question, whether Alpine's `7zip` carries the RAR codec, is answered: it does not, and the
+  image ships upstream's pinned `7zzs` instead — see
+  [`docs/decisions/0021-pin-7zz-by-version-and-hash.md`](docs/decisions/0021-pin-7zz-by-version-and-hash.md).)
 
 Report after each milestone: what you built, what the exit checkpoint printed, and
 anything you wrote under `## Blocked`.

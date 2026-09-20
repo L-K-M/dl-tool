@@ -9,7 +9,7 @@
 | **Blocks** | T075, T076, T077, T078, T119 |
 | **Parallel-safe** | no — it also edits the shared files `internal/store/tasks.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-100](../02-requirements.md#fr-100-auto-extract-the-supported-archive-formats), [FR-102](../02-requirements.md#fr-102-report-extraction-state-progress-and-failures), [FR-106](../02-requirements.md#fr-106-remove-completed-tasks-automatically), [NFR-018](../02-requirements.md#nfr-018-extract-archives-safely) |
-| **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md) |
+| **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md), [ADR-0021](../decisions/0021-pin-7zz-by-version-and-hash.md) |
 | **Est. size** | 3 new files, ~380 LOC |
 
 ## Goal
@@ -32,8 +32,13 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/jobs/postprocess.go` | create | `OnCompleted`: the extract → move → notify chain and auto-remove. |
 | `internal/jobs/handlers_extract.go` | create | The three-pass `7zz` recipe and the `extract` job handler. |
 | `internal/jobs/handlers_extract_test.go` | create | Six-format, progress, truncated-archive and zip-slip cases. |
+| `internal/jobs/testdata/` | create | The checked-in `.rar` fixture — `7zz` never writes RAR, so `t.TempDir()` cannot synthesize one ([ADR-0021](../decisions/0021-pin-7zz-by-version-and-hash.md)). |
 | `internal/store/tasks.go` | modify | Add `SetExtractProgress` and `SetErrorCode`. |
 | `cmd/dl-tool/main.go` | edit | Construct the `Chain`, register the `extract` handler and hook `OnCompleted`. |
+| `Dockerfile` | modify | Drop apk `7zip`; fetch upstream's `7z<ver>-linux-<arch>` tarball, verify the pinned SHA-256 and install `7zzs` as `/usr/local/bin/7zz`; update `DLTOOL_SEVENZIP_PATH`. |
+| `internal/config/config.go` | modify | `defaultSevenzipPath` follows the binary to `/usr/local/bin/7zz`. |
+| `docs/10-deployment-and-compose.md` | modify | §5 package list and the binary's provenance per ADR-0021. |
+| `docs/11-config-reference.md` | modify | `DLTOOL_SEVENZIP_PATH` default and the resolved package-name note. |
 
 No other file may be modified.
 
@@ -114,38 +119,47 @@ Failure mapping: `ErrWrongPassword` → `extract_failed_wrong_password`; `ErrInv
 `postprocess.extract.failed`, `postprocess.autoremoved`.
 
 ## Steps
-1. Create `internal/jobs/postprocess.go` with `Chain` and `OnCompleted`, enqueuing an `extract` job when the
+1. Make the image RAR-capable per [ADR-0021](../decisions/0021-pin-7zz-by-version-and-hash.md): in
+   `Dockerfile`, drop `7zip` from the apk list, add `ARG SEVENZIP_VERSION` and per-arch
+   `SEVENZIP_SHA256_*` pins, fetch upstream's `7z<ver>-linux-<arch>` tarball, verify it with
+   `sha256sum -c -`, and install its static `7zzs` as `/usr/local/bin/7zz` (the dynamic `7zz` is
+   glibc-linked and cannot run on `alpine:3.22`). Point `DLTOOL_SEVENZIP_PATH` at the new path,
+   move `defaultSevenzipPath` in `internal/config/config.go` to `/usr/local/bin/7zz`, and update
+   `docs/10-deployment-and-compose.md` §5 and `docs/11-config-reference.md` to match.
+2. Create `internal/jobs/postprocess.go` with `Chain` and `OnCompleted`, enqueuing an `extract` job when the
    `auto_extract` settings key is true and the payload matches one of the six extensions.
-2. In the same file, after the chain's last job, remove the task row when the `auto_remove_on_complete`
+3. In the same file, after the chain's last job, remove the task row when the `auto_remove_on_complete`
    settings key is true — read it with an explicit `false` default, because it is not seeded by
    `00001_init.sql` — leaving every downloaded file on disk and writing `postprocess.autoremoved`.
-3. Create `internal/jobs/handlers_extract.go` with `ListMembers`, `Validate`, `Caps` and `ExtractHandler`.
-4. Implement pass 1 exactly as doc 12 §4.1: reject an absolute name, a `..` element, a name failing
+4. Create `internal/jobs/handlers_extract.go` with `ListMembers`, `Validate`, `Caps` and `ExtractHandler`.
+5. Implement pass 1 exactly as doc 12 §4.1: reject an absolute name, a `..` element, a name failing
    `fsx.SanitiseSegment`, a declared link, device, FIFO, setuid or setgid member, and any cap breach.
-5. Implement pass 2 into a fresh `tmp` directory inside the same data root, with the exec array above, a
+6. Implement pass 2 into a fresh `tmp` directory inside the same data root, with the exec array above, a
    `context` deadline of `Caps.WallClock`, and the child's process group killed on expiry.
-6. Poll the bytes written into `tmp` once per second; update `unzip_progress` from bytes-written over the
+7. Poll the bytes written into `tmp` once per second; update `unzip_progress` from bytes-written over the
    declared total and abort with `ErrCapExceeded` on a breach. Never recurse into a nested archive.
-7. Implement pass 3: `lstat` every entry under `tmp`, abort on any symlink, hardlink, device, FIFO or socket
+8. Implement pass 3: `lstat` every entry under `tmp`, abort on any symlink, hardlink, device, FIFO or socket
    or on any path resolving outside `tmp`, force `0644` on files and `0755` on directories, then rename the
    tree into place. On any abort remove `tmp` recursively and leave the destination untouched.
-8. Add `SetExtractProgress` and `SetErrorCode` to `internal/store/tasks.go` with explicit column lists.
-9. Create `internal/jobs/handlers_extract_test.go`: build one fixture of each of the six formats in
-   `t.TempDir()`; assert each extracts; assert `unzip_progress` advances and ends at `100`; assert a
-   truncated archive yields `extract_failed_invalid_archive`; assert a member named `../escape` is rejected
-   before any file is written; assert the default of `auto_extract` is `false`.
-10. Edit `cmd/dl-tool/main.go` in `OnStart` to construct `Chain`, call
+9. Add `SetExtractProgress` and `SetErrorCode` to `internal/store/tasks.go` with explicit column lists.
+10. Create `internal/jobs/handlers_extract_test.go`: build one fixture of each of `.zip`, `.tar`, `.gz`,
+    `.tgz` and `.7z` in `t.TempDir()` and take the `.rar` fixture from `internal/jobs/testdata/` — `7zz`
+    never writes RAR, so the fixture is checked in, not synthesized; assert each extracts; assert
+    `unzip_progress` advances and ends at `100`; assert a truncated archive yields
+    `extract_failed_invalid_archive`; assert a member named `../escape` is rejected before any file is
+    written; assert the default of `auto_extract` is `false`.
+11. Edit `cmd/dl-tool/main.go` in `OnStart` to construct `Chain`, call
     `worker.Register("extract", jobs.NewExtractHandler(st, cfg.SevenzipPath).Handle)` and install
     `Chain.OnCompleted` as the callback the store fires on a transition into `completed`, so the chain has
     exactly one call site.
-11. Run the verification command and paste its output under `## Evidence`.
+12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] `auto_extract` defaults to `false` and no extraction runs until it is enabled.
 - [ ] `7zz i` against the built runtime image is pasted under `## Evidence`, and the formats asserted below
-      are exactly the ones it lists. If RAR is absent, stop and resolve the open question in
-      [`docs/06-download-engines.md`](../06-download-engines.md#open-questions) rather than weakening this
-      criterion.
+      are exactly the ones it lists. The image's binary is upstream's RAR-capable `7zzs` per
+      [ADR-0021](../decisions/0021-pin-7zz-by-version-and-hash.md) — `Rar` and `Rar5` must appear in its
+      output, not merely the five formats Alpine's `7zip` package carries.
 - [ ] One archive of each of `.zip`, `.tar`, `.gz`, `.tgz`, `.rar` and `.7z` extracts successfully.
 - [ ] A `.tgz` yields its contents, not an intermediate `.tar`: 7-Zip decompresses one container per pass,
       so the handler runs a second pass when the first output is itself an archive.
@@ -190,6 +204,14 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
+
+**Resolved 2026-09-20 — keep `.rar`.** The repository owner decided to retain the format; the
+image ships upstream's RAR-capable static `7zzs`, pinned by version and hash, installed as
+`/usr/local/bin/7zz` — see
+[ADR-0021](../decisions/0021-pin-7zz-by-version-and-hash.md). This task's `## Files` table and
+steps were repaired to cover `Dockerfile`, `internal/config/config.go`, `internal/jobs/testdata/`
+(the checked-in `.rar` fixture) and the two config/deployment docs. The original block record
+follows.
 
 RAR is absent from the `7zz` the runtime image ships, so the `.rar` acceptance criterion cannot pass.
 The task says to stop here rather than weaken it.

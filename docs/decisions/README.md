@@ -32,6 +32,7 @@ Format is MADR-minimal with a mandatory `## Confirmation` section — see
 | 0018 | [Pin yt-dlp by version and hash; never self-update at runtime](0018-pin-ytdlp-by-version-and-hash.md) | accepted |
 | 0019 | [One account, no ownership model](0019-single-account-no-ownership.md) | accepted |
 | 0020 | [golang.org/x/text provides NFC and case folding for path safety](0020-x-text-for-nfc-and-case-folding.md) | accepted |
+| 0021 | [Ship upstream's RAR-capable 7zz, pinned by version and hash](0021-pin-7zz-by-version-and-hash.md) | accepted |
 
 ## Rules
 
