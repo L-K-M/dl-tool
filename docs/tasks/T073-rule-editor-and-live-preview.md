@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T073 |
 | **Milestone** | M5 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T047, T050, T068, T070, T071, T072 |
 | **Blocks** | — |
 | **Parallel-safe** | no — adds a route to T040's `web/src/App.tsx`, extends T072's `rss.json` and edits `internal/rss` and `internal/api` files of T068–T071 |
@@ -222,16 +222,16 @@ The headline reads exactly `matches N of the last 50 items`.
 16. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestPreviewDebouncesToOneRequest` asserts one call for five keystrokes inside 250 ms.
-- [ ] `TestPreviewListsNonMatchesWithReason` asserts the `✗` row and its sentence.
-- [ ] `TestInvalidRegexShowsInlineErrorAndKeepsPreview` passes.
-- [ ] `TestSaveSendsMappedDocument` asserts `match.any_of` is an array of lines, never a `|`-joined string.
-- [ ] `TestHighlightConvertsUtf8Offsets` marks the matched substring of a non-ASCII title correctly —
+- [x] `TestPreviewDebouncesToOneRequest` asserts one call for five keystrokes inside 250 ms.
+- [x] `TestPreviewListsNonMatchesWithReason` asserts the `✗` row and its sentence.
+- [x] `TestInvalidRegexShowsInlineErrorAndKeepsPreview` passes.
+- [x] `TestSaveSendsMappedDocument` asserts `match.any_of` is an array of lines, never a `|`-joined string.
+- [x] `TestHighlightConvertsUtf8Offsets` marks the matched substring of a non-ASCII title correctly —
       slicing the raw byte offsets would select the wrong span.
-- [ ] `TestTitlePanelPostsTitles` asserts the docked panel's request body carries `titles` and no `feeds`.
-- [ ] `TestSaveSendsMappedDocument` also asserts `action.tags` is the entered list.
-- [ ] The thirteen labels appear character for character as doc 09 §8.2 gives them.
-- [ ] The headline string is `matches N of the last 50 items`.
+- [x] `TestTitlePanelPostsTitles` asserts the docked panel's request body carries `titles` and no `feeds`.
+- [x] `TestSaveSendsMappedDocument` also asserts `action.tags` is the entered list.
+- [x] The thirteen labels appear character for character as doc 09 §8.2 gives them.
+- [x] The headline string is `matches N of the last 50 items`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -266,7 +266,104 @@ row order. Use `git status`, not `git diff`: a file this task creates is untrack
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head. The vitest output interleaves `msw` unhandled-request stacks and
+`flushSync` lifecycle warnings from other screens (pre-existing noise — the same lines appear on
+a clean tree); those are elided here, every test-file and summary line is verbatim.
+
+```
+$ make lint && make typecheck && make test-web && echo RULE_EDITOR_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t073-1-1789896356/web
+
+ ✓ src/main.test.ts (1 test) 1585ms
+ ✓ src/store/useUiPrefs.test.ts (17 tests) 1028ms
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 1255ms
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests) 1327ms
+ ✓ src/components/Settings/IndexersSection.test.tsx (6 tests) 1564ms
+ ✓ src/lib/format.test.ts (6 tests) 71ms
+ ✓ src/i18n.test.ts (4 tests) 45ms
+ ✓ src/store/useTasks.test.ts (17 tests) 142ms
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests) 2530ms
+ ✓ src/api/events.test.ts (16 tests) 163ms
+ ✓ src/components/Rss/FeedsScreen.test.tsx (10 tests) 2699ms
+ ✓ src/eslint.test.ts (1 test) 1221ms
+ ✓ src/sw.test.ts (2 tests) 9ms
+ ✓ src/api/client.test.ts (12 tests) 14ms
+ ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 3008ms
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3100ms
+ ✓ src/lib/theme.test.ts (9 tests) 3117ms
+ ✓ src/components/Rss/RuleEditor.test.tsx (9 tests) 5167ms
+   ✓ TestPreviewDebouncesToOneRequest  1392ms
+   ✓ TestPreviewListsNonMatchesWithReason  535ms
+   ✓ TestInvalidRegexShowsInlineErrorAndKeepsPreview  848ms
+   ✓ TestSaveSendsMappedDocument  698ms
+   ✓ TestHighlightConvertsUtf8Offsets  381ms
+   ✓ TestTitlePanelPostsTitles  435ms
+   ✓ TestIgnoreStateToggleReposts  653ms
+ ✓ src/components/Search/SearchScreen.test.tsx (10 tests) 6200ms
+ ✓ src/App.test.tsx (55 tests) 6155ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests) 10499ms
+
+ Test Files  22 passed (22)
+      Tests  279 passed (279)
+   Duration  12.64s
+
+RULE_EDITOR_OK
+```
+
+`make test` (Go suites) on the same tree:
+
+```
+$ go test ./...
+ok  	github.com/L-K-M/dl-tool/internal/api	35.127s
+ok  	github.com/L-K-M/dl-tool/internal/config	0.086s
+ok  	github.com/L-K-M/dl-tool/internal/engine	4.699s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	1.846s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	7.465s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	0.022s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	1.351s
+ok  	github.com/L-K-M/dl-tool/internal/obs	0.078s
+ok  	github.com/L-K-M/dl-tool/internal/rss	(cached)
+ok  	github.com/L-K-M/dl-tool/internal/search	1.408s
+ok  	github.com/L-K-M/dl-tool/internal/secure	1.447s
+ok  	github.com/L-K-M/dl-tool/internal/store	8.328s
+ok  	github.com/L-K-M/dl-tool/internal/sync	3.306s
+ok  	github.com/L-K-M/dl-tool/internal/uri	0.016s
+```
+
+Scope — this branch commits incrementally, so `git status` is clean at the head and the branch
+scope is `git diff origin/main...HEAD --name-only` plus the two untracked-at-the-time files. It is
+exactly the Files table plus the two generated artifacts, and nothing else:
+
+```
+api/openapi.json
+internal/api/rules.go
+internal/api/rules_test.go
+internal/rss/dryrun.go
+internal/rss/dryrun_test.go
+internal/rss/grab.go
+internal/rss/grab_test.go
+internal/rss/ruledoc.go
+web/src/App.tsx
+web/src/api/schema.d.ts
+web/src/components/Rss/RuleEditor.test.tsx
+web/src/components/Rss/RuleEditor.tsx
+web/src/locales/en/rss.json
+```
 
 ## Blocked
 

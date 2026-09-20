@@ -340,12 +340,12 @@ export function RuleEditor(): JSX.Element {
   const duplicateRule = useCallback(() => {
     if (selected === null) return;
     const copy = structuredClone(selected.definition);
-    copy.name = `${selected.name} (copy)`;
+    copy.name = t("rss:rules.duplicateName", { name: selected.name });
     setSelectedId(null);
     setDoc(copy);
     setDirty(true);
     setSaveErrors({});
-  }, [selected]);
+  }, [selected, t]);
 
   const save = useCallback(async () => {
     if (saving || doc.name.trim() === "") return;
