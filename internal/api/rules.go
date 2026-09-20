@@ -22,6 +22,7 @@ const (
 	operationPatchRule  = "patch-rule"
 	operationDeleteRule = "delete-rule"
 	operationTestRule   = "test-rule"
+	operationRunRule    = "run-rule"
 
 	ruleConflictDetail      = "a rule with that name already exists"
 	ruleNameDetail          = "definition.name must equal the request's name"
@@ -109,15 +110,73 @@ type RuleOutput struct {
 	Body   RuleDTO
 }
 
-// RuleHandlers owns the rule CRUD of docs/05-api-contract.md section 10.2
-// over the rules table.
-type RuleHandlers struct {
-	db *sqlx.DB
+// RunRuleInput addresses one rule by id for POST /rules/{id}/run.
+type RunRuleInput struct {
+	ID string `path:"id" doc:"The rul_ id of the rule"`
 }
 
-// NewRuleHandlers builds the rule handlers over db.
-func NewRuleHandlers(db *sqlx.DB) *RuleHandlers {
-	return &RuleHandlers{db: db}
+// RunRuleOutput carries the 200 run report of docs/05-api-contract.md
+// section 10.2.
+type RunRuleOutput struct {
+	Body struct {
+		Evaluated      int      `json:"evaluated"`
+		Matched        int      `json:"matched"`
+		CreatedTaskIDs []string `json:"created_task_ids"`
+		ElapsedMS      int64    `json:"elapsed_ms"`
+	}
+}
+
+// ruleTaskCreator adapts the task handlers to rss.TaskCreator: it builds
+// the same body POST /tasks accepts and calls CreateTasks, so a rule grab
+// passes the same normalisation, routing, destination containment and
+// concurrency checks a pasted URI passes. It never writes the tasks table
+// directly.
+type ruleTaskCreator struct{ tasks *TaskHandlers }
+
+// CreateForRule turns one grabbed item into a one-URI POST /tasks body.
+// action.engine is an engine id (eng_qbittorrent) while the body's engine
+// member takes the bare kind, so the prefix is stripped. A submission the
+// create path refuses is a grab failure — its detail lands in the match
+// row's reason — never a fabricated task id.
+func (c ruleTaskCreator) CreateForRule(ctx context.Context, g rss.GrabRequest) (string, error) {
+	input := &CreateTasksInput{}
+	input.Body.URIs = []string{g.URI}
+	input.Body.Destination = g.Destination
+	input.Body.Category = g.Category
+	input.Body.Paused = g.Paused
+	// content_layout "subfolder" maps onto create_subfolder; original and
+	// no_subfolder both leave it false — the finer distinction has no
+	// POST /tasks equivalent (F551 records the gap).
+	input.Body.CreateSubfolder = g.ContentLayout == "subfolder"
+	input.Body.Engine = strings.TrimPrefix(g.Engine, store.EngineIDPrefix)
+
+	output, err := c.tasks.CreateTasks(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	if len(output.Body.Created) == 1 {
+		return output.Body.Created[0].ID, nil
+	}
+	if len(output.Body.Rejected) > 0 {
+		return "", errors.New(output.Body.Rejected[0].Detail)
+	}
+
+	return "", errors.New("the submission created no task")
+}
+
+// RuleHandlers owns the rule CRUD of docs/05-api-contract.md section 10.2
+// over the rules table. creator is the one ruleTaskCreator the composition
+// root built — the same instance the feed pollers carry; a nil creator
+// leaves POST /rules/{id}/run answering 503.
+type RuleHandlers struct {
+	db      *sqlx.DB
+	creator rss.TaskCreator
+}
+
+// NewRuleHandlers builds the rule handlers over db; tc is the shared
+// rss.TaskCreator of T071.
+func NewRuleHandlers(db *sqlx.DB, tc rss.TaskCreator) *RuleHandlers {
+	return &RuleHandlers{db: db, creator: tc}
 }
 
 // Register mounts the four operations on the Huma API;
@@ -189,6 +248,19 @@ func (h *RuleHandlers) Register(hapi huma.API) {
 		// is 422, never silently ignored.
 		RejectUnknownQueryParameters: true,
 	}, h.TestRule)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: operationRunRule,
+		Method:      http.MethodPost,
+		Path:        "/rules/{id}/run",
+		Summary:     "Run a rule against stored items",
+		Description: "Evaluates the saved rule over the items already stored for its feeds — including a disabled rule, which the poller skips — and commits every accepted candidate through the ordinary task-creation path. created_task_ids can be shorter than matched: contested content_keys and the throttle cap both commit fewer tasks than matches. 404 for an unknown rule id; 503 /problems/engine-unavailable when the engine refuses every grab.",
+		Tags:        []string{"rules"},
+		Security:    credentialRequired,
+		// Same strictness as every other operation: a mistyped query key
+		// is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, h.RunRule)
 }
 
 // List serves GET /rules: every rule in evaluation order, definition
@@ -405,6 +477,48 @@ func (h *RuleHandlers) TestRule(ctx context.Context, in *TestRuleInput) (*TestRu
 	}
 
 	return &TestRuleOutput{Body: report}, nil
+}
+
+// RunRule serves POST /rules/{id}/run: the saved rule evaluates the items
+// already stored for its feeds and commits every accepted candidate —
+// task creation, fallback rows, episode keys and the last_match_at
+// watermark all land through rss.RunRule (docs/05-api-contract.md section
+// 10.2). A nil creator — the document-only builds — answers 503, and so
+// does a run whose every grab the create path refused.
+func (h *RuleHandlers) RunRule(ctx context.Context, in *RunRuleInput) (*RunRuleOutput, error) {
+	if h.creator == nil {
+		return nil, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "the rule runner is not configured")
+	}
+
+	started := time.Now()
+	report, err := rss.RunRule(ctx, h.db, in.ID, 0, h.creator, started.UnixMilli())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, FromStore(err)
+		}
+
+		return nil, internalFailure(ctx, "run rule", err)
+	}
+
+	// Dedup-suppressed candidates stay inside matched — the fallbacks of a
+	// contested content_key included — but the grabs are the winners:
+	// every one attempted and none created a task is the documented 503.
+	if grabs := report.Matched - report.Fallbacks; grabs > 0 && len(report.CreatedTaskIDs) == 0 {
+		return nil, Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, "every grab was refused")
+	}
+
+	output := &RunRuleOutput{}
+	output.Body.Evaluated = report.Evaluated
+	output.Body.Matched = report.Matched
+	output.Body.CreatedTaskIDs = report.CreatedTaskIDs
+	if output.Body.CreatedTaskIDs == nil {
+		// The empty list encodes [], never null — the same rule every
+		// other list member of the contract follows.
+		output.Body.CreatedTaskIDs = []string{}
+	}
+	output.Body.ElapsedMS = time.Since(started).Milliseconds()
+
+	return output, nil
 }
 
 // ruleValidationProblem renders the 422 of doc 05 section 10.2: one

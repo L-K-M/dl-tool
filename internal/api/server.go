@@ -30,6 +30,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/engine/aria2"
 	"github.com/L-K-M/dl-tool/internal/engine/qbittorrent"
 	"github.com/L-K-M/dl-tool/internal/obs"
+	"github.com/L-K-M/dl-tool/internal/rss"
 	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
 	"github.com/L-K-M/dl-tool/internal/sync"
@@ -108,6 +109,13 @@ type Server struct {
 
 	// tasks owns the /tasks collection operations.
 	tasks *TaskHandlers
+
+	// RuleCreator is the one rss.TaskCreator the composition root built
+	// from tasks: the rules handlers use it for POST /rules/{id}/run, the
+	// feed handlers for the refresh poller's post-poll pass, and
+	// cmd/dl-tool hands it to the rss_poll job poller — one instance
+	// serves all three (docs/14-conventions.md section 8.3).
+	RuleCreator rss.TaskCreator
 
 	// settings owns the engines operations of doc 05 section 11.3, and the
 	// /settings operations T092 adds to the same handlers.
@@ -315,6 +323,14 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	// reaches the LAN — PreflightURI's doc comment records the residual.
 	taskGuard := secure.NewGuard(log, cfg.SSRFAllowPrivate)
 
+	// The task handlers hoist out of the literal so the rule-grab seam
+	// shares the one instance: ruleTaskCreator goes to the rules handlers
+	// (POST /rules/{id}/run), to the feed handlers (the refresh poller's
+	// post-poll rules pass) and — as Server.RuleCreator — to the rss_poll
+	// job poller cmd/dl-tool builds.
+	tasks := NewTaskHandlers(db, engines, cfg.DataRoots, taskGuard, net.DefaultResolver)
+	creator := ruleTaskCreator{tasks: tasks}
+
 	server := &Server{
 		Router:     root,
 		Base:       base,
@@ -324,19 +340,21 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		Health:     health,
 		auth:       auth,
 		Engines:    engines,
-		tasks:      NewTaskHandlers(db, engines, cfg.DataRoots, taskGuard, net.DefaultResolver),
+		tasks:      tasks,
 		settings:   NewSettingsHandlers(db, engines),
 		prefs:      NewPrefsHandlers(db),
 		categories: NewCategoryHandlers(db, cfg.DataRoots),
 		fs:         NewFSHandlers(cfg.DataRoots),
 		search:     NewSearchHandlers(log, searchDeps),
 		// The feed poller shares the SSRF-guarded client with the search
-		// fan-out; its item parser is nil until T067 lands parse.go — the
-		// poller reports that as a fetch failure rather than panic.
-		feeds:    NewFeedHandlers(db, searchDeps.HTTP, nil, log),
-		rules:    NewRuleHandlers(db),
-		SSE:      sseHandlers,
-		bgCancel: bgCancel,
+		// fan-out; its item parser is T067's parse.go and its grab
+		// creator the shared ruleTaskCreator, so a 200 that adds items
+		// runs the rules pass through the ordinary task-creation path.
+		feeds:       NewFeedHandlers(db, searchDeps.HTTP, rss.NewParser(time.Now), creator, log),
+		rules:       NewRuleHandlers(db, creator),
+		RuleCreator: creator,
+		SSE:         sseHandlers,
+		bgCancel:    bgCancel,
 	}
 	// Any construction failure after the first goroutine started still
 	// releases it before the error return.

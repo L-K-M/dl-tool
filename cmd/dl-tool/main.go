@@ -162,9 +162,11 @@ func main() {
 				db, logger, defs, runner, indexers, searchHTTP, userAgent,
 			))
 			// The feed poller shares the SSRF-guarded client with the search
-			// fan-out and the refresh endpoint; its item parser is nil until
-			// T067 lands parse.go, which polls report as a fetch failure.
-			poller := rss.NewPoller(db, searchHTTP, nil, logger, time.Now)
+			// fan-out and the refresh endpoint; the parser is T067's
+			// parse.go and the creator the one ruleTaskCreator NewServer
+			// built, so a 200 that adds items runs the rules pass through
+			// the ordinary task-creation path.
+			poller := rss.NewPoller(db, searchHTTP, rss.NewParser(time.Now), server.RuleCreator, logger, time.Now)
 			worker.Register(jobs.JobKindRSSPoll, poller.PollDue)
 			runDone.Add(1)
 			go func() {

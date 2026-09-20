@@ -1107,3 +1107,52 @@ func TestAutoRuleFollowsFeedURL(t *testing.T) {
 		t.Errorf("url move minted an auto rule on a feed that had none: %v", err)
 	}
 }
+
+// TestFeedItemsMatchedRules pins the doc 05 section 10.1 member: an item
+// with a stored rule_matches row renders matched_rules as the matching
+// rules' {id, name} pairs — every status counts — while an unmatched item
+// renders [], never null.
+func TestFeedItemsMatchedRules(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	feedID := env.seedFeed(t, "https://example.com/matched.xml")
+	published := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	seeded := env.seedFeedItems(t, feedID, 2, published)
+	matchedID := env.feedItemID(t, seeded[0])
+
+	if err := store.CreateRule(t.Context(), env.db, store.Rule{
+		ID: "rul_01MATCHEDRULES0000000000", Name: "Ubuntu desktops", Enabled: true, DefinitionJSON: "{}",
+	}); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := env.db.ExecContext(t.Context(),
+		`INSERT INTO rule_matches
+		(id, rule_id, feed_item_id, title, status, score, matched_at, created_at, updated_at)
+		VALUES ('rm_matched_rules', 'rul_01MATCHEDRULES0000000000', ?, 'item-0', 'sent', 0, ?, ?, ?)`,
+		matchedID, published, published, published); err != nil {
+		t.Fatalf("seed rule_matches: %v", err)
+	}
+
+	response := env.getFeedItems(t, feedID, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	page := decodeFeedItemsPage(t, response)
+	if len(page.Items) != 2 {
+		t.Fatalf("items = %d, want the two seeded items", len(page.Items))
+	}
+	for _, item := range page.Items {
+		if item.MatchedRules == nil {
+			t.Errorf("item %s matched_rules = null, want an array", item.ID)
+		}
+		if item.ID == matchedID {
+			if len(item.MatchedRules) != 1 ||
+				item.MatchedRules[0].ID != "rul_01MATCHEDRULES0000000000" ||
+				item.MatchedRules[0].Name != "Ubuntu desktops" {
+				t.Errorf("matched item = %+v, want the rule's {id, name}", item.MatchedRules)
+			}
+		} else if len(item.MatchedRules) != 0 {
+			t.Errorf("unmatched item = %+v, want matched_rules []", item.MatchedRules)
+		}
+	}
+}
