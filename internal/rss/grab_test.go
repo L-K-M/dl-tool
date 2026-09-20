@@ -169,7 +169,10 @@ func TestRunRuleReportsEvaluatedAndGrabbed(t *testing.T) {
 	rule := seedRule(t, db, RuleDoc{Match: MatchSpec{AnyOf: []string{"*desktop*"}}})
 	creator := &recordingCreator{tasks: store.NewTaskStore(db)}
 
-	report, err := RunRule(t.Context(), db, rule.ID, 0, creator, now)
+	// The run clock is an hour past the newest published_at, so the
+	// watermark assertion below can only pass if last_match_at comes from
+	// the last winner's published_at rather than the run's now.
+	report, err := RunRule(t.Context(), db, rule.ID, 0, creator, now+int64(time.Hour/time.Millisecond))
 	require.NoError(t, err)
 	require.Equal(t, 20, report.Evaluated)
 	require.Equal(t, 3, report.Matched)

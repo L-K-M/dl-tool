@@ -975,13 +975,10 @@ func TestRunRuleCommitsGrabsAsTasks(t *testing.T) {
 
 	// The committed match row names the created task and carries 'sent'.
 	var status, taskID string
-	if err := env.db.GetContext(t.Context(), &status,
-		`SELECT status FROM rule_matches WHERE rule_id = ?`, rule.ID); err != nil {
+	if err := env.db.QueryRowContext(t.Context(),
+		`SELECT status, task_id FROM rule_matches WHERE rule_id = ?`, rule.ID).
+		Scan(&status, &taskID); err != nil {
 		t.Fatalf("read rule_matches: %v", err)
-	}
-	if err := env.db.GetContext(t.Context(), &taskID,
-		`SELECT task_id FROM rule_matches WHERE rule_id = ?`, rule.ID); err != nil {
-		t.Fatalf("read task_id: %v", err)
 	}
 	if status != "sent" || taskID != report.CreatedTaskIDs[0] {
 		t.Errorf("rule_matches = (%s, %s), want sent row naming %s", status, taskID, report.CreatedTaskIDs[0])

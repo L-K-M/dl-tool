@@ -186,7 +186,7 @@ func Commit(ctx context.Context, db *sqlx.DB, doc RuleDoc, rule store.Rule,
 			// stages no episode key, so the next evaluation re-enters
 			// the item instead of losing it to a transient refusal.
 			if ferr := failMatch(ctx, db, matchID, err.Error(), now); ferr != nil {
-				return report, fmt.Errorf("rss: commit rule %s: %w", rule.ID, ferr)
+				return report, fmt.Errorf("rss: commit rule %s: %w", rule.ID, errors.Join(ferr, err))
 			}
 			continue
 		}
