@@ -30,6 +30,7 @@ type GrabRequest struct {
 	URI           string
 	Destination   string // rule action.destination, empty means the server default
 	Category      string
+	Tags          []string // rule action.tags; the create path makes them on demand
 	Paused        bool
 	ContentLayout string // original | subfolder | no_subfolder
 	Engine        string // rule action.engine, empty means let the router decide
@@ -175,6 +176,7 @@ func Commit(ctx context.Context, db *sqlx.DB, doc RuleDoc, rule store.Rule,
 			URI:           stringOrEmpty(winner.Item.DownloadURL),
 			Destination:   doc.Action.Destination,
 			Category:      doc.Action.Category,
+			Tags:          doc.Action.Tags,
 			Paused:        doc.Action.Paused,
 			ContentLayout: doc.Action.ContentLayout,
 			Engine:        doc.Action.Engine,

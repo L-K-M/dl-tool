@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -881,6 +882,118 @@ func TestTestRuleIgnoreStateFalseIsAccepted(t *testing.T) {
 	}
 	if report.Matched != 1 {
 		t.Errorf("default report = %+v, want the stateless run matching the item", report)
+	}
+}
+
+// TestTestRuleTitlesEvaluateWithoutStoredItems pins the docked-test path
+// of doc 05 section 10.3: titles replaces stored items entirely — the
+// results come back in request order, one verdict per title, and the
+// feed-shaped members marshal as null.
+func TestTestRuleTitlesEvaluateWithoutStoredItems(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	// A stored item whose title matches the rule would enter the results
+	// if the titles path ever read the item tables.
+	feedID := env.seedFeed(t, "https://example.com/titles.xml")
+	published := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	downloadURL := "https://example.com/t/x.torrent"
+	if _, err := store.UpsertFeedItems(t.Context(), env.db, []store.FeedItem{
+		{FeedID: feedID, Identity: "stored", Title: "ubuntu stored", TitleNorm: "ubuntu stored", DownloadURL: &downloadURL, PublishedAt: &published},
+	}, published); err != nil {
+		t.Fatalf("seed feed items: %v", err)
+	}
+
+	body := validTestRuleBody()
+	body["titles"] = []string{"debian netinst", "ubuntu desktop"}
+	body["rule"].(map[string]any)["action"].(map[string]any)["tags"] = []string{"iso"}
+	response := env.testRule(t, body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var report rss.DryRunReport
+	if err := json.Unmarshal(response.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode response body %q: %v", response.Body.String(), err)
+	}
+	if report.Evaluated != 2 || report.Matched != 1 || len(report.Results) != 2 {
+		t.Fatalf("report = %+v, want evaluated=2 matched=1", report)
+	}
+	if report.Results[0].Title != "debian netinst" || report.Results[1].Title != "ubuntu desktop" {
+		t.Errorf("results order = %q, %q, want request order",
+			report.Results[0].Title, report.Results[1].Title)
+	}
+	for _, row := range report.Results {
+		if row.FeedID != nil || row.Feed != nil || row.DownloadURL != nil || row.PublishedAt != nil {
+			t.Errorf("titles row = %+v, want feed_id, feed, download_url and published_at null", row)
+		}
+	}
+	if tags := report.Results[1].WouldDo.Tags; !slices.Equal(tags, []string{"iso"}) {
+		t.Errorf("would_do.tags = %v, want the rule's action.tags echoed", tags)
+	}
+	if !strings.Contains(response.Body.String(), `"feed_id":null`) {
+		t.Errorf("body %s, want feed_id marshalled as null", response.Body.String())
+	}
+}
+
+// TestTestRuleTitlesBounds pins the request validation of doc 05 section
+// 10.3: a present-but-empty array, more than 50 titles and a title past
+// 500 UTF-8 bytes each answer 422 with errors[].location body.titles.
+func TestTestRuleTitlesBounds(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	cases := map[string][]string{
+		"empty":     {},
+		"fifty-one": make([]string, 51),
+		"oversized": {strings.Repeat("x", 501)},
+	}
+	for name, titles := range cases {
+		body := validTestRuleBody()
+		body["titles"] = titles
+		problem := assertProblem(t, env.testRule(t, body), http.StatusUnprocessableEntity, SlugValidationFailed)
+		if len(problem.Errors) == 0 || problem.Errors[0].Location != "body.titles" {
+			t.Errorf("%s: errors = %+v, want errors[0].location body.titles", name, problem.Errors)
+		}
+	}
+}
+
+// TestRunRuleCarriesTagsToTheTask pins the grab hand-off of doc 04
+// section 5: action.tags rides GrabRequest into POST /tasks, so the
+// committed task lists the rule's tags.
+func TestRunRuleCarriesTagsToTheTask(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	feedID := env.seedFeed(t, "https://example.com/tagged.xml")
+	published := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	env.seedRunItems(t, feedID, []store.FeedItem{
+		runItem(feedID, "i1", "ubuntu 26.04 desktop amd64", "", published),
+	})
+
+	body := validRuleBody("Tagged")
+	body["definition"].(map[string]any)["action"].(map[string]any)["tags"] = []string{"iso", "linux"}
+	response := env.createRule(t, body)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	rule := decodeRuleBody(t, response)
+
+	response = env.runRule(t, rule.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	report := decodeRunRuleBody(t, response)
+	if len(report.CreatedTaskIDs) != 1 {
+		t.Fatalf("report = %+v, want one created task", report)
+	}
+
+	task := env.getTask(t, report.CreatedTaskIDs[0])
+	if task.Code != http.StatusOK {
+		t.Fatalf("get task status = %d, want %d; body %s", task.Code, http.StatusOK, task.Body.String())
+	}
+	var dto TaskDTO
+	if err := json.Unmarshal(task.Body.Bytes(), &dto); err != nil {
+		t.Fatalf("decode task body %q: %v", task.Body.String(), err)
+	}
+	if !slices.Equal(dto.Tags, []string{"iso", "linux"}) {
+		t.Errorf("task tags = %v, want [iso linux]", dto.Tags)
 	}
 }
 

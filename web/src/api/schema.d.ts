@@ -906,6 +906,7 @@ export interface components {
       destination?: string;
       engine?: string;
       paused?: boolean;
+      tags?: string[] | null;
     };
     ActionsInputBody: {
       /**
@@ -1095,9 +1096,10 @@ export interface components {
       tasks_removed: string[] | null;
     };
     DryRunItem: {
-      download_url: string;
-      feed: string;
-      feed_id: string;
+      download_url: string | null;
+      feed: string | null;
+      feed_id: string | null;
+      highlight?: number[];
       matched: boolean;
       matched_by?: {
         [key: string]: string;
@@ -1858,6 +1860,8 @@ export interface components {
       limit: number;
       /** @description The full rule document, unsaved */
       rule: unknown;
+      /** @description Arbitrary titles evaluated statelessly in place of stored items; feeds, limit and ignore_state do not apply */
+      titles?: string[] | null;
     };
     ThrottleSpec: {
       /** Format: int64 */
@@ -1900,6 +1904,7 @@ export interface components {
       category: string;
       destination: string;
       paused: boolean;
+      tags?: string[] | null;
     };
   };
   responses: never;

@@ -86,6 +86,15 @@ type ListRulesOutput struct {
 	}
 }
 
+// The titles bounds of docs/05-api-contract.md section 10.3: the editor's
+// docked test panel sends one; the request may carry at most 50 of at
+// most 500 UTF-8 bytes each.
+const (
+	testRuleMaxTitles      = 50
+	testRuleMaxTitleBytes  = 500
+	testRuleTitlesLocation = "body.titles"
+)
+
 // TestRuleInput is the body of POST /rules/test (docs/05-api-contract.md
 // section 10.3). The rule arrives as raw JSON so a malformed document is
 // this handler's 422 — errors[].location naming the member — never a
@@ -96,6 +105,7 @@ type TestRuleInput struct {
 		Feeds       []string        `json:"feeds,omitempty"         doc:"Feed ids; the default is rule.feeds resolved by url, else every enabled feed"`
 		Limit       int             `json:"limit,omitempty"         minimum:"1" maximum:"500" default:"200" doc:"Items per feed, newest first"`
 		IgnoreState *bool           `json:"ignore_state,omitempty"  default:"true" doc:"Default true: bypass rule_matches and rule_seen_episodes so the preview repeats byte for byte"`
+		Titles      []string        `json:"titles,omitempty"        doc:"Arbitrary titles evaluated statelessly in place of stored items; feeds, limit and ignore_state do not apply"`
 	}
 }
 
@@ -143,6 +153,7 @@ func (c ruleTaskCreator) CreateForRule(ctx context.Context, g rss.GrabRequest) (
 	input.Body.URIs = []string{g.URI}
 	input.Body.Destination = g.Destination
 	input.Body.Category = g.Category
+	input.Body.Tags = g.Tags
 	input.Body.Paused = g.Paused
 	// content_layout "subfolder" maps onto create_subfolder; original and
 	// no_subfolder both leave it false — the finer distinction has no
@@ -458,6 +469,24 @@ func (h *RuleHandlers) TestRule(ctx context.Context, in *TestRuleInput) (*TestRu
 		return nil, ruleValidationProblemAt("body.rule.", errs)
 	}
 
+	// A present-but-empty array is a 422 like an oversized one; absent
+	// (nil) leaves the stored-item path untouched.
+	if in.Body.Titles != nil {
+		if len(in.Body.Titles) == 0 {
+			return nil, ruleFieldProblem(testRuleTitlesLocation, "at least one title is required")
+		}
+		if len(in.Body.Titles) > testRuleMaxTitles {
+			return nil, ruleFieldProblem(testRuleTitlesLocation,
+				fmt.Sprintf("at most %d titles, got %d", testRuleMaxTitles, len(in.Body.Titles)))
+		}
+		for _, title := range in.Body.Titles {
+			if len(title) > testRuleMaxTitleBytes {
+				return nil, ruleFieldProblem(testRuleTitlesLocation,
+					fmt.Sprintf("a title is at most %d UTF-8 bytes", testRuleMaxTitleBytes))
+			}
+		}
+	}
+
 	ignoreState := true
 	if in.Body.IgnoreState != nil {
 		ignoreState = *in.Body.IgnoreState
@@ -467,6 +496,7 @@ func (h *RuleHandlers) TestRule(ctx context.Context, in *TestRuleInput) (*TestRu
 		FeedIDs:     in.Body.Feeds,
 		Limit:       in.Body.Limit,
 		IgnoreState: ignoreState,
+		Titles:      in.Body.Titles,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

@@ -3,10 +3,13 @@ package rss
 import (
 	"cmp"
 	"context"
+	"crypto/sha1"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -26,36 +29,47 @@ const (
 
 // DryRunRequest mirrors the body of POST /rules/test. FeedIDs empty means
 // the rule's own feeds, and an empty rule.feeds means every enabled feed.
-// Limit is items per feed, newest first.
+// Limit is items per feed, newest first. A non-empty Titles evaluates the
+// arbitrary titles of the editor's docked test panel in place of stored
+// items — statelessly, so FeedIDs, Limit and IgnoreState do not apply.
 type DryRunRequest struct {
 	Rule        RuleDoc
 	FeedIDs     []string
 	Limit       int  // default 200, range 1..500
 	IgnoreState bool // HTTP default is true; false explicitly opts into stateful checks
+	Titles      []string
 }
 
-// DryRunItem is one row of results[]. MatchedBy is present only when
-// Matched is true; Reason and ReasonDetail only when it is false.
+// DryRunItem is one row of results[]. MatchedBy and Highlight are present
+// only when Matched is true; Reason and ReasonDetail only when it is
+// false. FeedID, Feed, DownloadURL and PublishedAt carry no omitempty so
+// a synthesized titles row marshals them as null rather than dropping
+// the keys.
 type DryRunItem struct {
-	FeedID       string            `json:"feed_id"`
-	Feed         string            `json:"feed"`
-	Title        string            `json:"title"`
-	PublishedAt  *string           `json:"published_at"`
-	DownloadURL  string            `json:"download_url"`
-	Matched      bool              `json:"matched"`
-	Score        int               `json:"score,omitempty"`
-	MatchedBy    map[string]string `json:"matched_by,omitempty"`
-	WouldDo      *WouldDo          `json:"would_do,omitempty"`
-	Reason       string            `json:"reason,omitempty"`
-	ReasonDetail string            `json:"reason_detail,omitempty"`
+	FeedID      *string           `json:"feed_id"`
+	Feed        *string           `json:"feed"`
+	Title       string            `json:"title"`
+	PublishedAt *string           `json:"published_at"`
+	DownloadURL *string           `json:"download_url"`
+	Matched     bool              `json:"matched"`
+	Score       int               `json:"score,omitempty"`
+	MatchedBy   map[string]string `json:"matched_by,omitempty"`
+	// Highlight is the [start,end) half-open span of UTF-8 byte offsets
+	// into Title — Go byte indices, which a JavaScript consumer must
+	// convert to UTF-16 code units before slicing (doc 05 section 10.3).
+	Highlight    *[2]int  `json:"highlight,omitempty"`
+	WouldDo      *WouldDo `json:"would_do,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
+	ReasonDetail string   `json:"reason_detail,omitempty"`
 }
 
 // WouldDo restates the rule's action for a matched item; it is the
 // preview, never a promise.
 type WouldDo struct {
-	Destination string `json:"destination"`
-	Category    string `json:"category"`
-	Paused      bool   `json:"paused"`
+	Destination string   `json:"destination"`
+	Category    string   `json:"category"`
+	Tags        []string `json:"tags,omitempty"`
+	Paused      bool     `json:"paused"`
 }
 
 // DryRunReport is the POST /rules/test body: every evaluated item, the
@@ -147,47 +161,53 @@ func DryRun(ctx context.Context, db *sqlx.DB, req DryRunRequest) (DryRunReport, 
 		limit = dryRunMaxLimit
 	}
 
-	feeds, err := dryRunFeeds(ctx, db, req)
-	if err != nil {
-		return DryRunReport{}, err
-	}
-
-	feedByID := make(map[string]FeedRef, len(feeds))
-	feedName := make(map[string]string, len(feeds))
-	items := []store.FeedItem{}
-	for _, feed := range feeds {
-		feedByID[feed.ID] = FeedRef{URL: feed.URL, Priority: feed.Priority}
-		if feed.Title != nil {
-			feedName[feed.ID] = *feed.Title
-		} else {
-			// A feed that was never fetched has no title; the URL is the
-			// only name the row can offer.
-			feedName[feed.ID] = feed.URL
-		}
-		batch, err := newestFeedItems(ctx, db, feed.ID, limit)
+	feedByID := map[string]FeedRef{}
+	feedName := map[string]string{}
+	var items []store.FeedItem
+	var state State = dryRunState{db: db}
+	if len(req.Titles) > 0 {
+		// The docked test panel evaluates its titles in place of stored
+		// items: no feed selection, no limit and no state tables.
+		items, feedByID = synthesizeTitleItems(req.Titles, req.Rule)
+		state = StatelessState{}
+	} else {
+		feeds, err := dryRunFeeds(ctx, db, req)
 		if err != nil {
 			return DryRunReport{}, err
 		}
-		items = append(items, batch...)
-	}
 
-	// Merge the per-feed pages into one newest-first set, the order
-	// ListFeedItems itself pages in, so the report is stable.
-	slices.SortStableFunc(items, func(a, b store.FeedItem) int {
-		if c := cmp.Compare(dryRunSortKey(b), dryRunSortKey(a)); c != 0 {
-			return c
+		for _, feed := range feeds {
+			feedByID[feed.ID] = FeedRef{URL: feed.URL, Priority: feed.Priority}
+			if feed.Title != nil {
+				feedName[feed.ID] = *feed.Title
+			} else {
+				// A feed that was never fetched has no title; the URL is the
+				// only name the row can offer.
+				feedName[feed.ID] = feed.URL
+			}
+			batch, err := newestFeedItems(ctx, db, feed.ID, limit)
+			if err != nil {
+				return DryRunReport{}, err
+			}
+			items = append(items, batch...)
 		}
 
-		return cmp.Compare(b.ID, a.ID)
-	})
+		// Merge the per-feed pages into one newest-first set, the order
+		// ListFeedItems itself pages in, so the report is stable.
+		slices.SortStableFunc(items, func(a, b store.FeedItem) int {
+			if c := cmp.Compare(dryRunSortKey(b), dryRunSortKey(a)); c != 0 {
+				return c
+			}
+
+			return cmp.Compare(b.ID, a.ID)
+		})
+		if req.IgnoreState {
+			state = StatelessState{}
+		}
+	}
 	itemByID := make(map[string]store.FeedItem, len(items))
 	for _, item := range items {
 		itemByID[item.ID] = item
-	}
-
-	var state State = dryRunState{db: db}
-	if req.IgnoreState {
-		state = StatelessState{}
 	}
 
 	// The document is unsaved, so the synthesised rule carries no id and
@@ -210,19 +230,28 @@ func DryRun(ctx context.Context, db *sqlx.DB, req DryRunRequest) (DryRunReport, 
 	for _, decision := range decisions {
 		item := itemByID[decision.ItemID]
 		row := DryRunItem{
-			FeedID:      item.FeedID,
-			Feed:        feedName[item.FeedID],
 			Title:       item.Title,
 			PublishedAt: unixMilliPtrRFC3339(item.PublishedAt),
-			DownloadURL: stringOrEmpty(item.DownloadURL),
 			Matched:     decision.Matched,
 			Score:       decision.Score,
 		}
+		if len(req.Titles) == 0 {
+			// A synthesized title item carries no feed identity: its row
+			// keeps the three pointers nil so they marshal as null.
+			row.FeedID = strPtr(item.FeedID)
+			row.Feed = strPtr(feedName[item.FeedID])
+			row.DownloadURL = strPtr(stringOrEmpty(item.DownloadURL))
+		}
 		if decision.Matched {
 			row.MatchedBy = decision.MatchedBy
+			if decision.Highlight[1] > decision.Highlight[0] {
+				highlight := decision.Highlight
+				row.Highlight = &highlight
+			}
 			row.WouldDo = &WouldDo{
 				Destination: req.Rule.Action.Destination,
 				Category:    req.Rule.Action.Category,
+				Tags:        req.Rule.Action.Tags,
 				Paused:      req.Rule.Action.Paused,
 			}
 			report.Matched++
@@ -331,6 +360,37 @@ func dryRunSortKey(item store.FeedItem) int64 {
 	}
 
 	return item.FirstSeenAt
+}
+
+// synthesizeTitleItems builds the one store.FeedItem per tested title of
+// the titles path. Title is the only real datum: ID and Identity are
+// synthetic so the decision join and the dedup content key stay unique,
+// and DownloadURL carries a deterministic routable magnet so a matching
+// title reaches the step-12 matched verdict instead of aborting the pass
+// on a missing address — the result rows still report null, because the
+// URL is an evaluation aid, not feed data. The synthesized items' feed id
+// is empty, so feedByID[""] answers the rule's first feed URL and the
+// step-1 scope check keeps them: the panel's verdict tests the title
+// clauses, never feed membership.
+func synthesizeTitleItems(titles []string, doc RuleDoc) ([]store.FeedItem, map[string]FeedRef) {
+	items := make([]store.FeedItem, 0, len(titles))
+	for i, title := range titles {
+		id := fmt.Sprintf("titles:%d", i)
+		sum := sha1.Sum([]byte(strconv.Itoa(i) + "\x00" + title))
+		downloadURL := "magnet:?xt=urn:btih:" + hex.EncodeToString(sum[:])
+		items = append(items, store.FeedItem{
+			ID:          id,
+			Identity:    id,
+			Title:       title,
+			DownloadURL: &downloadURL,
+		})
+	}
+	scope := ""
+	if len(doc.Feeds) > 0 {
+		scope = doc.Feeds[0]
+	}
+
+	return items, map[string]FeedRef{"": {URL: scope}}
 }
 
 // unixMilliPtrRFC3339 renders a millisecond timestamp RFC 3339, nil for
