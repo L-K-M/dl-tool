@@ -133,7 +133,8 @@ Wire rules the editor depends on:
   result per title carries `feed_id`, `feed`, `download_url` and `published_at` as JSON `null`, which
   `DryRunItem`'s `FeedID`, `Feed` and `DownloadURL` becoming `*string` expresses; `PublishedAt` is
   already `*string`, stays nil for synthesized items, and none of the four members carries `omitempty`,
-  so a nil marshals as `null`, never an absent key.
+  so a nil marshals as `null`, never an absent key. A synthesized item has no `size_bytes`, so
+  `match.min_size`/`max_size` pass per doc 08 §5 step 7 — the panel's verdict tests the title clauses.
 - `limit` is per feed (doc 05 §10.3), so a rule scoped to several feeds can return more than
   `PREVIEW_LIMIT` rows. The editor renders only the newest `PREVIEW_LIMIT` — the merged results arrive
   newest-first — and the headline's `N` counts matches among the displayed rows, so

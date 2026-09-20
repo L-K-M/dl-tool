@@ -1139,7 +1139,10 @@ Contract details the UI depends on:
   example above is `[7,13]` in bytes but `[6,12]` in code units (`ä` is two bytes, one code unit). The
   two index systems coincide only for ASCII titles.
 - `titles` results carry the echoed `title` with `null` `feed_id`, `feed`, `download_url` and
-  `published_at`, in request order, and `evaluated` counts them.
+  `published_at`, in request order, and `evaluated` counts them. Synthesized items carry no size, so
+  `match.min_size`/`max_size` pass exactly as they do for any item without `size_bytes`
+  ([`08-rss-automation.md`](08-rss-automation.md) §5 step 7) — the panel's verdict tests the title
+  clauses, and `reason_detail` never cites a size clause for a synthesized item.
 - `evaluated`, `matched` and `elapsed_ms` are always present, so a pathological regex is visible at once.
 - The endpoint is called on every keystroke behind a 250 ms debounce: it must stay side-effect free and be
   safe to call with an invalid rule.
