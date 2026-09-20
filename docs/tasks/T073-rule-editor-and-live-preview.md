@@ -203,6 +203,8 @@ also has no owning step here; the Out-of-scope note assumes the toolbar exists.
 
 Evidence to rerun before ruling, observed on this branch:
 
+- `sed -n '39,51p' internal/rss/dryrun.go` — the `DryRunItem` struct verbatim: no offset member
+  under any name.
 - `grep -n "Highlight" internal/rss/match.go internal/rss/dryrun.go` — `match.go:46` declares the
   `[2]int` offsets, `match.go:481` fills them, and `dryrun.go` never mentions the field.
 - `sed -n '1097,1112p' web/src/api/schema.d.ts` — the generated `DryRunItem` members: `download_url`,
@@ -214,12 +216,14 @@ Evidence to rerun before ruling, observed on this branch:
 
 Remedies, mirroring the findings' suggested fixes:
 
-1. For F116: add `highlight [start,end]` (byte offsets into `title`, omitted when `{0,0}`, present
-   only when `matched`) to `rss.DryRunItem` in `internal/rss/dryrun.go`, populated from
-   `Decision.Highlight`; update doc 05 §10.3's example; widen T073's Files table with
-   `internal/rss/dryrun.go` and `internal/rss/dryrun_test.go` (`api/openapi.json` and
-   `web/src/api/schema.d.ts` are already implicitly in scope via doc 13 §7.1). Alternative: drop
-   requirement 3 of doc 08 §8 and step 4 of this task.
+1. For F116: add `highlight [start,end]` (byte offsets into the UTF-8 `title`, omitted when
+   `{0,0}`, present only when `matched`) to `rss.DryRunItem` in `internal/rss/dryrun.go`,
+   populated from `Decision.Highlight`; doc 05 §10.3 must pin that the offsets are UTF-8 bytes
+   and that the editor converts them to UTF-16 code-unit indices before slicing — Go bytes and
+   JavaScript string indices only coincide for ASCII titles; update its example; widen T073's
+   Files table with `internal/rss/dryrun.go` and `internal/rss/dryrun_test.go`
+   (`api/openapi.json` and `web/src/api/schema.d.ts` are already implicitly in scope via
+   doc 13 §7.1). Alternative: drop requirement 3 of doc 08 §8 and step 4 of this task.
 2. For F115: add an optional `titles: string[]` member to `POST /rules/test` — doc 05 §10.3's body
    table, `TestRuleInput.Body` in `internal/api/rules.go`, and a title-evaluation path in
    `internal/rss/dryrun.go` returning the same `DryRunReport` shape — and widen T073's Files table
@@ -227,9 +231,12 @@ Remedies, mirroring the findings' suggested fixes:
    `internal/rss/dryrun_test.go`, citing the member from step 7. Alternative: delete the docked
    test panel from doc 09 §8.2 and step 7.
 3. For F379: add a `tags` member to the rule document (doc 08 §4.1/§4.2,
-   `internal/rss/ruledoc.go`), thread `GrabRequest.Tags` into `ruleTaskCreator.CreateForRule`
-   (`internal/api/rules.go:141-165` already builds the `POST /tasks` body, whose `tags` member
-   exists), and add the mapping row to this task's field table. Alternative: drop `Tags` from
+   `internal/rss/ruledoc.go`) and to `rss.GrabRequest` (`internal/rss/grab.go:29-38`), thread
+   `GrabRequest.Tags` into `ruleTaskCreator.CreateForRule` (`internal/api/rules.go:141-165`
+   already builds the `POST /tasks` body, whose `tags` member exists), add the mapping row to
+   this task's field table, and widen the Files table with `internal/rss/ruledoc.go`,
+   `internal/rss/grab.go`, and their tests. Alternative: drop `Tags` from
    doc 09 §8.2's thirteen labels and from this task.
 4. In all cases pin the `errors[].location` prefixes the editor maps: `body.rule.` from the dry
-   run, `body.definition.` from save.
+   run, `body.definition.` from save. F317's toolbar import/export still has no owning task —
+   assign one or record it Out-of-scope before T073 can close.
