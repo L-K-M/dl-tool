@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T072 |
 | **Milestone** | M5 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T014, T040, T044, T052, T065, T066, T068, T071 |
 | **Blocks** | T073 |
 | **Parallel-safe** | no — adds a route to T040's `web/src/App.tsx` |
@@ -113,12 +113,12 @@ Fixed labels, verbatim from doc 09 §8.1: the Add-feed dialog is **URL**, **Name
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestFeedListRendersStatesAndCounts` and `TestRefreshShowsItemsAdded` pass.
-- [ ] `TestDownloadSelectedPostsDownloadUrls` asserts the request body's `uris[]` exactly.
-- [ ] `TestDuplicateFeedShowsConflictMessage` passes.
-- [ ] The route `/rss/feeds` resolves and the sidebar `RSS → Feeds` node marks itself `aria-current`.
-- [ ] No component in `web/src/components/Rss/` calls `fetch` directly.
-- [ ] Every size, rate and date renders through `Intl`.
+- [x] `TestFeedListRendersStatesAndCounts` and `TestRefreshShowsItemsAdded` pass.
+- [x] `TestDownloadSelectedPostsDownloadUrls` asserts the request body's `uris[]` exactly.
+- [x] `TestDuplicateFeedShowsConflictMessage` passes.
+- [x] The route `/rss/feeds` resolves and the sidebar `RSS → Feeds` node marks itself `aria-current`.
+- [x] No component in `web/src/components/Rss/` calls `fetch` directly.
+- [x] Every size, rate and date renders through `Intl`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -152,7 +152,77 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Run on the task-branch head. The vitest output interleaves `msw` unhandled-request stacks from
+`App.test.tsx` routes mounted without screen handlers (pre-existing noise — `/search` and
+`/settings/*` do the same); those stack lines are elided here, every test line is verbatim.
+
+```
+$ make lint && make typecheck && make test-web && echo RSS_FEEDS_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ RUN  v4.1.11 /home/paseo/.paseo/worktrees/0a6udotz/loop-t072-3-1789887101/web
+
+ ✓ src/eslint.test.ts (1 test) 1075ms
+ ✓ src/store/useUiPrefs.test.ts (17 tests) 1067ms
+ ✓ src/main.test.ts (1 test) 1821ms
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests) 1349ms
+ ✓ src/store/useTasks.test.ts (17 tests) 148ms
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests) 1561ms
+ ✓ src/components/Settings/IndexersSection.test.tsx (6 tests) 1723ms
+ ✓ src/components/Rss/FeedsScreen.test.tsx (6 tests) 1798ms
+   ✓ TestFeedListRendersStatesAndCounts  462ms
+   ✓ TestDuplicateFeedShowsConflictMessage  355ms
+   ✓ TestRssFeedsRouteResolvesAndSidebarMarksCurrent  304ms
+ ✓ src/i18n.test.ts (4 tests) 43ms
+ ✓ src/lib/format.test.ts (6 tests) 66ms
+ ✓ src/api/client.test.ts (12 tests) 16ms
+ ✓ src/sw.test.ts (2 tests) 12ms
+ ✓ src/api/events.test.ts (16 tests) 116ms
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests) 2618ms
+ ✓ src/lib/theme.test.ts (9 tests) 2924ms
+ ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 3069ms
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3101ms
+ ✓ src/components/Shell/Shell.test.tsx (13 tests) 3396ms
+ ✓ src/components/Search/SearchScreen.test.tsx (10 tests) 6073ms
+ ✓ src/App.test.tsx (55 tests) 5938ms
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests) 10412ms
+
+ Test Files  21 passed (21)
+      Tests  266 passed (266)
+   Duration  12.60s (transform 5.16s, setup 0ms, import 21.12s, tests 48.33s, environment 11.05s)
+
+RSS_FEEDS_OK
+```
+
+The `FeedsScreen.test.tsx` vitest line reports only three individual tests in the output above
+because vitest truncates per-test lines for fast files; the file runs six tests —
+`TestFeedListRendersStatesAndCounts`, `TestRefreshShowsItemsAdded`,
+`TestDownloadSelectedPostsDownloadUrls`, `TestDuplicateFeedShowsConflictMessage`,
+`TestItemPageLoadsAndPaginates` and `TestRssFeedsRouteResolvesAndSidebarMarksCurrent` — all passing
+(`(6 tests)` in the file line).
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+web/src/App.tsx
+web/src/components/Rss/FeedsScreen.test.tsx
+web/src/components/Rss/FeedsScreen.tsx
+web/src/locales/en/rss.json
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
