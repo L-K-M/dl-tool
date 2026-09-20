@@ -220,7 +220,8 @@ Remedies, mirroring the findings' suggested fixes:
    `{0,0}`, present only when `matched`) to `rss.DryRunItem` in `internal/rss/dryrun.go`,
    populated from `Decision.Highlight`; doc 05 §10.3 must pin that the offsets are UTF-8 bytes
    and that the editor converts them to UTF-16 code-unit indices before slicing — Go bytes and
-   JavaScript string indices only coincide for ASCII titles; update its example; widen T073's
+   JavaScript string indices only coincide for ASCII titles; update its example with a
+   non-ASCII title so the two index systems diverge; widen T073's
    Files table with `internal/rss/dryrun.go` and `internal/rss/dryrun_test.go`
    (`api/openapi.json` and `web/src/api/schema.d.ts` are already implicitly in scope via
    doc 13 §7.1). Alternative: drop requirement 3 of doc 08 §8 and step 4 of this task.
