@@ -348,7 +348,11 @@ export function RuleEditor(): JSX.Element {
   }, [selected, t]);
 
   const save = useCallback(async () => {
-    if (saving || doc.name.trim() === "") return;
+    if (saving) return;
+    if (doc.name.trim() === "") {
+      setSaveErrors({ name: t("rss:rules.nameRequired") });
+      return;
+    }
     setSaving(true);
     setSaveErrors({});
     try {
@@ -385,6 +389,8 @@ export function RuleEditor(): JSX.Element {
 
   const removeRule = useCallback(
     async (rule: RuleDTO) => {
+      // Close on click so a double-click cannot fire the DELETE twice.
+      setDeleteTarget(null);
       try {
         const { error } = await api.DELETE("/rules/{id}", {
           params: { path: { id: rule.id } },
@@ -397,7 +403,6 @@ export function RuleEditor(): JSX.Element {
         fail(undefined);
         return;
       }
-      setDeleteTarget(null);
       if (selectedId === rule.id) newRule();
       await invalidateRules();
     },
@@ -419,10 +424,12 @@ export function RuleEditor(): JSX.Element {
         fail(undefined);
         return;
       }
-      if (rule.id === selectedId) update((draft) => (draft.enabled = enabled));
+      // The PATCH already persisted the toggle, so the doc syncs without
+      // going through update() — dirty stays honest about unsaved edits.
+      if (rule.id === selectedId) setDoc((prev) => ({ ...prev, enabled }));
       await invalidateRules();
     },
-    [fail, invalidateRules, selectedId, update],
+    [fail, invalidateRules, selectedId],
   );
 
   const runExisting = useCallback(async () => {
@@ -513,6 +520,9 @@ export function RuleEditor(): JSX.Element {
           typeof candidate?.definition !== "object" ||
           candidate.definition === null
         ) {
+          // Entries before this one may have been created already, so
+          // refresh the list before reporting the abort.
+          await invalidateRules();
           toast.error(t("rss:rules.importInvalid"));
           return;
         }
@@ -845,33 +855,40 @@ export function RuleEditor(): JSX.Element {
                   {t("rss:rules.allFeeds")}
                 </p>
               ) : (
-                feeds.map((feed) => {
-                  const checked = (doc.feeds ?? []).includes(feed.url);
-                  return (
-                    <span
-                      key={feed.id}
-                      className="flex items-center gap-2 text-sm"
-                    >
-                      <Checkbox
-                        id={`rule-feed-${feed.id}`}
-                        checked={checked}
-                        onCheckedChange={(state) =>
-                          update((draft) => {
-                            const current = draft.feeds ?? [];
-                            const next =
-                              state === true
-                                ? [...current, feed.url]
-                                : current.filter((url) => url !== feed.url);
-                            draft.feeds = next.length > 0 ? next : undefined;
-                          })
-                        }
-                      />
-                      <Label htmlFor={`rule-feed-${feed.id}`}>
-                        {feed.title ?? feed.url}
-                      </Label>
-                    </span>
-                  );
-                })
+                <>
+                  {feeds.map((feed) => {
+                    const checked = (doc.feeds ?? []).includes(feed.url);
+                    return (
+                      <span
+                        key={feed.id}
+                        className="flex items-center gap-2 text-sm"
+                      >
+                        <Checkbox
+                          id={`rule-feed-${feed.id}`}
+                          checked={checked}
+                          onCheckedChange={(state) =>
+                            update((draft) => {
+                              const current = draft.feeds ?? [];
+                              const next =
+                                state === true
+                                  ? [...current, feed.url]
+                                  : current.filter((url) => url !== feed.url);
+                              draft.feeds = next.length > 0 ? next : undefined;
+                            })
+                          }
+                        />
+                        <Label htmlFor={`rule-feed-${feed.id}`}>
+                          {feed.title ?? feed.url}
+                        </Label>
+                      </span>
+                    );
+                  })}
+                  {(doc.feeds ?? []).length === 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      {t("rss:rules.allFeeds")}
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -939,7 +956,7 @@ export function RuleEditor(): JSX.Element {
               <Label htmlFor="rule-tag">{t("rss:rules.tags")}</Label>
               <div className="flex items-center gap-2">
                 <span className="flex flex-wrap gap-1">
-                  {(doc.action.tags ?? []).map((tag) => (
+                  {[...new Set(doc.action.tags ?? [])].map((tag) => (
                     <button
                       key={tag}
                       type="button"
@@ -1079,6 +1096,11 @@ export function RuleEditor(): JSX.Element {
                     )}
                   >
                     <span aria-hidden="true">{row.matched ? "✓ " : "✗ "}</span>
+                    <span className="sr-only">
+                      {row.matched
+                        ? t("rss:rules.testMatch")
+                        : t("rss:rules.testNoMatch")}
+                    </span>
                     <span className="break-all">
                       <HighlightedTitle row={row} />
                     </span>

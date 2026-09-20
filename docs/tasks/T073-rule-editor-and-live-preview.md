@@ -305,6 +305,7 @@ cd web && npx vitest run
  ✓ src/api/client.test.ts (12 tests) 14ms
  ✓ src/components/Search/SavedSearches.test.tsx (9 tests) 3008ms
  ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3100ms
+ ✓ src/components/Shell/Shell.test.tsx (13 tests) 3244ms
  ✓ src/lib/theme.test.ts (9 tests) 3117ms
  ✓ src/components/Rss/RuleEditor.test.tsx (9 tests) 5167ms
    ✓ TestPreviewDebouncesToOneRequest  1392ms

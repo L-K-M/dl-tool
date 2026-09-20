@@ -490,15 +490,43 @@ func TestDryRunHighlightIsUTF8ByteOffsets(t *testing.T) {
 		"an empty span leaves highlight absent")
 }
 
+// TestDryRunTitlesAreBounded pins the internal re-check of the contract's
+// titles bound: the handler 422s past 50, and DryRun refuses an oversized
+// slice for every other caller so a dry run never runs unbounded work.
+func TestDryRunTitlesAreBounded(t *testing.T) {
+	db := newTestDB(t)
+
+	_, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule:   dryRunDoc(),
+		Titles: make([]string, dryRunMaxTitles+1),
+	})
+	require.Error(t, err)
+
+	report, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule:   dryRunDoc(),
+		Titles: make([]string, dryRunMaxTitles),
+	})
+	require.NoError(t, err)
+	require.Len(t, report.Results, dryRunMaxTitles)
+}
+
 // TestDryRunTitlesEvaluatesStatelessly pins the IgnoreState bypass of the
 // titles path: a committed rule_matches row over the same synthesized
 // content still lets the title match — the panel never reads the state
-// tables.
+// tables. The synthesized item carries no InfoHash, so its content key is
+// its identity "titles:0"; the seeded row's unbeatable score would reject
+// it with already_have if state were consulted.
 func TestDryRunTitlesEvaluatesStatelessly(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, store.CreateRule(t.Context(), db, store.Rule{
 		ID: testRuleID, Name: "grabbed", Enabled: true, DefinitionJSON: "{}",
 	}))
+	_, err := db.ExecContext(t.Context(),
+		`INSERT INTO rule_matches
+		(id, rule_id, content_key, title, status, score, matched_at, created_at, updated_at)
+		VALUES ('rm_titles', ?, 'titles:0', 'ubuntu desktop', 'sent', 9999, ?, ?, ?)`,
+		testRuleID, testNow.UnixMilli(), testNow.UnixMilli(), testNow.UnixMilli())
+	require.NoError(t, err)
 
 	report, err := DryRun(t.Context(), db, DryRunRequest{
 		Rule:        dryRunDoc(),

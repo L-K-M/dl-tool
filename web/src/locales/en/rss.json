@@ -90,6 +90,7 @@
     "import": "Import",
     "export": "Export",
     "name": "Name",
+    "nameRequired": "A name is required",
     "namePlaceholder": "Rule name",
     "newRule": "New rule",
     "enabled": "Enabled",

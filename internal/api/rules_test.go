@@ -940,6 +940,16 @@ func TestTestRuleTitlesEvaluateWithoutStoredItems(t *testing.T) {
 func TestTestRuleTitlesBounds(t *testing.T) {
 	env := newTasksTestEnv(t)
 
+	// doc 05 section 10.3: with titles present, feeds are not resolved —
+	// an unknown feed id must still answer 200 with one verdict per title.
+	titlesBody := validTestRuleBody()
+	titlesBody["titles"] = []string{"ubuntu desktop"}
+	titlesBody["feeds"] = []string{"fed_does_not_exist"}
+	if response := env.testRule(t, titlesBody); response.Code != http.StatusOK {
+		t.Fatalf("titles + unknown feed status = %d, want %d; body %s",
+			response.Code, http.StatusOK, response.Body.String())
+	}
+
 	cases := map[string][]string{
 		"empty":     {},
 		"fifty-one": make([]string, 51),

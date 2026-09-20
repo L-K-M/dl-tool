@@ -375,7 +375,7 @@ test("TestIgnoreStateToggleReposts", async () => {
 test("TestThirteenLabelsInOrder", async () => {
   mount();
   await screen.findByText("Last match: never");
-  for (const label of [
+  const nodes = [
     "Enabled",
     "Use regular expressions",
     "Must contain",
@@ -388,8 +388,12 @@ test("TestThirteenLabelsInOrder", async () => {
     "Tags",
     "Add stopped",
     "Ignore subsequent matches for … days",
-  ]) {
-    expect(screen.getByText(label, { exact: true })).toBeTruthy();
+  ].map((label) => screen.getByText(label, { exact: true }));
+  nodes.push(screen.getByText(/Last match:/));
+  for (let i = 1; i < nodes.length; i++) {
+    expect(
+      nodes[i - 1].compareDocumentPosition(nodes[i]) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   }
-  expect(screen.getByText(/Last match:/)).toBeTruthy();
 });

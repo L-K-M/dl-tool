@@ -25,6 +25,9 @@ const (
 	dryRunDefaultLimit = 200
 	dryRunMaxLimit     = 500
 	dryRunPageLimit    = 200
+	// The HTTP contract's titles bound; DryRun re-checks it for every
+	// other caller so an oversized slice cannot run unbounded work.
+	dryRunMaxTitles = 50
 )
 
 // DryRunRequest mirrors the body of POST /rules/test. FeedIDs empty means
@@ -166,6 +169,10 @@ func DryRun(ctx context.Context, db *sqlx.DB, req DryRunRequest) (DryRunReport, 
 	var items []store.FeedItem
 	var state State = dryRunState{db: db}
 	if len(req.Titles) > 0 {
+		if len(req.Titles) > dryRunMaxTitles {
+			return DryRunReport{}, fmt.Errorf("rss: dry run: at most %d titles, got %d",
+				dryRunMaxTitles, len(req.Titles))
+		}
 		// The docked test panel evaluates its titles in place of stored
 		// items: no feed selection, no limit and no state tables.
 		items, feedByID = synthesizeTitleItems(req.Titles, req.Rule)
@@ -390,6 +397,10 @@ func synthesizeTitleItems(titles []string, doc RuleDoc) ([]store.FeedItem, map[s
 		scope = doc.Feeds[0]
 	}
 
+	// Priority stays zero and URL is the first rule feed purely to pass the
+	// step-1 membership check: a title's verdict must never depend on feed
+	// rank, and the synthesized identities keep every content key distinct
+	// so Resolve never compares priorities across title rows.
 	return items, map[string]FeedRef{"": {URL: scope}}
 }
 
