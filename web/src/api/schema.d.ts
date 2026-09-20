@@ -1860,7 +1860,7 @@ export interface components {
       limit: number;
       /** @description The full rule document, unsaved */
       rule: unknown;
-      /** @description Arbitrary titles evaluated statelessly in place of stored items; feeds, limit and ignore_state do not apply */
+      /** @description At most 50 titles of at most 500 UTF-8 bytes each, evaluated statelessly in place of stored items; feeds, limit and ignore_state do not apply */
       titles?: string[] | null;
     };
     ThrottleSpec: {

@@ -957,6 +957,11 @@ func TestTestRuleTitlesBounds(t *testing.T) {
 	if len(titlesReport.Results) != 1 {
 		t.Fatalf("titles + unknown feed verdicts = %d, want 1", len(titlesReport.Results))
 	}
+	if row := titlesReport.Results[0]; row.Title != "ubuntu desktop" ||
+		row.FeedID != nil || row.Feed != nil || row.DownloadURL != nil {
+		t.Fatalf("titles row = %+v, want title %q with null feed_id, feed and download_url",
+			row, "ubuntu desktop")
+	}
 
 	cases := map[string][]string{
 		"empty":     {},

@@ -105,7 +105,7 @@ type TestRuleInput struct {
 		Feeds       []string        `json:"feeds,omitempty"         doc:"Feed ids; the default is rule.feeds resolved by url, else every enabled feed"`
 		Limit       int             `json:"limit,omitempty"         minimum:"1" maximum:"500" default:"200" doc:"Items per feed, newest first"`
 		IgnoreState *bool           `json:"ignore_state,omitempty"  default:"true" doc:"Default true: bypass rule_matches and rule_seen_episodes so the preview repeats byte for byte"`
-		Titles      []string        `json:"titles,omitempty"        doc:"Arbitrary titles evaluated statelessly in place of stored items; feeds, limit and ignore_state do not apply"`
+		Titles      []string        `json:"titles,omitempty"        doc:"At most 50 titles of at most 500 UTF-8 bytes each, evaluated statelessly in place of stored items; feeds, limit and ignore_state do not apply"`
 	}
 }
 
