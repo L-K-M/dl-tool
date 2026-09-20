@@ -165,4 +165,79 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+This task cannot run as written: three of its requirements have no backend or document member to
+bind to, every fix lives outside the `## Files` table, and all three are already registered as
+confirmed in `PLAN-REVIEW-FINDINGS.md` (F115 and F116 at HIGH, F379 at M). Each was re-verified
+against the code on this branch.
+
+1. **Step 4's substring highlight has no offsets on the wire (F116).** Step 4 says "using the
+   offsets the response carries" and Out-of-scope says every highlight offset comes from
+   `POST /rules/test`, but `rss.DryRunItem` (`internal/rss/dryrun.go:39-51`) has no offset
+   member. The engine computes one — `Decision.Highlight [2]int`, byte offsets into the title
+   (`internal/rss/match.go:46`), populated at `internal/rss/match.go:481` — and `DryRun` drops it.
+   The generated `web/src/api/schema.d.ts` `DryRunItem` (lines 1097-1112) confirms the wire shape
+   carries only `matched_by` (clause → pattern). The two renderings the table permits are both
+   forbidden: re-running the pattern in the browser (step 4's "never", and wildcard entries such
+   as `ubuntu *desktop* amd64` are not substrings of the title anyway) or silently dropping a
+   documented requirement (doc 08 §8 requirement 3, listed "in priority order").
+
+2. **Step 7's docked "Test a title" panel has no request to send (F115).** `POST /rules/test`
+   accepts exactly `rule`, `feeds`, `limit`, `ignore_state` (`internal/api/rules.go:93-99`) and
+   `rss.DryRun` evaluates stored `feed_items` only. No member carries an arbitrary title, so the
+   "one-item dry run" cannot be issued; inventing one is an undocumented API edge, and evaluating
+   the title client-side is forbidden ("Do NOT implement the matching algorithm in TypeScript").
+
+3. **The mandatory `Tags` label has no document member (F379).** The acceptance criterion demands
+   all thirteen labels verbatim, `Tags` included, but `RuleDoc`/`ActionSpec`
+   (`internal/rss/ruledoc.go:40-50, 88-94`) define no `tags` member and `rss.GrabRequest`
+   (`internal/rss/grab.go:29-38`) carries none — a rendered control would save nothing and tag
+   nothing at grab time.
+
+Adjacent fact the repair should pin while it is here: step 5's example location is
+`body.definition.episode.filter`, but the dry-run 422 is emitted under `body.rule.`
+(`internal/api/rules.go:458` calls `ruleValidationProblemAt("body.rule.", …)` while CRUD uses
+`body.definition.` at `rules.go:528`) — F255's recorded conflict. The editor must map both
+prefixes, and the contract should say so. Doc 09 §8.2's toolbar *Import / export rules* (F317)
+also has no owning step here; the Out-of-scope note assumes the toolbar exists.
+
+Evidence to rerun before ruling, observed on this branch:
+
+- `sed -n '39,51p' internal/rss/dryrun.go` — the `DryRunItem` struct verbatim: no offset member
+  under any name.
+- `grep -n "Highlight" internal/rss/match.go internal/rss/dryrun.go` — `match.go:46` declares the
+  `[2]int` offsets, `match.go:481` fills them, and `dryrun.go` never mentions the field.
+- `sed -n '1097,1112p' web/src/api/schema.d.ts` — the generated `DryRunItem` members: `download_url`,
+  `feed`, `feed_id`, `matched`, `matched_by?`, `published_at`, `reason?`, `reason_detail?`,
+  `score?`, `title`, `would_do?`; no offsets.
+- `sed -n '93,99p' internal/api/rules.go` — `TestRuleInput.Body` is `Rule`, `Feeds`, `Limit`,
+  `IgnoreState`; no `titles`/`items` member.
+- `grep -n "tags" internal/rss/ruledoc.go internal/rss/grab.go` — no match.
+
+Remedies, mirroring the findings' suggested fixes:
+
+1. For F116: add `highlight [start,end]` (byte offsets into the UTF-8 `title`, omitted when
+   `{0,0}`, present only when `matched`) to `rss.DryRunItem` in `internal/rss/dryrun.go`,
+   populated from `Decision.Highlight`; doc 05 §10.3 must pin that the offsets are UTF-8 bytes
+   and that the editor converts them to UTF-16 code-unit indices before slicing — Go bytes and
+   JavaScript string indices only coincide for ASCII titles; update its example with a
+   non-ASCII title so the two index systems diverge; widen T073's
+   Files table with `internal/rss/dryrun.go` and `internal/rss/dryrun_test.go`
+   (`api/openapi.json` and `web/src/api/schema.d.ts` are already implicitly in scope via
+   doc 13 §7.1). Alternative: drop requirement 3 of doc 08 §8 and step 4 of this task.
+2. For F115: add an optional `titles: string[]` member to `POST /rules/test` — doc 05 §10.3's body
+   table, `TestRuleInput.Body` in `internal/api/rules.go`, and a title-evaluation path in
+   `internal/rss/dryrun.go` returning the same `DryRunReport` shape — and widen T073's Files table
+   with `internal/api/rules.go`, `internal/api/rules_test.go`, `internal/rss/dryrun.go` and
+   `internal/rss/dryrun_test.go`, citing the member from step 7. Alternative: delete the docked
+   test panel from doc 09 §8.2 and step 7.
+3. For F379: add a `tags` member to the rule document (doc 08 §4.1/§4.2,
+   `internal/rss/ruledoc.go`) and to `rss.GrabRequest` (`internal/rss/grab.go:29-38`), thread
+   `GrabRequest.Tags` into `ruleTaskCreator.CreateForRule` (`internal/api/rules.go:141-165`
+   already builds the `POST /tasks` body, whose `tags` member exists), add the mapping row to
+   this task's field table, and widen the Files table with `internal/rss/ruledoc.go`,
+   `internal/rss/grab.go`, and their tests. Alternative: drop `Tags` from
+   doc 09 §8.2's thirteen labels and from this task.
+4. In all cases pin the `errors[].location` prefixes the editor maps: `body.rule.` from the dry
+   run, `body.definition.` from save. F317's toolbar import/export still has no owning task —
+   assign one or record it Out-of-scope before T073 can close.
