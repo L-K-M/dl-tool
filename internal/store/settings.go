@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/L-K-M/dl-tool/internal/secure"
 )
 
 // EngineIDPrefix pairs with the engine kinds to form the stable row ids of
@@ -347,26 +349,52 @@ func (s *SettingsStore) DefaultDestination(ctx context.Context) (string, error) 
 	return value, nil
 }
 
-// DB exposes the shared database handle so a collaborator can pair this
-// store with a sibling over the same database — the extract handler's
-// password source reads both tasks.extract_password and the
-// extract_passwords settings row through it.
-func (s *TaskStore) DB() *sqlx.DB { return s.db }
+// Settings returns the sibling store over the same database, for a
+// collaborator that spans both table families — the extract handler's
+// password source reads tasks.extract_password and the extract_passwords
+// settings row.
+func (s *TaskStore) Settings() *SettingsStore { return NewSettingsStore(s.db) }
+
+// queryTaskExtractPassword reads the per-task candidate of the extract
+// handler (docs/12-security-and-threat-model.md section 4.2).
+const queryTaskExtractPassword = `SELECT extract_password FROM tasks WHERE id = ?`
+
+// ExtractPassword returns the task's stored extraction password, the empty
+// Secret when the column is NULL. ErrNotFound means the id addresses no
+// task. The value is a secret: it never enters a log line, an error string
+// or an API payload.
+func (s *TaskStore) ExtractPassword(ctx context.Context, id string) (secure.Secret, error) {
+	var password sql.NullString
+	err := s.db.GetContext(ctx, &password, queryTaskExtractPassword, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("store: task %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: read extract password of task %s: %w", id, err)
+	}
+
+	return secure.Secret(password.String), nil
+}
 
 // settingExtractPasswords is the settings key of the shared extraction
 // password list (docs/11-config-reference.md section 5). The migration
 // seeds no row: absent means the empty list.
 const settingExtractPasswords = "extract_passwords"
 
-// maxExtractPasswords is the doc 12 section 4.2 cap on the shared list;
-// jobs.MaxCandidates applies the same bound on the read side.
-const maxExtractPasswords = 16
+// MaxExtractPasswords is the doc 12 section 4.2 cap on the shared list.
+// jobs.MaxCandidates aliases it so the write-side trim and the read-side
+// candidate cap cannot drift apart.
+const MaxExtractPasswords = 16
 
 const queryExtractPasswords = `SELECT value_json FROM settings WHERE key = ?`
 
 // ExtractPasswords reads the extract_passwords settings key. It returns an
 // empty slice when the key is absent. The value is a secret: it is never
-// logged and GET /settings renders it "__redacted__".
+// logged and GET /settings renders it "__redacted__". One caveat is already
+// documented in doc 12 section 4.2: the extract handler passes each
+// candidate to 7zz as -p<password>, visible in /proc/<pid>/cmdline for the
+// child's lifetime — acceptable while every container process runs as the
+// same unprivileged user.
 func (s *SettingsStore) ExtractPasswords(ctx context.Context) ([]string, error) {
 	var valueJSON string
 	err := s.db.GetContext(ctx, &valueJSON, queryExtractPasswords, settingExtractPasswords)
@@ -425,8 +453,8 @@ func (s *SettingsStore) AppendExtractPassword(ctx context.Context, pw string) er
 	}
 
 	list = append(list, pw)
-	if len(list) > maxExtractPasswords {
-		list = list[len(list)-maxExtractPasswords:]
+	if len(list) > MaxExtractPasswords {
+		list = list[len(list)-MaxExtractPasswords:]
 	}
 
 	encoded, err := json.Marshal(list)

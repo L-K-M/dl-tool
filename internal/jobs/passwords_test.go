@@ -77,8 +77,11 @@ func loggingSevenzip(t *testing.T) (bin, logPath string) {
 	dir := t.TempDir()
 	logPath = filepath.Join(dir, "argv.log")
 	bin = filepath.Join(dir, "7zz")
+	// One argv per line, NUL-separated so a password containing whitespace
+	// still round-trips through the log.
 	script := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$*\" >> \"$DLTOOL_TEST_7ZZ_LOG\"\n" +
+		"printf '%s\\0' \"$@\" >> \"$DLTOOL_TEST_7ZZ_LOG\"\n" +
+		"printf '\\n' >> \"$DLTOOL_TEST_7ZZ_LOG\"\n" +
 		"exec \"$DLTOOL_TEST_7ZZ_REAL\" \"$@\"\n"
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	t.Setenv("DLTOOL_TEST_7ZZ_LOG", logPath)
@@ -96,13 +99,13 @@ func extractPasswordArgs(t *testing.T, logPath string) []string {
 
 	var passwords []string
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 0 || fields[0] != "x" {
+		args := strings.Split(strings.TrimSuffix(line, "\x00"), "\x00")
+		if len(args) == 0 || args[0] != "x" {
 			continue
 		}
-		for _, field := range fields {
-			if strings.HasPrefix(field, "-p") {
-				passwords = append(passwords, strings.TrimPrefix(field, "-p"))
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "-p") {
+				passwords = append(passwords, strings.TrimPrefix(arg, "-p"))
 			}
 		}
 	}
@@ -116,7 +119,7 @@ func TestCandidateOrder(t *testing.T) {
 	setTaskPassword(t, db, taskID, "task-secret")
 	setPasswordList(t, db, []string{"shared-one", "shared-two"})
 
-	got, err := NewStorePasswords(db).Candidates(t.Context(), taskID)
+	got, err := NewStorePasswords(store.NewTaskStore(db)).Candidates(t.Context(), taskID)
 	require.NoError(t, err)
 	assert.Equal(t,
 		[]string{"", "task-secret", "shared-one", "shared-two"}, got,
@@ -125,11 +128,11 @@ func TestCandidateOrder(t *testing.T) {
 
 	// A task with no per-task password falls back to the shared list only.
 	other := newCompletedTask(t, db, t.TempDir(), "other.zip")
-	got, err = NewStorePasswords(db).Candidates(t.Context(), other)
+	got, err = NewStorePasswords(store.NewTaskStore(db)).Candidates(t.Context(), other)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"", "shared-one", "shared-two"}, got)
 
-	_, err = NewStorePasswords(db).Candidates(t.Context(), "tsk_missing")
+	_, err = NewStorePasswords(store.NewTaskStore(db)).Candidates(t.Context(), "tsk_missing")
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
 
@@ -139,7 +142,7 @@ func TestCandidateTriedOnce(t *testing.T) {
 	setTaskPassword(t, db, taskID, "dup")
 	setPasswordList(t, db, []string{"dup", "other", "other"})
 
-	got, err := NewStorePasswords(db).Candidates(t.Context(), taskID)
+	got, err := NewStorePasswords(store.NewTaskStore(db)).Candidates(t.Context(), taskID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"", "dup", "other"}, got,
 		"duplicates collapse to their first occurrence")
@@ -188,7 +191,7 @@ func TestSuccessAppendsToSharedList(t *testing.T) {
 		"the per-task password that opened the archive joined the shared list")
 
 	// A candidate already on the list is not duplicated.
-	require.NoError(t, NewStorePasswords(db).Remember(t.Context(), "task-secret"))
+	require.NoError(t, NewStorePasswords(store.NewTaskStore(db)).Remember(t.Context(), "task-secret"))
 	assert.Equal(t, []string{"decoy", "task-secret"}, sharedPasswords(t, db))
 }
 
@@ -217,10 +220,12 @@ func TestSharedListCappedAt16(t *testing.T) {
 	}
 	setPasswordList(t, db, oversized)
 	taskID := newCompletedTask(t, db, t.TempDir(), "payload.zip")
-	candidates, err := NewStorePasswords(db).Candidates(t.Context(), taskID)
+	candidates, err := NewStorePasswords(store.NewTaskStore(db)).Candidates(t.Context(), taskID)
 	require.NoError(t, err)
 	assert.Len(t, candidates, MaxCandidates+1, "empty string plus the cap")
 	assert.Equal(t, "", candidates[0])
+	assert.Equal(t, oversized[:MaxCandidates], candidates[1:],
+		"the read side keeps the first entries in list order")
 }
 
 func TestExhaustedListSetsWrongPassword(t *testing.T) {
@@ -242,6 +247,9 @@ func TestExhaustedListSetsWrongPassword(t *testing.T) {
 	assert.FileExists(t, archive, "the archive stays in place")
 	assert.NoFileExists(t, filepath.Join(dest, "payload", memberName),
 		"nothing is delivered")
+	staged, err := filepath.Glob(filepath.Join(dest, ".dl-tool-extract-*"))
+	require.NoError(t, err)
+	assert.Empty(t, staged, "every failed candidate's staging dir is cleaned")
 	assert.NotContains(t, sharedPasswords(t, db), "wrong-task",
 		"a candidate that failed is not remembered")
 }
@@ -326,7 +334,7 @@ func TestRememberFailureIsExplicit(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.Close())
 
-	err := NewStorePasswords(db).Remember(context.Background(), "pw-sentinel-value")
+	err := NewStorePasswords(store.NewTaskStore(db)).Remember(context.Background(), "pw-sentinel-value")
 	assert.Error(t, err)
 	assert.NotContains(t, err.Error(), "pw-sentinel-value")
 }

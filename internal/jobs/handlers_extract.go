@@ -432,13 +432,13 @@ func (h *ExtractHandler) run(ctx context.Context, taskID, archivePath string) er
 	// stops advancing once 7zz is writing deep inside it.
 	sweepStaleStaging(root, staleStagingAge)
 
-	// The source is a stateless adapter over the same database the task
-	// store holds, so a per-run build keeps NewExtractHandler's signature
-	// — and its call sites — untouched.
-	passwords := NewStorePasswords(h.tasks.DB())
+	// The source is a stateless adapter over the task store, so a per-run
+	// build keeps NewExtractHandler's signature — and its call sites —
+	// untouched.
+	passwords := NewStorePasswords(h.tasks)
 	candidates, err := passwords.Candidates(ctx, taskID)
 	if err != nil {
-		return fmt.Errorf("jobs: extract task %q: %w", taskID, err)
+		return err
 	}
 
 	// The doc 12 section 4.2 order: each candidate gets one full
@@ -463,20 +463,24 @@ func (h *ExtractHandler) run(ctx context.Context, taskID, archivePath string) er
 		return ErrWrongPassword
 	}
 
+	// The candidate that opened the archive joins the shared list before
+	// the tree is delivered: a store failure surfaces while the staging
+	// dir can still be discarded and the whole run retried cleanly, rather
+	// than failing a task whose payload is already in place. The empty
+	// candidate is the unencrypted sentinel, not a password, and is never
+	// remembered.
+	if winner != "" {
+		if err := passwords.Remember(ctx, winner); err != nil {
+			return errors.Join(
+				fmt.Errorf("jobs: extract task %q: remember extraction password: %w", taskID, err),
+				removeStaging(tmp),
+			)
+		}
+	}
+
 	target := filepath.Join(root, payloadStem(archivePath))
 	if err := verifyAndMove(tmp, target, stagedCaps); err != nil {
 		return errors.Join(err, removeStaging(tmp))
-	}
-
-	// The candidate that opened the archive joins the shared list once it
-	// has actually delivered — a stored failure would survive as litter a
-	// retry would trip over, so the append lands after the tree is in
-	// place. The empty candidate is the unencrypted sentinel, not a
-	// password, and is never remembered.
-	if winner != "" {
-		if err := passwords.Remember(ctx, winner); err != nil {
-			return fmt.Errorf("jobs: extract task %q: remember extraction password: %w", taskID, err)
-		}
 	}
 
 	return nil

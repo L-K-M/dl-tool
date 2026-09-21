@@ -147,8 +147,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/jobs/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	26.764s
-ok  	github.com/L-K-M/dl-tool/internal/store	73.692s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	27.272s
+ok  	github.com/L-K-M/dl-tool/internal/store	75.905s
 EXTRACT_PW_OK
 ```
 
@@ -156,15 +156,15 @@ Named tests (run with `-v`, `DLTOOL_SEVENZIP_PATH` pointing at the pinned
 upstream `7zzs` 26.03 the image installs):
 
 ```text
---- PASS: TestCandidateOrder (0.41s)
---- PASS: TestCandidateTriedOnce (0.50s)
---- PASS: TestSuccessAppendsToSharedList (0.48s)
---- PASS: TestSharedListCappedAt16 (0.41s)
---- PASS: TestExhaustedListSetsWrongPassword (0.42s)
---- PASS: TestPasswordNeverLogged (0.47s)
---- PASS: TestCandidatesNeverLogOnFailure (0.53s)
---- PASS: TestRememberFailureIsExplicit (0.38s)
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.651s
+--- PASS: TestCandidateOrder (0.10s)
+--- PASS: TestCandidateTriedOnce (0.14s)
+--- PASS: TestSuccessAppendsToSharedList (0.22s)
+--- PASS: TestSharedListCappedAt16 (0.07s)
+--- PASS: TestExhaustedListSetsWrongPassword (0.11s)
+--- PASS: TestPasswordNeverLogged (0.09s)
+--- PASS: TestCandidatesNeverLogOnFailure (0.09s)
+--- PASS: TestRememberFailureIsExplicit (0.04s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	0.882s
 ```
 
 Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'`, clean
@@ -180,15 +180,23 @@ internal/store/settings.go
 Exactly the Files table, nothing else.
 
 Two deviations from the interface contract, both forced by the Files table:
-`NewStorePasswords` takes `*sqlx.DB` (`store.Store` does not exist; T074 set
-the substitution precedent), and the `passwords` source is built inside
+`NewStorePasswords` takes `*store.TaskStore` (`store.Store` does not exist;
+T074 set the substitution precedent) and reaches the sibling
+`SettingsStore` through `TaskStore.Settings()`, so the raw `*sqlx.DB` never
+crosses into the jobs package; and the `passwords` source is built inside
 `run` rather than held on `ExtractHandler` — the struct lives in
 `postprocess.go`, which the table does not list. `NewExtractHandler`'s
-signature and every call site are unchanged. One behavioural note: `l`
-carries `-p<candidate>` and scans a teed stdout head because 7zz prints
-"Cannot open encrypted archive" on stdout for `l` (stderr for `x`); without
-it a header-encrypted archive would abort as `ErrInvalidArchive` before any
-candidate ran.
+signature and every call site are unchanged. `tasks.extract_password` is
+read through `TaskStore.ExtractPassword`, which returns a `secure.Secret`
+so the column never leaves the store layer unwrapped.
+
+`Remember` runs before `verifyAndMove`, not after: a store failure then
+surfaces while the staging dir is still disposable and the run retried
+cleanly, instead of failing a task whose payload is already delivered. One
+behavioural note: `l` carries `-p<candidate>` and scans a teed stdout head
+because 7zz prints "Cannot open encrypted archive" on stdout for `l`
+(stderr for `x`); without it a header-encrypted archive would abort as
+`ErrInvalidArchive` before any candidate ran.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+

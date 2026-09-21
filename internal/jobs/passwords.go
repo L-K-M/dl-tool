@@ -2,11 +2,7 @@ package jobs
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
-
-	"github.com/jmoiron/sqlx"
 
 	"github.com/L-K-M/dl-tool/internal/store"
 )
@@ -28,25 +24,22 @@ type PasswordSource interface {
 	Remember(ctx context.Context, pw string) error
 }
 
-// MaxCandidates caps the shared list, per doc 12 section 4.2.
-const MaxCandidates = 16
-
-// queryTaskExtractPassword reads the per-task candidate. The column holds
-// a secret: it is bound as a parameter and never enters a log line, an
-// error string or a task_events detail.
-const queryTaskExtractPassword = `SELECT extract_password FROM tasks WHERE id = ?`
+// MaxCandidates caps the shared list, per doc 12 section 4.2. It aliases
+// the store's write-side bound so the two policies cannot drift apart.
+const MaxCandidates = store.MaxExtractPasswords
 
 // storePasswords is the PasswordSource backed by tasks.extract_password
-// and the extract_passwords settings key.
+// and the extract_passwords settings key. Both reads stay inside the
+// store layer so the secret column never crosses it in raw form.
 type storePasswords struct {
-	db       *sqlx.DB
+	tasks    *store.TaskStore
 	settings *store.SettingsStore
 }
 
 // NewStorePasswords returns the PasswordSource backed by
 // tasks.extract_password and the extract_passwords settings key.
-func NewStorePasswords(db *sqlx.DB) PasswordSource {
-	return &storePasswords{db: db, settings: store.NewSettingsStore(db)}
+func NewStorePasswords(tasks *store.TaskStore) PasswordSource {
+	return &storePasswords{tasks: tasks, settings: tasks.Settings()}
 }
 
 // Candidates implements the doc 12 section 4.2 order: the empty string
@@ -54,11 +47,7 @@ func NewStorePasswords(db *sqlx.DB) PasswordSource {
 // de-duplicated, first occurrence winning, the non-empty portion capped at
 // MaxCandidates.
 func (p *storePasswords) Candidates(ctx context.Context, taskID string) ([]string, error) {
-	var taskPassword sql.NullString
-	err := p.db.GetContext(ctx, &taskPassword, queryTaskExtractPassword, taskID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("jobs: password candidates for task %q: %w", taskID, store.ErrNotFound)
-	}
+	taskPassword, err := p.tasks.ExtractPassword(ctx, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: password candidates for task %q: %w", taskID, err)
 	}
@@ -82,9 +71,7 @@ func (p *storePasswords) Candidates(ctx context.Context, taskID string) ([]strin
 		seen[pw] = struct{}{}
 		candidates = append(candidates, pw)
 	}
-	if taskPassword.Valid {
-		add(taskPassword.String)
-	}
+	add(taskPassword.Reveal())
 	for _, pw := range shared {
 		add(pw)
 	}
