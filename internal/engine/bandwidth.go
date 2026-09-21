@@ -54,6 +54,10 @@ type Governor struct {
 	reg      *Registry
 	settings *store.SettingsStore
 
+	// applyMu serialises whole fan-outs; mu guards only current, so
+	// Current never stalls behind an engine apply that runs to the
+	// caller's deadline.
+	applyMu sync.Mutex
 	mu      sync.Mutex
 	current RateLimits
 }
@@ -80,14 +84,14 @@ func (g *Governor) Current() RateLimits {
 // mismatch is logged at warn with the requested and observed values and does
 // not fail the call. An engine returning ErrNotSupported is skipped. Errors
 // from individual engines are wrapped with the engine name and joined with
-// errors.Join, so one unreachable daemon never blocks the others. The mutex
+// errors.Join, so one unreachable daemon never blocks the others. applyMu
 // serialises whole applies — two concurrent fan-outs cannot interleave —
 // while the engines inside one apply run in parallel, so an engine that
 // hangs until the context ends cannot starve the ones behind it of the
 // shared deadline.
 func (g *Governor) ApplyGlobal(ctx context.Context, l RateLimits) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.applyMu.Lock()
+	defer g.applyMu.Unlock()
 
 	var (
 		wg    sync.WaitGroup
@@ -122,7 +126,9 @@ func (g *Governor) ApplyGlobal(ctx context.Context, l RateLimits) error {
 	wg.Wait()
 
 	if len(errs) == 0 {
+		g.mu.Lock()
 		g.current = l
+		g.mu.Unlock()
 	}
 
 	return errors.Join(errs...)

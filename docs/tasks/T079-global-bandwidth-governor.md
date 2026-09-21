@@ -187,7 +187,8 @@ BANDWIDTH_OK
 ```
 
 Re-run on the final tree after the review fixes (parallel fan-out, `current` recorded only
-on full success). The five named tests plus the hung-engine and stored-limits cases, individually:
+on full success, `applyMu`/`mu` split so `Current` never stalls behind a slow apply). The
+five named tests plus the review-added cases, individually:
 
 ```
 --- PASS: TestApplyGlobalReachesEveryEngine (0.00s)
@@ -196,9 +197,33 @@ on full success). The five named tests plus the hung-engine and stored-limits ca
 --- PASS: TestReadBackMismatchLogsOnly (0.00s)
 --- PASS: TestUnreachableEngineJoinedError (0.00s)
 --- PASS: TestHungEngineDoesNotStarveTheRest (0.10s)
+--- PASS: TestEmptyRegistryCountsAsSuccess (0.00s)
 --- PASS: TestLoadAndApplyPushesStoredLimits (0.39s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/engine	1.588s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.062s
+```
+
+Full Verification block on the final tree:
+
+```
+$ make lint && make test PKG="./internal/engine/... ./internal/store/..." && echo BANDWIDTH_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	30.278s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.313s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.137s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.082s
+BANDWIDTH_OK
 ```
 
 Scope:
