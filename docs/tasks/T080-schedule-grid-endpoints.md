@@ -170,28 +170,30 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	163.881s
-ok  	github.com/L-K-M/dl-tool/internal/store	76.686s
+ok  	github.com/L-K-M/dl-tool/internal/api	152.892s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.263s
 SCHEDULE_OK
 ```
 
-`go test -count=1 -v -run 'TestScheduleRoundTrips|TestWrongLengthRejected|TestCellOutOfRangeRejected|TestRejectedPutLeavesGridUnchanged|TestTimezoneReported' ./internal/api/`:
+`go test -count=1 -v -run 'TestScheduleRoundTrips|TestWrongLengthRejected|TestCellOutOfRangeRejected|TestRejectedPutLeavesGridUnchanged|TestTimezoneReported|TestReplaceScheduleMissingRowFails' ./internal/api/`:
 
 ```
 === RUN   TestScheduleRoundTrips
---- PASS: TestScheduleRoundTrips (0.08s)
+--- PASS: TestScheduleRoundTrips (0.09s)
 === RUN   TestWrongLengthRejected
---- PASS: TestWrongLengthRejected (0.08s)
+--- PASS: TestWrongLengthRejected (0.05s)
 === RUN   TestCellOutOfRangeRejected
---- PASS: TestCellOutOfRangeRejected (0.08s)
+--- PASS: TestCellOutOfRangeRejected (0.04s)
 === RUN   TestRejectedPutLeavesGridUnchanged
 === RUN   TestRejectedPutLeavesGridUnchanged/short
 === RUN   TestRejectedPutLeavesGridUnchanged/out-of-range
---- PASS: TestRejectedPutLeavesGridUnchanged (0.07s)
+--- PASS: TestRejectedPutLeavesGridUnchanged (0.04s)
 === RUN   TestTimezoneReported
---- PASS: TestTimezoneReported (0.06s)
+--- PASS: TestTimezoneReported (0.04s)
+=== RUN   TestReplaceScheduleMissingRowFails
+--- PASS: TestReplaceScheduleMissingRowFails (0.07s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/api	0.407s
+ok  	github.com/L-K-M/dl-tool/internal/api	0.366s
 ```
 
 `git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:

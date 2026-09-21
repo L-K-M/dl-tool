@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -20,10 +22,13 @@ const (
 // integers, not mode strings: 0 = no download, 1 = default speed,
 // 2 = alternative speed.
 type ScheduleBody struct {
-	Enabled    bool   `json:"enabled"`
-	Cells      []int  `json:"cells" minItems:"168" maxItems:"168" minimum:"0" maximum:"2" doc:"168 cells indexed day*24+hour, day 0 = Monday"`
-	Timezone   string `json:"timezone" readOnly:"true" doc:"IANA name of the zone the cells are evaluated in"`
-	ActiveMode string `json:"active_mode" readOnly:"true" enum:"no_download,default,alternative" doc:"the cell in force at the moment of the call"`
+	Enabled bool  `json:"enabled"`
+	Cells   []int `json:"cells" minItems:"168" maxItems:"168" minimum:"0" maximum:"2" nullable:"false" doc:"168 cells indexed day*24+hour, day 0 = Monday"`
+	// omitempty keeps the read-only members out of the PUT schema's
+	// required list so a typed client needs only enabled and cells; both
+	// are still emitted on every response.
+	Timezone   string `json:"timezone,omitempty" readOnly:"true" doc:"IANA name of the zone the cells are evaluated in"`
+	ActiveMode string `json:"active_mode,omitempty" readOnly:"true" enum:"no_download,default,alternative" doc:"the cell in force at the moment of the call"`
 }
 
 // GetScheduleOutput is the GET /settings/schedule body.
@@ -107,19 +112,15 @@ func (h *SettingsHandlers) PutSchedule(ctx context.Context, in *PutScheduleInput
 // evaluation lands, that active cell is the cell of the current local
 // hour.
 func (h *SettingsHandlers) scheduleBody(ctx context.Context) (ScheduleBody, error) {
-	modes, err := h.settings.Schedule(ctx)
+	modes, enabled, err := h.settings.ScheduleSnapshot(ctx)
 	if err != nil {
 		return ScheduleBody{}, internalFailure(ctx, "read schedule", err)
-	}
-	enabled, err := h.settings.ScheduleEnabled(ctx)
-	if err != nil {
-		return ScheduleBody{}, internalFailure(ctx, "read schedule_enabled", err)
 	}
 
 	body := ScheduleBody{
 		Enabled:    enabled,
 		Cells:      make([]int, len(modes)),
-		Timezone:   time.Local.String(),
+		Timezone:   localZoneName(),
 		ActiveMode: string(modes[activeScheduleIndex(time.Now())]),
 	}
 	for i, mode := range modes {
@@ -127,6 +128,25 @@ func (h *SettingsHandlers) scheduleBody(ctx context.Context) (ScheduleBody, erro
 	}
 
 	return body, nil
+}
+
+// localZoneName reports the zone the cells are evaluated in as an IANA
+// name. time.Local.String() is the zone name whenever TZ is set — the
+// documented container configuration — but "Local" when the process
+// loaded /etc/localtime without learning its name; the zoneinfo symlink
+// recovers that name, and the container's unset-TZ zone (UTC) is the
+// fallback.
+func localZoneName() string {
+	if name := time.Local.String(); name != "Local" {
+		return name
+	}
+	if target, err := filepath.EvalSymlinks("/etc/localtime"); err == nil {
+		if name, ok := strings.CutPrefix(target, "/usr/share/zoneinfo/"); ok {
+			return name
+		}
+	}
+
+	return "UTC"
 }
 
 // activeScheduleIndex resolves the grid index the current local hour

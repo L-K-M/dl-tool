@@ -81,6 +81,20 @@ func activeModeAt(now time.Time, cells []int) string {
 	}[cells[activeScheduleIndex(now)]]
 }
 
+// assertActiveMode checks the reported active_mode against the cell the
+// current hour addresses, tolerating an hour rollover between the
+// response's render and this assertion.
+func assertActiveMode(t *testing.T, reported string, cells []int) {
+	t.Helper()
+
+	now := time.Now()
+	current := activeModeAt(now, cells)
+	previous := activeModeAt(now.Add(-time.Hour), cells)
+	if reported != current && reported != previous {
+		t.Errorf("active_mode = %q, want %q (or %q across an hour rollover)", reported, current, previous)
+	}
+}
+
 // TestScheduleRoundTrips pins the acceptance criterion: a grid holding
 // all three cell values comes back identical through PUT then GET, the
 // enabled flag round-trips with it, and the credential gate of doc 05
@@ -101,9 +115,7 @@ func TestScheduleRoundTrips(t *testing.T) {
 	if !put.Enabled {
 		t.Error("PUT response enabled = false, want true")
 	}
-	if want := activeModeAt(time.Now(), cells); put.ActiveMode != want {
-		t.Errorf("PUT response active_mode = %q, want %q", put.ActiveMode, want)
-	}
+	assertActiveMode(t, put.ActiveMode, cells)
 
 	got := getSchedule(t, env)
 	if diff := cmp.Diff(cells, got.Cells); diff != "" {
@@ -112,9 +124,7 @@ func TestScheduleRoundTrips(t *testing.T) {
 	if !got.Enabled {
 		t.Error("GET enabled = false after PUT enabled:true, want true")
 	}
-	if want := activeModeAt(time.Now(), cells); got.ActiveMode != want {
-		t.Errorf("GET active_mode = %q, want %q", got.ActiveMode, want)
-	}
+	assertActiveMode(t, got.ActiveMode, cells)
 
 	if response := env.api.Get("/settings/schedule"); response.Code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated GET /settings/schedule status = %d, want 401", response.Code)
@@ -206,8 +216,11 @@ func TestTimezoneReported(t *testing.T) {
 	if got.Timezone == "" {
 		t.Fatal("GET timezone is empty")
 	}
-	if got.Timezone != time.Local.String() {
-		t.Errorf("GET timezone = %q, want the container zone %q", got.Timezone, time.Local.String())
+	if got.Timezone != localZoneName() {
+		t.Errorf("GET timezone = %q, want the container zone %q", got.Timezone, localZoneName())
+	}
+	if name := localZoneName(); name == "Local" {
+		t.Errorf("localZoneName() = %q, want an IANA name", name)
 	}
 	// A fresh grid is all-default, so the cell in force is default.
 	if got.ActiveMode != string(store.ScheduleDefault) {
@@ -225,17 +238,57 @@ func TestTimezoneReported(t *testing.T) {
 		t.Fatalf("PUT status = %d, want 200: %s", recorder.Code, recorder.Body.String())
 	}
 	put := decodeScheduleBody(t, recorder)
-	if put.Timezone != time.Local.String() {
-		t.Errorf("PUT echoed a client timezone %q, want the container zone %q", put.Timezone, time.Local.String())
+	if put.Timezone != localZoneName() {
+		t.Errorf("PUT echoed a client timezone %q, want the container zone %q", put.Timezone, localZoneName())
 	}
-	if want := activeModeAt(time.Now(), cells); put.ActiveMode != want {
-		t.Errorf("PUT echoed a client active_mode %q, want the cell in force %q", put.ActiveMode, want)
-	}
+	assertActiveMode(t, put.ActiveMode, cells)
 	if put.Enabled {
 		t.Error("PUT response enabled = true after enabled:false, want false")
 	}
 	if stored, err := store.NewSettingsStore(env.db).ScheduleEnabled(t.Context()); err != nil || stored {
 		t.Errorf("stored schedule_enabled = %v, %v; want false, nil", stored, err)
+	}
+}
+
+// TestReplaceScheduleMissingRowFails pins the write-side counterpart of
+// the strict 168-row read: a table missing a cell fails the replace
+// loudly, and the transaction leaves both the grid and the flag at their
+// last committed values.
+func TestReplaceScheduleMissingRowFails(t *testing.T) {
+	env := newSettingsTestEnv(t)
+
+	cells := scheduleGrid()
+	if recorder := putSchedule(t, env, map[string]any{"enabled": true, "cells": cells}); recorder.Code != http.StatusOK {
+		t.Fatalf("seed PUT status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if _, err := env.db.ExecContext(t.Context(), `DELETE FROM bandwidth_schedule WHERE day = 3 AND hour = 10`); err != nil {
+		t.Fatalf("delete schedule cell: %v", err)
+	}
+
+	var modes [168]store.ScheduleMode
+	for i := range modes {
+		modes[i] = store.ScheduleAlternative
+	}
+	settings := store.NewSettingsStore(env.db)
+	if err := settings.ReplaceSchedule(t.Context(), false, modes); err == nil {
+		t.Fatal("ReplaceSchedule against a 167-row table error = nil, want failure")
+	}
+
+	// The rolled-back transaction leaves the flag at its last committed
+	// value and a surviving row at its stored mode.
+	enabled, err := settings.ScheduleEnabled(t.Context())
+	if err != nil {
+		t.Fatalf("read schedule_enabled: %v", err)
+	}
+	if !enabled {
+		t.Error("rolled-back ReplaceSchedule changed schedule_enabled to false")
+	}
+	var mode string
+	if err := env.db.GetContext(t.Context(), &mode, `SELECT mode FROM bandwidth_schedule WHERE day = 0 AND hour = 0`); err != nil {
+		t.Fatalf("read surviving cell: %v", err)
+	}
+	if mode != string(store.ScheduleNoDownload) {
+		t.Errorf("surviving cell mode = %q after rolled-back replace, want %q", mode, store.ScheduleNoDownload)
 	}
 }
 

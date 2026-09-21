@@ -1649,12 +1649,12 @@ export interface components {
        * @description the cell in force at the moment of the call
        * @enum {string}
        */
-      readonly active_mode: "no_download" | "default" | "alternative";
+      readonly active_mode?: "no_download" | "default" | "alternative";
       /** @description 168 cells indexed day*24+hour, day 0 = Monday */
-      cells: number[] | null;
+      cells: number[];
       enabled: boolean;
       /** @description IANA name of the zone the cells are evaluated in */
-      readonly timezone: string;
+      readonly timezone?: string;
     };
     ScoreFormat: {
       name: string;

@@ -639,12 +639,19 @@ const querySchedule = `SELECT day, hour, mode FROM bandwidth_schedule ORDER BY d
 // out-of-range or unknown-mode read is an error rather than a partially
 // zeroed grid the scheduler would evaluate as unintended pauses.
 func (s *SettingsStore) Schedule(ctx context.Context) (cells [168]ScheduleMode, err error) {
+	return scheduleCells(ctx, s.db)
+}
+
+// scheduleCells runs the Schedule read on any queryable handle — the
+// store's DB for Schedule, a transaction for ScheduleSnapshot — so both
+// share the one strict decode.
+func scheduleCells(ctx context.Context, q sqlx.QueryerContext) (cells [168]ScheduleMode, err error) {
 	var rows []struct {
 		Day  int          `db:"day"`
 		Hour int          `db:"hour"`
 		Mode ScheduleMode `db:"mode"`
 	}
-	if err := s.db.SelectContext(ctx, &rows, querySchedule); err != nil {
+	if err := sqlx.SelectContext(ctx, q, &rows, querySchedule); err != nil {
 		return cells, fmt.Errorf("store: read bandwidth schedule: %w", err)
 	}
 	if len(rows) != len(cells) {
@@ -659,7 +666,11 @@ func (s *SettingsStore) Schedule(ctx context.Context) (cells [168]ScheduleMode, 
 		default:
 			return cells, fmt.Errorf("store: bandwidth schedule cell %d holds unknown mode %q", row.Day*24+row.Hour, row.Mode)
 		}
-		cells[row.Day*24+row.Hour] = row.Mode
+		idx := row.Day*24 + row.Hour
+		if cells[idx] != "" {
+			return cells, fmt.Errorf("store: bandwidth schedule has duplicate cell %d", idx)
+		}
+		cells[idx] = row.Mode
 	}
 
 	return cells, nil
@@ -670,8 +681,14 @@ func (s *SettingsStore) Schedule(ctx context.Context) (cells [168]ScheduleMode, 
 // an error when the stored value is not a JSON boolean — the same
 // grammar strictness GetInt64 applies to the integer keys.
 func (s *SettingsStore) ScheduleEnabled(ctx context.Context) (bool, error) {
+	return scheduleEnabled(ctx, s.db)
+}
+
+// scheduleEnabled runs the ScheduleEnabled read on any queryable handle —
+// the store's DB for ScheduleEnabled, a transaction for ScheduleSnapshot.
+func scheduleEnabled(ctx context.Context, q sqlx.QueryerContext) (bool, error) {
 	var valueJSON string
-	err := s.db.GetContext(ctx, &valueJSON, querySettingValue, settingScheduleEnabled)
+	err := sqlx.GetContext(ctx, q, &valueJSON, querySettingValue, settingScheduleEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -688,6 +705,37 @@ func (s *SettingsStore) ScheduleEnabled(ctx context.Context) (bool, error) {
 	}
 
 	return *value, nil
+}
+
+// ScheduleSnapshot returns the grid and the schedule_enabled flag from
+// one read transaction, so a concurrent ReplaceSchedule cannot interleave
+// the pair — the response the API renders is one committed version, never
+// new cells beside the old flag.
+func (s *SettingsStore) ScheduleSnapshot(ctx context.Context) (cells [168]ScheduleMode, enabled bool, err error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return cells, false, fmt.Errorf("store: read bandwidth schedule snapshot: %w", err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of bandwidth schedule snapshot failed", "error", err)
+		}
+	}()
+
+	if cells, err = scheduleCells(ctx, tx); err != nil {
+		return cells, false, err
+	}
+	if enabled, err = scheduleEnabled(ctx, tx); err != nil {
+		return cells, false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return cells, false, fmt.Errorf("store: read bandwidth schedule snapshot: commit: %w", err)
+	}
+
+	return cells, enabled, nil
 }
 
 const queryReplaceScheduleCell = `UPDATE bandwidth_schedule
@@ -734,8 +782,16 @@ func (s *SettingsStore) ReplaceSchedule(ctx context.Context, enabled bool, cells
 	}
 
 	for i, mode := range cells {
-		if _, err := tx.ExecContext(ctx, queryReplaceScheduleCell, string(mode), now, i/24, i%24); err != nil {
+		res, err := tx.ExecContext(ctx, queryReplaceScheduleCell, string(mode), now, i/24, i%24)
+		if err != nil {
 			return fmt.Errorf("store: replace bandwidth schedule: cell %d: %w", i, err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store: replace bandwidth schedule: cell %d: read rows affected: %w", i, err)
+		}
+		if affected != 1 {
+			return fmt.Errorf("store: replace bandwidth schedule: cell %d: updated %d rows, want 1", i, affected)
 		}
 	}
 
