@@ -218,6 +218,13 @@ func (n *Notifier) Send(ctx context.Context, ch store.NotificationChannel, ev Ev
 	}
 	req, err := renderRequest(ctx, ch, ev, secret)
 	if err != nil {
+		// A failed render is still a failed attempt: the channel row
+		// records it so an operator sees why nothing went out. The text
+		// is redacted — a parse error can quote the raw URL, query
+		// secrets included.
+		msg := secure.RedactError(err).Error()
+		n.touch(ctx, ch.ID, &msg)
+
 		return RawReply{}, err
 	}
 
@@ -550,7 +557,12 @@ func renderNtfy(
 		return nil, err
 	}
 
-	target := strings.TrimRight(serverURL, "/") + "/" + strings.TrimLeft(topic, "/")
+	// The topic lands in the request path verbatim; a character that would
+	// break the path or start a query is a config error, not a request.
+	if strings.ContainsAny(topic, "/?#&=% ") {
+		return nil, fmt.Errorf("jobs: channel %s: invalid ntfy topic %q", ch.ID, topic)
+	}
+	target := strings.TrimRight(serverURL, "/") + "/" + topic
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodPost, target, strings.NewReader(eventLine(ev)),
 	)

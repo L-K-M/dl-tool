@@ -182,8 +182,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/jobs/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	17.094s
-ok  	github.com/L-K-M/dl-tool/internal/store	79.002s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	17.677s
+ok  	github.com/L-K-M/dl-tool/internal/store	73.946s
 NOTIFY_OK
 ```
 
@@ -191,9 +191,10 @@ Named tests (verbose run, all `--- PASS`): `TestMaskSelectsOnlyListedCodes`,
 `TestWebhookShape`, `TestWebhookDefaultBody`, `TestNtfyShape`, `TestGotifyShape`,
 `TestAppriseShape`, `TestRawReplyCarriesStatusLine`, `TestBodyTruncatedAt8KiB`,
 `TestSecretNeverEchoed`, `TestUnreachableUpstream`, `TestChainFanoutDeliversEvent`,
-`TestRedeliveredJobDoesNotResend`, `TestFailedDeliveryRetries`,
-`TestUnknownConfigKeyRejected`, `TestDisabledChannelIsSkipped`,
-`TestSendToBlockedTargetIsInBand`.
+`TestFanoutDeduplicatesIdenticalEvent`, `TestRedeliveredJobResends`,
+`TestMalformedMaskSkipsOnlyThatChannel`, `TestFailedDeliveryRetries`,
+`TestUnknownConfigKeyRejected`, `TestNtfyTopicValidated`,
+`TestDisabledChannelIsSkipped`, `TestSendToBlockedTargetIsInBand`.
 
 Scope check:
 

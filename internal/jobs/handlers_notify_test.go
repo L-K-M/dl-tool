@@ -596,7 +596,9 @@ func TestFailedDeliveryRetries(t *testing.T) {
 }
 
 // TestUnknownConfigKeyRejected covers the validation rule of the per-kind
-// key sets: an unknown key is an error, never a silently ignored field.
+// key sets: an unknown key is an error, never a silently ignored field —
+// and the failed attempt is still recorded on the channel row so an
+// operator sees why nothing went out.
 func TestUnknownConfigKeyRejected(t *testing.T) {
 	db := newTestDB(t)
 	stub := newRecordingStub(t, http.StatusOK, "{}")
@@ -610,6 +612,29 @@ func TestUnknownConfigKeyRejected(t *testing.T) {
 	_, err := notifier.Send(t.Context(), getChannel(t, db, id), testEvent())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bogus")
+	require.Empty(t, stub.all())
+
+	ch := getChannel(t, db, id)
+	require.NotNil(t, ch.LastSendAt)
+	require.NotNil(t, ch.LastError)
+	require.Contains(t, *ch.LastError, "bogus")
+}
+
+// TestNtfyTopicValidated covers the path-injection guard: a topic
+// carrying a path or query delimiter is a config error, not a request.
+func TestNtfyTopicValidated(t *testing.T) {
+	db := newTestDB(t)
+	stub := newRecordingStub(t, http.StatusOK, "{}")
+
+	id := insertChannel(t, db, "ntfy", "phone", true, map[string]any{
+		"server_url": stub.srv.URL,
+		"topic":      "a/b?admin=1",
+	}, []string{"*"}, "")
+	notifier := NewNotifier(db, notifyTestKey, notifyClient(t, stub.srv.URL))
+
+	_, err := notifier.Send(t.Context(), getChannel(t, db, id), testEvent())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid ntfy topic")
 	require.Empty(t, stub.all())
 }
 
