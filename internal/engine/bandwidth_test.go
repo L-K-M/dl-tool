@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -54,6 +55,21 @@ type bandwidthReadback struct {
 
 func (e *bandwidthReadback) GlobalLimits(context.Context) (int64, int64, error) {
 	return e.down, e.up, e.err
+}
+
+// blockingEngine is the black-holed daemon: SetRateLimits parks until the
+// context ends and answers its error. A sequential fan-out would let it eat
+// the whole deadline and starve every engine iterated after it.
+type blockingEngine struct {
+	engine.Engine
+	name string
+}
+
+func (e *blockingEngine) Name() string { return e.name }
+
+func (e *blockingEngine) SetRateLimits(ctx context.Context, _ string, _, _ *int64) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // captureGovernorLogs swaps the default slog for one writing into the
@@ -163,6 +179,32 @@ func TestUnreachableEngineJoinedError(t *testing.T) {
 		[]bandwidthCall{{id: "", down: 1048576, up: 0}},
 		up.calls,
 		"one unreachable daemon must not block the other engine",
+	)
+	require.Equal(t, engine.RateLimits{}, gov.Current(),
+		"a fan-out an engine refused is not recorded as applied",
+	)
+}
+
+func TestHungEngineDoesNotStarveTheRest(t *testing.T) {
+	reg := engine.NewRegistry()
+	hung := &blockingEngine{name: engine.NameAria2}
+	ok := &bandwidthEngine{name: engine.NameQBittorrent}
+	reg.Register(hung)
+	reg.Register(ok)
+
+	gov := engine.NewGovernor(reg, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := gov.ApplyGlobal(ctx, engine.RateLimits{Down: 1048576, Up: 0})
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Contains(t, err.Error(), engine.NameAria2)
+
+	require.Equal(t,
+		[]bandwidthCall{{id: "", down: 1048576, up: 0}},
+		ok.calls,
+		"an engine parked on the context must not starve the fan-out behind it",
 	)
 }
 

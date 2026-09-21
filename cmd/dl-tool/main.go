@@ -255,7 +255,8 @@ func main() {
 			// every registered engine before the listener accepts traffic, so
 			// the first admitted task already runs under them. A partial
 			// fan-out is a warn, never a boot failure: a down engine must not
-			// lock the UI out, and the next settings write re-pushes the pair.
+			// lock the UI out. Nothing re-pushes a missed fan-out yet — the
+			// settings write path (T092) owns that call site.
 			governor := engine.NewGovernor(server.Engines, store.NewSettingsStore(db))
 			governorCtx, cancelGovernor := context.WithTimeout(ctx, governorBootTimeout)
 			if err := governor.LoadAndApply(governorCtx); err != nil {

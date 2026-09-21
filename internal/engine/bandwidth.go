@@ -64,7 +64,10 @@ func NewGovernor(reg *Registry, st *store.SettingsStore) *Governor {
 	return &Governor{reg: reg, settings: st}
 }
 
-// Current returns the limits last applied.
+// Current returns the limits last applied — recorded only when every
+// registered engine accepted the fan-out, so a failed apply is never
+// mistaken for a landed one and a caller comparing against Current still
+// retries it.
 func (g *Governor) Current() RateLimits {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -78,33 +81,49 @@ func (g *Governor) Current() RateLimits {
 // not fail the call. An engine returning ErrNotSupported is skipped. Errors
 // from individual engines are wrapped with the engine name and joined with
 // errors.Join, so one unreachable daemon never blocks the others. The mutex
-// serialises the whole fan-out: two concurrent applies cannot interleave
-// per-engine calls, and the last one's limits are what Current reports.
+// serialises whole applies — two concurrent fan-outs cannot interleave —
+// while the engines inside one apply run in parallel, so an engine that
+// hangs until the context ends cannot starve the ones behind it of the
+// shared deadline.
 func (g *Governor) ApplyGlobal(ctx context.Context, l RateLimits) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	var errs []error
+	var (
+		wg    sync.WaitGroup
+		errMu sync.Mutex
+		errs  []error
+	)
 	for _, name := range g.reg.Names() {
 		e, ok := g.reg.Get(name)
 		if !ok {
 			continue
 		}
 
-		down, up := l.Down, l.Up
-		err := e.SetRateLimits(ctx, "", &down, &up)
-		if errors.Is(err, ErrNotSupported) {
-			continue
-		}
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", name, err))
-			continue
-		}
+		wg.Add(1)
+		go func(name string, e Engine) {
+			defer wg.Done()
 
-		g.readBack(ctx, e, name, l)
+			down, up := l.Down, l.Up
+			err := e.SetRateLimits(ctx, "", &down, &up)
+			if errors.Is(err, ErrNotSupported) {
+				return
+			}
+			if err != nil {
+				errMu.Lock()
+				errs = append(errs, fmt.Errorf("%s: %w", name, err))
+				errMu.Unlock()
+				return
+			}
+
+			g.readBack(ctx, e, name, l)
+		}(name, e)
 	}
+	wg.Wait()
 
-	g.current = l
+	if len(errs) == 0 {
+		g.current = l
+	}
 
 	return errors.Join(errs...)
 }
@@ -153,8 +172,9 @@ func (g *Governor) readBack(ctx context.Context, e Engine, name string, want Rat
 }
 
 // LoadAndApply reads download_rate_limit and upload_rate_limit from the
-// settings table and calls ApplyGlobal. It is called once at boot and again
-// after any settings write that touches either key.
+// settings table and calls ApplyGlobal. It is called once at boot; the
+// settings write path (T092) calls it again after a write that touches
+// either key — that call site does not exist yet.
 func (g *Governor) LoadAndApply(ctx context.Context) error {
 	if g.settings == nil {
 		return errors.New("engine: governor has no settings store")

@@ -179,14 +179,15 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/engine	29.963s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.254s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.104s
-ok  	github.com/L-K-M/dl-tool/internal/store	75.553s
+ok  	github.com/L-K-M/dl-tool/internal/engine	30.067s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.241s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.129s
+ok  	github.com/L-K-M/dl-tool/internal/store	73.949s
 BANDWIDTH_OK
 ```
 
-The five named tests plus `TestLoadAndApplyPushesStoredLimits`, individually:
+Re-run on the final tree after the review fixes (parallel fan-out, `current` recorded only
+on full success). The five named tests plus the hung-engine and stored-limits cases, individually:
 
 ```
 --- PASS: TestApplyGlobalReachesEveryEngine (0.00s)
@@ -194,9 +195,10 @@ The five named tests plus `TestLoadAndApplyPushesStoredLimits`, individually:
 --- PASS: TestNotSupportedEngineSkipped (0.00s)
 --- PASS: TestReadBackMismatchLogsOnly (0.00s)
 --- PASS: TestUnreachableEngineJoinedError (0.00s)
---- PASS: TestLoadAndApplyPushesStoredLimits (0.38s)
+--- PASS: TestHungEngineDoesNotStarveTheRest (0.10s)
+--- PASS: TestLoadAndApplyPushesStoredLimits (0.39s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/engine	1.475s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.588s
 ```
 
 Scope:
