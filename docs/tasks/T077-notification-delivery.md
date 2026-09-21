@@ -128,12 +128,12 @@ unknown key is a validation error, never a silently ignored field.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] A `task.completed` event reaches a stub webhook and the stub records the `Event` JSON.
-- [ ] `event_mask` filtering is exact: `["task.completed"]` excludes `task.error`; `["*"]` includes both.
-- [ ] Each of the four kinds produces the request shape in the table above.
-- [ ] A `403` upstream returns `ok:false` with `status_line` and `body` verbatim, and `error` null.
-- [ ] An unreachable upstream returns `ok:false`, `response:null` and the transport error in `error`.
-- [ ] The stored secret never appears in a `RawReply`, a log record or a `task_events` row.
+- [x] A `task.completed` event reaches a stub webhook and the stub records the `Event` JSON.
+- [x] `event_mask` filtering is exact: `["task.completed"]` excludes `task.error`; `["*"]` includes both.
+- [x] Each of the four kinds produces the request shape in the table above.
+- [x] A `403` upstream returns `ok:false` with `status_line` and `body` verbatim, and `error` null.
+- [x] An unreachable upstream returns `ok:false`, `response:null` and the transport error in `error`.
+- [x] The stored secret never appears in a `RawReply`, a log record or a `task_events` row.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -167,7 +167,46 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```
+$ make lint && make test PKG="./internal/jobs/... ./internal/store/..." && echo NOTIFY_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/jobs/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	17.094s
+ok  	github.com/L-K-M/dl-tool/internal/store	79.002s
+NOTIFY_OK
+```
+
+Named tests (verbose run, all `--- PASS`): `TestMaskSelectsOnlyListedCodes`,
+`TestWebhookShape`, `TestWebhookDefaultBody`, `TestNtfyShape`, `TestGotifyShape`,
+`TestAppriseShape`, `TestRawReplyCarriesStatusLine`, `TestBodyTruncatedAt8KiB`,
+`TestSecretNeverEchoed`, `TestUnreachableUpstream`, `TestChainFanoutDeliversEvent`,
+`TestRedeliveredJobDoesNotResend`, `TestFailedDeliveryRetries`,
+`TestUnknownConfigKeyRejected`, `TestDisabledChannelIsSkipped`,
+`TestSendToBlockedTargetIsInBand`.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+internal/jobs/handlers_notify.go
+internal/jobs/handlers_notify_test.go
+internal/jobs/postprocess.go
+internal/store/settings.go
+```
+
+Exactly the Files-table paths and nothing else.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

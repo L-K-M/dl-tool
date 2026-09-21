@@ -142,12 +142,18 @@ func main() {
 			userAgent := "dl-tool/" + version
 			runner := search.NewRunner(searchHTTP, logger, userAgent)
 
+			// The notifier (T077) shares the one SSRF-guarded client and
+			// opens channel secrets under the same at-rest key the indexer
+			// store seals with; the chain's tail step fans out through it.
+			notifier := jobs.NewNotifier(db, cfg.SecretKey, searchHTTP)
+
 			// The post-processing chain (T074) is installed before the API
 			// server runs its boot reconciliation: the completion hook is
 			// the chain's single entry point, and tasks the reconciler
 			// moves into completed during boot must feed it too. A chain
 			// error only strands the enqueue, so it is logged, never raised.
 			postprocess := jobs.NewChain(db, store.NewTaskStore(db))
+			postprocess.SetNotifier(notifier)
 			store.SetCompletedHook(func(ctx context.Context, taskID string) {
 				// The store detaches cancellation already; the timeout
 				// bounds the enqueue so a wedged chain cannot stall the
@@ -193,6 +199,10 @@ func main() {
 				jobs.JobKindMove,
 				jobs.NewMoveHandler(db, store.NewTaskStore(db), cfg.DataRoots).Handle,
 			)
+			// The webhook handler (T077) claims the notification jobs the
+			// chain's terminal fan-out enqueues — one per enabled channel
+			// whose mask selected the event.
+			worker.Register(jobs.JobKindWebhook, notifier.Handle)
 			// The feed poller shares the SSRF-guarded client with the search
 			// fan-out and the refresh endpoint; the parser is T067's
 			// parse.go and the creator the one ruleTaskCreator NewServer
