@@ -164,11 +164,13 @@ func (h *MoveHandler) Handle(ctx context.Context, job store.Job) error {
 			return fmt.Errorf("jobs: move task %q: compare existing destination: %w", taskID, err)
 		}
 		if same {
-			if os.SameFile(srcInfo, dstInfo) {
-				// src and dst name one physical entry — a hardlink or a
+			if os.SameFile(srcInfo, dstInfo) && !distinctHardlink(srcInfo) {
+				// src and dst are two spellings of one dirent — a
 				// case-insensitive duplicate the chain's string compare
-				// could not see: removing src would delete the payload
-				// the move just settled on.
+				// could not see (the identical-spelling case returned
+				// above): removing src would delete the payload the move
+				// just settled on. A distinct hardlink is safe to
+				// unlink — the inode survives at dst.
 				return h.settle(ctx, task, dst)
 			}
 			if err := os.RemoveAll(src); err != nil {
@@ -443,6 +445,19 @@ func moveErrorCode(err error) string {
 	default:
 		return "unknown"
 	}
+}
+
+// distinctHardlink reports whether info is a regular file carrying at
+// least two names — unlinking src then leaves the inode reachable at dst.
+// A directory, or a platform whose stat does not answer a link count,
+// stays on the conservative side of the same-entry guard.
+func distinctHardlink(info fs.FileInfo) bool {
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+
+	return ok && st.Nlink >= 2
 }
 
 // samePayload reports whether dst already holds the move's content — a file

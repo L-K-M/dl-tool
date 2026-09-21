@@ -163,8 +163,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/fsx/... ./internal/jobs/...
-ok  	github.com/L-K-M/dl-tool/internal/fsx	2.314s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	9.719s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.736s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	9.903s
 MOVE_OK
 ```
 
@@ -176,13 +176,14 @@ import cycle):
 ```text
 --- PASS: TestSameFilesystemUsesRename (0.00s)
 --- PASS: TestEXDEVFallsBackToCopy (0.01s)
---- PASS: TestVerifyFailureKeepsSource (0.01s)
---- PASS: TestCancelledMoveKeepsSource (0.05s)
---- PASS: TestTaskPassesThroughMoving (0.40s)
---- PASS: TestMoveRefusedByDiskFloorPauses (0.40s)
---- PASS: TestSameFSMoveThroughHandler (0.33s)
+--- PASS: TestVerifyFailureKeepsSource (0.00s)
+--- PASS: TestCancelledMoveKeepsSource (0.04s)
+--- PASS: TestTaskPassesThroughMoving (0.39s)
+--- PASS: TestMoveRefusedByDiskFloorPauses (0.48s)
+--- PASS: TestSameFSMoveThroughHandler (0.39s)
+--- PASS: TestMoveSettlesOnDistinctHardlink (0.41s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/fsx	2.256s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.791s
 ```
 
 Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'` was

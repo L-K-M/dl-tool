@@ -388,6 +388,47 @@ func TestSameFSMoveThroughHandler(t *testing.T) {
 	assert.Empty(t, stagingLitter(t, filepath.Dir(dst)))
 }
 
+func TestMoveSettlesOnDistinctHardlink(t *testing.T) {
+	db := moveTestDB(t)
+	root := t.TempDir()
+
+	src := filepath.Join(root, "incomplete", "payload.bin")
+	dst := filepath.Join(root, "done", "payload.bin")
+	body := []byte("hardlinked payload")
+	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+	require.NoError(t, os.WriteFile(src, body, 0o644))
+	// dst already names the payload's inode: the crash-window branch
+	// must unlink src's extra name, never the payload dst holds.
+	require.NoError(t, os.Link(src, dst))
+
+	tasks := store.NewTaskStore(db)
+	task, err := tasks.Create(t.Context(), store.Task{
+		Engine:      "aria2",
+		SourceKind:  "http",
+		Name:        "payload.bin",
+		State:       "completed",
+		Destination: filepath.Dir(dst),
+		ContentPath: &src,
+	})
+	require.NoError(t, err)
+
+	handler := jobs.NewMoveHandler(db, tasks, []string{root})
+	require.NoError(t, handler.Handle(t.Context(), moveJob(t, task.ID, src, dst)))
+
+	reloaded, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", reloaded.State)
+	require.NotNil(t, reloaded.ContentPath)
+	assert.Equal(t, dst, *reloaded.ContentPath)
+
+	got, err := os.ReadFile(dst)
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
+	_, err = os.Stat(src)
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the duplicate source name must be unlinked")
+}
+
 // setMinFreeSpace writes the destination root's min_free_space floor the
 // move handler's pre-check reads.
 func setMinFreeSpace(t *testing.T, db *sqlx.DB, root string, floor int64) {
