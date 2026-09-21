@@ -356,6 +356,63 @@ func (s *SettingsStore) DefaultDestination(ctx context.Context) (string, error) 
 	return value, nil
 }
 
+// querySettingValue reads one settings row's value by key.
+const querySettingValue = `SELECT value_json FROM settings WHERE key = ?`
+
+// GetInt64 reads one settings key as an integer, returning def when the
+// row is absent. The stored grammar is a bare JSON integer — `4`, never
+// `"4"` or `4.0` — the same shape parseNonNegativeSettingInt enforces for
+// the admission keys, so a malformed row is an error, never a guess.
+func (s *SettingsStore) GetInt64(ctx context.Context, key string, def int64) (int64, error) {
+	var valueJSON string
+	err := s.db.GetContext(ctx, &valueJSON, querySettingValue, key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return def, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("store: read settings key %s: %w", key, err)
+	}
+
+	// Decoding into *int64 rather than int64 so a stored JSON null is a
+	// decode failure, not a silent 0 an operator never wrote.
+	var value *int64
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return 0, fmt.Errorf("store: decode settings key %s: want an integer, got %q: %w", key, valueJSON, err)
+	}
+	if value == nil {
+		return 0, fmt.Errorf("store: decode settings key %s: want an integer, got %q", key, valueJSON)
+	}
+
+	return *value, nil
+}
+
+// queryUpsertSettingInt64 inserts or replaces one settings row by key; the
+// ON CONFLICT targets the settings.key unique index the migration creates.
+const queryUpsertSettingInt64 = `INSERT INTO settings (id, key, value_json, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(key) DO UPDATE SET
+  value_json = excluded.value_json,
+  updated_at = excluded.updated_at`
+
+// SetInt64 upserts one settings key as a bare JSON integer — the grammar
+// GetInt64 accepts.
+func (s *SettingsStore) SetInt64(ctx context.Context, key string, v int64) error {
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("store: encode settings key %s: %w", key, err)
+	}
+
+	now := time.Now().UnixMilli()
+	if _, err := s.db.ExecContext(
+		ctx, queryUpsertSettingInt64,
+		NewID(PrefixSetting), key, string(encoded), now, now,
+	); err != nil {
+		return fmt.Errorf("store: write settings key %s: %w", key, err)
+	}
+
+	return nil
+}
+
 // Settings returns the sibling store over the same database, for a
 // collaborator that spans both table families — the extract handler's
 // password source reads tasks.extract_password and the extract_passwords
