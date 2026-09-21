@@ -707,7 +707,7 @@ func verifyAndMove(tmp, target string, caps Caps) error {
 	// clears; the delivered tree keeps the mode the rename preserves, so
 	// open it to the same 0o755 as every archive-delivered directory.
 	if err := os.Chmod(tmp, 0o755); err != nil {
-		return fmt.Errorf("jobs: verify extracted tree: %w", err)
+		return fmt.Errorf("jobs: open delivered extraction root: %w", err)
 	}
 
 	if err := os.Rename(tmp, target); err != nil {

@@ -120,38 +120,38 @@ func (c *Chain) OnCompleted(ctx context.Context, taskID string) error {
 	return c.maybeAutoRemove(ctx, taskID)
 }
 
-// enqueueExtract records the extract job unless a live row already
-// exists — the (kind, task_id) pair is dispatched at most once per
-// ADR-0015. A failed row is reset rather than duplicated: the task
+// enqueueExtract records the extract job unless a row already exists —
+// the (kind, task_id) pair is dispatched at most once per ADR-0015. Both
+// writes are single statements so a pair of overlapping OnCompleted
+// calls cannot both observe "no row" and insert twice: SQLite serializes
+// writers, and the second caller's UPDATE guard or NOT EXISTS sees the
+// first row. A failed row is reset rather than duplicated: the task
 // reached completed again (an operator retry after the verdict was
 // recorded), so the chain owes the new completion a fresh run.
 func (c *Chain) enqueueExtract(ctx context.Context, taskID string) error {
-	jobID, state, exists, err := c.extractJobState(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	if exists && state != "failed" {
-		return nil
-	}
-	if exists {
-		_, err := c.db.ExecContext(
-			ctx,
-			`UPDATE jobs SET state = 'pending', attempts = 0, locked_at = NULL, last_error = NULL,
-				run_after = ?, updated_at = ? WHERE id = ? AND state = 'failed'`,
-			time.Now().UnixMilli(), time.Now().UnixMilli(), jobID,
-		)
-		if err != nil {
-			return fmt.Errorf("jobs: postprocess task %q: reset extract job: %w", taskID, err)
-		}
+	now := time.Now().UnixMilli()
 
-		return nil
+	if _, err := c.db.ExecContext(
+		ctx,
+		`UPDATE jobs SET state = 'pending', attempts = 0, locked_at = NULL, last_error = NULL,
+			run_after = ?, updated_at = ? WHERE kind = ? AND task_id = ? AND state = 'failed'`,
+		now, now, JobKindExtract, taskID,
+	); err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: reset extract job: %w", taskID, err)
 	}
 
-	_, err = store.EnqueueJob(
-		ctx, c.db, JobKindExtract, &taskID,
-		map[string]string{"task_id": taskID}, time.Now().UnixMilli(),
-	)
+	payload, err := json.Marshal(map[string]string{"task_id": taskID})
 	if err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
+	}
+	if _, err := c.db.ExecContext(
+		ctx,
+		`INSERT INTO jobs (id, kind, task_id, payload_json, run_after, created_at, updated_at)
+			SELECT ?, ?, ?, ?, ?, ?, ?
+			WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE kind = ? AND task_id = ?)`,
+		store.NewID(store.PrefixJob), JobKindExtract, taskID, string(payload), now, now, now,
+		JobKindExtract, taskID,
+	); err != nil {
 		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
 	}
 
@@ -196,24 +196,48 @@ func (c *Chain) extractJobState(ctx context.Context, taskID string) (string, str
 // maybeAutoRemove is the chain's tail (FR-106): with
 // auto_remove_on_complete the task row goes away once post-processing is
 // done — the downloaded data stays on disk, and the row's final event is
-// postprocess.autoremoved.
+// postprocess.autoremoved. Event and delete share one transaction so a
+// crash cannot leave a live task whose log ends claiming it was removed.
 func (c *Chain) maybeAutoRemove(ctx context.Context, taskID string) error {
 	remove, err := c.boolSetting(ctx, settingAutoRemoveOnComplete)
 	if err != nil || !remove {
 		return err
 	}
 
-	if err := c.tasks.AppendEvent(
-		ctx, taskID, "info", eventAutoRemoved, "removed automatically after completion", nil,
-	); err != nil && !errors.Is(err, store.ErrNotFound) {
+	tx, err := c.db.BeginTxx(ctx, nil)
+	if err != nil {
 		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
 	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "jobs: rollback of auto-remove failed", "task_id", taskID, "error", err)
+		}
+	}()
 
-	err = c.tasks.Delete(ctx, taskID)
-	if errors.Is(err, store.ErrNotFound) {
+	var exists int
+	if err := tx.GetContext(ctx, &exists, `SELECT COUNT(*) FROM tasks WHERE id = ?`, taskID); err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
+	}
+	if exists == 0 {
+		// The row vanished between the chain's read and now — the
+		// removal already did everything post-processing would.
 		return nil
 	}
-	if err != nil {
+
+	now := time.Now().UnixMilli()
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO task_events (id, task_id, at, level, code, message, detail_json, created_at, updated_at)
+			VALUES (?, ?, ?, 'info', ?, ?, NULL, ?, ?)`,
+		store.NewID(store.PrefixTaskEvent), taskID, now, eventAutoRemoved,
+		"removed automatically after completion", now, now,
+	); err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, taskID); err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
 	}
 
@@ -260,13 +284,12 @@ func NewExtractHandler(tasks *store.TaskStore, sevenzipPath string) *ExtractHand
 
 // payloadStem names the directory the verified tree is renamed to: the
 // archive's base name minus its extension, beside the archive itself.
+// Only the archiveExtensions spellings ever reach it — .tar.gz counts as
+// one extension so its stem drops both parts.
 func payloadStem(archivePath string) string {
 	base := filepath.Base(archivePath)
-	lower := strings.ToLower(base)
-	for _, ext := range []string{".tar.gz", ".tar.bz2", ".tar.xz"} {
-		if strings.HasSuffix(lower, ext) {
-			return base[:len(base)-len(ext)]
-		}
+	if lower := strings.ToLower(base); strings.HasSuffix(lower, ".tar.gz") {
+		return base[:len(base)-len(".tar.gz")]
 	}
 
 	return strings.TrimSuffix(base, filepath.Ext(base))
