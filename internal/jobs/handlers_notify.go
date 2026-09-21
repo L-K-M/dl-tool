@@ -126,7 +126,13 @@ func (n *Notifier) Fanout(ctx context.Context, ev Event) error {
 		}
 		var mask []string
 		if err := json.Unmarshal([]byte(ch.EventMask), &mask); err != nil {
-			return fmt.Errorf("jobs: decode event mask of channel %s: %w", ch.ID, err)
+			// One malformed row must not suppress every other channel's
+			// delivery — isolate the damage to the broken channel.
+			slog.WarnContext(
+				ctx, "jobs: notification channel has malformed event_mask, skipping",
+				"channel_id", ch.ID, "error", err,
+			)
+			continue
 		}
 		if !Matches(mask, ev.Code) {
 			continue
@@ -148,10 +154,14 @@ func (n *Notifier) Fanout(ctx context.Context, ev Event) error {
 }
 
 // Handle runs one webhook job end to end. Registered with the T012 worker
-// pool as worker.Register(JobKindWebhook, n.Handle). It is idempotent on
-// the payload's (channel, event) pair — the (kind, task_id) idempotence
-// of ADR-0015 with the delivery's identity carried in the payload because
-// the row keeps task_id NULL.
+// pool as worker.Register(JobKindWebhook, n.Handle). Delivery is
+// at-least-once: the job row itself is the (kind, task_id) idempotence
+// ADR-0015 names — a done row is never re-claimed — and a replay in the
+// crash window between a successful Send and the row's done write
+// delivers twice. That is the standard webhook contract and strictly
+// better than inferring per-event dedupe from the channel-level
+// last_send_at, which would silently drop any queued event older than
+// the channel's newest send.
 func (n *Notifier) Handle(ctx context.Context, job store.Job) error {
 	var payload webhookPayload
 	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
@@ -170,15 +180,6 @@ func (n *Notifier) Handle(ctx context.Context, job store.Job) error {
 	}
 	if ch.Enabled == 0 {
 		return nil // disabled between enqueue and claim
-	}
-	// The idempotent re-delivery the contract names: the crash window
-	// between Send recording its success and the worker marking the row
-	// done replays the job, and a delivery that already succeeded — a
-	// last_send_at at or past the event's own time with no recorded
-	// error — is not repeated.
-	if ch.LastError == nil && ch.LastSendAt != nil &&
-		!payload.Event.At.IsZero() && *ch.LastSendAt >= payload.Event.At.UnixMilli() {
-		return nil
 	}
 
 	reply, err := n.Send(ctx, ch, payload.Event)

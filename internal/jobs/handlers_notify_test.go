@@ -499,10 +499,27 @@ func TestChainFanoutDeliversEvent(t *testing.T) {
 	require.Nil(t, ch.LastError)
 }
 
-// TestRedeliveredJobDoesNotResend covers the handler's idempotence: a job
-// whose delivery already succeeded — the crash window between the channel
-// bookkeeping and the row's done write — must not send twice.
-func TestRedeliveredJobDoesNotResend(t *testing.T) {
+// TestFanoutDeduplicatesIdenticalEvent covers the enqueue-level
+// idempotence: a re-entered chain pass rebuilds the identical payload, so
+// the second Fanout adds no row.
+func TestFanoutDeduplicatesIdenticalEvent(t *testing.T) {
+	db := newTestDB(t)
+	insertChannel(t, db, "webhook", "hook", true,
+		map[string]any{"url": "http://example.invalid/"}, []string{"*"}, "")
+	notifier := NewNotifier(db, notifyTestKey, nil)
+
+	ev := testEvent()
+	require.NoError(t, notifier.Fanout(t.Context(), ev))
+	require.NoError(t, notifier.Fanout(t.Context(), ev))
+	require.Len(t, fanoutChannels(t, db), 1)
+}
+
+// TestRedeliveredJobResends pins the at-least-once contract: a replayed
+// job — the crash window between Send's success and the worker's done
+// write — delivers again rather than guessing per-event dedupe from the
+// channel's last_send_at, which would silently drop any queued event
+// older than the newest send.
+func TestRedeliveredJobResends(t *testing.T) {
 	db := newTestDB(t)
 	stub := newRecordingStub(t, http.StatusOK, "{}")
 
@@ -523,10 +540,36 @@ func TestRedeliveredJobDoesNotResend(t *testing.T) {
 	require.NoError(t, notifier.Handle(t.Context(), job))
 	require.Len(t, stub.all(), 1)
 
-	// Re-running the same job is a no-op: the channel's last_send_at is
-	// at or past the event's own time and no error was recorded.
+	// Replaying the same job — as a re-claimed crash window would —
+	// delivers a second time. Two events queued on one channel must both
+	// arrive, so no send-level suppression exists.
 	require.NoError(t, notifier.Handle(t.Context(), job))
-	require.Len(t, stub.all(), 1)
+	require.Len(t, stub.all(), 2)
+}
+
+// TestMalformedMaskSkipsOnlyThatChannel covers the isolation rule: one
+// channel's broken event_mask never suppresses the other channels'
+// deliveries.
+func TestMalformedMaskSkipsOnlyThatChannel(t *testing.T) {
+	db := newTestDB(t)
+
+	good := insertChannel(t, db, "webhook", "good", true,
+		map[string]any{"url": "http://example.invalid/"}, []string{"*"}, "")
+	// A row T106 would never write — event_mask is not JSON at all.
+	badID := store.NewID(store.PrefixNotificationChannel)
+	now := time.Now().UnixMilli()
+	_, err := db.ExecContext(
+		t.Context(),
+		`INSERT INTO notification_channels
+(id, kind, name, enabled, config_json, event_mask, created_at, updated_at)
+VALUES (?, 'webhook', 'broken', 1, '{"url":"http://example.invalid/"}', 'not-json', ?, ?)`,
+		badID, now, now,
+	)
+	require.NoError(t, err)
+
+	notifier := NewNotifier(db, notifyTestKey, nil)
+	require.NoError(t, notifier.Fanout(t.Context(), testEvent()))
+	require.Equal(t, []string{good}, fanoutChannels(t, db))
 }
 
 // TestFailedDeliveryRetries covers the backoff contract of doc 04

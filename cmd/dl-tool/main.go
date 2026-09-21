@@ -145,6 +145,9 @@ func main() {
 			// The notifier (T077) shares the one SSRF-guarded client and
 			// opens channel secrets under the same at-rest key the indexer
 			// store seals with; the chain's tail step fans out through it.
+			// LAN-hosted endpoints (a self-hosted ntfy or gotify on
+			// 192.168.x.x) need DLTOOL_SSRF_ALLOW_PRIVATE — the same
+			// operator opt-in the indexers and feeds use.
 			notifier := jobs.NewNotifier(db, cfg.SecretKey, searchHTTP)
 
 			// The post-processing chain (T074) is installed before the API
