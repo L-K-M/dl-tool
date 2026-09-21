@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T079 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T016, T019, T027, T037 |
 | **Blocks** | T080, T081, T082, T110, T118 |
 | **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/store/settings.go` |
@@ -113,12 +113,24 @@ func (s *SettingsStore) SetInt64(ctx context.Context, key string, v int64) error
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `ApplyGlobal` calls `SetRateLimits(ctx, "", …)` on every enabled engine, aria2 included.
-- [ ] `0` is applied as unlimited on every engine, never silently skipped.
-- [ ] Every value crossing the package boundary is bytes per second; no KB/s conversion exists.
-- [ ] A read-back mismatch produces a warn log and no error.
-- [ ] One unreachable engine does not prevent the others from being set.
-- [ ] `LoadAndApply` runs at boot and the engines carry the stored limits before the listener starts.
+- [x] `ApplyGlobal` calls `SetRateLimits(ctx, "", …)` on every enabled engine, aria2 included.
+  `TestApplyGlobalReachesEveryEngine` asserts both the aria2-named and the qbittorrent-named fake
+  record exactly one `("", 1048576, 524288)` call.
+- [x] `0` is applied as unlimited on every engine, never silently skipped.
+  `TestZeroMeansUnlimited` asserts the `("", 0, 0)` call is recorded, not dropped.
+- [x] Every value crossing the package boundary is bytes per second; no KB/s conversion exists.
+  `RateLimits` fields are `int64` B/s end to end — the same unit `Engine.SetRateLimits` already
+  takes — and no literal `1024` or conversion appears in `bandwidth.go`.
+- [x] A read-back mismatch produces a warn log and no error.
+  `TestReadBackMismatchLogsOnly` asserts `level=WARN` carrying `sent_bps`/`read_bps` and the engine
+  name while `ApplyGlobal` returns nil.
+- [x] One unreachable engine does not prevent the others from being set.
+  `TestUnreachableEngineJoinedError` asserts the joined error names and wraps the failing engine
+  while the healthy engine still records the call.
+- [x] `LoadAndApply` runs at boot and the engines carry the stored limits before the listener starts.
+  `cmd/dl-tool/main.go` calls `governor.LoadAndApply` in `OnStart` ahead of the `http.Server`
+  goroutine; `TestLoadAndApplyPushesStoredLimits` proves the stored pair reaches the engine
+  verbatim and absent rows fan out `0`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -152,7 +164,91 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG="./internal/engine/... ./internal/store/..." && echo BANDWIDTH_OK`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	30.067s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.241s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.129s
+ok  	github.com/L-K-M/dl-tool/internal/store	73.949s
+BANDWIDTH_OK
+```
+
+Re-run on the final tree after the review fixes (parallel fan-out, `current` recorded only
+on full success, `applyMu`/`mu` split so `Current` never stalls behind a slow apply). The
+five named tests plus the review-added cases, individually:
+
+```
+--- PASS: TestApplyGlobalReachesEveryEngine (0.00s)
+--- PASS: TestZeroMeansUnlimited (0.00s)
+--- PASS: TestNotSupportedEngineSkipped (0.00s)
+--- PASS: TestReadBackMismatchLogsOnly (0.00s)
+--- PASS: TestUnreachableEngineJoinedError (0.00s)
+--- PASS: TestHungEngineDoesNotStarveTheRest (0.10s)
+--- PASS: TestEmptyRegistryCountsAsSuccess (0.00s)
+--- PASS: TestLoadAndApplyPushesStoredLimits (0.39s)
+--- PASS: TestMalformedStoredLimitErrorsRatherThanUnlimited (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.853s
+```
+
+Full Verification block on the final tree:
+
+```
+$ make lint && make test PKG="./internal/engine/... ./internal/store/..." && echo BANDWIDTH_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	30.653s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.340s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.116s
+ok  	github.com/L-K-M/dl-tool/internal/store	73.919s
+BANDWIDTH_OK
+```
+
+Scope:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+internal/engine/bandwidth.go
+internal/engine/bandwidth_test.go
+internal/store/settings.go
+```
+
+Two contract details resolved against the existing code, neither a `## Blocked`:
+
+- `NewGovernor(reg *Registry, st *store.Store)` — there is no `store.Store` type; the settings
+  rows are owned by `store.SettingsStore` (T027), which is what `NewGovernor` takes.
+- Read-back — the governor reads back through an optional `GlobalLimits(ctx)` interface, the
+  exact surface `qbittorrent.Client` already implements (T037). The production
+  `*aria2.Client` exports no global-limit read-back (doc §10.1's `aria2.getGlobalStat` reports
+  current speeds, not configured limits — the contract suite's `readbackClient` uses
+  `aria2.getGlobalOption` for the same reason) and the adapter is outside this task's Files
+  table, so aria2 is fanned out to and records a debug line in place of the confirmation; its
+  `changeGlobalOption` is synchronous, so a nil `SetRateLimits` error already means the daemon
+  took the value.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

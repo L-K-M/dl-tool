@@ -19,6 +19,7 @@ import (
 
 	"github.com/L-K-M/dl-tool/internal/api"
 	"github.com/L-K-M/dl-tool/internal/config"
+	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/obs"
 	"github.com/L-K-M/dl-tool/internal/rss"
@@ -43,6 +44,10 @@ const (
 	readTimeout       = 60 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 10 * time.Second
+
+	// governorBootTimeout bounds the stored-limits fan-out so a black-holed
+	// engine can hold the boot for one window, not per daemon RPC.
+	governorBootTimeout = 10 * time.Second
 
 	// healthcheckTimeout stays under the image HEALTHCHECK's --timeout=5s so
 	// the probe process always answers before Docker kills it.
@@ -245,6 +250,19 @@ func main() {
 				defer runDone.Done()
 				metrics.RunTasksTotalSampler(runCtx, db)
 			}()
+
+			// The bandwidth governor (T079) pushes the stored global limits to
+			// every registered engine before the listener accepts traffic, so
+			// the first admitted task already runs under them. A partial
+			// fan-out is a warn, never a boot failure: a down engine must not
+			// lock the UI out. Nothing re-pushes a missed fan-out yet — the
+			// settings write path (T092) owns that call site.
+			governor := engine.NewGovernor(server.Engines, store.NewSettingsStore(db))
+			governorCtx, cancelGovernor := context.WithTimeout(ctx, governorBootTimeout)
+			if err := governor.LoadAndApply(governorCtx); err != nil {
+				logger.Warn("global rate limits not applied to every engine", "err", err)
+			}
+			cancelGovernor()
 
 			httpServer = &http.Server{
 				Addr:              cfg.HTTPAddr,
