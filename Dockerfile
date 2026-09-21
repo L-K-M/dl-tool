@@ -42,7 +42,7 @@ RUN apk add --no-cache xz && \
     wget -q -O /tmp/7z.tar.xz \
       "https://www.7-zip.org/a/7z${SEVENZIP_VERSION}-linux-${arch}.tar.xz"; \
     echo "${sum}  /tmp/7z.tar.xz" | sha256sum -c -; \
-    tar -xJf /tmp/7z.tar.xz -C /tmp 7zzs; \
+    xz -dc /tmp/7z.tar.xz | tar -xf - -C /tmp 7zzs; \
     install -m 0755 /tmp/7zzs /7zz
 
 FROM alpine:3.22
