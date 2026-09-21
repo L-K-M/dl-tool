@@ -199,8 +199,9 @@ five named tests plus the review-added cases, individually:
 --- PASS: TestHungEngineDoesNotStarveTheRest (0.10s)
 --- PASS: TestEmptyRegistryCountsAsSuccess (0.00s)
 --- PASS: TestLoadAndApplyPushesStoredLimits (0.39s)
+--- PASS: TestMalformedStoredLimitErrorsRatherThanUnlimited (0.00s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/engine	1.062s
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.853s
 ```
 
 Full Verification block on the final tree:
@@ -219,10 +220,10 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/engine/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/engine	30.278s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.313s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.137s
-ok  	github.com/L-K-M/dl-tool/internal/store	76.082s
+ok  	github.com/L-K-M/dl-tool/internal/engine	30.653s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.340s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.116s
+ok  	github.com/L-K-M/dl-tool/internal/store	73.919s
 BANDWIDTH_OK
 ```
 

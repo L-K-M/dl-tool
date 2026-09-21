@@ -249,3 +249,37 @@ func TestLoadAndApplyPushesStoredLimits(t *testing.T) {
 	)
 	require.Equal(t, engine.RateLimits{Down: 2097152, Up: 524288}, gov.Current())
 }
+
+func TestMalformedStoredLimitErrorsRatherThanUnlimited(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(t.Context(),
+		filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	settings := store.NewSettingsStore(db)
+
+	// The stored grammar is a bare JSON integer. Every other shape must
+	// error — 0 means unlimited, so decoding a corrupted row to a guessed
+	// number could silently drop a throttle the operator set.
+	for _, raw := range []string{`null`, `"4"`, `4.0`, `4x`, ``} {
+		_, err := db.ExecContext(t.Context(),
+			`INSERT INTO settings (id, key, value_json, created_at, updated_at)
+			 VALUES ('st_malformed', 'download_rate_limit', ?, 0, 0)`, raw)
+		require.NoError(t, err)
+
+		_, err = settings.GetInt64(t.Context(), "download_rate_limit", 7)
+		require.Errorf(t, err, "malformed value_json %q must error, never decode to a guess", raw)
+
+		reg := engine.NewRegistry()
+		e := &bandwidthEngine{name: engine.NameAria2}
+		reg.Register(e)
+		gov := engine.NewGovernor(reg, settings)
+		require.Error(t, gov.LoadAndApply(t.Context()))
+		require.Empty(t, e.calls, "a malformed stored row must never reach the engines as a limit")
+
+		_, err = db.ExecContext(t.Context(),
+			`DELETE FROM settings WHERE key = 'download_rate_limit'`)
+		require.NoError(t, err)
+	}
+}
