@@ -142,6 +142,23 @@ func main() {
 			userAgent := "dl-tool/" + version
 			runner := search.NewRunner(searchHTTP, logger, userAgent)
 
+			// The post-processing chain (T074) is installed before the API
+			// server runs its boot reconciliation: the completion hook is
+			// the chain's single entry point, and tasks the reconciler
+			// moves into completed during boot must feed it too. A chain
+			// error only strands the enqueue, so it is logged, never raised.
+			postprocess := jobs.NewChain(db, store.NewTaskStore(db))
+			store.SetCompletedHook(func(ctx context.Context, taskID string) {
+				// The store detaches cancellation already; the timeout
+				// bounds the enqueue so a wedged chain cannot stall the
+				// transitioning caller indefinitely.
+				hookCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				if err := postprocess.OnCompleted(hookCtx, taskID); err != nil {
+					logger.ErrorContext(ctx, "postprocess chain failed", "task_id", taskID, "err", err)
+				}
+			})
+
 			server, err := api.NewServer(cfg, db, logger, api.Deps{Indexers: indexers, Defs: defs, Runner: runner, HTTP: searchHTTP, DB: db})
 			if err != nil {
 				logger.Error("server build failed", "err", err)
@@ -156,11 +173,18 @@ func main() {
 			// runDone.Wait blocks until every in-flight handler has finished.
 			// The search fan-out (T061) reuses the same Deps collaborators
 			// the API holds — one runner, one registry, one guarded client
-			// per process. T066/T074/T091 register their kinds here later.
+			// per process. T066/T091 register their kinds here later.
 			worker := jobs.NewWorker(db, logger, workerPoolSize)
 			worker.Register(jobs.JobKindSearch, jobs.NewSearchHandler(
 				db, logger, defs, runner, indexers, searchHTTP, userAgent,
 			))
+
+			// The extract handler claims the jobs the chain installed
+			// above enqueues.
+			worker.Register(
+				jobs.JobKindExtract,
+				jobs.NewExtractHandler(store.NewTaskStore(db), cfg.SevenzipPath).Handle,
+			)
 			// The feed poller shares the SSRF-guarded client with the search
 			// fan-out and the refresh endpoint; the parser is T067's
 			// parse.go and the creator the one ruleTaskCreator NewServer

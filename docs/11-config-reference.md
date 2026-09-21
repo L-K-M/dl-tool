@@ -81,7 +81,7 @@ column names the package that consumes the parsed field.
 | `DLTOOL_QBITTORRENT_PASSWORD` | **secret** string | *(empty)* | yes when `DLTOOL_QBITTORRENT_URL` is set | infrastructure | Password for the same login call. | `internal/engine/qbittorrent/client.go` |
 | `DLTOOL_YTDLP_PATH` | file path | `/usr/local/bin/yt-dlp` | no | infrastructure | Standalone `yt-dlp_musllinux` binary. Probed at boot for its version; self-update is never invoked. | `internal/engine/ytdlp/runner.go` |
 | `DLTOOL_JS_RUNTIME_PATH` | file path | `/usr/bin/node` | no | infrastructure | JavaScript runtime required by `yt-dlp-ejs` for full YouTube support. Missing binary raises `js_runtime_missing` and disables the media lane with a visible warning. | `internal/engine/ytdlp/runner.go` |
-| `DLTOOL_SEVENZIP_PATH` | file path | `/usr/bin/7zz` | no | infrastructure | Archive extractor used by the auto-extract job handler. | `internal/jobs/handlers_extract.go` |
+| `DLTOOL_SEVENZIP_PATH` | file path | `/usr/local/bin/7zz` | no | infrastructure | Archive extractor used by the auto-extract job handler. | `internal/jobs/handlers_extract.go` |
 | `DLTOOL_SSRF_ALLOW_PRIVATE` | bool | `false` | no | infrastructure | When `true`, outbound fetches of feeds, indexers and task URIs may resolve to loopback and RFC 1918 addresses and may use ports other than 80/443. Link-local stays denied in every case — that is where the cloud metadata endpoints live. Leave `false` unless an indexer or feed lives on the same LAN. | `internal/secure/ssrf.go` |
 | `DLTOOL_WATCH_DIR` | dir path | *(empty)* | no | preference | Seeds one enabled row in `watch_folders` pointing at this directory. Must be inside `DLTOOL_DATA_ROOTS`. | `internal/jobs/cron.go` |
 | `DLTOOL_NOTIFY_URL` | url | *(empty)* | no | preference | Seeds one enabled `notification_channels` row of kind `webhook` with this URL. | `internal/jobs/handlers_notify.go` |
@@ -309,7 +309,7 @@ DLTOOL_QBITTORRENT_USERNAME=admin
 DLTOOL_QBITTORRENT_PASSWORD_FILE=/run/secrets/qbt_password
 DLTOOL_YTDLP_PATH=/usr/local/bin/yt-dlp
 DLTOOL_JS_RUNTIME_PATH=/usr/bin/node
-DLTOOL_SEVENZIP_PATH=/usr/bin/7zz
+DLTOOL_SEVENZIP_PATH=/usr/local/bin/7zz
 DLTOOL_SSRF_ALLOW_PRIVATE=false
 
 # --- dl-tool: preference seeds, first boot only ---
@@ -370,8 +370,6 @@ stated fallback.
 
 - `DLTOOL_JS_RUNTIME_PATH` is not in the brief's canonical variable list; it is added because §15.2 requires a
   JavaScript runtime probe for yt-dlp and the probe needs a configurable path.
-- <!-- UNVERIFIED: the Alpine `7zip` package installing the binary as `/usr/bin/7zz` was not verified against
-  the package manifest; the brief pins this default and T004 confirms it at build time. -->
 
 ## Change log
 
@@ -397,3 +395,4 @@ stated fallback.
 | 2026-09-02 | Review pass: removed the duplicated `DLTOOL_ALLOWED_HOSTS` row; `DLTOOL_CONFIG_LOCK` now names `internal/api/security.go`, the file a task actually creates; §4 gained the six `DLTOOL_*` pass-throughs and the note that the gluetun variables are not dl-tool configuration; the reference `.env` block is marked as not being the shipped `.env.example`, which ships both engine lanes disabled. |
 | 2026-09-02 | Defined `min_free_space` as a sparse map whose missing roots use the 2 GiB default, whose explicit zero disables a root's floor and whose unconfigured roots remain stored but inactive, matching the host-independent initial seed. |
 | 2026-09-02 | Defined `integrity_check_failed` for a fatal boot integrity result. |
+| 2026-09-21 | `DLTOOL_SEVENZIP_PATH` defaults to `/usr/local/bin/7zz`: the image installs upstream's pinned, hash-verified static `7zzs` there because Alpine's `7zip` package compiles the RAR codec out ([ADR-0021](decisions/0021-pin-7zz-by-version-and-hash.md)); the `/usr/bin/7zz` UNVERIFIED note is resolved by removal. |

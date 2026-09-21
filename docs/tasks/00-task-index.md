@@ -184,7 +184,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 
 | Task | Title | Depends on | Status |
 |---|---|---|---|
-| [T074](T074-auto-extract-archives.md) | Extract completed archives with the safe recipe | T012, T017, T024 | todo |
+| [T074](T074-auto-extract-archives.md) | Extract completed archives with the safe recipe | T012, T017, T024 | done |
 | [T075](T075-extraction-password-list.md) | Try the per-task and shared extraction passwords | T074 | todo |
 | [T076](T076-exdev-aware-move.md) | Move completed data across filesystems with progress | T074, T099 | todo |
 | [T077](T077-notification-delivery.md) | Deliver task events to notification channels | T054, T074 | todo |
@@ -392,7 +392,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
-| T074 | Extract completed archives with the safe recipe | T012, T017, T024 | yes | todo | [T074](T074-auto-extract-archives.md) |
+| T074 | Extract completed archives with the safe recipe | T012, T017, T024 | no | done | [T074](T074-auto-extract-archives.md) |
 | T075 | Try the per-task and shared extraction passwords | T074 | no | todo | [T075](T075-extraction-password-list.md) |
 | T076 | Move completed data across filesystems with progress | T074, T099 | yes | todo | [T076](T076-exdev-aware-move.md) |
 | T077 | Deliver task events to notification channels | T054, T074 | yes | todo | [T077](T077-notification-delivery.md) |

@@ -59,7 +59,7 @@ const (
 	defaultMetricsAddr   = "127.0.0.1:9090"
 	defaultYtdlpPath     = "/usr/local/bin/yt-dlp"
 	defaultJSRuntimePath = "/usr/bin/node"
-	defaultSevenzipPath  = "/usr/bin/7zz"
+	defaultSevenzipPath  = "/usr/local/bin/7zz"
 	defaultSessionTTL    = 720 * time.Hour
 
 	logLevelDebug = "debug"

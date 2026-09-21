@@ -10,6 +10,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -381,6 +382,22 @@ WHERE id = ? AND state = 'queued' AND admission_pending = 0
 RETURNING id`
 
 	queryTaskAdmissionPending = `SELECT state, admission_pending FROM tasks WHERE id = ?`
+
+	// The extractor's progress gauge (T074): written only while the row is
+	// extracting, so a late tick never revives a task the operator moved on.
+	querySetTaskExtractProgress = `UPDATE tasks
+SET unzip_progress = ?, updated_at = ?
+WHERE id = ? AND state = 'extracting'`
+
+	// The unconditional error-code write the extract handler uses after it
+	// has already committed the task to the error state (T074).
+	querySetTaskErrorCode = `UPDATE tasks
+SET error_code = ?, error_message = ?, updated_at = ?
+WHERE id = ?`
+
+	// The hard delete behind auto_remove_on_complete (T074, FR-106): every
+	// dependent row cascades on the task's primary key.
+	queryDeleteTask = `DELETE FROM tasks WHERE id = ?`
 )
 
 // TaskStore persists tasks rows and enforces the task state machine.
@@ -1313,7 +1330,41 @@ func (s *TaskStore) Transition(ctx context.Context, id, next, code, message stri
 		return fmt.Errorf("store: commit transition of task %q: %w", id, err)
 	}
 
+	// The completion hook runs after the commit, never inside it: a slow or
+	// failing enqueue must not roll back a transition that already landed.
+	// It is process-wide because every TaskStore wraps the same *sqlx.DB —
+	// engine reconciliation, API actions and the post-processing chain's own
+	// return leg all reach completed through Transition on different
+	// instances, and each of them must feed the chain (T074).
+	if next == "completed" {
+		if h := onTaskCompleted.Load(); h != nil {
+			(*h)(context.WithoutCancel(ctx), id)
+		}
+	}
+
 	return nil
+}
+
+// OnTaskCompleted is the callback fired once per committed transition into
+// completed. It runs on a context detached from the caller's cancellation —
+// the transition already committed, so a cancelled request context must not
+// silently drop the chain's enqueue — and the installing adapter bounds the
+// detached work with its own timeout.
+type OnTaskCompleted func(ctx context.Context, taskID string)
+
+// onTaskCompleted is deliberately package-level, not a TaskStore field: the
+// process holds several TaskStore instances over one database and the hook
+// must fire whoever performed the transition.
+var onTaskCompleted atomic.Pointer[OnTaskCompleted]
+
+// SetCompletedHook installs the post-completion callback; nil disables it.
+// The last registered hook wins.
+func SetCompletedHook(h OnTaskCompleted) {
+	if h == nil {
+		onTaskCompleted.Store(nil)
+		return
+	}
+	onTaskCompleted.Store(&h)
 }
 
 // errTransitionConflict reports a compare-and-swap miss: expected is the
@@ -1882,4 +1933,97 @@ func stablePartition(order []string, keep func(string) bool) []string {
 	}
 
 	return append(head, tail...)
+}
+
+// SetExtractProgress writes tasks.unzip_progress (0–100) and holds state at
+// extracting: the write is a no-op error on any other state, so a progress
+// tick can never resurrect a task the operator moved on from under the
+// extractor. The range check is a programming-error guard — the handler
+// computes percent from capped counters.
+func (s *TaskStore) SetExtractProgress(ctx context.Context, taskID string, percent int) error {
+	if percent < 0 || percent > 100 {
+		return fmt.Errorf("store: task %q extract progress %d outside 0..100", taskID, percent)
+	}
+
+	result, err := s.db.ExecContext(
+		ctx, querySetTaskExtractProgress, percent, time.Now().UnixMilli(), taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set extract progress of task %q: %w", taskID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: set extract progress of task %q: count rows: %w", taskID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: set extract progress of task %q: %w", taskID, ErrNotFound)
+	}
+
+	return nil
+}
+
+// taskErrorCodes is the closed error_code vocabulary of
+// docs/04-data-model.md section 4.2, mirrored from the DDL CHECK list so a
+// typo is a legible panic instead of a constraint dump.
+var taskErrorCodes = map[string]bool{
+	"broken_link": true, "destination_not_exist": true, "destination_denied": true,
+	"disk_full": true, "quota_reached": true, "timeout": true,
+	"exceed_max_file_system_size": true, "exceed_max_destination_size": true,
+	"exceed_max_temp_size": true, "encrypted_name_too_long": true,
+	"name_too_long": true, "torrent_duplicate": true, "file_not_exist": true,
+	"required_premium_account": true, "not_supported_type": true,
+	"try_it_later": true, "task_encryption": true, "missing_python": true,
+	"private_video": true, "ftp_encryption_not_supported_type": true,
+	"extract_failed": true, "extract_failed_wrong_password": true,
+	"extract_failed_invalid_archive": true, "extract_failed_quota_reached": true,
+	"extract_failed_disk_full": true, "unknown": true,
+	"ssrf_blocked": true, "path_rejected": true, "engine_unavailable": true,
+	"unsupported_scheme": true, "concurrency_limit": true, "js_runtime_missing": true,
+}
+
+// SetErrorCode sets tasks.error_code and tasks.error_message. code must be
+// a value of docs/04-data-model.md section 4.2; an unknown code is a
+// programming error and panics rather than writing a value the CHECK
+// constraint and the frontend translations both reject.
+func (s *TaskStore) SetErrorCode(ctx context.Context, taskID, code, message string) error {
+	if !taskErrorCodes[code] {
+		panic(fmt.Sprintf("store: task %q error code %q not in the section 4.2 vocabulary", taskID, code))
+	}
+
+	result, err := s.db.ExecContext(
+		ctx, querySetTaskErrorCode, code, nullableText(message), time.Now().UnixMilli(), taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set error code of task %q: %w", taskID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: set error code of task %q: count rows: %w", taskID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: set error code of task %q: %w", taskID, ErrNotFound)
+	}
+
+	return nil
+}
+
+// Delete removes the task row outright; task_events, task_files, tags and
+// pending jobs follow by ON DELETE CASCADE. This is the hard delete the
+// post-download auto-remove preference needs (doc 04 section 3.6) —
+// MarkRemoved's tombstone keeps the row, Delete erases it. A missing id is
+// ErrNotFound.
+func (s *TaskStore) Delete(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, queryDeleteTask, id)
+	if err != nil {
+		return fmt.Errorf("store: delete task %q: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete task %q: count rows: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: delete task %q: %w", id, ErrNotFound)
+	}
+
+	return nil
 }
