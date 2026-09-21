@@ -176,6 +176,13 @@ func (h *MoveHandler) Handle(ctx context.Context, job store.Job) error {
 			if err := os.RemoveAll(src); err != nil {
 				return fmt.Errorf("jobs: move task %q: remove duplicate source: %w", taskID, err)
 			}
+			// Nlink >= 2 does not prove src and dst were distinct dirents:
+			// a case-insensitive duplicate carrying a third hardlink reads
+			// the same, and the unlink just removed the only name dst
+			// resolved to. Fail rather than settle on a missing path.
+			if _, err := os.Lstat(dst); err != nil {
+				return fmt.Errorf("jobs: move task %q: destination missing after source removal: %w", taskID, err)
+			}
 			return h.settle(ctx, task, dst)
 		}
 		return h.fail(ctx, taskID, fmt.Errorf("destination %q already exists with different content", dst))

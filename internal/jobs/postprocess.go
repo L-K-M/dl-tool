@@ -260,7 +260,21 @@ func (c *Chain) enqueueMove(ctx context.Context, taskID, src, dst string) error 
 		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
 	}
 
-	if _, err := c.db.ExecContext(
+	// Reset and create are one transaction: the at-most-one-row-per-task
+	// invariant moveSettled's LIMIT-1 read assumes is then enforced by the
+	// write itself, not by SQLite's writer serialization happening to
+	// interleave two overlapping chain passes benignly.
+	tx, err := c.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: begin move job write: %w", taskID, err)
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "jobs: rollback of move job write failed", "task_id", taskID, "error", err)
+		}
+	}()
+
+	if _, err := tx.ExecContext(
 		ctx,
 		`UPDATE jobs SET state = 'pending', attempts = 0, locked_at = NULL, last_error = NULL,
 			payload_json = ?, run_after = ?, updated_at = ?
@@ -271,7 +285,7 @@ func (c *Chain) enqueueMove(ctx context.Context, taskID, src, dst string) error 
 		return fmt.Errorf("jobs: postprocess task %q: reset move job: %w", taskID, err)
 	}
 
-	if _, err := c.db.ExecContext(
+	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO jobs (id, kind, task_id, payload_json, run_after, created_at, updated_at)
 			SELECT ?, ?, ?, ?, ?, ?, ?
@@ -279,10 +293,10 @@ func (c *Chain) enqueueMove(ctx context.Context, taskID, src, dst string) error 
 		store.NewID(store.PrefixJob), JobKindMove, taskID, string(payload), now, now, now,
 		JobKindMove, taskID,
 	); err != nil {
-		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
+		return fmt.Errorf("jobs: postprocess task %q: create move job: %w", taskID, err)
 	}
 
-	return nil
+	return tx.Commit()
 }
 
 // maybeAutoRemove is the chain's tail (FR-106): with

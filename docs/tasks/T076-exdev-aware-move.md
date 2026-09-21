@@ -163,8 +163,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/fsx/... ./internal/jobs/...
-ok  	github.com/L-K-M/dl-tool/internal/fsx	2.736s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	9.903s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.806s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	10.380s
 MOVE_OK
 ```
 
