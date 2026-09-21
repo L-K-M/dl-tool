@@ -132,6 +132,17 @@ func TestNotSupportedEngineSkipped(t *testing.T) {
 		ok.calls,
 		"the capable engine still receives the value",
 	)
+	require.Equal(t, engine.RateLimits{Down: 1048576, Up: 0}, gov.Current(),
+		"an ErrNotSupported skip still counts as success for Current",
+	)
+}
+
+func TestEmptyRegistryCountsAsSuccess(t *testing.T) {
+	gov := engine.NewGovernor(engine.NewRegistry(), nil)
+	require.NoError(t, gov.ApplyGlobal(context.Background(), engine.RateLimits{Down: 1048576, Up: 0}))
+	require.Equal(t, engine.RateLimits{Down: 1048576, Up: 0}, gov.Current(),
+		"a fan-out over no engines has no rejection, so Current records it",
+	)
 }
 
 func TestReadBackMismatchLogsOnly(t *testing.T) {
