@@ -74,14 +74,20 @@ func gzipWrapped(name string) bool {
 // first call dispatches the extract job, and the extract handler's return
 // leg to completed re-enters OnCompleted to run the steps after it.
 type Chain struct {
-	db    *sqlx.DB
-	tasks *store.TaskStore
+	db     *sqlx.DB
+	tasks  *store.TaskStore
+	notify *Notifier
 }
 
 // NewChain returns the post-processing chain over the shared database.
 func NewChain(db *sqlx.DB, tasks *store.TaskStore) *Chain {
 	return &Chain{db: db, tasks: tasks}
 }
+
+// SetNotifier attaches the T077 notifier the tail step fans out through.
+// nil leaves the step a no-op — the tests that build a chain without one
+// exercise the earlier legs alone.
+func (c *Chain) SetNotifier(n *Notifier) { c.notify = n }
 
 // OnCompleted runs the post-processing chain for one task. Auto-extract is
 // skipped when the settings key auto_extract is false, which is its
@@ -138,6 +144,29 @@ func (c *Chain) OnCompleted(ctx context.Context, taskID string) error {
 		}
 		// running on the handler's own success leg: fall through to the
 		// steps after move.
+	}
+
+	// The notify step (T077): the chain's terminal event — the
+	// task.completed this pass ran for — fans out to every enabled
+	// channel whose mask selects it. The event's At is the task's
+	// completed_at when the row carries it, so a re-entered pass rebuilds
+	// the identical payload and the enqueue dedupe holds. The step must
+	// run before the auto-remove tail: that tail deletes the task row.
+	if c.notify != nil {
+		at := time.Now()
+		if task.CompletedAt != nil {
+			at = time.UnixMilli(*task.CompletedAt)
+		}
+		if err := c.notify.Fanout(ctx, Event{
+			Code:    store.CodeTaskCompleted,
+			TaskID:  task.ID,
+			Name:    task.Name,
+			State:   task.State,
+			Message: "download finished",
+			At:      at,
+		}); err != nil {
+			return fmt.Errorf("jobs: postprocess task %q: notify fanout: %w", taskID, err)
+		}
 	}
 
 	return c.maybeAutoRemove(ctx, taskID)

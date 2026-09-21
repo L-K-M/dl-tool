@@ -187,7 +187,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T074](T074-auto-extract-archives.md) | Extract completed archives with the safe recipe | T012, T017, T024 | done |
 | [T075](T075-extraction-password-list.md) | Try the per-task and shared extraction passwords | T074 | done |
 | [T076](T076-exdev-aware-move.md) | Move completed data across filesystems with progress | T074, T099 | done |
-| [T077](T077-notification-delivery.md) | Deliver task events to notification channels | T054, T074 | todo |
+| [T077](T077-notification-delivery.md) | Deliver task events to notification channels | T054, T074 | done |
 | [T078](T078-completion-hook.md) | Run the completion hook as an argument vector | T074 | todo |
 | [T079](T079-global-bandwidth-governor.md) | Fan global rate limits out to every engine | T016, T019, T027, T037 | todo |
 | [T080](T080-schedule-grid-endpoints.md) | Store and serve the 24×7 schedule grid | T027, T079 | todo |
@@ -395,7 +395,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T074 | Extract completed archives with the safe recipe | T012, T017, T024 | no | done | [T074](T074-auto-extract-archives.md) |
 | T075 | Try the per-task and shared extraction passwords | T074 | no | done | [T075](T075-extraction-password-list.md) |
 | T076 | Move completed data across filesystems with progress | T074, T099 | yes | done | [T076](T076-exdev-aware-move.md) |
-| T077 | Deliver task events to notification channels | T054, T074 | yes | todo | [T077](T077-notification-delivery.md) |
+| T077 | Deliver task events to notification channels | T054, T074 | yes | done | [T077](T077-notification-delivery.md) |
 | T078 | Run the completion hook as an argument vector | T074 | yes | todo | [T078](T078-completion-hook.md) |
 | T079 | Fan global rate limits out to every engine | T016, T019, T027, T037 | yes | todo | [T079](T079-global-bandwidth-governor.md) |
 | T080 | Store and serve the 24×7 schedule grid | T027, T079 | yes | todo | [T080](T080-schedule-grid-endpoints.md) |

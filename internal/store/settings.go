@@ -2,15 +2,22 @@ package store
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"golang.org/x/crypto/hkdf"
 
 	"github.com/L-K-M/dl-tool/internal/secure"
 )
@@ -548,4 +555,178 @@ func (s *SettingsStore) PutPrefs(ctx context.Context, userID string, doc map[str
 	}
 
 	return nil
+}
+
+// NotificationChannel is one row of the notification_channels table
+// (docs/04-data-model.md section 4.8). It is a store-internal shape: every
+// field carries json:"-" so the row can never be serialised to an API
+// response — the API renders channels through its own view — and
+// SecretEnc only ever leaves the row as ciphertext. The notifier
+// (internal/jobs) is the sole caller that opens it.
+type NotificationChannel struct {
+	ID         string  `db:"id"           json:"-"`
+	Kind       string  `db:"kind"         json:"-"` // webhook | ntfy | gotify | apprise
+	Name       string  `db:"name"         json:"-"`
+	Enabled    int     `db:"enabled"      json:"-"`
+	ConfigJSON string  `db:"config_json"  json:"-"`
+	SecretEnc  *string `db:"secret_enc"   json:"-"`
+	EventMask  string  `db:"event_mask"   json:"-"`
+	LastSendAt *int64  `db:"last_send_at" json:"-"`
+	LastError  *string `db:"last_error"   json:"-"`
+	CreatedAt  int64   `db:"created_at"   json:"-"`
+	UpdatedAt  int64   `db:"updated_at"   json:"-"`
+}
+
+// notificationChannelColumns is the explicit column list both channel
+// reads share, so the list and detail reads cannot drift apart and a
+// widening SELECT cannot change what either returns. secret_enc is
+// included deliberately: the notifier decrypts it inside Send, and the
+// struct is unserialisable so the ciphertext can reach no response.
+const notificationChannelColumns = `id, kind, name, enabled, config_json, secret_enc,
+event_mask, last_send_at, last_error, created_at, updated_at`
+
+const queryListNotificationChannels = `SELECT ` + notificationChannelColumns + `
+FROM notification_channels ORDER BY name`
+
+// ListNotificationChannels returns every notification_channels row,
+// ordered by name. The fan-out filters on enabled and event_mask itself —
+// a disabled channel is still listed so the test send can reach it.
+func (s *SettingsStore) ListNotificationChannels(ctx context.Context) ([]NotificationChannel, error) {
+	var channels []NotificationChannel
+	if err := s.db.SelectContext(ctx, &channels, queryListNotificationChannels); err != nil {
+		return nil, fmt.Errorf("store: list notification channels: %w", err)
+	}
+
+	return channels, nil
+}
+
+const queryNotificationChannelByID = `SELECT ` + notificationChannelColumns + `
+FROM notification_channels WHERE id = ?`
+
+// GetNotificationChannel resolves one row by id. ErrNotFound means the id
+// addresses no known channel.
+func (s *SettingsStore) GetNotificationChannel(ctx context.Context, id string) (NotificationChannel, error) {
+	var ch NotificationChannel
+	err := s.db.GetContext(ctx, &ch, queryNotificationChannelByID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NotificationChannel{}, fmt.Errorf("store: notification channel %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return NotificationChannel{}, fmt.Errorf("store: notification channel %s: %w", id, err)
+	}
+
+	return ch, nil
+}
+
+const queryTouchNotificationChannel = `UPDATE notification_channels
+SET last_send_at = ?, last_error = ?, updated_at = ?
+WHERE id = ?`
+
+// TouchNotificationChannel records the outcome of one delivery attempt:
+// last_send_at is the attempt time on success and failure alike, and
+// last_error carries the failure text or NULL after a success (the
+// semantics of docs/04-data-model.md section 3.2). ErrNotFound means the
+// channel was deleted between enqueue and delivery.
+func (s *SettingsStore) TouchNotificationChannel(ctx context.Context, id string, lastErr *string, at int64) error {
+	result, err := s.db.ExecContext(ctx, queryTouchNotificationChannel, at, lastErr, at, id)
+	if err != nil {
+		return fmt.Errorf("store: touch notification channel %s: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: touch notification channel %s: read rows affected: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: touch notification channel %s: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+const (
+	// notificationSecretInfo is the HKDF info string separating the
+	// notification-channel seal from every other use of the at-rest key
+	// (docs/11-config-reference.md section 6); notificationKeySize is the
+	// AES-256 key length derived from it — the same construction
+	// NewIndexerStore applies to api_key_enc.
+	notificationSecretInfo = "dl-tool/notification-secret/v1"
+	notificationKeySize    = 32
+)
+
+// notificationAEAD derives the channel-secret cipher from the at-rest key.
+// An empty key is an error: sealing under an empty secret would silently
+// reduce to a fixed key.
+func notificationAEAD(key secure.Secret) (cipher.AEAD, error) {
+	if key.Reveal() == "" {
+		return nil, errors.New("store: notification secret sealing requires a non-empty secret key")
+	}
+
+	raw := make([]byte, notificationKeySize)
+	if _, err := io.ReadFull(
+		hkdf.New(sha256.New, []byte(key.Reveal()), nil, []byte(notificationSecretInfo)),
+		raw,
+	); err != nil {
+		return nil, fmt.Errorf("store: derive notification key: %w", err)
+	}
+	block, err := aes.NewCipher(raw)
+	if err != nil {
+		return nil, fmt.Errorf("store: build notification cipher: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("store: build notification aead: %w", err)
+	}
+
+	return aead, nil
+}
+
+// SealNotificationSecret encrypts one channel secret for secret_enc:
+// base64(nonce || ciphertext). An empty plaintext seals to nil — the
+// column stays NULL so secret_set reports false.
+func SealNotificationSecret(key secure.Secret, plain string) (*string, error) {
+	if plain == "" {
+		return nil, nil
+	}
+
+	aead, err := notificationAEAD(key)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("store: seal notification secret: nonce: %w", err)
+	}
+	sealed := aead.Seal(nonce, nonce, []byte(plain), nil)
+	enc := base64.StdEncoding.EncodeToString(sealed)
+
+	return &enc, nil
+}
+
+// OpenNotificationSecret decrypts one secret_enc value back to the stored
+// secret; a NULL column returns the empty Secret. A ciphertext that does
+// not open is corrupt or sealed under a different key — either way an
+// error, never a silently wrong value.
+func OpenNotificationSecret(key secure.Secret, enc *string) (secure.Secret, error) {
+	if enc == nil || *enc == "" {
+		return "", nil
+	}
+
+	aead, err := notificationAEAD(key)
+	if err != nil {
+		return "", err
+	}
+	raw, err := base64.StdEncoding.DecodeString(*enc)
+	if err != nil {
+		return "", fmt.Errorf("store: decode notification secret: %w", err)
+	}
+	if len(raw) < aead.NonceSize() {
+		return "", errors.New("store: notification secret ciphertext shorter than nonce")
+	}
+	plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], nil)
+	if err != nil {
+		return "", fmt.Errorf("store: open notification secret: %w", err)
+	}
+
+	return secure.Secret(plain), nil
 }
