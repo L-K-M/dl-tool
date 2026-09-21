@@ -194,7 +194,7 @@ test files cannot reach the API — `internal/api` already imports `internal/job
 need a `jobs_test` file or a home in `internal/api`, which the Files table does not list.
 
 Remedies for the owner — the choice changes the dependency graph or T092's scope, so it is not made
-here:
+here. Deciding files: `docs/tasks/T092-settings-and-system-info.md`, Doc 05 §11.1:
 
 1. Add `T092` to this task's `Depends on`. T078 then runs after T091 and T092 land, and step 8 is
    exercised against the real endpoint. T091 is itself unblocked, so the stall is two tasks.
@@ -205,3 +205,7 @@ here:
    the hook.
 3. Prescribe a deferral-register interim — a registered `patch-settings` that rejects every key
    until T092 lands — if the hook should ship ahead of the settings endpoints.
+
+   Under remedies 1 and 3, step 9's PATCH assert still cannot live in `internal/jobs/hook_test.go`:
+   the import cycle is ordering-independent — it must move to a `package jobs_test` file or
+   `internal/api` in those branches too.
