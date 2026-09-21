@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -344,6 +345,107 @@ func (s *SettingsStore) DefaultDestination(ctx context.Context) (string, error) 
 	}
 
 	return value, nil
+}
+
+// DB exposes the shared database handle so a collaborator can pair this
+// store with a sibling over the same database — the extract handler's
+// password source reads both tasks.extract_password and the
+// extract_passwords settings row through it.
+func (s *TaskStore) DB() *sqlx.DB { return s.db }
+
+// settingExtractPasswords is the settings key of the shared extraction
+// password list (docs/11-config-reference.md section 5). The migration
+// seeds no row: absent means the empty list.
+const settingExtractPasswords = "extract_passwords"
+
+// maxExtractPasswords is the doc 12 section 4.2 cap on the shared list;
+// jobs.MaxCandidates applies the same bound on the read side.
+const maxExtractPasswords = 16
+
+const queryExtractPasswords = `SELECT value_json FROM settings WHERE key = ?`
+
+// ExtractPasswords reads the extract_passwords settings key. It returns an
+// empty slice when the key is absent. The value is a secret: it is never
+// logged and GET /settings renders it "__redacted__".
+func (s *SettingsStore) ExtractPasswords(ctx context.Context) ([]string, error) {
+	var valueJSON string
+	err := s.db.GetContext(ctx, &valueJSON, queryExtractPasswords, settingExtractPasswords)
+	if errors.Is(err, sql.ErrNoRows) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: read settings key %s: %w", settingExtractPasswords, err)
+	}
+
+	var list []string
+	if err := json.Unmarshal([]byte(valueJSON), &list); err != nil {
+		return nil, fmt.Errorf("store: decode settings key %s: want a JSON array: %w", settingExtractPasswords, err)
+	}
+
+	return list, nil
+}
+
+const queryUpsertExtractPasswords = `INSERT INTO settings (id, key, value_json, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(key) DO UPDATE SET
+  value_json = excluded.value_json,
+  updated_at = excluded.updated_at`
+
+// AppendExtractPassword appends pw to the extract_passwords array in one
+// transaction when it is absent, keeping at most maxExtractPasswords
+// entries, oldest dropped first. The password is a secret: it is bound as
+// a parameter, never interpolated into a query, log line or error.
+func (s *SettingsStore) AppendExtractPassword(ctx context.Context, pw string) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: append settings key %s: %w", settingExtractPasswords, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of extract_passwords append failed", "error", err)
+		}
+	}()
+
+	var valueJSON string
+	err = tx.GetContext(ctx, &valueJSON, queryExtractPasswords, settingExtractPasswords)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: append settings key %s: %w", settingExtractPasswords, err)
+	}
+
+	var list []string
+	if err == nil {
+		if err := json.Unmarshal([]byte(valueJSON), &list); err != nil {
+			return fmt.Errorf("store: decode settings key %s: want a JSON array: %w", settingExtractPasswords, err)
+		}
+	}
+	if slices.Contains(list, pw) {
+		return nil
+	}
+
+	list = append(list, pw)
+	if len(list) > maxExtractPasswords {
+		list = list[len(list)-maxExtractPasswords:]
+	}
+
+	encoded, err := json.Marshal(list)
+	if err != nil {
+		return fmt.Errorf("store: encode settings key %s: %w", settingExtractPasswords, err)
+	}
+	now := time.Now().UnixMilli()
+	if _, err := tx.ExecContext(
+		ctx, queryUpsertExtractPasswords,
+		NewID(PrefixSetting), settingExtractPasswords, string(encoded), now, now,
+	); err != nil {
+		return fmt.Errorf("store: append settings key %s: %w", settingExtractPasswords, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: append settings key %s: commit: %w", settingExtractPasswords, err)
+	}
+
+	return nil
 }
 
 // queryPrefs reads every ui_prefs row of one account: one row per top-level

@@ -113,21 +113,32 @@ const unixModeLink = "lrwxrwxrwx"
 // is ErrWrongPassword when 7zz says so and ErrInvalidArchive otherwise;
 // the row set is only trustworthy on a clean run.
 func ListMembers(ctx context.Context, sevenzipPath, archivePath string) ([]Member, error) {
+	return listMembers(ctx, sevenzipPath, archivePath, "")
+}
+
+// listMembers is ListMembers carrying one password candidate: a
+// header-encrypted archive fails its listing, so the candidate loop needs
+// the password on `l` as well as on `x`.
+func listMembers(ctx context.Context, sevenzipPath, archivePath, password string) ([]Member, error) {
 	// The member list is streamed: a hostile archive's listing can be far
 	// larger than the cap Validate enforces, so buffering it wholesale
 	// would make the listing itself the memory bomb.
-	cmd := exec.CommandContext(ctx, sevenzipPath, "l", "-slt", "-y", "-ba", archivePath)
+	cmd := exec.CommandContext(ctx, sevenzipPath, "l", "-slt", "-y", "-ba", "-p"+password, archivePath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("jobs: pipe extractor listing: %w", err)
 	}
 	var stderr cappedBuffer
 	cmd.Stderr = &stderr
+	// 7zz prints its "cannot open encrypted archive" verdict on stdout —
+	// the member stream — so a tee keeps a capped copy for the classifier
+	// while parseMembers consumes the listing.
+	var stdoutHead cappedBuffer
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("jobs: start extractor listing: %w", err)
 	}
 
-	members, parseErr := parseMembers(stdout)
+	members, parseErr := parseMembers(io.TeeReader(stdout, &stdoutHead))
 	if parseErr != nil {
 		// The listing was cut short — a member-count bomb trips the parse
 		// bound mid-stream — so the child still holds the pipe and must be
@@ -151,13 +162,16 @@ func ListMembers(ctx context.Context, sevenzipPath, archivePath string) ([]Membe
 		}
 		// A listing that fails is a verdict on the archive itself — a
 		// truncated, corrupt or unreadable file — never a retryable
-		// condition: invalid unless the tool names a password.
-		if diagnosticMatch(string(stderr.Bytes()), "wrong password") ||
-			diagnosticMatch(string(stderr.Bytes()), "cannot open encrypted archive") {
-			return nil, fmt.Errorf("%w: %s", ErrWrongPassword, firstLine(string(stderr.Bytes())))
+		// condition: invalid unless the tool names a password. The
+		// signature lives on stderr for `x` but on the teed stdout head
+		// for `l`.
+		diagnostics := string(stderr.Bytes()) + "\n" + string(stdoutHead.Bytes())
+		if diagnosticMatch(diagnostics, "wrong password") ||
+			diagnosticMatch(diagnostics, "cannot open encrypted archive") {
+			return nil, fmt.Errorf("%w: %s", ErrWrongPassword, firstLine(diagnostics))
 		}
 
-		return nil, fmt.Errorf("%w: %s", ErrInvalidArchive, firstLine(string(stderr.Bytes())))
+		return nil, fmt.Errorf("%w: %s", ErrInvalidArchive, firstLine(diagnostics))
 	}
 
 	return members, nil
@@ -418,9 +432,69 @@ func (h *ExtractHandler) run(ctx context.Context, taskID, archivePath string) er
 	// stops advancing once 7zz is writing deep inside it.
 	sweepStaleStaging(root, staleStagingAge)
 
-	members, err := ListMembers(ctx, h.sevenzipPath, archivePath)
+	// The source is a stateless adapter over the same database the task
+	// store holds, so a per-run build keeps NewExtractHandler's signature
+	// — and its call sites — untouched.
+	passwords := NewStorePasswords(h.tasks.DB())
+	candidates, err := passwords.Candidates(ctx, taskID)
 	if err != nil {
-		return err
+		return fmt.Errorf("jobs: extract task %q: %w", taskID, err)
+	}
+
+	// The doc 12 section 4.2 order: each candidate gets one full
+	// list-validate-extract attempt, a wrong password moves to the next,
+	// and every other verdict — corrupt, capped, out of space — aborts the
+	// job at once. A failed candidate is never retried.
+	var tmp, winner string
+	var stagedCaps Caps
+	for _, candidate := range candidates {
+		staged, attemptCaps, err := h.tryCandidate(ctx, taskID, archivePath, root, candidate, caps)
+		if errors.Is(err, ErrWrongPassword) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		tmp, stagedCaps, winner = staged, attemptCaps, candidate
+
+		break
+	}
+	if tmp == "" {
+		return ErrWrongPassword
+	}
+
+	target := filepath.Join(root, payloadStem(archivePath))
+	if err := verifyAndMove(tmp, target, stagedCaps); err != nil {
+		return errors.Join(err, removeStaging(tmp))
+	}
+
+	// The candidate that opened the archive joins the shared list once it
+	// has actually delivered — a stored failure would survive as litter a
+	// retry would trip over, so the append lands after the tree is in
+	// place. The empty candidate is the unencrypted sentinel, not a
+	// password, and is never remembered.
+	if winner != "" {
+		if err := passwords.Remember(ctx, winner); err != nil {
+			return fmt.Errorf("jobs: extract task %q: remember extraction password: %w", taskID, err)
+		}
+	}
+
+	return nil
+}
+
+// tryCandidate runs one password candidate through the pass 1 listing and
+// validation and the pass 2 extraction of doc 12 section 4.1, including
+// the gzip container's single inner unwrap. On success it returns the
+// staging directory and the caps the final verify must enforce — a
+// gzip-wrapped payload's inner caps, otherwise the archive's own.
+func (h *ExtractHandler) tryCandidate(
+	ctx context.Context,
+	taskID, archivePath, root, password string,
+	caps Caps,
+) (string, Caps, error) {
+	members, err := listMembers(ctx, h.sevenzipPath, archivePath, password)
+	if err != nil {
+		return "", Caps{}, err
 	}
 
 	// A gzip wrapper's single member is the container layer, not content —
@@ -431,12 +505,12 @@ func (h *ExtractHandler) run(ctx context.Context, taskID, archivePath string) er
 		outerCaps.TotalUncompressedBytes = caps.SingleMemberBytes
 	}
 	if err := validate(members, outerCaps); err != nil {
-		return err
+		return "", Caps{}, err
 	}
 
-	tmp, err := h.extractPass(ctx, taskID, archivePath, root, sumMemberBytes(members), outerCaps)
+	tmp, err := h.extractPass(ctx, taskID, archivePath, root, sumMemberBytes(members), outerCaps, password)
 	if err != nil {
-		return err
+		return "", Caps{}, err
 	}
 
 	// A gzip outer layer unwraps exactly one level: a .tgz's first pass
@@ -449,21 +523,21 @@ func (h *ExtractHandler) run(ctx context.Context, taskID, archivePath string) er
 			// .tar is far larger than the gzip that carried it.
 			innerInfo, err := os.Stat(inner)
 			if err != nil {
-				return fmt.Errorf("jobs: stat inner container: %w", errors.Join(err, removeStaging(tmp)))
+				return "", Caps{}, fmt.Errorf("jobs: stat inner container: %w", errors.Join(err, removeStaging(tmp)))
 			}
 			innerCaps := h.caps.withDefaults(innerInfo.Size())
 
-			innerMembers, err := ListMembers(ctx, h.sevenzipPath, inner)
+			innerMembers, err := listMembers(ctx, h.sevenzipPath, inner, password)
 			if err != nil {
-				return errors.Join(err, removeStaging(tmp))
+				return "", Caps{}, errors.Join(err, removeStaging(tmp))
 			}
 			if err := validate(innerMembers, innerCaps); err != nil {
-				return errors.Join(err, removeStaging(tmp))
+				return "", Caps{}, errors.Join(err, removeStaging(tmp))
 			}
-			innerTmp, err := h.extractPass(ctx, taskID, inner, root, sumMemberBytes(innerMembers), innerCaps)
+			innerTmp, err := h.extractPass(ctx, taskID, inner, root, sumMemberBytes(innerMembers), innerCaps, password)
 			err = errors.Join(err, removeStaging(tmp))
 			if err != nil {
-				return err
+				return "", Caps{}, err
 			}
 			tmp = innerTmp
 			// The staged tree came from the inner container, so the final
@@ -472,12 +546,7 @@ func (h *ExtractHandler) run(ctx context.Context, taskID, archivePath string) er
 		}
 	}
 
-	target := filepath.Join(root, payloadStem(archivePath))
-	if err := verifyAndMove(tmp, target, caps); err != nil {
-		return errors.Join(err, removeStaging(tmp))
-	}
-
-	return nil
+	return tmp, caps, nil
 }
 
 // extractPass is pass 2: `7zz x` into a fresh staging directory under
@@ -488,6 +557,7 @@ func (h *ExtractHandler) extractPass(
 	taskID, archivePath, root string,
 	declaredBytes int64,
 	caps Caps,
+	password string,
 ) (string, error) {
 	tmp := filepath.Join(root, ".dl-tool-extract-"+ulid.Make().String())
 	// Owner-only while contents are still unverified attacker output;
@@ -501,7 +571,7 @@ func (h *ExtractHandler) extractPass(
 
 	cmd := exec.CommandContext(
 		extractCtx, h.sevenzipPath,
-		"x", "-y", "-bd", "-o"+tmp, "-p", archivePath,
+		"x", "-y", "-bd", "-o"+tmp, "-p"+password, archivePath,
 	)
 	// Setpgid plus the group kill: the deadline must take down the whole
 	// decoder tree, not just the direct child.
