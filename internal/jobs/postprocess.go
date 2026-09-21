@@ -248,7 +248,9 @@ func (c *Chain) moveSettled(ctx context.Context, taskID string) (bool, error) {
 // enqueueMove records the move job with its durable src/dst payload. A done
 // or failed row is reset in place — the only path here is one where the
 // payload still owes relocation, so the row's earlier verdict is stale —
-// while pending and running rows stay untouched, the same
+// and a pending row carrying a stale payload (a destination change after
+// enqueue) is rewritten: pending is provably unclaimed because the worker's
+// claim flips state to running atomically. A running row keeps the
 // dispatch-at-most-once rule the extract step follows.
 func (c *Chain) enqueueMove(ctx context.Context, taskID, src, dst string) error {
 	now := time.Now().UnixMilli()
@@ -262,8 +264,9 @@ func (c *Chain) enqueueMove(ctx context.Context, taskID, src, dst string) error 
 		ctx,
 		`UPDATE jobs SET state = 'pending', attempts = 0, locked_at = NULL, last_error = NULL,
 			payload_json = ?, run_after = ?, updated_at = ?
-			WHERE kind = ? AND task_id = ? AND state IN ('done', 'failed')`,
-		string(payload), now, now, JobKindMove, taskID,
+			WHERE kind = ? AND task_id = ? AND (state IN ('done', 'failed')
+				OR (state = 'pending' AND payload_json != ?))`,
+		string(payload), now, now, JobKindMove, taskID, string(payload),
 	); err != nil {
 		return fmt.Errorf("jobs: postprocess task %q: reset move job: %w", taskID, err)
 	}

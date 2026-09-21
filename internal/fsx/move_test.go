@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,11 +191,18 @@ func TestCancelledMoveKeepsSource(t *testing.T) {
 	dst := filepath.Join(dstRoot, "payload")
 
 	// Cancel inside the first progress report — mid-copy, not before the
-	// attempt — so the abort exercises the copy loop's cleanup.
+	// attempt — so the abort exercises the copy loop's cleanup. The
+	// contract reports the first write immediately, so the callback is
+	// guaranteed to fire on any non-empty copy.
 	ctx, cancel := context.WithCancel(t.Context())
-	err := fsx.Move(ctx, src, dst, func(copied, total int64) { cancel() })
+	fired := false
+	err := fsx.Move(ctx, src, dst, func(copied, total int64) {
+		fired = true
+		cancel()
+	})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.Canceled), "want context.Canceled, got %v", err)
+	assert.True(t, fired, "expected at least one progress report during the copy")
 
 	// The source tree is intact and no staging path survives beside dst.
 	for rel, body := range bodies {
@@ -337,16 +343,64 @@ func TestMoveRefusedByDiskFloorPauses(t *testing.T) {
 	assert.Empty(t, stagingLitter(t, dstRoot))
 }
 
+func TestSameFSMoveThroughHandler(t *testing.T) {
+	db := moveTestDB(t)
+	root := t.TempDir()
+
+	src := filepath.Join(root, "incomplete", "payload.bin")
+	dst := filepath.Join(root, "done", "payload.bin")
+	body := []byte("same-filesystem payload")
+	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+	require.NoError(t, os.WriteFile(src, body, 0o644))
+
+	tasks := store.NewTaskStore(db)
+	task, err := tasks.Create(t.Context(), store.Task{
+		Engine:      "aria2",
+		SourceKind:  "http",
+		Name:        "payload.bin",
+		State:       "completed",
+		Destination: filepath.Dir(dst),
+		ContentPath: &src,
+	})
+	require.NoError(t, err)
+
+	// The rename path needs no floor override: the space pre-check runs
+	// only when source and destination live on different filesystems.
+	handler := jobs.NewMoveHandler(db, tasks, []string{root})
+	require.NoError(t, handler.Handle(t.Context(), moveJob(t, task.ID, src, dst)))
+
+	reloaded, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", reloaded.State)
+	require.NotNil(t, reloaded.ContentPath)
+	assert.Equal(t, dst, *reloaded.ContentPath)
+
+	codes := moveTaskEvents(t, db, task.ID)
+	assert.Contains(t, codes, "postprocess.move.started")
+	assert.Contains(t, codes, "postprocess.move.completed")
+
+	got, err := os.ReadFile(dst)
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
+	_, err = os.Stat(src)
+	assert.True(t, errors.Is(err, os.ErrNotExist))
+	assert.Empty(t, stagingLitter(t, filepath.Dir(dst)))
+}
+
 // setMinFreeSpace writes the destination root's min_free_space floor the
 // move handler's pre-check reads.
 func setMinFreeSpace(t *testing.T, db *sqlx.DB, root string, floor int64) {
 	t.Helper()
 
-	_, err := db.ExecContext(
+	value, err := json.Marshal(map[string]int64{root: floor})
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(
 		t.Context(),
 		`INSERT OR REPLACE INTO settings (id, key, value_json, created_at, updated_at)
 			VALUES ('set_test_min_free_space', 'min_free_space', ?, 0, 0)`,
-		fmt.Sprintf(`{%q:%d}`, root, floor),
+		string(value),
 	)
 	require.NoError(t, err)
 }

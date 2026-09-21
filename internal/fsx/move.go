@@ -149,6 +149,22 @@ func moveAcrossFilesystems(ctx context.Context, src, dst string, onProgress Prog
 		return errors.Join(mapMoveError(verifyErr), removeMoveStaging(staging))
 	}
 
+	// fsync on a copied file does not persist the dirent its parent
+	// directory gained — ext4's new-entry heuristic hides that, XFS,
+	// btrfs and ZFS do not — so every staged directory is fsynced
+	// bottom-up before the deliver rename: the tree RemoveAll(src) then
+	// deletes is durable in fact, not just in the page cache. The
+	// single-file stage has no interior dirents; its own fsync plus the
+	// post-rename parent fsync cover it.
+	if srcInfo.IsDir() {
+		if err := syncStagedDirs(staging); err != nil {
+			return errors.Join(
+				mapMoveError(fmt.Errorf("fsx: fsync staged move tree: %w", err)),
+				removeMoveStaging(staging),
+			)
+		}
+	}
+
 	if err := os.Rename(staging, dst); err != nil {
 		return errors.Join(
 			mapMoveError(fmt.Errorf("fsx: deliver staged move to %s: %w", dst, err)),
@@ -160,7 +176,7 @@ func moveAcrossFilesystems(ctx context.Context, src, dst string, onProgress Prog
 	// "never delete a source before the destination is durable".
 	if err := syncDir(filepath.Dir(dst)); err != nil {
 		return errors.Join(
-			mapMoveError(fmt.Errorf("fsx: fsync destination directory: %w", err)),
+			mapMoveError(fmt.Errorf("fsx: fsync destination directory (delivered copy %q discarded, source intact): %w", dst, err)),
 			removeMoveStaging(dst),
 		)
 	}
@@ -356,7 +372,10 @@ func verifyMovedTree(src, staging string) error {
 			return err
 		}
 		stagedInfo, err := os.Stat(filepath.Join(staging, rel))
-		if err != nil || stagedInfo.Size() != srcInfo.Size() {
+		if err != nil {
+			return fmt.Errorf("fsx: verify staged copy %q: %w", rel, err)
+		}
+		if stagedInfo.Size() != srcInfo.Size() {
 			return ErrVerifyFailed
 		}
 
@@ -371,8 +390,36 @@ func verifyMovedFile(src, staged string) error {
 		return fmt.Errorf("fsx: verify move source %q: %w", src, err)
 	}
 	stagedInfo, err := os.Stat(staged)
-	if err != nil || stagedInfo.Size() != srcInfo.Size() {
+	if err != nil {
+		return fmt.Errorf("fsx: verify staged copy %q: %w", staged, err)
+	}
+	if stagedInfo.Size() != srcInfo.Size() {
 		return ErrVerifyFailed
+	}
+
+	return nil
+}
+
+// syncStagedDirs fsyncs every directory of the staged tree, children
+// before parents, so the dirents the copy created are durable before the
+// deliver rename lands the tree on dst.
+func syncStagedDirs(root string) error {
+	var dirs []string
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if d.IsDir() {
+			dirs = append(dirs, path)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := syncDir(dirs[i]); err != nil {
+			return fmt.Errorf("fsx: fsync staged dir %q: %w", dirs[i], err)
+		}
 	}
 
 	return nil

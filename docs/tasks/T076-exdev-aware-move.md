@@ -163,23 +163,26 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/fsx/... ./internal/jobs/...
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.901s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	9.914s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.314s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	9.719s
 MOVE_OK
 ```
 
-Named tests, run with `-v` (`TestTaskPassesThroughMoving` lives in
-`internal/fsx/move_test.go` as `package fsx_test`, so it can exercise the
-jobs handler without an import cycle):
+Named tests, run with `-v` (`TestTaskPassesThroughMoving` and the other
+handler-level tests live in `internal/fsx/move_test.go` as
+`package fsx_test`, so they can exercise the jobs handler without an
+import cycle):
 
 ```text
 --- PASS: TestSameFilesystemUsesRename (0.00s)
---- PASS: TestEXDEVFallsBackToCopy (0.03s)
+--- PASS: TestEXDEVFallsBackToCopy (0.01s)
 --- PASS: TestVerifyFailureKeepsSource (0.01s)
---- PASS: TestCancelledMoveKeepsSource (0.04s)
+--- PASS: TestCancelledMoveKeepsSource (0.05s)
 --- PASS: TestTaskPassesThroughMoving (0.40s)
---- PASS: TestMoveRefusedByDiskFloorPauses (0.42s)
-ok  	github.com/L-K-M/dl-tool/internal/fsx	1.459s
+--- PASS: TestMoveRefusedByDiskFloorPauses (0.40s)
+--- PASS: TestSameFSMoveThroughHandler (0.33s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.256s
 ```
 
 Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'` was

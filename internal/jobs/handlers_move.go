@@ -164,6 +164,13 @@ func (h *MoveHandler) Handle(ctx context.Context, job store.Job) error {
 			return fmt.Errorf("jobs: move task %q: compare existing destination: %w", taskID, err)
 		}
 		if same {
+			if os.SameFile(srcInfo, dstInfo) {
+				// src and dst name one physical entry — a hardlink or a
+				// case-insensitive duplicate the chain's string compare
+				// could not see: removing src would delete the payload
+				// the move just settled on.
+				return h.settle(ctx, task, dst)
+			}
 			if err := os.RemoveAll(src); err != nil {
 				return fmt.Errorf("jobs: move task %q: remove duplicate source: %w", taskID, err)
 			}
@@ -282,10 +289,12 @@ func (h *MoveHandler) forwardProgress(ctx context.Context, taskID string, copied
 func (h *MoveHandler) destinationAdmits(ctx context.Context, dst string, total int64) (bool, error) {
 	fsID, err := fsx.FilesystemID(dst)
 	if err != nil {
+		slog.WarnContext(ctx, "jobs: move admission failed open: destination filesystem unidentified", "dst", dst, "error", err)
 		return true, nil
 	}
 	space, err := fsx.FreeSpace(dst)
 	if err != nil {
+		slog.WarnContext(ctx, "jobs: move admission failed open: free space unreadable", "dst", dst, "error", err)
 		return true, nil
 	}
 
