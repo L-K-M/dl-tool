@@ -96,12 +96,12 @@ candidate, an invalid archive aborts the whole job at once with `ErrInvalidArchi
 8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] Candidate order is empty string, then `tasks.extract_password`, then the shared list in order.
-- [ ] Each candidate is tried exactly once; a failed candidate is never retried.
-- [ ] A password that opened an archive is present in `extract_passwords` afterwards.
-- [ ] The shared list never exceeds `MaxCandidates` entries.
-- [ ] Exhausting the list sets `error_code` `extract_failed_wrong_password` and leaves the archive in place.
-- [ ] No password appears in any log record or error message produced by the package.
+- [x] Candidate order is empty string, then `tasks.extract_password`, then the shared list in order.
+- [x] Each candidate is tried exactly once; a failed candidate is never retried.
+- [x] A password that opened an archive is present in `extract_passwords` afterwards.
+- [x] The shared list never exceeds `MaxCandidates` entries.
+- [x] Exhausting the list sets `error_code` `extract_failed_wrong_password` and leaves the archive in place.
+- [x] No password appears in any log record or error message produced by the package.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -132,7 +132,63 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```bash
+$ make lint && make test PKG="./internal/jobs/... ./internal/store/..." && echo EXTRACT_PW_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/jobs/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	26.764s
+ok  	github.com/L-K-M/dl-tool/internal/store	73.692s
+EXTRACT_PW_OK
+```
+
+Named tests (run with `-v`, `DLTOOL_SEVENZIP_PATH` pointing at the pinned
+upstream `7zzs` 26.03 the image installs):
+
+```text
+--- PASS: TestCandidateOrder (0.41s)
+--- PASS: TestCandidateTriedOnce (0.50s)
+--- PASS: TestSuccessAppendsToSharedList (0.48s)
+--- PASS: TestSharedListCappedAt16 (0.41s)
+--- PASS: TestExhaustedListSetsWrongPassword (0.42s)
+--- PASS: TestPasswordNeverLogged (0.47s)
+--- PASS: TestCandidatesNeverLogOnFailure (0.53s)
+--- PASS: TestRememberFailureIsExplicit (0.38s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.651s
+```
+
+Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'`, clean
+tree; committed diff `git diff --name-only origin/main...HEAD`):
+
+```text
+internal/jobs/handlers_extract.go
+internal/jobs/passwords.go
+internal/jobs/passwords_test.go
+internal/store/settings.go
+```
+
+Exactly the Files table, nothing else.
+
+Two deviations from the interface contract, both forced by the Files table:
+`NewStorePasswords` takes `*sqlx.DB` (`store.Store` does not exist; T074 set
+the substitution precedent), and the `passwords` source is built inside
+`run` rather than held on `ExtractHandler` — the struct lives in
+`postprocess.go`, which the table does not list. `NewExtractHandler`'s
+signature and every call site are unchanged. One behavioural note: `l`
+carries `-p<candidate>` and scans a teed stdout head because 7zz prints
+"Cannot open encrypted archive" on stdout for `l` (stderr for `x`); without
+it a header-encrypted archive would abort as `ErrInvalidArchive` before any
+candidate ran.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
