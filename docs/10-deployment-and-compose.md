@@ -471,6 +471,27 @@ RUN set -eu; \
     echo "${sum}  /yt-dlp" | sha256sum -c -; \
     chmod 0755 /yt-dlp
 
+# 7-Zip: fetched on the build platform, selected by TARGETARCH, verified by SHA-256
+# (ADR-0021). The tarball's static 7zzs is the only upstream build that both carries
+# the RAR codec and runs on musl; Alpine's 7zip package compiles the codec out.
+FROM --platform=$BUILDPLATFORM alpine:3.22 AS sevenzip
+ARG TARGETARCH
+ARG SEVENZIP_VERSION=2603
+ARG SEVENZIP_SHA256_AMD64=dc99eff5008f1ab79bd7084c68513701547a808a89502bf4133683535ab3c695
+ARG SEVENZIP_SHA256_ARM64=2389ba20e4d8295e8709c20b6263b69bd1ec4972fe38a04ad7a1badbf595b996
+RUN apk add --no-cache xz && \
+    set -eu; \
+    case "${TARGETARCH}" in \
+      amd64) arch=x64;   sum="${SEVENZIP_SHA256_AMD64}" ;; \
+      arm64) arch=arm64; sum="${SEVENZIP_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    wget -q -O /tmp/7z.tar.xz \
+      "https://www.7-zip.org/a/7z${SEVENZIP_VERSION}-linux-${arch}.tar.xz"; \
+    echo "${sum}  /tmp/7z.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/7z.tar.xz -C /tmp 7zzs; \
+    install -m 0755 /tmp/7zzs /7zz
+
 FROM alpine:3.22
 ARG VERSION REVISION CREATED
 LABEL org.opencontainers.image.title="dl-tool" \
@@ -484,9 +505,10 @@ LABEL org.opencontainers.image.title="dl-tool" \
       org.opencontainers.image.vendor="L-K-M" \
       org.opencontainers.image.licenses="Unlicense" \
       org.opencontainers.image.base.name="docker.io/library/alpine:3.22"
-RUN apk add --no-cache su-exec ca-certificates tzdata 7zip nodejs
+RUN apk add --no-cache su-exec ca-certificates tzdata nodejs
 COPY --from=build /out/dl-tool /usr/local/bin/dl-tool
 COPY --from=ytdlp /yt-dlp     /usr/local/bin/yt-dlp
+COPY --from=sevenzip /7zz     /usr/local/bin/7zz
 COPY deploy/entrypoint.sh     /entrypoint.sh
 ENV PUID=1000 PGID=1000 UMASK=002 TZ=Etc/UTC \
     DLTOOL_HTTP_ADDR=:8080 \
@@ -494,7 +516,7 @@ ENV PUID=1000 PGID=1000 UMASK=002 TZ=Etc/UTC \
     DLTOOL_DATA_ROOTS=/data \
     DLTOOL_DB_PATH=/config/dl-tool.db \
     DLTOOL_YTDLP_PATH=/usr/local/bin/yt-dlp \
-    DLTOOL_SEVENZIP_PATH=/usr/bin/7zz
+    DLTOOL_SEVENZIP_PATH=/usr/local/bin/7zz
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["/usr/local/bin/dl-tool", "healthcheck"]
@@ -502,9 +524,13 @@ ENTRYPOINT ["/entrypoint.sh"]
 CMD ["serve"]
 ```
 
-- `su-exec` performs the privilege drop; `ca-certificates` for HTTPS indexers; `tzdata` for `TZ`; `7zip`
-  provides `/usr/bin/7zz` for auto-extract; `nodejs` is the JavaScript runtime `yt-dlp-ejs` requires for full
-  YouTube support ([ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md)).
+- `su-exec` performs the privilege drop; `ca-certificates` for HTTPS indexers; `tzdata` for `TZ`; `nodejs`
+  is the JavaScript runtime `yt-dlp-ejs` requires for full YouTube support
+  ([ADR-0018](decisions/0018-pin-ytdlp-by-version-and-hash.md)).
+- `/usr/local/bin/7zz` for auto-extract is upstream's static `7zzs`, fetched from the pinned
+  `7z<ver>-linux-<arch>` tarball and verified by SHA-256 at build time — Alpine's `7zip` package compiles
+  the RAR codec out, so it is not installed at all
+  ([ADR-0021](decisions/0021-pin-7zz-by-version-and-hash.md)).
 - **Python is never installed.** yt-dlp is the standalone musl binary; `yt-dlp -U` is disabled at runtime and
   freshness comes from a scheduled CI rebuild that bumps `YTDLP_VERSION` and the hashes.
 - `dl-tool healthcheck` is a subcommand of the same binary: it requests `{BASE_PATH}/healthz` on

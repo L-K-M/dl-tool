@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T074 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T012, T017, T024 |
 | **Blocks** | T075, T076, T077, T078, T119 |
 | **Parallel-safe** | no — it also edits the shared files `internal/store/tasks.go` and `cmd/dl-tool/main.go` |
@@ -201,7 +201,75 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```bash
+$ make lint && make test PKG=./internal/jobs/... && echo EXTRACT_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/jobs/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	21.319s
+EXTRACT_OK
+```
+
+Named tests (run with `-v`):
+
+```text
+--- PASS: TestExtractsAllSixFormats (2.50s)   # zip, tar, gz, tgz, 7z, rar subtests
+--- PASS: TestProgressReaches100 (6.10s)
+--- PASS: TestTruncatedArchiveIsInvalid (0.49s)
+--- PASS: TestZipSlipMemberRejectedInPassOne (0.40s)
+--- PASS: TestTarPrivilegedMembersRejectedInPassOne (1.26s)
+--- PASS: TestExtractReRunAfterSuccessIsIdempotent (0.48s)
+--- PASS: TestAutoExtractDefaultsOff (0.37s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	12.685s
+```
+
+Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'`):
+
+```text
+Dockerfile
+cmd/dl-tool/main.go
+internal/config/config.go
+internal/jobs/handlers_extract.go
+internal/jobs/handlers_extract_test.go
+internal/jobs/postprocess.go
+internal/jobs/testdata/fixture.rar
+internal/store/tasks.go
+```
+
+Exactly the Files table, nothing else.
+
+`7zz i` — there is no Docker daemon in this environment, so the image itself cannot be
+built here (CI builds it); the check ran against the exact `7zzs` the Dockerfile
+installs, extracted from the tarball whose SHA-256 matches the `SEVENZIP_SHA256_AMD64`
+pin:
+
+```text
+$ sha256sum 7z2603-linux-x64.tar.xz
+dc99eff5008f1ab79bd7084c68513701547a808a89502bf4133683535ab3c695  7z2603-linux-x64.tar.xz
+$ ./7zzs i | grep -iE 'rar|7-Zip \(z\)|Formats:'
+7-Zip (z) 26.03 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-09-03
+Formats:
+    ...F..................  Rar      rar r00       R a r ! 1A 07 00
+    ...F..................  Rar5     rar r00       R a r ! 1A 07 01 00
+     D     40301 Rar1
+     D     40302 Rar2
+     D     40303 Rar3
+     D     40305 Rar5
+```
+
+`Rar` and `Rar5` appear in both Formats and Codecs — upstream's build, per
+[ADR-0021](../decisions/0021-pin-7zz-by-version-and-hash.md). `7zz` is invoked only as an
+argument vector (`exec.CommandContext`); `sh -c` appears nowhere in `internal/jobs`.
 
 ## Blocked
 
