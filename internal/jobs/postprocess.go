@@ -20,6 +20,10 @@ import (
 // completed task whose payload is a supported archive.
 const JobKindExtract = "extract"
 
+// JobKindMove is the jobs.kind the post-processing chain enqueues for a
+// completed task whose payload sits outside its resolved destination (T076).
+const JobKindMove = "move"
+
 // Settings keys the chain reads (docs/11-config-reference.md section 5).
 // Neither is seeded by 00001_init.sql, so a missing row means the
 // documented default — false for both.
@@ -117,6 +121,25 @@ func (c *Chain) OnCompleted(ctx context.Context, taskID string) error {
 		}
 	}
 
+	// The move step (T076): the payload belongs inside the resolved
+	// destination, and the directory holding it — the engine's save
+	// directory — differing from tasks.destination is the signal that a
+	// relocation is owed. Same-dir means the engine already delivered the
+	// payload where the task asked, and nothing is enqueued.
+	if task.ContentPath != nil && *task.ContentPath != "" && task.Destination != "" &&
+		filepath.Dir(*task.ContentPath) != filepath.Clean(task.Destination) {
+		settled, err := c.moveSettled(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if !settled {
+			src := *task.ContentPath
+			return c.enqueueMove(ctx, taskID, src, filepath.Join(task.Destination, filepath.Base(src)))
+		}
+		// running on the handler's own success leg: fall through to the
+		// steps after move.
+	}
+
 	return c.maybeAutoRemove(ctx, taskID)
 }
 
@@ -191,6 +214,89 @@ func (c *Chain) extractJobState(ctx context.Context, taskID string) (string, str
 	}
 
 	return row.ID, row.State, true, nil
+}
+
+// moveSettled reports whether the chain may advance past the move step.
+// Only a running row settles the step — it is the handler's own success leg
+// re-entering through the completed transition, and the worker marks it done
+// after Handle returns. A pending row still owes the task its run — the
+// chain stops on it like the extract step does, because letting the tail
+// run would let auto-remove cascade-delete the job before the move ever
+// ran. And done or failed rows are stale verdicts, not finished work: this
+// pass is reachable only while the payload still sits outside the
+// destination — the same-dir guard above sees to that — the disk-full park
+// retried after the task's next completed transition, or a destination
+// change under a finished move. enqueueMove re-arms those rows with a fresh
+// payload instead of letting the tail skip a move that is still owed.
+func (c *Chain) moveSettled(ctx context.Context, taskID string) (bool, error) {
+	var state string
+	err := c.db.GetContext(
+		ctx, &state,
+		`SELECT state FROM jobs WHERE kind = ? AND task_id = ? ORDER BY created_at DESC LIMIT 1`,
+		JobKindMove, taskID,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("jobs: postprocess task %q: read move job: %w", taskID, err)
+	}
+
+	return state == "running", nil
+}
+
+// enqueueMove records the move job with its durable src/dst payload. A done
+// or failed row is reset in place — the only path here is one where the
+// payload still owes relocation, so the row's earlier verdict is stale —
+// and a pending row carrying a stale payload (a destination change after
+// enqueue) is rewritten: pending is provably unclaimed because the worker's
+// claim flips state to running atomically. A running row keeps the
+// dispatch-at-most-once rule the extract step follows.
+func (c *Chain) enqueueMove(ctx context.Context, taskID, src, dst string) error {
+	now := time.Now().UnixMilli()
+
+	payload, err := json.Marshal(movePayload{TaskID: taskID, Src: src, Dst: dst})
+	if err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: %w", taskID, err)
+	}
+
+	// Reset and create are one transaction: the at-most-one-row-per-task
+	// invariant moveSettled's LIMIT-1 read assumes is then enforced by the
+	// write itself, not by SQLite's writer serialization happening to
+	// interleave two overlapping chain passes benignly.
+	tx, err := c.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: begin move job write: %w", taskID, err)
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "jobs: rollback of move job write failed", "task_id", taskID, "error", err)
+		}
+	}()
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE jobs SET state = 'pending', attempts = 0, locked_at = NULL, last_error = NULL,
+			payload_json = ?, run_after = ?, updated_at = ?
+			WHERE kind = ? AND task_id = ? AND (state IN ('done', 'failed')
+				OR (state = 'pending' AND payload_json != ?))`,
+		string(payload), now, now, JobKindMove, taskID, string(payload),
+	); err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: reset move job: %w", taskID, err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO jobs (id, kind, task_id, payload_json, run_after, created_at, updated_at)
+			SELECT ?, ?, ?, ?, ?, ?, ?
+			WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE kind = ? AND task_id = ?)`,
+		store.NewID(store.PrefixJob), JobKindMove, taskID, string(payload), now, now, now,
+		JobKindMove, taskID,
+	); err != nil {
+		return fmt.Errorf("jobs: postprocess task %q: create move job: %w", taskID, err)
+	}
+
+	return tx.Commit()
 }
 
 // maybeAutoRemove is the chain's tail (FR-106): with

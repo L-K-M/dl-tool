@@ -185,6 +185,14 @@ func main() {
 				jobs.JobKindExtract,
 				jobs.NewExtractHandler(store.NewTaskStore(db), cfg.SevenzipPath).Handle,
 			)
+			// The move handler (T076) claims the relocation jobs the chain
+			// enqueues when a completed payload sits outside its resolved
+			// destination; it needs the raw db for the content_path write
+			// and the configured roots for the destination's min-free floor.
+			worker.Register(
+				jobs.JobKindMove,
+				jobs.NewMoveHandler(db, store.NewTaskStore(db), cfg.DataRoots).Handle,
+			)
 			// The feed poller shares the SSRF-guarded client with the search
 			// fan-out and the refresh endpoint; the parser is T067's
 			// parse.go and the creator the one ruleTaskCreator NewServer

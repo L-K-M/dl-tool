@@ -148,7 +148,58 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```text
+$ make lint && make test PKG="./internal/fsx/... ./internal/jobs/..." && echo MOVE_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/fsx/... ./internal/jobs/...
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.799s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	9.997s
+MOVE_OK
+```
+
+Named tests, run with `-v` (`TestTaskPassesThroughMoving` and the other
+handler-level tests live in `internal/fsx/move_test.go` as
+`package fsx_test`, so they can exercise the jobs handler without an
+import cycle):
+
+```text
+--- PASS: TestSameFilesystemUsesRename (0.00s)
+--- PASS: TestEXDEVFallsBackToCopy (0.01s)
+--- PASS: TestVerifyFailureKeepsSource (0.03s)
+--- PASS: TestCancelledMoveKeepsSource (0.05s)
+--- PASS: TestTaskPassesThroughMoving (0.38s)
+--- PASS: TestMoveRefusedByDiskFloorPauses (0.35s)
+--- PASS: TestSameFSMoveThroughHandler (0.39s)
+--- PASS: TestMoveSettlesOnSameInodePayload (0.41s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.673s
+```
+
+Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'` was
+clean after the single task commit, so the recorded scope is the commit's
+file list — the same five paths, in Files-table order):
+
+```text
+$ git log origin/main..HEAD --stat --format='%h %s'
+630fac4 T076: Move completed data across filesystems
+
+ cmd/dl-tool/main.go            |   8 +
+ internal/fsx/move.go           | 415 +++++++++++++++++++++++++++++++++++++
+ internal/fsx/move_test.go      | 354 ++++++++++++++++++++++++++++++++
+ internal/jobs/handlers_move.go | 452 +++++++++++++++++++++++++++++++++++++++++
+ internal/jobs/postprocess.go   |  89 ++++++++
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
