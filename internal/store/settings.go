@@ -386,9 +386,9 @@ func (s *SettingsStore) GetInt64(ctx context.Context, key string, def int64) (in
 	return *value, nil
 }
 
-// queryUpsertSettingInt64 inserts or replaces one settings row by key; the
+// queryUpsertSetting inserts or replaces one settings row by key; the
 // ON CONFLICT targets the settings.key unique index the migration creates.
-const queryUpsertSettingInt64 = `INSERT INTO settings (id, key, value_json, created_at, updated_at)
+const queryUpsertSetting = `INSERT INTO settings (id, key, value_json, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET
   value_json = excluded.value_json,
@@ -404,7 +404,7 @@ func (s *SettingsStore) SetInt64(ctx context.Context, key string, v int64) error
 
 	now := time.Now().UnixMilli()
 	if _, err := s.db.ExecContext(
-		ctx, queryUpsertSettingInt64,
+		ctx, queryUpsertSetting,
 		NewID(PrefixSetting), key, string(encoded), now, now,
 	); err != nil {
 		return fmt.Errorf("store: write settings key %s: %w", key, err)
@@ -609,6 +609,138 @@ func (s *SettingsStore) PutPrefs(ctx context.Context, userID string, doc map[str
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: replace ui_prefs for user %s: commit: %w", userID, err)
+	}
+
+	return nil
+}
+
+// ScheduleMode is the stored bandwidth_schedule.mode value
+// (docs/04-data-model.md section 3.6). The API renders the cells as the
+// integers of docs/05-api-contract.md section 11.2; the translation is
+// owned there, not here.
+type ScheduleMode string
+
+const (
+	ScheduleNoDownload  ScheduleMode = "no_download"
+	ScheduleDefault     ScheduleMode = "default"
+	ScheduleAlternative ScheduleMode = "alternative"
+)
+
+// settingScheduleEnabled is the settings key gating evaluation of the
+// grid (docs/11-config-reference.md section 5). The migration seeds no
+// row: absent means false, the documented default.
+const settingScheduleEnabled = "schedule_enabled"
+
+const querySchedule = `SELECT day, hour, mode FROM bandwidth_schedule ORDER BY day, hour`
+
+// Schedule reads all 168 rows of bandwidth_schedule and returns them as
+// cells indexed day*24+hour, day 0 = Monday. The table always holds
+// exactly 168 rows, seeded by 00001_init.sql with 'default'; a short,
+// out-of-range or unknown-mode read is an error rather than a partially
+// zeroed grid the scheduler would evaluate as unintended pauses.
+func (s *SettingsStore) Schedule(ctx context.Context) (cells [168]ScheduleMode, err error) {
+	var rows []struct {
+		Day  int          `db:"day"`
+		Hour int          `db:"hour"`
+		Mode ScheduleMode `db:"mode"`
+	}
+	if err := s.db.SelectContext(ctx, &rows, querySchedule); err != nil {
+		return cells, fmt.Errorf("store: read bandwidth schedule: %w", err)
+	}
+	if len(rows) != len(cells) {
+		return cells, fmt.Errorf("store: bandwidth schedule holds %d rows, want %d", len(rows), len(cells))
+	}
+	for _, row := range rows {
+		if row.Day < 0 || row.Day > 6 || row.Hour < 0 || row.Hour > 23 {
+			return cells, fmt.Errorf("store: bandwidth schedule row out of range: day %d, hour %d", row.Day, row.Hour)
+		}
+		switch row.Mode {
+		case ScheduleNoDownload, ScheduleDefault, ScheduleAlternative:
+		default:
+			return cells, fmt.Errorf("store: bandwidth schedule cell %d holds unknown mode %q", row.Day*24+row.Hour, row.Mode)
+		}
+		cells[row.Day*24+row.Hour] = row.Mode
+	}
+
+	return cells, nil
+}
+
+// ScheduleEnabled reads the schedule_enabled settings key
+// (docs/11-config-reference.md section 5): false when the row is absent,
+// an error when the stored value is not a JSON boolean — the same
+// grammar strictness GetInt64 applies to the integer keys.
+func (s *SettingsStore) ScheduleEnabled(ctx context.Context) (bool, error) {
+	var valueJSON string
+	err := s.db.GetContext(ctx, &valueJSON, querySettingValue, settingScheduleEnabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: read settings key %s: %w", settingScheduleEnabled, err)
+	}
+
+	var value *bool
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return false, fmt.Errorf("store: decode settings key %s: want a boolean, got %q: %w", settingScheduleEnabled, valueJSON, err)
+	}
+	if value == nil {
+		return false, fmt.Errorf("store: decode settings key %s: want a boolean, got %q", settingScheduleEnabled, valueJSON)
+	}
+
+	return *value, nil
+}
+
+const queryReplaceScheduleCell = `UPDATE bandwidth_schedule
+SET mode = ?, updated_at = ?
+WHERE day = ? AND hour = ?`
+
+// ReplaceSchedule writes all 168 cells and the schedule_enabled flag in
+// one sqlx.Tx — PUT /settings/schedule carries both, so a partial write
+// is impossible: either every cell and the flag land or none does
+// (docs/05-api-contract.md section 11.2). A mode outside the stored
+// vocabulary is rejected before the transaction opens, and the flag is
+// upserted as a bare JSON boolean — the grammar ScheduleEnabled accepts.
+func (s *SettingsStore) ReplaceSchedule(ctx context.Context, enabled bool, cells [168]ScheduleMode) error {
+	for i, mode := range cells {
+		switch mode {
+		case ScheduleNoDownload, ScheduleDefault, ScheduleAlternative:
+		default:
+			return fmt.Errorf("store: replace bandwidth schedule: cell %d holds unknown mode %q", i, mode)
+		}
+	}
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: replace bandwidth schedule: %w", err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of bandwidth schedule replace failed", "error", err)
+		}
+	}()
+
+	now := time.Now().UnixMilli()
+	enabledJSON, err := json.Marshal(enabled)
+	if err != nil {
+		return fmt.Errorf("store: encode settings key %s: %w", settingScheduleEnabled, err)
+	}
+	if _, err := tx.ExecContext(
+		ctx, queryUpsertSetting,
+		NewID(PrefixSetting), settingScheduleEnabled, string(enabledJSON), now, now,
+	); err != nil {
+		return fmt.Errorf("store: replace bandwidth schedule: write settings key %s: %w", settingScheduleEnabled, err)
+	}
+
+	for i, mode := range cells {
+		if _, err := tx.ExecContext(ctx, queryReplaceScheduleCell, string(mode), now, i/24, i%24); err != nil {
+			return fmt.Errorf("store: replace bandwidth schedule: cell %d: %w", i, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: replace bandwidth schedule: commit: %w", err)
 	}
 
 	return nil
