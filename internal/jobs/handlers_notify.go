@@ -219,13 +219,15 @@ func (n *Notifier) Send(ctx context.Context, ch store.NotificationChannel, ev Ev
 	req, err := renderRequest(ctx, ch, ev, secret)
 	if err != nil {
 		// A failed render is still a failed attempt: the channel row
-		// records it so an operator sees why nothing went out. The text
-		// is redacted — a parse error can quote the raw URL, query
-		// secrets included.
-		msg := secure.RedactError(err).Error()
+		// records it so an operator sees why nothing went out, and the
+		// caller receives the same redacted error — a parse error can
+		// quote the raw URL, query secrets included, and the returned
+		// value flows to the job row's last_error.
+		redErr := secure.RedactError(err)
+		msg := redErr.Error()
 		n.touch(ctx, ch.ID, &msg)
 
-		return RawReply{}, err
+		return RawReply{}, redErr
 	}
 
 	var reply RawReply
