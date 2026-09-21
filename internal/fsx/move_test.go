@@ -388,7 +388,7 @@ func TestSameFSMoveThroughHandler(t *testing.T) {
 	assert.Empty(t, stagingLitter(t, filepath.Dir(dst)))
 }
 
-func TestMoveSettlesOnDistinctHardlink(t *testing.T) {
+func TestMoveSettlesOnSameInodePayload(t *testing.T) {
 	db := moveTestDB(t)
 	root := t.TempDir()
 
@@ -398,8 +398,11 @@ func TestMoveSettlesOnDistinctHardlink(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
 	require.NoError(t, os.WriteFile(src, body, 0o644))
-	// dst already names the payload's inode: the crash-window branch
-	// must unlink src's extra name, never the payload dst holds.
+	// dst already names the payload's inode. Whether the pair is a
+	// distinct hardlink or two spellings of one dirent cannot be told
+	// apart portably, so the handler must settle keeping both names —
+	// unlinking src would delete the payload dst resolves to in the
+	// same-dirent case.
 	require.NoError(t, os.Link(src, dst))
 
 	tasks := store.NewTaskStore(db)
@@ -425,8 +428,11 @@ func TestMoveSettlesOnDistinctHardlink(t *testing.T) {
 	got, err := os.ReadFile(dst)
 	require.NoError(t, err)
 	assert.Equal(t, body, got)
-	_, err = os.Stat(src)
-	assert.True(t, errors.Is(err, os.ErrNotExist), "the duplicate source name must be unlinked")
+	srcInfo, err := os.Stat(src)
+	require.NoError(t, err, "a same-inode source name must survive — it may be dst's only dirent")
+	dstInfo, err := os.Stat(dst)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(srcInfo, dstInfo))
 }
 
 // setMinFreeSpace writes the destination root's min_free_space floor the

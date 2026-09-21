@@ -164,24 +164,20 @@ func (h *MoveHandler) Handle(ctx context.Context, job store.Job) error {
 			return fmt.Errorf("jobs: move task %q: compare existing destination: %w", taskID, err)
 		}
 		if same {
-			if os.SameFile(srcInfo, dstInfo) && !distinctHardlink(srcInfo) {
-				// src and dst are two spellings of one dirent — a
-				// case-insensitive duplicate the chain's string compare
-				// could not see (the identical-spelling case returned
-				// above): removing src would delete the payload the move
-				// just settled on. A distinct hardlink is safe to
-				// unlink — the inode survives at dst.
+			if os.SameFile(srcInfo, dstInfo) {
+				// src and dst resolve to one physical entry — either two
+				// spellings of one dirent (a case-insensitive or
+				// symlink-resolved duplicate the chain's string compare
+				// could not see) or a distinct hardlink. No portable
+				// check separates the two — Nlink counts links, not
+				// dirents — and in the same-dirent case unlinking src
+				// deletes the payload's only dst name, so settle with
+				// the extra name kept: a hardlink duplicate costs no
+				// space.
 				return h.settle(ctx, task, dst)
 			}
 			if err := os.RemoveAll(src); err != nil {
 				return fmt.Errorf("jobs: move task %q: remove duplicate source: %w", taskID, err)
-			}
-			// Nlink >= 2 does not prove src and dst were distinct dirents:
-			// a case-insensitive duplicate carrying a third hardlink reads
-			// the same, and the unlink just removed the only name dst
-			// resolved to. Fail rather than settle on a missing path.
-			if _, err := os.Lstat(dst); err != nil {
-				return fmt.Errorf("jobs: move task %q: destination missing after source removal: %w", taskID, err)
 			}
 			return h.settle(ctx, task, dst)
 		}
@@ -452,19 +448,6 @@ func moveErrorCode(err error) string {
 	default:
 		return "unknown"
 	}
-}
-
-// distinctHardlink reports whether info is a regular file carrying at
-// least two names — unlinking src then leaves the inode reachable at dst.
-// A directory, or a platform whose stat does not answer a link count,
-// stays on the conservative side of the same-entry guard.
-func distinctHardlink(info fs.FileInfo) bool {
-	if !info.Mode().IsRegular() {
-		return false
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-
-	return ok && st.Nlink >= 2
 }
 
 // samePayload reports whether dst already holds the move's content — a file
