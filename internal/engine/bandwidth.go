@@ -64,10 +64,10 @@ func NewGovernor(reg *Registry, st *store.SettingsStore) *Governor {
 	return &Governor{reg: reg, settings: st}
 }
 
-// Current returns the limits last applied — recorded only when every
-// registered engine accepted the fan-out, so a failed apply is never
-// mistaken for a landed one and a caller comparing against Current still
-// retries it.
+// Current returns the limits last applied — recorded only when no engine
+// rejected the fan-out, so a failed apply is never mistaken for a landed
+// one and a caller comparing against Current still retries it. Engines
+// skipped for ErrNotSupported, and an empty registry, count as success.
 func (g *Governor) Current() RateLimits {
 	g.mu.Lock()
 	defer g.mu.Unlock()
