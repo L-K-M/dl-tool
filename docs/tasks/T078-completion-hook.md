@@ -152,4 +152,60 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+Step 8 and its acceptance criterion require `PATCH /settings` to answer `422`
+`/problems/validation-failed` for a hook-named key, but no `/settings` route exists. The endpoint —
+and the settings write path behind it — belongs to T092, which is still `todo` behind T091 (`todo`
+but eligible: T006, T012 and T066 are all `done`). This task's `Depends on` lists only T074, so the
+row the picker took is missing the edge to the task that builds the surface step 8 edits.
+
+Rerunnable evidence on this commit:
+
+```bash
+# No /settings operation is registered — the only routes under it are T092's future work.
+grep -rn 'Path:.*"/settings' internal/api/        # no output
+grep -n '"/settings"' api/openapi.json            # no output
+# PATCH /settings is T092's, and three task files forbid building it elsewhere.
+grep -n 'PATCH /settings' docs/tasks/T092-settings-and-system-info.md
+grep -rn 'T092 owns' docs/tasks/T027-list-and-test-engines.md \
+    docs/tasks/T079-global-bandwidth-governor.md docs/tasks/T117-rss-settings-section.md
+```
+
+The Files table does name `internal/api/settings.go`, and `SettingsHandlers.registerOperations` is
+already wired into `internal/api/server.go`, so a `patch-settings` registration could be added inside
+the table — but every in-scope shape is an improvisation the plan never specified:
+
+- **A stub that returns `422` for every key**, because no write path exists to call. Doc 05 §11.1
+  defines `PATCH /settings` as accepting a valid subset with `200`; a reject-all operation registers
+  the contract's path while inverting its success case — a `PATCH {"auto_extract":true}` would be
+  told the key is unknown. It also lands `patch-settings` in `api/openapi.json`, which T092 then has
+  to reconcile with its own registration step.
+- **The real write path**, which T092's interface contract places in `internal/store/settings.go`
+  (`PutSettings`) — outside this Files table — and which cannot be shrunk to a verbatim upsert:
+  `internal/api/server.go`'s `parseNonNegativeSettingInt` assumes the write side rejects negative
+  `max_active_*` values ("the write side rejects it, so the read side must too"), and
+  `extract_passwords` needs the `"__redacted__"` no-op rule, so an interim writer either reimplements
+  T092's validation grammar or wedges the admission pass and lets a client overwrite the stored
+  secret with the placeholder literal.
+
+Related: step 9 puts `TestSettingsRejectsHookKey` in `internal/jobs/hook_test.go`, and `package jobs`
+test files cannot reach the API — `internal/api` already imports `internal/jobs`
+(`internal/api/search.go`), so an in-package test would be an import cycle. The PATCH assert would
+need a `jobs_test` file or a home in `internal/api`, which the Files table does not list.
+
+Remedies for the owner — the choice changes the dependency graph or T092's scope, so it is not made
+here (deciding files: `docs/tasks/T092-settings-and-system-info.md`, Doc 05 §11.1):
+
+1. Add `T092` to this task's `Depends on`. T078 then runs after T091 and T092 land, and step 8 is
+   exercised against the real endpoint. T091 is itself unblocked, so the stall is two tasks.
+2. Move step 8's PATCH half, the `PATCH /settings` acceptance criterion and
+   `TestSettingsRejectsHookKey` into T092, whose step 8 already tests "an unknown key returning
+   `422`" — the exact mechanism FR-105's verify prescribes ("the same body shape as any other
+   unknown settings key"). T078 then drops `internal/api/settings.go` from its Files table and keeps
+   the hook.
+3. Prescribe a deferral-register interim — a registered `patch-settings` that rejects every key
+   until T092 lands — if the hook should ship ahead of the settings endpoints.
+
+Under remedies 1 and 3, step 9's PATCH assert still cannot live in `internal/jobs/hook_test.go`:
+the import cycle is ordering-independent — it must move to a `package jobs_test` file or
+`internal/api` in those branches too.
