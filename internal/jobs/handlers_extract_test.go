@@ -600,7 +600,7 @@ func TestFailedExtractJobIsRedispatched(t *testing.T) {
 	// the new completion a fresh run on the same (kind, task_id) row.
 	_, err := db.ExecContext(
 		t.Context(),
-		`UPDATE jobs SET state = 'failed' WHERE kind = ? AND task_id = ?`,
+		`UPDATE jobs SET state = 'failed', attempts = max_attempts WHERE kind = ? AND task_id = ?`,
 		JobKindExtract, taskID,
 	)
 	require.NoError(t, err)
@@ -647,6 +647,44 @@ func TestSameStemCollisionFails(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "not ours", string(data))
 	assert.NoFileExists(t, filepath.Join(dest, "payload", memberName))
+}
+
+func TestSameExtractedTreeRequiresAnExactMatch(t *testing.T) {
+	staged := t.TempDir()
+	target := t.TempDir()
+
+	stage := func() {
+		require.NoError(t, os.MkdirAll(filepath.Join(staged, "sub"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(staged, "sub", "a.txt"), []byte("a"), 0o644))
+	}
+	populate := func(dir string) {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", "a.txt"), []byte("a"), 0o644))
+	}
+	stage()
+	populate(target)
+
+	same, err := sameExtractedTree(staged, target)
+	require.NoError(t, err)
+	assert.True(t, same)
+
+	// A superset target is a polluted home, not a re-run: the extra file
+	// has no staged counterpart, so the trees differ.
+	extra := t.TempDir()
+	populate(extra)
+	require.NoError(t, os.WriteFile(filepath.Join(extra, "stray.txt"), []byte("x"), 0o644))
+	same, err = sameExtractedTree(staged, extra)
+	require.NoError(t, err)
+	assert.False(t, same)
+
+	// A symlink where the staged tree has a regular file is a type swap,
+	// not a match — even though both occupy the same relative path.
+	swapped := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(swapped, "sub"), 0o755))
+	require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(swapped, "sub", "a.txt")))
+	same, err = sameExtractedTree(staged, swapped)
+	require.NoError(t, err)
+	assert.False(t, same)
 }
 
 func TestListMembersHonoursCancellation(t *testing.T) {
@@ -817,6 +855,13 @@ func TestAutoRemoveAfterExtractChain(t *testing.T) {
 	// Emulate the worker's claim on the real row: it is running while
 	// Handle is in flight, which is what the chain sees on the handler's
 	// success leg.
+	_, err = db.ExecContext(
+		t.Context(),
+		`UPDATE jobs SET state = 'running' WHERE kind = ? AND task_id = ?`,
+		JobKindExtract, taskID,
+	)
+	require.NoError(t, err)
+
 	var job store.Job
 	require.NoError(t, db.GetContext(
 		t.Context(), &job,
@@ -824,12 +869,6 @@ func TestAutoRemoveAfterExtractChain(t *testing.T) {
 		        run_after, locked_at, last_error
 		   FROM jobs WHERE kind = ? AND task_id = ?`, JobKindExtract, taskID,
 	))
-	_, err = db.ExecContext(
-		t.Context(),
-		`UPDATE jobs SET state = 'running' WHERE kind = ? AND task_id = ?`,
-		JobKindExtract, taskID,
-	)
-	require.NoError(t, err)
 
 	handler := NewExtractHandler(tasks, bin)
 	require.NoError(t, handler.Handle(t.Context(), job))

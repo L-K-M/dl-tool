@@ -503,7 +503,7 @@ LABEL org.opencontainers.image.title="dl-tool" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.vendor="L-K-M" \
-      org.opencontainers.image.licenses="Unlicense AND LGPL-2.1-or-later AND LicenseRef-unRAR" \
+      org.opencontainers.image.licenses="Unlicense AND MIT AND MPL-2.0 AND LGPL-2.1-or-later AND LicenseRef-unRAR" \
       org.opencontainers.image.base.name="docker.io/library/alpine:3.22"
 RUN apk add --no-cache su-exec ca-certificates tzdata nodejs
 COPY --from=build /out/dl-tool /usr/local/bin/dl-tool

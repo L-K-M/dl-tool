@@ -152,7 +152,8 @@ func ListMembers(ctx context.Context, sevenzipPath, archivePath string) ([]Membe
 		// A listing that fails is a verdict on the archive itself — a
 		// truncated, corrupt or unreadable file — never a retryable
 		// condition: invalid unless the tool names a password.
-		if isWrongPassword(stderr.Bytes()) {
+		if diagnosticMatch(string(stderr.Bytes()), "wrong password") ||
+			diagnosticMatch(string(stderr.Bytes()), "cannot open encrypted archive") {
 			return nil, fmt.Errorf("%w: %s", ErrWrongPassword, firstLine(string(stderr.Bytes())))
 		}
 
@@ -160,14 +161,6 @@ func ListMembers(ctx context.Context, sevenzipPath, archivePath string) ([]Membe
 	}
 
 	return members, nil
-}
-
-// isWrongPassword reports the signature 7zz prints for an encrypted
-// archive that none of the (empty, until T075) candidates opened.
-func isWrongPassword(output []byte) bool {
-	text := string(output)
-	return strings.Contains(text, "Wrong password") ||
-		strings.Contains(text, "Cannot open encrypted archive")
 }
 
 // parseMemberBound bounds the members parseMembers will buffer before
@@ -419,10 +412,11 @@ func (h *ExtractHandler) run(ctx context.Context, taskID, archivePath string) er
 	caps := h.caps.withDefaults(info.Size())
 	root := filepath.Dir(archivePath)
 
-	// A crashed run leaves its staging dir behind; anything older than
-	// the wall-clock deadline cannot still be live, so it is swept
-	// best-effort and never blocks the run.
-	sweepStaleStaging(root, caps.WallClock)
+	// A crashed run leaves its staging dir behind; only a dir older than
+	// any run could possibly still be live may be reaped — the bound is a
+	// fixed multiple of the wall clock because a staging root's mtime
+	// stops advancing once 7zz is writing deep inside it.
+	sweepStaleStaging(root, staleStagingAge)
 
 	members, err := ListMembers(ctx, h.sevenzipPath, archivePath)
 	if err != nil {
@@ -565,16 +559,21 @@ func removeStaging(dir string) error {
 	return nil
 }
 
-// sweepStaleStaging removes .dl-tool-extract-* directories in root that
-// are older than the extraction wall clock — orphans of crashed or killed
-// runs. A sweep failure is logged, never reported: leftover litter must
-// not block the extraction it shares a root with.
-func sweepStaleStaging(root string, wallClock time.Duration) {
+// staleStagingAge is the liveness bound for a staging dir: far past the
+// 30-minute extraction wall clock, so no live run — this task's or a
+// sibling's — can be mistaken for an orphan.
+const staleStagingAge = 24 * time.Hour
+
+// sweepStaleStaging removes .dl-tool-extract-* directories in root older
+// than staleStagingAge — orphans of crashed or killed runs. A sweep
+// failure is logged, never reported: leftover litter must not block the
+// extraction it shares a root with.
+func sweepStaleStaging(root string, maxAge time.Duration) {
 	stale, err := filepath.Glob(filepath.Join(root, ".dl-tool-extract-*"))
 	if err != nil {
 		return
 	}
-	cutoff := time.Now().Add(-wallClock)
+	cutoff := time.Now().Add(-maxAge)
 	for _, dir := range stale {
 		info, err := os.Lstat(dir)
 		if err != nil || !info.IsDir() || info.ModTime().After(cutoff) {
@@ -704,6 +703,13 @@ func verifyAndMove(tmp, target string, caps Caps) error {
 		return fmt.Errorf("jobs: verify extracted tree: %w", err)
 	}
 
+	// The staging root itself is tool-created 0o700 until verification
+	// clears; the delivered tree keeps the mode the rename preserves, so
+	// open it to the same 0o755 as every archive-delivered directory.
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return fmt.Errorf("jobs: verify extracted tree: %w", err)
+	}
+
 	if err := os.Rename(tmp, target); err != nil {
 		// A re-run after the first success — the worker reschedules a job
 		// row stranded in running, or a duplicated enqueue claims twice —
@@ -724,23 +730,36 @@ func verifyAndMove(tmp, target string, caps Caps) error {
 }
 
 // sameExtractedTree reports whether dir already holds exactly the staged
-// tree — same relative paths, same kinds, same file sizes — which is how
-// an idempotent re-run recognises its own earlier output.
+// tree — same relative paths in both directions, same entry kinds, same
+// file sizes — which is how an idempotent re-run recognises its own
+// earlier output. A superset target or a type-swapped entry is a
+// collision, not a re-run.
 func sameExtractedTree(staged, dir string) (bool, error) {
 	info, err := os.Lstat(dir)
 	if err != nil || !info.IsDir() {
 		return false, err
 	}
 
+	if same, err := containedInTree(staged, dir); err != nil || !same {
+		return same, err
+	}
+
+	return containedInTree(dir, staged)
+}
+
+// containedInTree reports whether every entry under src exists at the
+// same relative path under dst with the same entry kind and, for regular
+// files, the same size.
+func containedInTree(src, dst string) (bool, error) {
 	same := true
-	err = filepath.WalkDir(staged, func(path string, d fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if path == staged {
+		if path == src {
 			return nil
 		}
-		rel, err := filepath.Rel(staged, path)
+		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
 		}
@@ -748,9 +767,9 @@ func sameExtractedTree(staged, dir string) (bool, error) {
 		if err != nil {
 			return err
 		}
-		dstInfo, err := os.Lstat(filepath.Join(dir, rel))
+		dstInfo, err := os.Lstat(filepath.Join(dst, rel))
 		if err != nil ||
-			dstInfo.IsDir() != srcInfo.IsDir() ||
+			dstInfo.Mode().Type() != srcInfo.Mode().Type() ||
 			(dstInfo.Mode().IsRegular() && srcInfo.Mode().IsRegular() && dstInfo.Size() != srcInfo.Size()) {
 			same = false
 			return filepath.SkipAll
@@ -794,28 +813,52 @@ func sumMemberBytes(members []Member) int64 {
 }
 
 // classifySevenzipError maps a failed 7zz run onto the error the task
-// records. stderr carries the tool's ERROR diagnostics and is classified
-// first; stdout's banner and member dump are the fallback stream.
+// records. Signatures are matched anchored — a member named
+// "No space.mkv" echoed in the listing must not steer a genuine crash
+// into the disk-full bucket — so a verdict counts only at a line start
+// or inside 7zz's own "ERROR:" marker.
 func classifySevenzipError(err error, stderr, stdout []byte, op string) error {
 	stderrText := string(stderr)
 	stdoutText := string(stdout)
+	detail := firstLine(stderrText + "\n" + stdoutText)
 	switch {
-	case isWrongPassword(stderr), isWrongPassword(stdout):
-		return fmt.Errorf("%w: %s", ErrWrongPassword, firstLine(stderrText+"\n"+stdoutText))
-	case strings.Contains(stderrText, "No space"), strings.Contains(stdoutText, "No space"):
+	case diagnosticMatch(stderrText, "wrong password"),
+		diagnosticMatch(stderrText, "cannot open encrypted archive"),
+		diagnosticMatch(stdoutText, "wrong password"),
+		diagnosticMatch(stdoutText, "cannot open encrypted archive"):
+		return fmt.Errorf("%w: %s", ErrWrongPassword, detail)
+	case diagnosticMatch(stderrText, "no space"), diagnosticMatch(stdoutText, "no space"):
 		return fmt.Errorf("jobs: 7zz %s ran out of space: %w", op, fsx.ErrDiskFull)
-	case strings.Contains(stderrText, "Unexpected end of archive"),
-		strings.Contains(stderrText, "is not archive"),
-		strings.Contains(stderrText, "Cannot open the file as archive"),
-		strings.Contains(stderrText, "Headers Error"),
-		strings.Contains(stdoutText, "Unexpected end of archive"),
-		strings.Contains(stdoutText, "is not archive"),
-		strings.Contains(stdoutText, "Cannot open the file as archive"),
-		strings.Contains(stdoutText, "Headers Error"):
-		return fmt.Errorf("%w: %s", ErrInvalidArchive, firstLine(stderrText+"\n"+stdoutText))
+	case diagnosticMatch(stderrText, "unexpected end of archive"),
+		diagnosticMatch(stderrText, "is not archive"),
+		diagnosticMatch(stderrText, "cannot open the file as archive"),
+		diagnosticMatch(stderrText, "headers error"),
+		diagnosticMatch(stdoutText, "unexpected end of archive"),
+		diagnosticMatch(stdoutText, "is not archive"),
+		diagnosticMatch(stdoutText, "cannot open the file as archive"),
+		diagnosticMatch(stdoutText, "headers error"):
+		return fmt.Errorf("%w: %s", ErrInvalidArchive, detail)
 	}
 
-	return fmt.Errorf("jobs: 7zz %s failed: %w: %s", op, err, firstLine(stderrText+"\n"+stdoutText))
+	return fmt.Errorf("jobs: 7zz %s failed: %w: %s", op, err, detail)
+}
+
+// diagnosticMatch reports whether an output line either begins with the
+// signature or carries it inside 7zz's "ERROR:" marker — the two shapes
+// real diagnostics take. A member name embedded in a listing line can
+// satisfy neither.
+func diagnosticMatch(text, signature string) bool {
+	for line := range strings.Lines(text) {
+		line = strings.ToLower(strings.TrimSpace(line))
+		if strings.HasPrefix(line, signature) {
+			return true
+		}
+		if strings.HasPrefix(line, "error:") && strings.Contains(line, signature) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // firstLine keeps one diagnostic line for the error message — the full
