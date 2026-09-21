@@ -489,7 +489,7 @@ RUN apk add --no-cache xz && \
     wget -q -O /tmp/7z.tar.xz \
       "https://www.7-zip.org/a/7z${SEVENZIP_VERSION}-linux-${arch}.tar.xz"; \
     echo "${sum}  /tmp/7z.tar.xz" | sha256sum -c -; \
-    tar -xJf /tmp/7z.tar.xz -C /tmp 7zzs; \
+    xz -dc /tmp/7z.tar.xz | tar -xf - -C /tmp 7zzs; \
     install -m 0755 /tmp/7zzs /7zz
 
 FROM alpine:3.22
@@ -503,7 +503,7 @@ LABEL org.opencontainers.image.title="dl-tool" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.vendor="L-K-M" \
-      org.opencontainers.image.licenses="Unlicense" \
+      org.opencontainers.image.licenses="Unlicense AND LGPL-2.1-or-later AND LicenseRef-unRAR" \
       org.opencontainers.image.base.name="docker.io/library/alpine:3.22"
 RUN apk add --no-cache su-exec ca-certificates tzdata nodejs
 COPY --from=build /out/dl-tool /usr/local/bin/dl-tool
@@ -530,7 +530,9 @@ CMD ["serve"]
 - `/usr/local/bin/7zz` for auto-extract is upstream's static `7zzs`, fetched from the pinned
   `7z<ver>-linux-<arch>` tarball and verified by SHA-256 at build time — Alpine's `7zip` package compiles
   the RAR codec out, so it is not installed at all
-  ([ADR-0021](decisions/0021-pin-7zz-by-version-and-hash.md)).
+  ([ADR-0021](decisions/0021-pin-7zz-by-version-and-hash.md)). **Upgrade note:** the Alpine `7zip`
+  package — and with it `/usr/bin/7zz` — is gone; a `.env` or compose override that still sets
+  `DLTOOL_SEVENZIP_PATH=/usr/bin/7zz` must move to `/usr/local/bin/7zz` or be dropped.
 - **Python is never installed.** yt-dlp is the standalone musl binary; `yt-dlp -U` is disabled at runtime and
   freshness comes from a scheduled CI rebuild that bumps `YTDLP_VERSION` and the hashes.
 - `dl-tool healthcheck` is a subcommand of the same binary: it requests `{BASE_PATH}/healthz` on

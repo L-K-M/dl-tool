@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -119,14 +120,30 @@ func (c *Chain) OnCompleted(ctx context.Context, taskID string) error {
 	return c.maybeAutoRemove(ctx, taskID)
 }
 
-// enqueueExtract records the extract job unless a row already exists —
-// the (kind, task_id) pair is dispatched at most once per ADR-0015.
+// enqueueExtract records the extract job unless a live row already
+// exists — the (kind, task_id) pair is dispatched at most once per
+// ADR-0015. A failed row is reset rather than duplicated: the task
+// reached completed again (an operator retry after the verdict was
+// recorded), so the chain owes the new completion a fresh run.
 func (c *Chain) enqueueExtract(ctx context.Context, taskID string) error {
-	_, exists, err := c.extractJobState(ctx, taskID)
+	jobID, state, exists, err := c.extractJobState(ctx, taskID)
 	if err != nil {
 		return err
 	}
+	if exists && state != "failed" {
+		return nil
+	}
 	if exists {
+		_, err := c.db.ExecContext(
+			ctx,
+			`UPDATE jobs SET state = 'pending', attempts = 0, locked_at = NULL, last_error = NULL,
+				run_after = ?, updated_at = ? WHERE id = ? AND state = 'failed'`,
+			time.Now().UnixMilli(), time.Now().UnixMilli(), jobID,
+		)
+		if err != nil {
+			return fmt.Errorf("jobs: postprocess task %q: reset extract job: %w", taskID, err)
+		}
+
 		return nil
 	}
 
@@ -148,7 +165,7 @@ func (c *Chain) enqueueExtract(ctx context.Context, taskID string) error {
 // the row done only after Handle returns, which is after this re-entry —
 // and done is the plain finished case.
 func (c *Chain) extractSettled(ctx context.Context, taskID string) (bool, error) {
-	state, exists, err := c.extractJobState(ctx, taskID)
+	_, state, exists, err := c.extractJobState(ctx, taskID)
 	if err != nil {
 		return false, err
 	}
@@ -156,21 +173,24 @@ func (c *Chain) extractSettled(ctx context.Context, taskID string) (bool, error)
 	return exists && (state == "running" || state == "done"), nil
 }
 
-func (c *Chain) extractJobState(ctx context.Context, taskID string) (string, bool, error) {
-	var state string
+func (c *Chain) extractJobState(ctx context.Context, taskID string) (string, string, bool, error) {
+	var row struct {
+		ID    string `db:"id"`
+		State string `db:"state"`
+	}
 	err := c.db.GetContext(
-		ctx, &state,
-		`SELECT state FROM jobs WHERE kind = ? AND task_id = ? ORDER BY created_at DESC LIMIT 1`,
+		ctx, &row,
+		`SELECT id, state FROM jobs WHERE kind = ? AND task_id = ? ORDER BY created_at DESC LIMIT 1`,
 		JobKindExtract, taskID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("jobs: postprocess task %q: read extract job: %w", taskID, err)
+		return "", "", false, fmt.Errorf("jobs: postprocess task %q: read extract job: %w", taskID, err)
 	}
 
-	return state, true, nil
+	return row.ID, row.State, true, nil
 }
 
 // maybeAutoRemove is the chain's tail (FR-106): with
@@ -214,7 +234,11 @@ func (c *Chain) boolSetting(ctx context.Context, key string) (bool, error) {
 
 	var value bool
 	if err := json.Unmarshal([]byte(raw), &value); err != nil {
-		return false, fmt.Errorf("jobs: decode settings key %s: %w", key, err)
+		// A malformed row falls back to the documented default rather
+		// than wedging every completing task's post-processing.
+		slog.Warn("jobs: settings key holds malformed JSON, using default", "key", key, "err", err)
+
+		return false, nil
 	}
 
 	return value, nil

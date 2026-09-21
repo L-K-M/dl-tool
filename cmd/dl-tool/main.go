@@ -149,7 +149,12 @@ func main() {
 			// error only strands the enqueue, so it is logged, never raised.
 			postprocess := jobs.NewChain(db, store.NewTaskStore(db))
 			store.SetCompletedHook(func(ctx context.Context, taskID string) {
-				if err := postprocess.OnCompleted(ctx, taskID); err != nil {
+				// The store detaches cancellation already; the timeout
+				// bounds the enqueue so a wedged chain cannot stall the
+				// transitioning caller indefinitely.
+				hookCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				if err := postprocess.OnCompleted(hookCtx, taskID); err != nil {
 					logger.ErrorContext(ctx, "postprocess chain failed", "task_id", taskID, "err", err)
 				}
 			})

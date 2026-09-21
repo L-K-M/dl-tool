@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,6 +143,12 @@ func ListMembers(ctx context.Context, sevenzipPath, archivePath string) ([]Membe
 	}
 	waitErr := cmd.Wait()
 	if waitErr != nil {
+		// A cancelled context (worker shutdown, job cancel) is not a
+		// verdict on the archive: surface it so the job is retried instead
+		// of recorded as permanently invalid.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		// A listing that fails is a verdict on the archive itself — a
 		// truncated, corrupt or unreadable file — never a retryable
 		// condition: invalid unless the tool names a password.
@@ -222,10 +229,16 @@ func parseMembers(out io.Reader) ([]Member, error) {
 		}
 		switch key {
 		case "Size":
-			size, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-			if err == nil {
-				member.Size = size
+			trimmed := strings.TrimSpace(value)
+			if trimmed == "" {
+				continue
 			}
+			size, err := strconv.ParseInt(trimmed, 10, 64)
+			if err != nil || size < 0 {
+				return nil, fmt.Errorf("%w: member %q declares unparsable size %q",
+					ErrInvalidArchive, member.Path, value)
+			}
+			member.Size = size
 		case "Attributes", "Mode":
 			// tar-style archives report the unix mode as Mode, zip-style
 			// ones as Attributes; both feed memberHostile's token scan.
@@ -366,7 +379,7 @@ func (h *ExtractHandler) Handle(ctx context.Context, job store.Job) error {
 	}
 
 	if task.ContentPath == nil || *task.ContentPath == "" {
-		return h.fail(ctx, taskID, "", fmt.Errorf("%w: task carries no content_path", ErrInvalidArchive))
+		return h.fail(ctx, taskID, fmt.Errorf("%w: task carries no content_path", ErrInvalidArchive))
 	}
 	archivePath := *task.ContentPath
 
@@ -388,7 +401,7 @@ func (h *ExtractHandler) Handle(ctx context.Context, job store.Job) error {
 		return fmt.Errorf("jobs: extract task %q: %w", taskID, ctx.Err())
 	}
 
-	return h.fail(ctx, taskID, archivePath, runErr)
+	return h.fail(ctx, taskID, runErr)
 }
 
 // run is the three-pass recipe of doc 12 section 4.1. Staging directories
@@ -405,6 +418,11 @@ func (h *ExtractHandler) run(ctx context.Context, taskID, archivePath string) er
 
 	caps := h.caps.withDefaults(info.Size())
 	root := filepath.Dir(archivePath)
+
+	// A crashed run leaves its staging dir behind; anything older than
+	// the wall-clock deadline cannot still be live, so it is swept
+	// best-effort and never blocks the run.
+	sweepStaleStaging(root, caps.WallClock)
 
 	members, err := ListMembers(ctx, h.sevenzipPath, archivePath)
 	if err != nil {
@@ -454,6 +472,9 @@ func (h *ExtractHandler) run(ctx context.Context, taskID, archivePath string) er
 				return err
 			}
 			tmp = innerTmp
+			// The staged tree came from the inner container, so the final
+			// verify enforces its caps, not the gzip wrapper's.
+			caps = innerCaps
 		}
 	}
 
@@ -475,7 +496,9 @@ func (h *ExtractHandler) extractPass(
 	caps Caps,
 ) (string, error) {
 	tmp := filepath.Join(root, ".dl-tool-extract-"+ulid.Make().String())
-	if err := os.Mkdir(tmp, 0o755); err != nil {
+	// Owner-only while contents are still unverified attacker output;
+	// verifyAndMove applies the delivered modes at the end.
+	if err := os.Mkdir(tmp, 0o700); err != nil {
 		return "", fmt.Errorf("jobs: create extract staging dir: %w", err)
 	}
 
@@ -492,9 +515,11 @@ func (h *ExtractHandler) extractPass(
 	cmd.Cancel = func() error {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
-	var output cappedBuffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
+	// stderr gets its own capped sink: 7zz's verdict lines land there last,
+	// and a head-only buffer would lose them under a flood of member names.
+	var stderrBuf, stdoutBuf cappedBuffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("jobs: start extractor: %w", errors.Join(err, removeStaging(tmp)))
@@ -519,7 +544,7 @@ func (h *ExtractHandler) extractPass(
 	case errors.Is(extractCtx.Err(), context.DeadlineExceeded):
 		runErr = fmt.Errorf("jobs: extraction exceeded the %s wall clock", caps.WallClock)
 	case waitErr != nil:
-		runErr = classifySevenzipError(waitErr, output.Bytes(), "extract")
+		runErr = classifySevenzipError(waitErr, stderrBuf.Bytes(), stdoutBuf.Bytes(), "extract")
 	}
 
 	if runErr != nil {
@@ -538,6 +563,27 @@ func removeStaging(dir string) error {
 	}
 
 	return nil
+}
+
+// sweepStaleStaging removes .dl-tool-extract-* directories in root that
+// are older than the extraction wall clock — orphans of crashed or killed
+// runs. A sweep failure is logged, never reported: leftover litter must
+// not block the extraction it shares a root with.
+func sweepStaleStaging(root string, wallClock time.Duration) {
+	stale, err := filepath.Glob(filepath.Join(root, ".dl-tool-extract-*"))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-wallClock)
+	for _, dir := range stale {
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() || info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			slog.Warn("jobs: sweep of stale extract staging dir failed", "dir", dir, "err", err)
+		}
+	}
 }
 
 // pollProgress samples the bytes staged under tmp once per interval,
@@ -661,16 +707,59 @@ func verifyAndMove(tmp, target string, caps Caps) error {
 	if err := os.Rename(tmp, target); err != nil {
 		// A re-run after the first success — the worker reschedules a job
 		// row stranded in running, or a duplicated enqueue claims twice —
-		// finds its own output already in place: discard the staged copy
-		// rather than fail the task on ENOTEMPTY.
-		if info, statErr := os.Lstat(target); statErr == nil && info.IsDir() {
-			return removeStaging(tmp)
+		// finds its own output already in place. That is only the verdict
+		// on a genuine name collision: the existing directory must match
+		// the staged tree exactly, or this is a different payload's home
+		// (a same-stem sibling archive) and the run must fail loudly.
+		if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+			if same, cmpErr := sameExtractedTree(tmp, target); cmpErr == nil && same {
+				return removeStaging(tmp)
+			}
 		}
 
 		return fmt.Errorf("jobs: move extracted tree into place: %w", err)
 	}
 
 	return nil
+}
+
+// sameExtractedTree reports whether dir already holds exactly the staged
+// tree — same relative paths, same kinds, same file sizes — which is how
+// an idempotent re-run recognises its own earlier output.
+func sameExtractedTree(staged, dir string) (bool, error) {
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		return false, err
+	}
+
+	same := true
+	err = filepath.WalkDir(staged, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == staged {
+			return nil
+		}
+		rel, err := filepath.Rel(staged, path)
+		if err != nil {
+			return err
+		}
+		srcInfo, err := d.Info()
+		if err != nil {
+			return err
+		}
+		dstInfo, err := os.Lstat(filepath.Join(dir, rel))
+		if err != nil ||
+			dstInfo.IsDir() != srcInfo.IsDir() ||
+			(dstInfo.Mode().IsRegular() && srcInfo.Mode().IsRegular() && dstInfo.Size() != srcInfo.Size()) {
+			same = false
+			return filepath.SkipAll
+		}
+
+		return nil
+	})
+
+	return same, err
 }
 
 // dirSizeBytes sums the sizes of every regular file under dir — the
@@ -705,28 +794,35 @@ func sumMemberBytes(members []Member) int64 {
 }
 
 // classifySevenzipError maps a failed 7zz run onto the error the task
-// records: the tool reports every verdict on stdout, so the combined
-// output is the classifier's input.
-func classifySevenzipError(err error, output []byte, op string) error {
-	text := string(output)
+// records. stderr carries the tool's ERROR diagnostics and is classified
+// first; stdout's banner and member dump are the fallback stream.
+func classifySevenzipError(err error, stderr, stdout []byte, op string) error {
+	stderrText := string(stderr)
+	stdoutText := string(stdout)
 	switch {
-	case isWrongPassword(output):
-		return fmt.Errorf("%w: %s", ErrWrongPassword, firstLine(text))
-	case strings.Contains(text, "No space"):
+	case isWrongPassword(stderr), isWrongPassword(stdout):
+		return fmt.Errorf("%w: %s", ErrWrongPassword, firstLine(stderrText+"\n"+stdoutText))
+	case strings.Contains(stderrText, "No space"), strings.Contains(stdoutText, "No space"):
 		return fmt.Errorf("jobs: 7zz %s ran out of space: %w", op, fsx.ErrDiskFull)
-	case strings.Contains(text, "Unexpected end of archive"),
-		strings.Contains(text, "is not archive"),
-		strings.Contains(text, "Cannot open the file as archive"),
-		strings.Contains(text, "Headers Error"):
-		return fmt.Errorf("%w: %s", ErrInvalidArchive, firstLine(text))
+	case strings.Contains(stderrText, "Unexpected end of archive"),
+		strings.Contains(stderrText, "is not archive"),
+		strings.Contains(stderrText, "Cannot open the file as archive"),
+		strings.Contains(stderrText, "Headers Error"),
+		strings.Contains(stdoutText, "Unexpected end of archive"),
+		strings.Contains(stdoutText, "is not archive"),
+		strings.Contains(stdoutText, "Cannot open the file as archive"),
+		strings.Contains(stdoutText, "Headers Error"):
+		return fmt.Errorf("%w: %s", ErrInvalidArchive, firstLine(stderrText+"\n"+stdoutText))
 	}
 
-	return fmt.Errorf("jobs: 7zz %s failed: %w: %s", op, err, firstLine(text))
+	return fmt.Errorf("jobs: 7zz %s failed: %w: %s", op, err, firstLine(stderrText+"\n"+stdoutText))
 }
 
 // firstLine keeps one diagnostic line for the error message — the full
 // dump can carry member names and stays out of the log and the database.
-// Error-shaped lines win over the banner and member records.
+// Lines starting with 7zz's diagnostic prefixes win over the banner and
+// member records; a member named "error.txt" must not pose as the
+// verdict, so the match is anchored at the line start.
 func firstLine(text string) string {
 	fallback := ""
 	for line := range strings.Lines(text) {
@@ -738,8 +834,8 @@ func firstLine(text string) string {
 			fallback = line
 		}
 		lower := strings.ToLower(line)
-		if strings.Contains(lower, "error") || strings.Contains(lower, "cannot") ||
-			strings.Contains(lower, "unexpected") || strings.Contains(lower, "password") {
+		if strings.HasPrefix(lower, "error") || strings.HasPrefix(lower, "cannot") ||
+			strings.HasPrefix(lower, "unexpected") || strings.Contains(lower, "wrong password") {
 			return line
 		}
 	}
@@ -767,12 +863,33 @@ func extractErrorCode(err error) string {
 // fail records the failure on the task — state error, the mapped
 // error_code, the postprocess.extract.failed event inside the transition —
 // then reports the job done: the verdict is durable, so the worker must
-// not retry it.
-func (h *ExtractHandler) fail(ctx context.Context, taskID, archivePath string, runErr error) error {
+// not retry it. A task the operator moved out of extracting mid-run (a
+// pause is what turns SetExtractProgress no-op) has already been answered
+// elsewhere — there is nothing left to record.
+func (h *ExtractHandler) fail(ctx context.Context, taskID string, runErr error) error {
+	task, err := h.tasks.Get(ctx, taskID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("jobs: extract task %q: %w", taskID, err)
+	}
+	if task.State != "extracting" {
+		return nil
+	}
+
 	code := extractErrorCode(runErr)
 
-	transitionErr := h.tasks.Transition(ctx, taskID, "error", eventExtractFailed, runErr.Error())
+	// SetErrorCode is an idempotent overwrite, so a retry after a partial
+	// first attempt converges; Transition is the commit point — if it
+	// fails, the state is unchanged and the retry starts clean. An
+	// error→error rejection means the first attempt's verdict already
+	// landed and this attempt's writes are settled either way.
 	codeErr := h.tasks.SetErrorCode(ctx, taskID, code, runErr.Error())
+	transitionErr := h.tasks.Transition(ctx, taskID, "error", eventExtractFailed, runErr.Error())
+	if errors.Is(transitionErr, store.ErrIllegalTransition) {
+		transitionErr = nil
+	}
 	if err := errors.Join(transitionErr, codeErr); err != nil {
 		// The verdict itself could not be recorded — this is the failure
 		// the worker should retry.

@@ -1338,7 +1338,7 @@ func (s *TaskStore) Transition(ctx context.Context, id, next, code, message stri
 	// instances, and each of them must feed the chain (T074).
 	if next == "completed" {
 		if h := onTaskCompleted.Load(); h != nil {
-			(*h)(ctx, id)
+			(*h)(context.WithoutCancel(ctx), id)
 		}
 	}
 
@@ -1346,9 +1346,10 @@ func (s *TaskStore) Transition(ctx context.Context, id, next, code, message stri
 }
 
 // OnTaskCompleted is the callback fired once per committed transition into
-// completed. It carries the transitioning caller's context, so a cancelled
-// request context can decline the enqueue — the failure is logged at the
-// call site, not rolled back.
+// completed. It runs on a context detached from the caller's cancellation —
+// the transition already committed, so a cancelled request context must not
+// silently drop the chain's enqueue — and the installing adapter bounds the
+// detached work with its own timeout.
 type OnTaskCompleted func(ctx context.Context, taskID string)
 
 // onTaskCompleted is deliberately package-level, not a TaskStore field: the

@@ -237,6 +237,11 @@ func TestExtractsAllSixFormats(t *testing.T) {
 			require.NoError(t, err, "extracted member missing at %s", extracted)
 			assert.True(t, info.Mode().IsRegular())
 			assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+			if fixture.ext == "rar" {
+				// fixture.rar's hello.txt is pinned at 25 bytes — drift
+				// in the checked-in fixture must fail here.
+				assert.Equal(t, int64(25), info.Size())
+			}
 			if wantBody != "" {
 				data, err := os.ReadFile(extracted)
 				require.NoError(t, err)
@@ -318,7 +323,8 @@ func TestProgressReaches100(t *testing.T) {
 			if err == nil {
 				seen.Store(progress, struct{}{})
 			}
-			time.Sleep(time.Millisecond)
+			// ~5x the 1 ms writer cadence so the loops cannot alias.
+			time.Sleep(200 * time.Microsecond)
 		}
 	}()
 	require.NoError(t, handler.Handle(t.Context(), extractJobFor(taskID)))
@@ -577,6 +583,95 @@ func TestNestedArchiveIsNotRecursed(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(dest, "outer", "inner"))
 }
 
+func TestFailedExtractJobIsRedispatched(t *testing.T) {
+	db := newTestDB(t)
+	dest := t.TempDir()
+	archive := filepath.Join(dest, "payload.zip")
+	require.NoError(t, os.WriteFile(archive, []byte("pk"), 0o644))
+
+	setBoolSetting(t, db, settingAutoExtract, true)
+
+	taskID := newCompletedTask(t, db, dest, archive)
+	chain := NewChain(db, store.NewTaskStore(db))
+	require.NoError(t, chain.OnCompleted(t.Context(), taskID))
+
+	// The first run's job row exhausts its retries; the operator retries
+	// the download, the task reaches completed again, and the chain owes
+	// the new completion a fresh run on the same (kind, task_id) row.
+	_, err := db.ExecContext(
+		t.Context(),
+		`UPDATE jobs SET state = 'failed' WHERE kind = ? AND task_id = ?`,
+		JobKindExtract, taskID,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, chain.OnCompleted(t.Context(), taskID))
+
+	var state string
+	require.NoError(t, db.GetContext(
+		t.Context(), &state,
+		`SELECT state FROM jobs WHERE kind = ? AND task_id = ?`, JobKindExtract, taskID,
+	))
+	assert.Equal(t, "pending", state, "a failed extract row is reset for the retried completion")
+}
+
+func TestSameStemCollisionFails(t *testing.T) {
+	bin := sevenzipPath(t)
+
+	// dest/payload already holds a different archive's output; the staged
+	// tree does not match it, so the run must fail loudly rather than
+	// report the other payload as this task's extraction.
+	db := newTestDB(t)
+	dest := t.TempDir()
+	archive := filepath.Join(dest, "payload.zip")
+	require.NoError(t, os.MkdirAll(filepath.Join(dest, "payload"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dest, "payload", "other.txt"), []byte("not ours"), 0o644))
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(memberName)
+	require.NoError(t, err)
+	_, err = w.Write([]byte(memberBody))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	require.NoError(t, os.WriteFile(archive, buf.Bytes(), 0o644))
+
+	taskID := newCompletedTask(t, db, dest, archive)
+	handler := NewExtractHandler(store.NewTaskStore(db), bin)
+	require.NoError(t, handler.Handle(t.Context(), extractJobFor(taskID)))
+
+	assert.Equal(t, "error", taskState(t, db, taskID))
+	assert.Equal(t, codeExtractFailed, taskErrorCode(t, db, taskID))
+	// The foreign directory is untouched.
+	data, err := os.ReadFile(filepath.Join(dest, "payload", "other.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "not ours", string(data))
+	assert.NoFileExists(t, filepath.Join(dest, "payload", memberName))
+}
+
+func TestListMembersHonoursCancellation(t *testing.T) {
+	bin := sevenzipPath(t)
+
+	dest := t.TempDir()
+	archive := filepath.Join(dest, "payload.zip")
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(memberName)
+	require.NoError(t, err)
+	_, err = w.Write([]byte(memberBody))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	require.NoError(t, os.WriteFile(archive, buf.Bytes(), 0o644))
+
+	// A cancelled context is an abort, not a verdict on the archive.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = ListMembers(ctx, bin, archive)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, ErrInvalidArchive)
+}
+
 func TestAutoExtractDefaultsOff(t *testing.T) {
 	db := newTestDB(t)
 	dest := t.TempDir()
@@ -618,6 +713,8 @@ func TestChainEnqueuesAndHandlerRuns(t *testing.T) {
 
 	// Install the hook exactly as main.go does, so the completed →
 	// extracting → completed leg re-enters the chain through the store.
+	// SetCompletedHook is process-global: do not add t.Parallel() to this
+	// package without serializing hook installation.
 	store.SetCompletedHook(func(ctx context.Context, taskID string) {
 		require.NoError(t, chain.OnCompleted(ctx, taskID))
 	})
@@ -717,10 +814,21 @@ func TestAutoRemoveAfterExtractChain(t *testing.T) {
 	taskID := newCompletedTask(t, db, dest, archive)
 	require.NoError(t, chain.OnCompleted(t.Context(), taskID))
 
-	// Emulate the worker's claim: the row is running while Handle is in
-	// flight, which is what the chain sees on the handler's success leg.
-	job := extractJobFor(taskID)
-	_, err = db.ExecContext(t.Context(), `UPDATE jobs SET state = 'running' WHERE task_id = ?`, taskID)
+	// Emulate the worker's claim on the real row: it is running while
+	// Handle is in flight, which is what the chain sees on the handler's
+	// success leg.
+	var job store.Job
+	require.NoError(t, db.GetContext(
+		t.Context(), &job,
+		`SELECT id, kind, task_id, payload_json, state, attempts, max_attempts,
+		        run_after, locked_at, last_error
+		   FROM jobs WHERE kind = ? AND task_id = ?`, JobKindExtract, taskID,
+	))
+	_, err = db.ExecContext(
+		t.Context(),
+		`UPDATE jobs SET state = 'running' WHERE kind = ? AND task_id = ?`,
+		JobKindExtract, taskID,
+	)
 	require.NoError(t, err)
 
 	handler := NewExtractHandler(tasks, bin)
@@ -746,6 +854,8 @@ func TestValidateRejects(t *testing.T) {
 		{"absolute path", []Member{{Path: "/etc/cron.d/x", Size: 1}}, ErrInvalidArchive},
 		{"dotdot", []Member{{Path: "../escape", Size: 1}}, ErrInvalidArchive},
 		{"mid-path dotdot", []Member{{Path: "a/../../escape", Size: 1}}, ErrInvalidArchive},
+		{"backslash traversal", []Member{{Path: `..\escape`, Size: 1}}, ErrInvalidArchive},
+		{"backslash mid-path dotdot", []Member{{Path: `a\..\escape`, Size: 1}}, ErrInvalidArchive},
 		{"symlink mode", []Member{{Path: "link", Size: 1, Attributes: " lrwxrwxrwx"}}, ErrInvalidArchive},
 		{"fifo mode", []Member{{Path: "pipe", Size: 0, Attributes: " prw-r--r--"}}, ErrInvalidArchive},
 		{"device mode", []Member{{Path: "dev", Size: 0, Attributes: " crw-r--r--"}}, ErrInvalidArchive},
