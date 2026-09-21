@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T078 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | deferred — see `## Blocked` |
 | **Depends on** | T074 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/settings.go`, `internal/jobs/postprocess.go` |
@@ -209,3 +209,41 @@ here (deciding files: `docs/tasks/T092-settings-and-system-info.md`, Doc 05 §11
 Under remedies 1 and 3, step 9's PATCH assert still cannot live in `internal/jobs/hook_test.go`:
 the import cycle is ordering-independent — it must move to a `package jobs_test` file or
 `internal/api` in those branches too.
+
+### 2026-09-21 — re-verified on b080192, row set to `deferred`
+
+The blocker is unchanged on b080192, the head of `main`:
+
+```bash
+grep -rn '"/settings' internal/api/                 # no output: no /settings route literal, any style
+grep -n '"/settings' api/openapi.json               # no output: covers /settings and /settings/* paths
+grep -n 'PutSettings' internal/store/ internal/api/ # no output: T092's write path is absent
+grep -n 'internal/jobs' internal/api/*.go           # internal/api/search.go: the import cycle stands
+```
+
+Additions to the record:
+
+- The picker takes the topmost eligible `todo` row, and T078 heads the eligible
+  set, so leaving it `todo` re-selects it on every iteration and nothing below it
+  can start. The row is set to `deferred`, the status the picker skips, so the
+  queue can proceed. This chooses none of the remedies above: the owner still
+  decides, and un-deferring is a one-word flip back to `todo`. FR-105 stays a
+  `must`; the deferral parks the task rather than waiving the requirement, and
+  M6's exit checkpoint does not exercise the hook, so the gap stays visible only
+  through this record.
+- FR-105's verify prescribes "the same body shape as any other unknown settings
+  key". T092's design already delivers it: `PATCH /settings` accepts a closed key
+  set and maps `store.ErrUnknownSettingKey` to `422`
+  `/problems/validation-failed`, with `TestPatchUnknownKeyIs422` named in its
+  verification. Under remedy 2 the PATCH half of this task shrinks to naming a
+  hook-shaped key in that test; no hook-specific rejection is wanted, because a
+  distinct rejection is what would reveal the key is special.
+- Reactivation trigger: flip both T078 rows in `00-task-index.md` — the `## M6`
+  milestone-table row and the `## Roster` detail-table row — back to `todo` in
+  the same change that lands the chosen remedy — under remedy 2, T092's
+  completion — so the deferral cannot outlive its cause. T092's
+  `## Cross-task notes` section carries the reverse link. No row depends on
+  T078, so the deferral stalls nothing downstream.
+- This deferral change also corrects T078's `Parallel` cell in the roster
+  detail table from `yes` to `no`, matching this file's `Parallel-safe` field;
+  the correction is unrelated to the deferral itself.
