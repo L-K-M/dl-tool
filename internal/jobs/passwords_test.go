@@ -77,11 +77,12 @@ func loggingSevenzip(t *testing.T) (bin, logPath string) {
 	dir := t.TempDir()
 	logPath = filepath.Join(dir, "argv.log")
 	bin = filepath.Join(dir, "7zz")
-	// One argv per line, NUL-separated so a password containing whitespace
-	// still round-trips through the log.
+	// One argv per record, NUL-separated, framed by \036 (RS) — a record
+	// separator far less likely than \n to appear inside a password, so
+	// whitespace and newlines in a candidate round-trip through the log.
 	script := "#!/bin/sh\n" +
 		"printf '%s\\0' \"$@\" >> \"$DLTOOL_TEST_7ZZ_LOG\"\n" +
-		"printf '\\n' >> \"$DLTOOL_TEST_7ZZ_LOG\"\n" +
+		"printf '\\036' >> \"$DLTOOL_TEST_7ZZ_LOG\"\n" +
 		"exec \"$DLTOOL_TEST_7ZZ_REAL\" \"$@\"\n"
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	t.Setenv("DLTOOL_TEST_7ZZ_LOG", logPath)
@@ -98,8 +99,8 @@ func extractPasswordArgs(t *testing.T, logPath string) []string {
 	require.NoError(t, err)
 
 	var passwords []string
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		args := strings.Split(strings.TrimSuffix(line, "\x00"), "\x00")
+	for _, record := range strings.Split(strings.TrimSuffix(string(data), "\x1e"), "\x1e") {
+		args := strings.Split(strings.TrimSuffix(record, "\x00"), "\x00")
 		if len(args) == 0 || args[0] != "x" {
 			continue
 		}
