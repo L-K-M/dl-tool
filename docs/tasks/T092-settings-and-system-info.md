@@ -199,3 +199,10 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+Cross-task note (2026-09-21, T078's deferral record): T078 is `deferred` pending
+an owner remedy for its `PATCH /settings` step — the endpoint and its write path
+are this task's. T092's closed key set already rejects a hook-named key as an
+unknown key, which is the body shape FR-105's verify prescribes. Completing T092
+is the moment to flip T078's index rows back to `todo` and pick up its remaining
+steps; see `## Blocked` in [T078](T078-completion-hook.md).

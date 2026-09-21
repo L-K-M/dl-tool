@@ -215,13 +215,13 @@ the import cycle is ordering-independent — it must move to a `package jobs_tes
 The blocker is unchanged on b080192, the head of `main`:
 
 ```bash
-grep -rn 'Path:.*"/settings' internal/api/          # no output: no /settings operation registered
-grep -n '"/settings"' api/openapi.json              # no output
+grep -rn '"/settings' internal/api/                 # no output: no /settings route literal, any style
+grep -n '"/settings' api/openapi.json               # no output: covers /settings and /settings/* paths
 grep -n 'PutSettings' internal/store/ internal/api/ # no output: T092's write path is absent
 grep -n 'internal/jobs' internal/api/*.go           # internal/api/search.go: the import cycle stands
 ```
 
-Two additions to the record:
+Additions to the record:
 
 - The picker takes the topmost eligible `todo` row, and T078 heads the eligible
   set, so leaving it `todo` re-selects it on every iteration and nothing below it
@@ -238,3 +238,7 @@ Two additions to the record:
   verification. Under remedy 2 the PATCH half of this task shrinks to naming a
   hook-shaped key in that test; no hook-specific rejection is wanted, because a
   distinct rejection is what would reveal the key is special.
+- Reactivation trigger: flip the row back to `todo` in the same change that lands
+  the chosen remedy — under remedy 2, T092's completion — so the deferral cannot
+  outlive its cause. T092's `## Blocked` carries the reverse link. No row depends
+  on T078, so the deferral stalls nothing downstream.
