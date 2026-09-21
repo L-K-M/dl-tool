@@ -244,6 +244,6 @@ Additions to the record:
   completion — so the deferral cannot outlive its cause. T092's
   `## Cross-task notes` section carries the reverse link. No row depends on
   T078, so the deferral stalls nothing downstream.
-- The same change corrects T078's `Parallel` cell in the roster detail table
-  from `yes` to `no`, matching this file's `Parallel-safe` field; the
-  correction is unrelated to the deferral.
+- This deferral change also corrects T078's `Parallel` cell in the roster
+  detail table from `yes` to `no`, matching this file's `Parallel-safe` field;
+  the correction is unrelated to the deferral itself.
