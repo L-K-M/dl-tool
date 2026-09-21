@@ -238,7 +238,8 @@ Additions to the record:
   verification. Under remedy 2 the PATCH half of this task shrinks to naming a
   hook-shaped key in that test; no hook-specific rejection is wanted, because a
   distinct rejection is what would reveal the key is special.
-- Reactivation trigger: flip the row back to `todo` in the same change that lands
-  the chosen remedy — under remedy 2, T092's completion — so the deferral cannot
-  outlive its cause. T092's `## Blocked` carries the reverse link. No row depends
-  on T078, so the deferral stalls nothing downstream.
+- Reactivation trigger: flip both index rows back to `todo` in the same change
+  that lands the chosen remedy — under remedy 2, T092's completion — so the
+  deferral cannot outlive its cause. T092's `## Cross-task notes` section
+  carries the reverse link. No row depends on T078, so the deferral stalls
+  nothing downstream.
