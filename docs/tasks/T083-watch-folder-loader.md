@@ -178,4 +178,95 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+The contract's `jobs.TaskCreator` (`CreateFromTorrent(ctx, blob, dest, category)`) has no implementer
+and no delivery path inside the `## Files` table, so step 8's "start `Run` alongside the existing
+entries" cannot run in production — the same defect class findings F342 records and F671 repaired for
+T081. The only task-creation entry point is `(*api.TaskHandlers).CreateTasks`
+(`internal/api/tasks.go:380`); the only adapter of that shape is the unexported `ruleTaskCreator`
+(`internal/api/rules.go:144`), exported once as `Server.RuleCreator` — an `rss.TaskCreator` whose
+`CreateForRule` takes a URI, never a `.torrent` blob. `internal/jobs` cannot build its own adapter: it
+cannot import `internal/api` (`internal/api/search.go:25` already imports `internal/jobs` — an import
+cycle), and re-implementing the create path is what the injected interface exists to prevent. Even the
+re-implementation would fail: the destination jail needs `fsx.ResolveDestination(cfg.DataRoots, …)`
+(doc 05 §15 checks `destination` against the roots, and this task's own out-of-scope rule makes an
+outside folder `path_rejected`), the engine check needs `server.Engines`, and the `requested_destination`
+echo (acceptance criterion 5) lives in `insertPlanned` — `cfg` and the registry are composition-root
+state that `NewScheduler` never receives.
+
+Nor can any in-scope file deliver a creator to the watcher. `NewWatcher(st, creator)` needs the
+creator at construction; the only `Scheduler` construction site is `cmd/dl-tool/main.go:266`, a file
+outside the `## Files` table, calling `jobs.NewScheduler(db, logger)` — a signature pinned by that
+uneditable call. A `WithWatcher`-style attach on `Scheduler` would have no caller, which
+docs/14-conventions.md §8.3 counts as not done. Every in-scope alternative is an improvisation the
+plan never specified:
+
+- **A nil or stub creator** lets `Run` start and every unit test pass (they inject fakes) while
+  production scans folders and creates nothing — the "built and never wired" failure §8.3 exists to
+  catch, hidden behind green tests.
+- **A jobs-local creator** writing `tasks` rows through the store duplicates T020's routing,
+  destination-jail, dedup, category and `requested_destination` logic, needs `cfg.DataRoots` and the
+  engine registry `NewScheduler` cannot see, and is precisely what the contract's "injected so the
+  watcher never re-implements it" forbids.
+
+A second gap rides the same missing caller: step 8's `DLTOOL_WATCH_DIR` seed needs configuration the
+Scheduler does not hold. `internal/config` already parses `DLTOOL_WATCH_DIR` into `cfg.WatchDir`
+(`internal/config/config.go:188`) and clears it with `warningOutOfRoot` when it escapes every
+`DLTOOL_DATA_ROOTS` entry (`internal/config/config.go:549`); `NewScheduler(db, logger)` receives
+neither `cfg` nor the roots, so cron.go can neither reuse the validated value nor re-derive the
+containment check without re-reading the environment — a second parser duplicating a fact doc 11
+§2 gives to config. The seeded row's `destination` is also unspecified (doc 11 §2 names only the
+`path`), and `watch_folders.destination` is `NOT NULL`.
+
+Not itself blocking, for the repair's awareness: `store.WatchFolder` has no definition site (F261),
+but `internal/store/settings.go` — in this table — already hosts the `Category`, `Tag`, `Engine` and
+`NotificationChannel` row structs, so the struct can live beside the three new queries exactly as
+T077 did.
+
+Rerunnable evidence on this commit:
+
+```bash
+# No implementer of the contract's creator exists anywhere.
+git grep -nE "CreateFromTorrent" HEAD -- '*.go'
+# → exit 1: the signature is named only by this task file's contract.
+
+# The only creator-shaped adapter and its one exported handle; it is
+# URI-shaped (rss.TaskCreator), not blob-shaped.
+git grep -nE "type ruleTaskCreator|RuleCreator" HEAD -- 'internal/api/*.go' | grep -v _test | sed 's|^[^:]*:||'
+# → internal/api/rules.go:144 (adapter), internal/api/server.go:118 (rss.TaskCreator field).
+
+# api already imports jobs, so jobs cannot reach TaskHandlers through api.
+grep -rn "internal/jobs" internal/api/*.go | grep -v _test
+# → internal/api/search.go:25
+
+# The sole production Scheduler construction site; its signature is pinned.
+git grep -nE "NewScheduler" HEAD -- '*.go' | grep -v _test | sed 's|^[^:]*:||'
+# → cmd/dl-tool/main.go:266 (call), internal/jobs/cron.go:53 (definition NewScheduler(db, log)).
+
+# DLTOOL_WATCH_DIR is already parsed and root-validated in config; the
+# Scheduler sees neither cfg nor DataRoots.
+grep -n "envWatchDir\|WatchDir" internal/config/config.go
+# → config.go:50,128,188 (parsed into cfg.WatchDir); config.go:549-554 (out-of-root warn + clear).
+```
+
+Remedies for the owner — the choice changes the composition root or the contract, so it is not made
+here (deciding files: this task's `## Files` table, docs/14-conventions.md §8.3):
+
+1. Widen the `## Files` table with `cmd/dl-tool/main.go` and the api seam of the owner's choice —
+   e.g. a new `internal/api/watchcreator.go` plus `internal/api/server.go` exporting
+   `Server.WatchCreator jobs.TaskCreator`. The adapter can hand `CreateTasks` the blob through the
+   multipart path (`context.WithValue(ctx, uploadedFilesKey{}, []UploadedFile{…})`, same package),
+   so routing, dedup, the destination jail and the `requested_destination` echo come from T020/T033
+   unchanged. main.go then attaches
+   `scheduler.WithWatcher(jobs.NewWatcher(store.NewSettingsStore(db), server.WatchCreator))` — or the
+   Scheduler construction moves below the server build — and seeds `cfg.WatchDir` (already
+   root-validated) at the same site, with the repair also pinning the seeded row's `destination`.
+   Same repair class the owner applied to T081 (F671).
+2. Alternatively pin `NewScheduler(db, log, creator, watchDir)` (or a `WithWatcher` the contract
+   names) and put `cmd/dl-tool/main.go` in the table to update the call site; the api adapter from
+   remedy 1 is still required.
+3. Alternatively amend the contract so `Run` is started by the job worker (`worker.Register`) with a
+   creator delivered through a package the plan adds to the table — larger, and still a main.go edit.
+
+Status stays `todo` pending plan repair — do not re-dispatch; the owner must pick remedy 1–3 or amend
+the contract first.
