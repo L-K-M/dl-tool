@@ -1,0 +1,119 @@
+package api
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/L-K-M/dl-tool/internal/jobs"
+)
+
+// The adapter tests drive Server.WatchCreator — the field cmd/dl-tool
+// hands to jobs.NewWatcher — so they pin the production seam, not a test
+// double. Every call goes through the real CreateTasks.
+
+// TestWatchCreatorDuplicateMapsToSentinel covers step 10's first half: a
+// live task carrying the blob's infohash answers jobs.ErrTorrentDuplicate.
+// The adapter's FindByInfohash pre-check is the same lookup the create
+// path's duplicateRejection runs.
+func TestWatchCreatorDuplicateMapsToSentinel(t *testing.T) {
+	env := newTasksTestEnv(t)
+	creator := env.server.WatchCreator
+	if creator == nil {
+		t.Fatal("Server.WatchCreator is nil — NewServer must fill it")
+	}
+
+	taskID, err := creator.CreateFromTorrent(t.Context(), "hello.torrent", []byte(uploadSingleFileTorrent), env.dataRoot, "")
+	if err != nil {
+		t.Fatalf("first CreateFromTorrent: %v", err)
+	}
+	if taskID == "" {
+		t.Fatal("first CreateFromTorrent returned an empty task id")
+	}
+
+	if _, err := creator.CreateFromTorrent(t.Context(), "hello.torrent", []byte(uploadSingleFileTorrent), env.dataRoot, ""); !errors.Is(err, jobs.ErrTorrentDuplicate) {
+		t.Fatalf("duplicate CreateFromTorrent error = %v, want jobs.ErrTorrentDuplicate", err)
+	}
+}
+
+// TestWatchCreatorPathRejectedMapsToSentinel covers step 10's second half:
+// a destination outside the data roots answers
+// jobs.ErrDestinationRejected, mapped off the problem's
+// /problems/path-rejected type — so a reworded detail cannot break the
+// watcher's path_rejected skip.
+func TestWatchCreatorPathRejectedMapsToSentinel(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	outside := t.TempDir()
+	_, err := env.server.WatchCreator.CreateFromTorrent(t.Context(), "hello.torrent", []byte(uploadSingleFileTorrent), outside, "")
+	if !errors.Is(err, jobs.ErrDestinationRejected) {
+		t.Fatalf("out-of-roots CreateFromTorrent error = %v, want jobs.ErrDestinationRejected", err)
+	}
+}
+
+// TestWatchCreatorRequestedDestinationEcho pins FR-044 through the watch
+// seam: a folder destination that resolves to a different path (here a
+// symlink inside the roots) lands both columns on the task row — the
+// resolved destination and the requested echo — through the same
+// insertPlanned rule an upload follows.
+func TestWatchCreatorRequestedDestinationEcho(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	real := filepath.Join(env.dataRoot, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatalf("make real dir: %v", err)
+	}
+	link := filepath.Join(env.dataRoot, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	requested := filepath.Join(link, "watch")
+
+	taskID, err := env.server.WatchCreator.CreateFromTorrent(t.Context(), "hello.torrent", []byte(uploadSingleFileTorrent), requested, "")
+	if err != nil {
+		t.Fatalf("CreateFromTorrent: %v", err)
+	}
+
+	var row struct {
+		Destination          string  `db:"destination"`
+		RequestedDestination *string `db:"requested_destination"`
+		SourceKind           string  `db:"source_kind"`
+	}
+	if err := env.db.GetContext(t.Context(), &row,
+		`SELECT destination, requested_destination, source_kind FROM tasks WHERE id = ?`, taskID); err != nil {
+		t.Fatalf("read task row: %v", err)
+	}
+
+	wantResolved := filepath.Join(real, "watch")
+	if row.Destination != wantResolved {
+		t.Errorf("destination = %q, want the resolved %q", row.Destination, wantResolved)
+	}
+	if row.RequestedDestination == nil || *row.RequestedDestination != requested {
+		t.Errorf("requested_destination = %v, want the requested %q", row.RequestedDestination, requested)
+	}
+	if row.SourceKind != "torrent" {
+		t.Errorf("source_kind = %q, want torrent", row.SourceKind)
+	}
+}
+
+// TestWatchCreatorSameDestinationLeavesEchoNull pins the other half of the
+// echo rule: a folder destination that already resolves to itself carries
+// a null requested_destination — the echo exists only when the two differ.
+func TestWatchCreatorSameDestinationLeavesEchoNull(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	taskID, err := env.server.WatchCreator.CreateFromTorrent(t.Context(), "hello.torrent", []byte(uploadSingleFileTorrent), env.dataRoot, "")
+	if err != nil {
+		t.Fatalf("CreateFromTorrent: %v", err)
+	}
+
+	var requested *string
+	if err := env.db.GetContext(t.Context(), &requested,
+		`SELECT requested_destination FROM tasks WHERE id = ?`, taskID); err != nil {
+		t.Fatalf("read task row: %v", err)
+	}
+	if requested != nil {
+		t.Errorf("requested_destination = %q, want null — requested and resolved agree", *requested)
+	}
+}

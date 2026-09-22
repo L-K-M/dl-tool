@@ -20,6 +20,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/api"
 	"github.com/L-K-M/dl-tool/internal/config"
 	"github.com/L-K-M/dl-tool/internal/engine"
+	"github.com/L-K-M/dl-tool/internal/fsx"
 	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/obs"
 	"github.com/L-K-M/dl-tool/internal/rss"
@@ -257,13 +258,33 @@ func main() {
 			}
 			cancelGovernor()
 
+			// The watch-folder loader (T083) shares the one create path
+			// through server.WatchCreator — a dropped .torrent takes the
+			// T020 path unchanged. DLTOOL_WATCH_DIR seeds one enabled row
+			// before the loader starts, its destination the data root
+			// containing the directory (doc 11 section 2); the value
+			// arrives already root-validated, and a resolve or seed error
+			// is logged and skipped, never fatal.
+			watcher := jobs.NewWatcher(store.NewSettingsStore(db), server.WatchCreator)
+			if cfg.WatchDir != "" {
+				if root, _, err := fsx.ResolveDestinationRoot(cfg.DataRoots, cfg.WatchDir); err != nil {
+					logger.Warn("watch directory resolves outside the data roots; skipping seed", "path", cfg.WatchDir, "err", err)
+				} else if created, err := store.NewSettingsStore(db).SeedWatchFolder(ctx, cfg.WatchDir, root); err != nil {
+					logger.Warn("watch folder seed failed", "path", cfg.WatchDir, "err", err)
+				} else if created {
+					logger.Info("seeded watch folder", "path", cfg.WatchDir, "destination", root)
+				}
+			}
+
 			// The cron scheduler enqueues the periodic jobs (rss_poll now,
-			// T083/T091 extend it later) and, with the governor attached,
-			// applies the active schedule cell once a minute (T081). The
-			// attach lands before Start arms the entry, so the first tick
-			// already sees the live instance. Start blocks until runCtx is
-			// cancelled in OnStop, then drains the in-flight entry.
-			scheduler := jobs.NewScheduler(db, logger).WithGovernor(governor)
+			// T091 extends it later) and, with the governor attached,
+			// applies the active schedule cell once a minute (T081); the
+			// watch-folder loader runs beside the entries on the same
+			// context (T083). The attaches land before Start arms the
+			// entries, so the first tick already sees the live instances.
+			// Start blocks until runCtx is cancelled in OnStop, then drains
+			// the in-flight entry and the loader.
+			scheduler := jobs.NewScheduler(db, logger).WithGovernor(governor).WithWatcher(watcher)
 			runDone.Add(1)
 			go func() {
 				defer runDone.Done()

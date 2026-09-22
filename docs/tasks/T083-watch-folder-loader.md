@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T083 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T020, T031, T066, T081 |
 | **Blocks** | T107, T119 |
 | **Parallel-safe** | no — it also edits the shared files `internal/jobs/cron.go`, `internal/store/settings.go`, `internal/api/server.go` and `cmd/dl-tool/main.go` |
@@ -249,13 +249,13 @@ for when the two differ, per the Task object in
 11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] A dropped `.torrent` becomes a task within one poll interval, in the folder's destination.
-- [ ] `delete_after_load` unlinks the source only after the engine accepted the task.
-- [ ] A second scan skips the file with `already_loaded`; nothing is imported twice.
-- [ ] Every skip carries one of the five documented reasons and no other string.
-- [ ] The task's `destination` is the resolved path and `requested_destination` is non-null when they differ.
-- [ ] An inotify registration failure falls back to polling and the same files are still loaded.
-- [ ] Review check (not assertable from `internal/jobs/watch_test.go`) — `cmd/dl-tool/main.go` attaches
+- [x] A dropped `.torrent` becomes a task within one poll interval, in the folder's destination.
+- [x] `delete_after_load` unlinks the source only after the engine accepted the task.
+- [x] A second scan skips the file with `already_loaded`; nothing is imported twice.
+- [x] Every skip carries one of the five documented reasons and no other string.
+- [x] The task's `destination` is the resolved path and `requested_destination` is non-null when they differ.
+- [x] An inotify registration failure falls back to polling and the same files are still loaded.
+- [x] Review check (not assertable from `internal/jobs/watch_test.go`) — `cmd/dl-tool/main.go` attaches
   `jobs.NewWatcher(store.NewSettingsStore(db), server.WatchCreator)` through `scheduler.WithWatcher`
   before `Start`, so an enabled folder is watched in production, and seeds `cfg.WatchDir` through
   `SeedWatchFolder` with the containing data root as `destination` when the variable is set
@@ -295,7 +295,61 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG="./internal/jobs/... ./internal/store/... ./internal/api/..." && echo WATCH_OK`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/jobs/... ./internal/store/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	39.835s
+ok  	github.com/L-K-M/dl-tool/internal/store	101.464s
+ok  	github.com/L-K-M/dl-tool/internal/api	191.019s
+WATCH_OK
+```
+
+The six named jobs tests and the adapter-mapping tests, individually:
+
+```
+--- PASS: TestDroppedTorrentBecomesTask (0.74s)
+--- PASS: TestDeleteAfterLoadOnlyOnSuccess (0.43s)
+--- PASS: TestSecondScanSkipsLoaded (0.49s)
+--- PASS: TestNonTorrentSkipped (0.44s)
+--- PASS: TestRequestedDestinationRecorded (0.36s)
+--- PASS: TestFallsBackToPolling (0.45s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.001s
+--- PASS: TestWatchCreatorDuplicateMapsToSentinel (0.50s)
+--- PASS: TestWatchCreatorPathRejectedMapsToSentinel (0.40s)
+--- PASS: TestWatchCreatorRequestedDestinationEcho (0.43s)
+--- PASS: TestWatchCreatorSameDestinationLeavesEchoNull (0.44s)
+ok  	github.com/L-K-M/dl-tool/internal/api	2.836s
+```
+
+`make ci` on the same tree: lint, vet, typecheck, `test` (Go + 279 vitest cases),
+`compose-check` and `doclint` (2523 links, 0 errors) all green.
+
+Scope:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+internal/api/server.go
+internal/api/watchcreator.go
+internal/api/watchcreator_test.go
+internal/jobs/cron.go
+internal/jobs/watch.go
+internal/jobs/watch_inotify_linux.go
+internal/jobs/watch_test.go
+internal/store/settings.go
+```
 
 ## Blocked
 
