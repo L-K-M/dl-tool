@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -435,4 +436,41 @@ func TestApplyTaskReadBackMismatchLogsOnly(t *testing.T) {
 	require.Contains(t, logged, "engine="+engine.NameQBittorrent)
 	require.NotContains(t, logged, "per-task upload limit read back different",
 		"the direction the daemon did hold must not warn")
+}
+
+func TestApplyTaskNilDirectionSkipsReadBackComparison(t *testing.T) {
+	reg := engine.NewRegistry()
+	probe := &taskReadbackEngine{
+		bandwidthEngine: &bandwidthEngine{name: engine.NameAria2},
+		down:            1048576, // matches what was sent
+		up:              524288,  // the daemon holds a limit the patch never touched
+	}
+	reg.Register(probe)
+
+	logs := captureGovernorLogs(t)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), nil))
+
+	require.NotContains(t, logs.String(), "read back different",
+		"a direction the patch left as nil must not be compared against the daemon",
+	)
+}
+
+func TestApplyTaskReadBackErrorStillSucceeds(t *testing.T) {
+	reg := engine.NewRegistry()
+	probe := &taskReadbackEngine{
+		bandwidthEngine: &bandwidthEngine{name: engine.NameQBittorrent},
+		err:             errors.New("daemon query failed"),
+	}
+	reg.Register(probe)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "qbittorrent:8f9c3a2b", p64(1048576), p64(524288)))
+
+	require.Equal(t,
+		[]bandwidthCall{{id: "8f9c3a2b", down: p64(1048576), up: p64(524288)}},
+		probe.calls,
+		"a failed read-back must not fail an apply that already succeeded",
+	)
 }

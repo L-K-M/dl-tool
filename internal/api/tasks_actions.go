@@ -86,6 +86,13 @@ const (
 	patchFailedDetail   = "the patch holds values that failed validation"
 	negativeLimitDetail = "the limit cannot be negative; 0 means unlimited"
 
+	// detailLimitUnapplied is the 503 detail of a rate-limit patch the
+	// engine could not take: unlike the other patch failures the row
+	// keeps the new pair, and the next spawn or the boot reconciliation
+	// re-pushes it — the client must not read the 503 as "the limit was
+	// rejected".
+	detailLimitUnapplied = "the engine could not take the limit; the new value is stored and re-pushed at the next spawn or boot"
+
 	// detailSequentialUnsupported is the 422 of a sequential patch
 	// against an engine that declares no such capability: the persisted
 	// flag could never be honoured, so the request is refused before any
@@ -1025,31 +1032,29 @@ func (h *TaskHandlers) buildTaskPatch(
 }
 
 // applyLiveRateLimits pushes new rate limits to the engine that holds the
-// task through the governor's per-task call (T082, FR-094), without
-// restarting it: both of aria2's changeOption limits are on its safe list
-// and qBittorrent's torrents/set*Limit endpoints touch nothing else
-// (doc 06 section 10.1). ApplyTask resolves the engine from the
-// namespaced id and needs only the shared registry, so the governor built
-// here over h.engines applies identically to the one the composition root
-// owns. The caller places this after the row write: the persisted pair is
-// what the next spawn and the boot reconciliation re-push, so the stored
-// value is kept whatever the engine answers — an unreachable daemon is
-// the 503 of doc 05 section 5.5 with the row already holding the new
-// value. A task the admission pass has not handed to an engine yet gets
-// its limits at admission time instead, and ErrNotSupported is not a
-// failure: the persisted limit applies the next time the engine starts
-// the task.
+// task through ApplyTask (T082, FR-094), without restarting it: both of
+// aria2's changeOption limits are on its safe list and qBittorrent's
+// torrents/set*Limit endpoints touch nothing else (doc 06 section 10.1).
+// ApplyTask resolves the engine from the namespaced id and consumes only
+// the shared registry. The caller places this after the row write: the
+// persisted pair is what the next spawn and the boot reconciliation
+// re-push, so the stored value is kept whatever the engine answers — an
+// unreachable daemon is the 503 of doc 05 section 5.5 with the row
+// already holding the new value, and the detail says so. A task the
+// admission pass has not handed to an engine yet gets its limits at
+// admission time instead, and ErrNotSupported is not a failure: the
+// persisted limit applies the next time the engine starts the task.
 func (h *TaskHandlers) applyLiveRateLimits(ctx context.Context, task store.Task, down, up *int64) error {
 	if task.EngineRef == nil || (down == nil && up == nil) {
 		return nil
 	}
 
-	err := engine.NewGovernor(h.engines, nil).ApplyTask(ctx, engineTaskID(task.Engine, task.EngineRef), down, up)
+	err := engine.ApplyTask(ctx, h.engines, engineTaskID(task.Engine, task.EngineRef), down, up)
 	if errors.Is(err, engine.ErrNotSupported) {
 		return nil
 	}
 	if err != nil {
-		return Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, detailEngineFailed)
+		return Problem(SlugEngineUnavailable, http.StatusServiceUnavailable, detailLimitUnapplied)
 	}
 
 	return nil
@@ -1074,6 +1079,17 @@ func (h *TaskHandlers) applyPatchMutators(
 	destination string,
 ) error {
 	if task.EngineRef == nil {
+		return nil
+	}
+
+	// The engine is resolved only when a field needs an engine call: a
+	// patch of display or stored-only fields — name, or the rate limits
+	// applyLiveRateLimits owns — must not 503 on an engine the request
+	// never dials, and must not keep a limit patch from reaching the
+	// store-then-apply path that keeps the value on an engine failure.
+	needsEngine := body.Category != nil || body.Tags != nil || body.Sequential != nil ||
+		body.RatioLimit != nil || body.SeedingTimeLimit != nil || body.Destination != nil
+	if !needsEngine {
 		return nil
 	}
 

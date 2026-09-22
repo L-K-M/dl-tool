@@ -472,23 +472,30 @@ func (g *Governor) resumeParked(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// ApplyTask is the Governor method of the T082 contract; it delegates to
+// the package-level ApplyTask because the call consumes only the
+// registry — Current, Mode, the settings rows and the parked-set store
+// are the global pair's bookkeeping, none of which a per-task apply
+// reads — and takes no lock for the same reason.
+func (g *Governor) ApplyTask(ctx context.Context, engineTaskID string, down, up *int64) error {
+	return ApplyTask(ctx, g.reg, engineTaskID, down, up)
+}
+
 // ApplyTask pushes a per-task limit to the engine that owns the task, in
 // bytes per second (T082, FR-094). engineTaskID is the engine-namespaced
 // id — "aria2:2089b05ecca3d829" — the TaskInfo.ID shape: the prefix
-// selects the engine and the bare ref is what SetRateLimits receives. A
-// nil direction is left unchanged at the engine; 0 means unlimited. The
-// call must not restart, re-add or re-check the transfer — aria2's
-// changeOption carries both max-*-limit keys on the safe list and
+// selects the engine in reg and the bare ref is what SetRateLimits
+// receives. A nil direction is left unchanged at the engine; 0 means
+// unlimited. The call must not restart, re-add or re-check the transfer —
+// aria2's changeOption carries both max-*-limit keys on the safe list and
 // qBittorrent's torrents/set*Limit endpoints touch nothing else
 // (docs/06-download-engines.md section 10.1) — so it invokes no method
 // but SetRateLimits. An adapter without the capability answers
 // ErrNotSupported — for yt-dlp the recorded value applies at the next
 // spawn — and an unregistered or unreachable engine answers
 // ErrUnavailable; the caller keeps the stored value either way, so a
-// later boot reconciliation re-pushes it. ApplyTask touches no governor
-// state — Current and Mode are the global pair's bookkeeping — and so
-// takes no lock: any governor over the same registry applies identically.
-func (g *Governor) ApplyTask(ctx context.Context, engineTaskID string, down, up *int64) error {
+// later boot reconciliation re-pushes it.
+func ApplyTask(ctx context.Context, reg *Registry, engineTaskID string, down, up *int64) error {
 	if down == nil && up == nil {
 		return nil
 	}
@@ -498,7 +505,7 @@ func (g *Governor) ApplyTask(ctx context.Context, engineTaskID string, down, up 
 		return fmt.Errorf("engine: %q is not an engine-namespaced task id", engineTaskID)
 	}
 
-	e, ok := g.reg.Get(name)
+	e, ok := reg.Get(name)
 	if !ok {
 		return fmt.Errorf("%w: %s is not registered", ErrUnavailable, name)
 	}
@@ -507,17 +514,21 @@ func (g *Governor) ApplyTask(ctx context.Context, engineTaskID string, down, up 
 		return err
 	}
 
-	g.readBackTask(ctx, e, name, ref, down, up)
+	readBackTask(ctx, e, name, ref, down, up)
 	return nil
 }
 
 // taskLimitReader is the optional per-task read-back surface: the
-// daemon's configured limits for one transfer in bytes per second,
-// queried — never echoed from the set request. No adapter exports it
-// yet — qBittorrent confirms a per-task set against its maindata cache
-// inside SetRateLimits, and aria2's changeOption is synchronous — so the
-// read-back below records the same debug line the global one leaves for
-// an engine without the surface.
+// daemon's configured limits for one transfer, queried — never echoed
+// from the set request. Its return vocabulary is the one SetRateLimits
+// takes — bytes per second, 0 meaning unlimited — so an adapter whose
+// daemon reports a different convention (an -1 unlimited sentinel, a
+// KiB/s field) normalises inside its TaskLimits implementation rather
+// than letting the read-back warn on a faithful set. No adapter exports
+// the surface yet — qBittorrent confirms a per-task set against its
+// maindata cache inside SetRateLimits, and aria2's changeOption is
+// synchronous — so the read-back below records the same debug line the
+// global one leaves for an engine without the surface.
 type taskLimitReader interface {
 	TaskLimits(ctx context.Context, id string) (down, up int64, err error)
 }
@@ -526,7 +537,7 @@ type taskLimitReader interface {
 // adapter exposes a read-back surface. A mismatch is a warn carrying
 // both numbers, never an error — the set already succeeded — and a nil
 // direction was not sent, so it is not compared.
-func (g *Governor) readBackTask(ctx context.Context, e Engine, name, ref string, down, up *int64) {
+func readBackTask(ctx context.Context, e Engine, name, ref string, down, up *int64) {
 	reader, ok := e.(taskLimitReader)
 	if !ok {
 		slog.DebugContext(ctx, "engine: no per-task rate-limit read-back surface",

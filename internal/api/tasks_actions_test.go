@@ -1214,6 +1214,35 @@ func TestPatchLimitEngineUnavailable(t *testing.T) {
 	}
 }
 
+// TestPatchLimitEngineNotRegistered pins the same 503 for an engine that
+// is absent from the registry — ApplyTask's wrapped ErrUnavailable must
+// map to /problems/engine-unavailable — and the row keeps the value here
+// too.
+func TestPatchLimitEngineNotRegistered(t *testing.T) {
+	env := newActionsTestEnv(t)
+
+	id := env.seedActionTask(t, func(task *store.Task) {
+		ref := "job-7"
+		task.Engine = "ytdlp"
+		task.EngineRef = &ref
+		task.SourceKind = "media"
+	})
+
+	response := env.patchTask(t, id, map[string]any{"dl_limit": testDLLimit})
+	assertProblem(t, response, http.StatusServiceUnavailable, SlugEngineUnavailable)
+
+	var stored int64
+	if err := env.db.GetContext(t.Context(), &stored,
+		`SELECT dl_limit FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read dl_limit: %v", err)
+	}
+	if stored != testDLLimit {
+		t.Errorf("stored dl_limit = %d, want the kept value %d", stored, testDLLimit)
+	}
+	env.aria2.assertNoCalls(t)
+	env.qbittorrent.assertNoCalls(t)
+}
+
 // TestPatchTaskMutatorsReachEngine pins the five live applications of
 // doc 05 section 5.5: each patched field reaches the engine exactly once,
 // under the engine-namespaced id, and a one-sided share-limit patch rides
