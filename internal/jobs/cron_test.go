@@ -276,6 +276,31 @@ func TestAlternativeReachesAria2(t *testing.T) {
 	}
 }
 
+func TestApplyGlobalHonoursAlternativeCell(t *testing.T) {
+	f := newScheduleFixture(t, engine.NameAria2)
+	ctx := t.Context()
+
+	f.writeGrid(t, true, map[int]store.ScheduleMode{11: store.ScheduleAlternative})
+	require.NoError(t, f.settings.SetInt64(ctx, "alt_download_rate_limit", 2048))
+	require.NoError(t, f.settings.SetInt64(ctx, "alt_upload_rate_limit", 1024))
+
+	require.NoError(t, f.scheduler.EvaluateSchedule(ctx, scheduleTime(11, 0)))
+	require.Equal(t, engine.ModeAlternative, f.governor.Mode())
+
+	// A global-limit write inside the 2 cell must not push the global
+	// pair — the engines run the pair the active cell names.
+	require.NoError(t, f.governor.ApplyGlobal(ctx, engine.RateLimits{Down: 100, Up: 50}))
+
+	aria2 := f.engines[engine.NameAria2]
+	require.Equal(t,
+		[]scheduleRateCall{{id: "", down: 2048, up: 1024}, {id: "", down: 2048, up: 1024}},
+		aria2.rateCalls,
+		"a global write inside the alternative cell re-applies the cell pair, not the global one",
+	)
+	require.Equal(t, engine.RateLimits{Down: 2048, Up: 1024}, f.governor.Current())
+	require.Equal(t, engine.ModeAlternative, f.governor.Mode())
+}
+
 func TestTickWithinCellIsIdempotent(t *testing.T) {
 	f := newScheduleFixture(t, engine.NameAria2)
 	ctx := t.Context()

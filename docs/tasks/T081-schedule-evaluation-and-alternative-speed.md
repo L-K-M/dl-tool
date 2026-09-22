@@ -203,36 +203,38 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/jobs/... ./internal/engine/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	22.094s
-ok  	github.com/L-K-M/dl-tool/internal/engine	30.525s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.289s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.111s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	59.806s
+ok  	github.com/L-K-M/dl-tool/internal/engine	66.482s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.253s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.768s
 SCHED_EVAL_OK
 ```
 
-The five named tests plus the nil-store acceptance case and the two review-added
-regressions (startup evaluation, appended-event parked membership), from a `-v`
-run of the same tree:
+The five named tests plus the nil-store acceptance case and the three
+review-added regressions (startup evaluation, appended-event parked membership,
+global write inside an alternative cell), from a `-v` run of the same tree:
 
 ```
 === RUN   TestNoDownloadPausesAndResumesSameSet
---- PASS: TestNoDownloadPausesAndResumesSameSet (0.60s)
+--- PASS: TestNoDownloadPausesAndResumesSameSet (0.92s)
 === RUN   TestUserPausedTaskNotResumed
---- PASS: TestUserPausedTaskNotResumed (0.63s)
+--- PASS: TestUserPausedTaskNotResumed (1.05s)
 === RUN   TestAlternativeReachesAria2
---- PASS: TestAlternativeReachesAria2 (0.52s)
+--- PASS: TestAlternativeReachesAria2 (0.58s)
+=== RUN   TestApplyGlobalHonoursAlternativeCell
+--- PASS: TestApplyGlobalHonoursAlternativeCell (0.62s)
 === RUN   TestTickWithinCellIsIdempotent
---- PASS: TestTickWithinCellIsIdempotent (0.51s)
+--- PASS: TestTickWithinCellIsIdempotent (1.02s)
 === RUN   TestDisabledScheduleDoesNothing
---- PASS: TestDisabledScheduleDoesNothing (0.39s)
+--- PASS: TestDisabledScheduleDoesNothing (0.61s)
 === RUN   TestAppendedEventKeepsParkedMembership
---- PASS: TestAppendedEventKeepsParkedMembership (0.49s)
+--- PASS: TestAppendedEventKeepsParkedMembership (0.69s)
 === RUN   TestStartAppliesCellImmediately
---- PASS: TestStartAppliesCellImmediately (0.53s)
+--- PASS: TestStartAppliesCellImmediately (1.27s)
 === RUN   TestNoDownloadWithoutTaskStoreFailsClosed
---- PASS: TestNoDownloadWithoutTaskStoreFailsClosed (0.48s)
+--- PASS: TestNoDownloadWithoutTaskStoreFailsClosed (0.55s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/jobs	5.215s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	8.387s
 ```
 
 Scope:

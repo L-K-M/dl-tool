@@ -129,6 +129,16 @@ func (g *Governor) ApplyGlobal(ctx context.Context, l RateLimits) error {
 	g.applyMu.Lock()
 	defer g.applyMu.Unlock()
 
+	g.mu.Lock()
+	mode := g.mode
+	g.mu.Unlock()
+	if mode == ModeAlternative {
+		// A write during an alternative cell must not leave the
+		// engines on the global pair until the cell changes —
+		// re-apply the pair the cell names.
+		return g.applyCellLimits(ctx, mode)
+	}
+
 	return g.applyGlobal(ctx, l)
 }
 
@@ -417,7 +427,8 @@ func (g *Governor) parkAll(ctx context.Context) error {
 		}
 
 		if err := g.tasks.ScheduleParked(ctx, id); err != nil &&
-			!errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrTransitionConflict) {
+			!errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrIllegalTransition) &&
+			!errors.Is(err, store.ErrTransitionConflict) {
 			errs = append(errs, fmt.Errorf("task %s: %w", id, err))
 		}
 	}
