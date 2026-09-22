@@ -1130,9 +1130,9 @@ export interface components {
     CreateTokenInputBody: {
       /**
        * Format: date-time
-       * @description RFC 3339 expiry; null means the token never expires
+       * @description RFC 3339 expiry; omit or send null for a token that never expires
        */
-      expires_at?: string;
+      expires_at?: string | null;
       /** @description Display label shown in the token list */
       name: string;
     };

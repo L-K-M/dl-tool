@@ -123,6 +123,19 @@ func TestTokenRevealedOnce(t *testing.T) {
 		t.Errorf("created_at %q is not RFC 3339: %v", created.CreatedAt, err)
 	}
 
+	// expires_at may also be omitted outright; both spellings mean no expiry.
+	omitted := api.Post("/api-tokens", "Authorization: Bearer "+management, map[string]any{"name": "no key"})
+	if omitted.Code != http.StatusCreated {
+		t.Fatalf("POST without expires_at = %d, want %d: %s", omitted.Code, http.StatusCreated, omitted.Body.String())
+	}
+	var omittedBody createTokenBody
+	if err := json.Unmarshal(omitted.Body.Bytes(), &omittedBody); err != nil {
+		t.Fatalf("decode omitted-expiry body: %v", err)
+	}
+	if omittedBody.ExpiresAt != nil {
+		t.Errorf("expires_at = %q, want null when the key is omitted", *omittedBody.ExpiresAt)
+	}
+
 	// The minted value authenticates — it is a live bearer credential.
 	response := api.Get("/api-tokens", "Authorization: Bearer "+created.Token)
 	if response.Code != http.StatusOK {
@@ -136,8 +149,8 @@ func TestTokenRevealedOnce(t *testing.T) {
 	}
 
 	list := listTokens(t, api, management, "")
-	if list.Total != 2 || len(list.Items) != 2 {
-		t.Fatalf("list = %d items / total %d, want 2/2", len(list.Items), list.Total)
+	if list.Total != 3 || len(list.Items) != 3 {
+		t.Fatalf("list = %d items / total %d, want 3/3", len(list.Items), list.Total)
 	}
 	var item *tokenListItem
 	for i := range list.Items {
