@@ -51,7 +51,7 @@ type ListTokensInput struct {
 // CreateTokenInput is the JSON body of POST /api-tokens.
 type CreateTokenInput struct {
 	Body struct {
-		Name      string     `json:"name"       required:"true" minLength:"1" doc:"Display label shown in the token list"`
+		Name      string     `json:"name"       required:"true" minLength:"1" maxLength:"256" doc:"Display label shown in the token list"`
 		ExpiresAt *time.Time `json:"expires_at,omitempty" nullable:"true" doc:"RFC 3339 expiry; omit or send null for a token that never expires"`
 	}
 }

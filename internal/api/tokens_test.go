@@ -136,6 +136,11 @@ func TestTokenRevealedOnce(t *testing.T) {
 		t.Errorf("expires_at = %q, want null when the key is omitted", *omittedBody.ExpiresAt)
 	}
 
+	// A label is bounded: a 257-character name is a 422, not a stored row.
+	tooLong := api.Post("/api-tokens", "Authorization: Bearer "+management,
+		map[string]any{"name": strings.Repeat("n", 257)})
+	assertProblem(t, tooLong, http.StatusUnprocessableEntity, SlugValidationFailed)
+
 	// The minted value authenticates — it is a live bearer credential.
 	response := api.Get("/api-tokens", "Authorization: Bearer "+created.Token)
 	if response.Code != http.StatusOK {
