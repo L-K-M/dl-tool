@@ -7,10 +7,10 @@
 | **Status** | todo |
 | **Depends on** | T020, T031, T066, T081 |
 | **Blocks** | T107, T119 |
-| **Parallel-safe** | no — it also edits the shared files `internal/jobs/cron.go`, `internal/store/settings.go` |
+| **Parallel-safe** | no — it also edits the shared files `internal/jobs/cron.go`, `internal/store/settings.go`, `internal/api/server.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-043](../02-requirements.md#fr-043-import-torrent-files-from-a-watch-folder), [FR-044](../02-requirements.md#fr-044-report-the-effective-destination) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0012](../decisions/0012-single-data-mount.md) |
-| **Est. size** | 3 new files, ~360 LOC |
+| **Est. size** | 4 new files, ~460 LOC plus the composition-root wiring this repair assigns to `internal/api/server.go` and `cmd/dl-tool/main.go` |
 
 ## Goal
 A `.torrent` file dropped into an enabled watch folder becomes a task in that folder's destination and
@@ -32,8 +32,11 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/jobs/watch.go` | create | `Watcher`, `ScanOnce`, the polling loop and the skip-reason vocabulary. |
 | `internal/jobs/watch_inotify_linux.go` | create | The inotify registration that replaces the polling loop on Linux. |
 | `internal/jobs/watch_test.go` | create | Scan, skip-reason, delete-after-load and fallback cases. |
-| `internal/store/settings.go` | modify | Add `ListEnabledWatchFolders`, `GetWatchFolder`, `TouchWatchFolder`. |
-| `internal/jobs/cron.go` | modify | Register the watch-folder entry and seed `DLTOOL_WATCH_DIR`. |
+| `internal/store/settings.go` | modify | Add `WatchFolder`, `ListEnabledWatchFolders`, `GetWatchFolder`, `TouchWatchFolder`, `SeedWatchFolder` and the loaded-set pair. |
+| `internal/jobs/cron.go` | modify | Add `Scheduler.WithWatcher` and start `Run` beside the cron entries. |
+| `internal/api/watchcreator.go` | create | `watchTaskCreator`, the `jobs.TaskCreator` adapter over `TaskHandlers.CreateTasks`. |
+| `internal/api/server.go` | modify | Add the exported `Server.WatchCreator` field and build it in `NewServer`. |
+| `cmd/dl-tool/main.go` | modify | Attach the watcher to the scheduler and seed `cfg.WatchDir`. |
 
 No other file may be modified.
 
@@ -67,9 +70,9 @@ type SkippedFile struct {
 }
 
 // Watcher loads torrents from watch folders.
-type Watcher struct{ /* store *store.Store; creator TaskCreator */ }
+type Watcher struct{ /* settings *store.SettingsStore; creator TaskCreator */ }
 
-func NewWatcher(st *store.Store, creator TaskCreator) *Watcher
+func NewWatcher(st *store.SettingsStore, creator TaskCreator) *Watcher
 
 // ScanOnce scans exactly one watch folder and returns what it did. It is synchronous and
 // idempotent: a file already loaded is skipped with SkipAlreadyLoaded, never loaded twice.
@@ -78,7 +81,8 @@ func (w *Watcher) ScanOnce(ctx context.Context, folderID string) (ScanResult, er
 
 // Run watches every enabled folder until ctx ends. It calls newOSWatcher for each folder; when
 // registration fails it falls back to a time.Ticker at the folder's poll_interval_s, which is 10 by
-// default. Both paths call ScanOnce and nothing else.
+// default (a value below 1 falls back to 10 as well — the API validates ≥1, the store does not).
+// Both paths call ScanOnce and nothing else.
 func (w *Watcher) Run(ctx context.Context) error
 
 // newOSWatcher is the platform hook. The default is the polling implementation; the linux build
@@ -88,13 +92,70 @@ func (w *Watcher) Run(ctx context.Context) error
 var newOSWatcher = newPollWatcher
 
 // TaskCreator is the T020 creation path, injected so the watcher never re-implements it.
+// name is the file's base name — it feeds the rejection display and the task-name fallback,
+// exactly as an UploadedFile part name does.
 type TaskCreator interface {
-	CreateFromTorrent(ctx context.Context, blob []byte, dest, category string) (taskID string, err error)
+	CreateFromTorrent(ctx context.Context, name string, blob []byte, dest, category string) (taskID string, err error)
 }
+
+// ErrTorrentDuplicate and ErrDestinationRejected are the classified failures the TaskCreator
+// contract defines; ScanOnce maps them with errors.Is onto SkipDuplicate and SkipPathRejected.
+// Any other error is a hand-off failure: the file stays in place and the scan records it in the
+// folder's last_error through TouchWatchFolder.
+var (
+	ErrTorrentDuplicate    = errors.New("jobs: a task for this torrent already exists")
+	ErrDestinationRejected = errors.New("jobs: destination resolves outside the data roots")
+)
+
+// WithWatcher attaches the loader; Start runs w.Run on the scheduler context beside the cron
+// entries and joins it during the drain. The field is set before the cron goroutine can observe
+// it — the same attach rule WithGovernor follows.
+func (s *Scheduler) WithWatcher(w *Watcher) *Scheduler
 ```
 
 ```go
+package api
+
+// watchTaskCreator adapts TaskHandlers.CreateTasks to jobs.TaskCreator (file
+// internal/api/watchcreator.go): the blob rides the same uploadedFilesKey context slot the
+// multipart middleware fills, so normalisation, routing, the destination jail, dedup and the
+// requested_destination echo stay the T020/T033 path unchanged.
+type watchTaskCreator struct{ tasks *TaskHandlers }
+
+// CreateFromTorrent first parses blob with uri.InspectTorrent and answers jobs.ErrTorrentDuplicate
+// when c.tasks.FindByInfohash finds a live task — the same lookup duplicateRejection runs. It then
+// calls CreateTasks with ctx carrying []UploadedFile{{Name: name, Bytes: blob}} and the body holding
+// dest and category. A returned *huma.ErrorModel maps Type SlugPathRejected onto
+// jobs.ErrDestinationRejected and a Detail prefixed by duplicateDetail onto jobs.ErrTorrentDuplicate
+// (the commit-between-check-and-insert race); every other error passes through.
+func (c watchTaskCreator) CreateFromTorrent(ctx context.Context, name string, blob []byte, dest, category string) (string, error)
+```
+
+`Server.WatchCreator jobs.TaskCreator` is the exported field `NewServer` fills beside
+`RuleCreator` — `watchTaskCreator{tasks: tasks}` built at the same site — and `cmd/dl-tool` hands
+it to the watcher, the same sharing rule `Server.RuleCreator` documents
+(docs/14-conventions.md §8.3).
+
+```go
 package store
+
+// WatchFolder is one row of watch_folders with the category name joined in from categories
+// (docs/04-data-model.md section 3.6); Category is NULL when the folder has none or the category
+// row was deleted (ON DELETE SET NULL). The struct lives in settings.go beside Category, Tag,
+// Engine and NotificationChannel — the same placement T077 used.
+type WatchFolder struct {
+	ID              string  `db:"id"`
+	Path            string  `db:"path"`
+	Enabled         int     `db:"enabled"`
+	Destination     string  `db:"destination"`
+	Category        *string `db:"category"`
+	DeleteAfterLoad int     `db:"delete_after_load"`
+	PollIntervalS   int     `db:"poll_interval_s"`
+	LastScanAt      *int64  `db:"last_scan_at"`
+	LastError       *string `db:"last_error"`
+	CreatedAt       int64   `db:"created_at"`
+	UpdatedAt       int64   `db:"updated_at"`
+}
 
 // ListEnabledWatchFolders returns every row of watch_folders with enabled = 1.
 func (s *SettingsStore) ListEnabledWatchFolders(ctx context.Context) ([]WatchFolder, error)
@@ -102,8 +163,28 @@ func (s *SettingsStore) ListEnabledWatchFolders(ctx context.Context) ([]WatchFol
 // GetWatchFolder returns one row by id, or ErrNotFound.
 func (s *SettingsStore) GetWatchFolder(ctx context.Context, id string) (WatchFolder, error)
 
-// TouchWatchFolder writes last_scan_at and last_error after a scan.
+// TouchWatchFolder writes last_scan_at and last_error after a scan; an empty lastErr clears
+// the column.
 func (s *SettingsStore) TouchWatchFolder(ctx context.Context, id string, at int64, lastErr string) error
+
+// SeedWatchFolder inserts one enabled row for path — the DLTOOL_WATCH_DIR seed — and reports
+// whether it created the row. ON CONFLICT(path) DO NOTHING leaves an operator's row untouched
+// across restarts.
+func (s *SettingsStore) SeedWatchFolder(ctx context.Context, path, destination string) (created bool, err error)
+
+// MaxWatchFolderLoaded bounds the per-folder loaded set; the oldest entries drop first, the
+// same trim AppendExtractPassword applies.
+const MaxWatchFolderLoaded = 4096
+
+// WatchFolderLoaded reports whether the folder's loaded set already holds infohash. The set is
+// the persistent record already_loaded is answered from: a per-folder settings key
+// watch_folder_loaded_<id> holding a JSON array of infohashes, so the record survives a restart —
+// the tasks row alone cannot separate already_loaded from torrent_duplicate.
+func (s *SettingsStore) WatchFolderLoaded(ctx context.Context, folderID, infohash string) (bool, error)
+
+// MarkWatchFolderLoaded adds infohash to the folder's loaded set; ScanOnce calls it only after
+// the creator returned a task id.
+func (s *SettingsStore) MarkWatchFolderLoaded(ctx context.Context, folderID, infohash string) error
 ```
 
 The created task records both destinations, so a category or watch-folder default is visible rather than a
@@ -113,26 +194,44 @@ for when the two differ, per the Task object in
 ([FR-044](../02-requirements.md#fr-044-report-the-effective-destination)).
 
 ## Steps
-1. Add the three watch-folder queries to `internal/store/settings.go` with explicit column lists.
+1. Add the `WatchFolder` row struct and the six watch-folder methods — `ListEnabledWatchFolders`,
+   `GetWatchFolder`, `TouchWatchFolder`, `SeedWatchFolder`, `WatchFolderLoaded`,
+   `MarkWatchFolderLoaded` — to `internal/store/settings.go` with explicit column lists, the category
+   name joined in from `categories`.
 2. Create `internal/jobs/watch.go` with the skip vocabulary, `ScanResult`, `Watcher`, `ScanOnce`, `Run`,
-   `newOSWatcher` and the polling implementation.
+   `newOSWatcher`, the polling implementation and the `ErrTorrentDuplicate`/`ErrDestinationRejected`
+   sentinels.
 3. In `ScanOnce`, read each directory entry, skip anything not ending in `.torrent` with `SkipNotATorrent`,
-   parse it with the T031 metainfo parser and skip an unparsable file with `SkipNotATorrent`.
-4. Create the task through `TaskCreator` with the folder's `destination` and `category`; map a rejected
-   destination to `SkipPathRejected` and a known infohash to `SkipDuplicate`.
+   parse it with the T031 metainfo parser and skip an unparsable file with `SkipNotATorrent`. An entry
+   that cannot be read at all is `SkipUnreadable`.
+4. Consult `WatchFolderLoaded` on the parsed manifest's infohash — v1 when present, v2 otherwise, the
+   identity `magnetFromManifest` prefers — and skip a known hash with `SkipAlreadyLoaded`. Then create
+   the task through `TaskCreator` with the file's base name and the folder's `destination` and
+   `category`; map `ErrDestinationRejected` to `SkipPathRejected` and `ErrTorrentDuplicate` to
+   `SkipDuplicate`, and leave the file in place on any other error.
 5. Unlink the source file only after the creator returned a task id, and only when `delete_after_load` is
    set; a failed hand-off always leaves the file in place.
-6. Record the loaded files so a re-scan skips them with `SkipAlreadyLoaded`, keyed on the torrent's
-   infohash rather than the filename.
+6. Record each accepted file with `MarkWatchFolderLoaded` after the creator returned a task id, so a
+   re-scan — in this process or after a restart — answers `SkipAlreadyLoaded`.
 7. Create `internal/jobs/watch_inotify_linux.go` with `//go:build linux`, registering
    `syscall.IN_CLOSE_WRITE | syscall.IN_MOVED_TO` and installing itself into `newOSWatcher` from `init()`.
-   Any registration error returns the polling watcher instead of failing.
-8. Edit `internal/jobs/cron.go` to start `Run` alongside the existing entries and, when `DLTOOL_WATCH_DIR`
-   is set and no row exists for it, seed one enabled `watch_folders` row pointing at it.
+   Any registration error returns the polling watcher instead of failing. The inotify watcher still
+   ticks at the folder's `poll_interval_s` between events: NFS and CIFS mounts accept the registration
+   but never deliver remote writes, so the sweep is what keeps the one-interval bound there.
+8. Edit `internal/jobs/cron.go`: add `Scheduler.WithWatcher` and run `watcher.Run` on the scheduler
+   context inside `Start` beside the cron entries, joining it during the drain. Edit
+   `cmd/dl-tool/main.go`: build `jobs.NewWatcher(store.NewSettingsStore(db), server.WatchCreator)` and
+   attach it at the existing `NewScheduler` construction chain, and when `cfg.WatchDir` is non-empty
+   seed one enabled row — `SeedWatchFolder(ctx, cfg.WatchDir, root)` with `root` the
+   `fsx.ResolveDestinationRoot(cfg.DataRoots, cfg.WatchDir)` result, the containing data root —
+   before the watcher starts. `cfg.WatchDir` arrives already root-validated (`config.Load` warns and
+   clears an out-of-roots value); a resolve or seed error is logged and skipped, never fatal.
 9. Create `internal/jobs/watch_test.go`: drop a fixture `.torrent` into a temporary directory and assert a
    task appears within one poll interval; assert the file is removed with `delete_after_load` and kept
    without it; assert a `.part` file yields `not_a_torrent`; assert a second scan yields `already_loaded`;
-   assert a failing hand-off leaves the file; assert the fallback path runs when `newOSWatcher` errors.
+   assert a creator answering `ErrTorrentDuplicate` yields `torrent_duplicate` and one answering
+   `ErrDestinationRejected` yields `path_rejected`; assert a failing hand-off leaves the file; assert the
+   fallback path runs when `newOSWatcher` errors.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -142,6 +241,11 @@ for when the two differ, per the Task object in
 - [ ] Every skip carries one of the five documented reasons and no other string.
 - [ ] The task's `destination` is the resolved path and `requested_destination` is non-null when they differ.
 - [ ] An inotify registration failure falls back to polling and the same files are still loaded.
+- [ ] Review check (not assertable from `internal/jobs/watch_test.go`) — `cmd/dl-tool/main.go` attaches
+  `jobs.NewWatcher(store.NewSettingsStore(db), server.WatchCreator)` through `scheduler.WithWatcher`
+  before `Start`, so an enabled folder is watched in production, and seeds `cfg.WatchDir` through
+  `SeedWatchFolder` with the containing data root as `destination` when the variable is set
+  (docs/14-conventions.md §8.3).
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -270,3 +374,31 @@ here (deciding files: this task's `## Files` table, docs/14-conventions.md §8.3
 
 Status stays `todo` pending plan repair — do not re-dispatch; the owner must pick remedy 1–3 or amend
 the contract first.
+
+**Repair applied 2026-09-22.** The ruling picked remedy 1, the smallest interpretation consistent
+with the accepted ADRs and the merged code — the same repair class F671 applied to T081. The
+`## Files` table now carries `internal/api/watchcreator.go`, `internal/api/server.go` and
+`cmd/dl-tool/main.go`, and the contract pins every seam the blocked record found missing:
+`watchTaskCreator` hands `CreateTasks` the blob through the `uploadedFilesKey` context slot, so
+routing, the destination jail, dedup and the `requested_destination` echo stay the T020/T033 code
+path; `Server.WatchCreator` exposes it the way `Server.RuleCreator` does; the classified failures
+cross the package boundary as `jobs.ErrTorrentDuplicate` and `jobs.ErrDestinationRejected`, since
+the create endpoint's all-refused answer flattens the rejected[] entry's slug into its detail text;
+`Scheduler.WithWatcher` attaches the loader the way `WithGovernor` attaches the governor, leaving
+the `NewScheduler(db, log)` signature untouched; and the `DLTOOL_WATCH_DIR` seed moved to the
+composition root as `SeedWatchFolder(ctx, cfg.WatchDir, root)` with the destination pinned to the
+`DLTOOL_DATA_ROOTS` entry containing the directory, resolved through `fsx.ResolveDestinationRoot` —
+`watch_folders.destination` is `NOT NULL` and doc 11 §2 names only the path.
+
+The repair also closes the sibling findings the blocked record cited: `WatchFolder` is pinned into
+`internal/store/settings.go` beside `NotificationChannel` (F261, F086's T083 slice — the merged code
+took concrete `*store.SettingsStore` everywhere, no aggregate); `watch_folders` carries no
+`owner_id` after ADR-0019, so the seeded row needs no owner (F341); `tasks.requested_destination`
+exists and `insertPlanned` writes it (F345); the persistent loaded set is a per-folder `settings`
+key behind `WatchFolderLoaded`/`MarkWatchFolderLoaded`, which is why `already_loaded` survives a
+restart (F343); and the inotify path keeps ticking at `poll_interval_s`, so NFS/CIFS mounts that
+accept the registration but never deliver remote writes are still swept (F344). The creator
+signature gained the file's base name so a watch-folder torrent gets the same display-name and
+rejection text an upload would.
+
+The index row stays `todo`; the next loop iteration implements the task.

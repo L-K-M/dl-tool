@@ -83,7 +83,7 @@ column names the package that consumes the parsed field.
 | `DLTOOL_JS_RUNTIME_PATH` | file path | `/usr/bin/node` | no | infrastructure | JavaScript runtime required by `yt-dlp-ejs` for full YouTube support. Missing binary raises `js_runtime_missing` and disables the media lane with a visible warning. | `internal/engine/ytdlp/runner.go` |
 | `DLTOOL_SEVENZIP_PATH` | file path | `/usr/local/bin/7zz` | no | infrastructure | Archive extractor used by the auto-extract job handler. | `internal/jobs/handlers_extract.go` |
 | `DLTOOL_SSRF_ALLOW_PRIVATE` | bool | `false` | no | infrastructure | When `true`, outbound fetches of feeds, indexers and task URIs may resolve to loopback and RFC 1918 addresses and may use ports other than 80/443. Link-local stays denied in every case — that is where the cloud metadata endpoints live. Leave `false` unless an indexer or feed lives on the same LAN. | `internal/secure/ssrf.go` |
-| `DLTOOL_WATCH_DIR` | dir path | *(empty)* | no | preference | Seeds one enabled row in `watch_folders` pointing at this directory. Must be inside `DLTOOL_DATA_ROOTS`. | `internal/jobs/cron.go` |
+| `DLTOOL_WATCH_DIR` | dir path | *(empty)* | no | preference | Seeds one enabled row in `watch_folders` pointing at this directory; the row's `destination` is the `DLTOOL_DATA_ROOTS` entry containing it. Must be inside `DLTOOL_DATA_ROOTS`. | `cmd/dl-tool/main.go` |
 | `DLTOOL_NOTIFY_URL` | url | *(empty)* | no | preference | Seeds one enabled `notification_channels` row of kind `webhook` with this URL. | `internal/jobs/handlers_notify.go` |
 
 Every variable marked **secret** also accepts a `_FILE` suffixed sibling — see §6.
