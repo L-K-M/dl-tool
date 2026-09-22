@@ -29,6 +29,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/engine/aria2"
 	"github.com/L-K-M/dl-tool/internal/engine/qbittorrent"
+	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/obs"
 	"github.com/L-K-M/dl-tool/internal/rss"
 	"github.com/L-K-M/dl-tool/internal/secure"
@@ -116,6 +117,12 @@ type Server struct {
 	// cmd/dl-tool hands it to the rss_poll job poller — one instance
 	// serves all three (docs/14-conventions.md section 8.3).
 	RuleCreator rss.TaskCreator
+
+	// WatchCreator is the one jobs.TaskCreator the composition root built
+	// from tasks: cmd/dl-tool hands it to the watch-folder loader (T083),
+	// the same sharing rule RuleCreator documents
+	// (docs/14-conventions.md section 8.3).
+	WatchCreator jobs.TaskCreator
 
 	// settings owns the engines operations of doc 05 section 11.3, and the
 	// /settings operations T092 adds to the same handlers.
@@ -330,6 +337,9 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	// job poller cmd/dl-tool builds.
 	tasks := NewTaskHandlers(db, engines, cfg.DataRoots, taskGuard, net.DefaultResolver)
 	creator := ruleTaskCreator{tasks: tasks}
+	// The watch-folder creator shares the same tasks instance: a dropped
+	// .torrent takes the identical create path an uploaded one does.
+	watchCreator := watchTaskCreator{tasks: tasks}
 
 	server := &Server{
 		Router:     root,
@@ -350,11 +360,12 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		// fan-out; its item parser is T067's parse.go and its grab
 		// creator the shared ruleTaskCreator, so a 200 that adds items
 		// runs the rules pass through the ordinary task-creation path.
-		feeds:       NewFeedHandlers(db, searchDeps.HTTP, rss.NewParser(time.Now), creator, log),
-		rules:       NewRuleHandlers(db, creator),
-		RuleCreator: creator,
-		SSE:         sseHandlers,
-		bgCancel:    bgCancel,
+		feeds:        NewFeedHandlers(db, searchDeps.HTTP, rss.NewParser(time.Now), creator, log),
+		rules:        NewRuleHandlers(db, creator),
+		RuleCreator:  creator,
+		WatchCreator: watchCreator,
+		SSE:          sseHandlers,
+		bgCancel:     bgCancel,
 	}
 	// Any construction failure after the first goroutine started still
 	// releases it before the error return.

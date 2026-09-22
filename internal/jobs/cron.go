@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -48,6 +49,9 @@ type Scheduler struct {
 	// time.Now by default, a test's fixed clock in cron_test.go.
 	gov *engine.Governor
 	now func() time.Time
+	// watcher is set by WithWatcher: the watch-folder loader Start runs
+	// beside the cron entries (T083).
+	watcher *Watcher
 }
 
 func NewScheduler(db *sqlx.DB, log *slog.Logger) *Scheduler {
@@ -66,6 +70,22 @@ func NewScheduler(db *sqlx.DB, log *slog.Logger) *Scheduler {
 // so the attach needs no timing argument.
 func (s *Scheduler) WithGovernor(gov *engine.Governor) *Scheduler {
 	s.gov = gov
+	return s
+}
+
+// WithWatcher attaches the watch-folder loader; Start runs w.Run on the
+// scheduler context beside the cron entries and joins it during the
+// drain. The field is set before the cron goroutine can observe it — the
+// same attach rule WithGovernor follows. The scheduler's logger is handed
+// over so the loader reports in the same stream.
+func (s *Scheduler) WithWatcher(w *Watcher) *Scheduler {
+	if w == nil {
+		return s
+	}
+	if w.log == nil {
+		w.log = s.log
+	}
+	s.watcher = w
 	return s
 }
 
@@ -96,10 +116,35 @@ func (s *Scheduler) Start(ctx context.Context) {
 		s.evaluateOnce(ctx)
 	}
 
+	// The watch-folder loader runs beside the cron entries on the same
+	// context and is joined during the drain, so Stop leaves no scan
+	// running against a store the caller is about to close.
+	var loops sync.WaitGroup
+	if s.watcher != nil {
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			for {
+				if err := s.watcher.Run(ctx); err != nil && ctx.Err() == nil {
+					s.log.ErrorContext(ctx, "watch folder loader stopped; restarting", "err", err)
+				}
+				// A returned Run — whether it errored or not — restarts
+				// after a minute: the folder list failing once must not
+				// leave the loader dead for the process's lifetime.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Minute):
+				}
+			}
+		}()
+	}
+
 	c.Start()
 	<-ctx.Done()
 	// Stop returns a context that completes when running entries finish.
 	<-c.Stop().Done()
+	loops.Wait()
 }
 
 // enqueueOnce inserts one pending job of kind when none is already waiting.

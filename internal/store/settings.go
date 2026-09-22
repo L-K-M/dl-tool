@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -974,4 +975,222 @@ func OpenNotificationSecret(key secure.Secret, enc *string) (secure.Secret, erro
 	}
 
 	return secure.Secret(plain), nil
+}
+
+// WatchFolder is one row of watch_folders with the category name joined in
+// from categories (docs/04-data-model.md section 3.6); Category is NULL when
+// the folder has none or the category row was deleted (ON DELETE SET NULL).
+type WatchFolder struct {
+	ID              string  `db:"id"`
+	Path            string  `db:"path"`
+	Enabled         int     `db:"enabled"`
+	Destination     string  `db:"destination"`
+	Category        *string `db:"category"`
+	DeleteAfterLoad int     `db:"delete_after_load"`
+	PollIntervalS   int     `db:"poll_interval_s"`
+	LastScanAt      *int64  `db:"last_scan_at"`
+	LastError       *string `db:"last_error"`
+	CreatedAt       int64   `db:"created_at"`
+	UpdatedAt       int64   `db:"updated_at"`
+}
+
+// watchFolderColumns is the explicit column list both watch-folder reads
+// share — the folder's own columns plus the joined category name — so the
+// list and detail reads cannot drift apart.
+const watchFolderColumns = `w.id, w.path, w.enabled, w.destination, c.name AS category,
+w.delete_after_load, w.poll_interval_s, w.last_scan_at, w.last_error, w.created_at, w.updated_at`
+
+const queryListEnabledWatchFolders = `SELECT ` + watchFolderColumns + `
+FROM watch_folders w LEFT JOIN categories c ON c.id = w.category_id
+WHERE w.enabled = 1
+ORDER BY w.created_at, w.id`
+
+// ListEnabledWatchFolders returns every row of watch_folders with
+// enabled = 1.
+func (s *SettingsStore) ListEnabledWatchFolders(ctx context.Context) ([]WatchFolder, error) {
+	var folders []WatchFolder
+	if err := s.db.SelectContext(ctx, &folders, queryListEnabledWatchFolders); err != nil {
+		return nil, fmt.Errorf("store: list enabled watch folders: %w", err)
+	}
+
+	return folders, nil
+}
+
+const queryWatchFolderByID = `SELECT ` + watchFolderColumns + `
+FROM watch_folders w LEFT JOIN categories c ON c.id = w.category_id
+WHERE w.id = ?`
+
+// GetWatchFolder returns one row by id, or ErrNotFound.
+func (s *SettingsStore) GetWatchFolder(ctx context.Context, id string) (WatchFolder, error) {
+	var folder WatchFolder
+	err := s.db.GetContext(ctx, &folder, queryWatchFolderByID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return WatchFolder{}, fmt.Errorf("store: watch folder %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return WatchFolder{}, fmt.Errorf("store: watch folder %s: %w", id, err)
+	}
+
+	return folder, nil
+}
+
+// queryTouchWatchFolder clears last_error on an empty value — NULLIF turns
+// the empty string into NULL — so one statement covers both outcomes.
+const queryTouchWatchFolder = `UPDATE watch_folders
+SET last_scan_at = ?, last_error = NULLIF(?, ''), updated_at = ?
+WHERE id = ?`
+
+// TouchWatchFolder writes last_scan_at and last_error after a scan; an
+// empty lastErr clears the column. ErrNotFound means the id addresses no
+// row.
+func (s *SettingsStore) TouchWatchFolder(ctx context.Context, id string, at int64, lastErr string) error {
+	result, err := s.db.ExecContext(ctx, queryTouchWatchFolder, at, lastErr, at, id)
+	if err != nil {
+		return fmt.Errorf("store: touch watch folder %s: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: touch watch folder %s: read rows affected: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: touch watch folder %s: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+// querySeedWatchFolder inserts the DLTOOL_WATCH_DIR row; the column
+// defaults supply enabled, delete_after_load and poll_interval_s, and
+// ON CONFLICT(path) DO NOTHING leaves an operator's row untouched across
+// restarts.
+const querySeedWatchFolder = `INSERT INTO watch_folders (id, path, destination, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(path) DO NOTHING`
+
+// SeedWatchFolder inserts one enabled row for path — the DLTOOL_WATCH_DIR
+// seed — and reports whether it created the row.
+func (s *SettingsStore) SeedWatchFolder(ctx context.Context, path, destination string) (created bool, err error) {
+	now := time.Now().UnixMilli()
+	result, err := s.db.ExecContext(
+		ctx, querySeedWatchFolder, NewID(PrefixWatchFolder), path, destination, now, now,
+	)
+	if err != nil {
+		return false, fmt.Errorf("store: seed watch folder %s: %w", path, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: seed watch folder %s: read rows affected: %w", path, err)
+	}
+
+	return rows == 1, nil
+}
+
+// MaxWatchFolderLoaded bounds the per-folder loaded set; the oldest
+// entries drop first, the same trim AppendExtractPassword applies.
+const MaxWatchFolderLoaded = 4096
+
+// watchFolderLoadedPrefix prefixes the per-folder settings key holding the
+// persistent already_loaded record — a JSON array of infohashes, so the
+// record survives a restart: the tasks row alone cannot separate
+// already_loaded from torrent_duplicate.
+const watchFolderLoadedPrefix = "watch_folder_loaded_"
+
+func watchFolderLoadedKey(folderID string) string {
+	return watchFolderLoadedPrefix + folderID
+}
+
+// WatchFolderLoaded reports whether the folder's loaded set already holds
+// infohash. An absent settings row is the empty set.
+func (s *SettingsStore) WatchFolderLoaded(ctx context.Context, folderID, infohash string) (bool, error) {
+	key := watchFolderLoadedKey(folderID)
+
+	var valueJSON string
+	err := s.db.GetContext(ctx, &valueJSON, querySettingValue, key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: read settings key %s: %w", key, err)
+	}
+
+	var list []string
+	if err := json.Unmarshal([]byte(valueJSON), &list); err != nil {
+		return false, fmt.Errorf("store: decode settings key %s: want a JSON array: %w", key, err)
+	}
+
+	return slices.Contains(list, infohash), nil
+}
+
+// watchFolderLoadedMu serializes loaded-set appends process-wide: the
+// JSON array under one settings key is a read-modify-write, and two
+// overlapping deferred transactions that both read then both write lose
+// the earlier entry — or answer SQLITE_BUSY on the upgrade. Serializing
+// here rather than on the instance keeps the guarantee when a caller
+// holds a different SettingsStore over the same db.
+var watchFolderLoadedMu sync.Mutex
+
+// MarkWatchFolderLoaded adds infohash to the folder's loaded set in one
+// transaction when it is absent, keeping at most MaxWatchFolderLoaded
+// entries, oldest dropped first. Eviction is graceful but visible: a
+// still-present file whose infohash was trimmed re-surfaces as
+// SkipDuplicate on the next sweep — task dedup, not the loaded set, keeps
+// it from loading twice.
+func (s *SettingsStore) MarkWatchFolderLoaded(ctx context.Context, folderID, infohash string) error {
+	watchFolderLoadedMu.Lock()
+	defer watchFolderLoadedMu.Unlock()
+
+	key := watchFolderLoadedKey(folderID)
+
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: append settings key %s: %w", key, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of watch-folder loaded-set write failed", "error", err)
+		}
+	}()
+
+	var valueJSON string
+	err = tx.GetContext(ctx, &valueJSON, querySettingValue, key)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: append settings key %s: %w", key, err)
+	}
+
+	var list []string
+	if err == nil {
+		if err := json.Unmarshal([]byte(valueJSON), &list); err != nil {
+			return fmt.Errorf("store: decode settings key %s: want a JSON array: %w", key, err)
+		}
+	}
+	if slices.Contains(list, infohash) {
+		return nil
+	}
+
+	list = append(list, infohash)
+	if len(list) > MaxWatchFolderLoaded {
+		list = list[len(list)-MaxWatchFolderLoaded:]
+	}
+
+	encoded, err := json.Marshal(list)
+	if err != nil {
+		return fmt.Errorf("store: encode settings key %s: %w", key, err)
+	}
+	now := time.Now().UnixMilli()
+	if _, err := tx.ExecContext(
+		ctx, queryUpsertSetting,
+		NewID(PrefixSetting), key, string(encoded), now, now,
+	); err != nil {
+		return fmt.Errorf("store: append settings key %s: %w", key, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: append settings key %s: commit: %w", key, err)
+	}
+
+	return nil
 }
