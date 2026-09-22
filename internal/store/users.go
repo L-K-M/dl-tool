@@ -113,8 +113,9 @@ WHERE id = ?
 AND revoked_at IS NULL
 AND (last_used_at IS NULL OR last_used_at < ?)`
 
-	// The caller owns every field of the row, timestamps included, so the
-	// creation response can render exactly what was stored.
+	// The caller owns every field of the row except updated_at, which
+	// mirrors created_at on insert, so the creation response can render
+	// exactly what was stored.
 	queryCreateAPIToken = `INSERT INTO api_tokens
 (id, user_id, name, token_hash, prefix, last_used_at, expires_at, revoked_at, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
