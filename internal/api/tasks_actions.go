@@ -1087,6 +1087,9 @@ func (h *TaskHandlers) applyPatchMutators(
 	// applyLiveRateLimits owns — must not 503 on an engine the request
 	// never dials, and must not keep a limit patch from reaching the
 	// store-then-apply path that keeps the value on an engine failure.
+	// Keep this list in lockstep with the engine mutators applied below:
+	// a field that gains an engine apply but is missing here would
+	// silently skip it.
 	needsEngine := body.Category != nil || body.Tags != nil || body.Sequential != nil ||
 		body.RatioLimit != nil || body.SeedingTimeLimit != nil || body.Destination != nil
 	if !needsEngine {

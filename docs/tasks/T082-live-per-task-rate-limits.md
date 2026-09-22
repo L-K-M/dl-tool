@@ -195,14 +195,21 @@ internal/engine/bandwidth_test.go
 Two contract details resolved against the existing code, neither a `## Blocked`:
 
 - `TaskHandlers` carries no `*engine.Governor` field and `NewTaskHandlers` lives in `tasks.go`,
-  outside the Files table. `ApplyTask` reads only `g.reg`, so the handler calls it on
-  `engine.NewGovernor(h.engines, nil)` — a governor over the same shared registry applies
-  identically, and `ApplyTask` takes no lock because it touches no governor state.
+  outside the Files table. The handler calls the package-level
+  `engine.ApplyTask(ctx, h.engines, …)`, which consumes only the shared registry and takes no
+  lock — no governor is constructed per request. `Governor.ApplyTask` remains as the contract's
+  method, a thin delegation to the package function.
 - The engine call moved from before the row write to after it, per the contract's outcome
   table: an unreachable engine answers `503` with the row already holding the new pair. The
   mutators keep their engine-first order; only the rate limits changed sides.
   `TestPatchTaskEngineUnavailable`, which pinned the old nothing-persisted semantics, became
   `TestPatchLimitEngineUnavailable` asserting the kept value.
+- `applyPatchMutators` resolved the engine unconditionally once the task held a handle, so a
+  `dl_limit`-only patch against an unregistered engine 503'd before the row write — the
+  kept-value promise could not hold there. The lookup is now lazy (`needsEngine` covers exactly
+  the six mutator fields): a patch carrying no engine field persists without dialling the
+  engine, and a limit patch reaches `ApplyTask` — pinned by `TestPatchLimitEngineNotRegistered`
+  asserting 503 with the value kept.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
