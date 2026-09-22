@@ -136,10 +136,16 @@ func TestTokenRevealedOnce(t *testing.T) {
 		t.Errorf("expires_at = %q, want null when the key is omitted", *omittedBody.ExpiresAt)
 	}
 
-	// A label is bounded: a 257-character name is a 422, not a stored row.
+	// A label is bounded: a 257-character name is a 422, not a stored row,
+	// while exactly 256 characters is still accepted.
 	tooLong := api.Post("/api-tokens", "Authorization: Bearer "+management,
 		map[string]any{"name": strings.Repeat("n", 257)})
 	assertProblem(t, tooLong, http.StatusUnprocessableEntity, SlugValidationFailed)
+	atLimit := api.Post("/api-tokens", "Authorization: Bearer "+management,
+		map[string]any{"name": strings.Repeat("n", 256)})
+	if atLimit.Code != http.StatusCreated {
+		t.Errorf("256-char name = %d, want %d: %s", atLimit.Code, http.StatusCreated, atLimit.Body.String())
+	}
 
 	// The minted value authenticates — it is a live bearer credential.
 	response := api.Get("/api-tokens", "Authorization: Bearer "+created.Token)
@@ -154,8 +160,8 @@ func TestTokenRevealedOnce(t *testing.T) {
 	}
 
 	list := listTokens(t, api, management, "")
-	if list.Total != 3 || len(list.Items) != 3 {
-		t.Fatalf("list = %d items / total %d, want 3/3", len(list.Items), list.Total)
+	if list.Total != 4 || len(list.Items) != 4 {
+		t.Fatalf("list = %d items / total %d, want 4/4", len(list.Items), list.Total)
 	}
 	var item *tokenListItem
 	for i := range list.Items {
