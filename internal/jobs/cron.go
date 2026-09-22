@@ -2,12 +2,15 @@ package jobs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/robfig/cron/v3"
 
+	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
@@ -19,6 +22,12 @@ const JobKindRSSPoll = "rss_poll"
 // minute, so a newly created feed (next_fetch_at = now) waits at most a
 // minute for its first poll.
 const rssPollSchedule = "@every 1m"
+
+// scheduleEvalSpec is the cadence of the bandwidth-schedule entry
+// (T081): once a minute, the granularity the 168-cell grid is defined
+// at — a cell spans a whole hour, so no faster tick can observe a
+// boundary the minute tick misses.
+const scheduleEvalSpec = "* * * * *"
 
 // queryPendingOfKind counts the pending rows of one jobs.kind; the cron
 // entry enqueues only when this is zero. The check collapses bursts of
@@ -32,8 +41,13 @@ const queryPendingOfKind = `SELECT COUNT(*) FROM jobs WHERE kind = ? AND state =
 // (ADR-0015). cmd/dl-tool starts it in OnStart on the run context and
 // cancels that context in OnStop.
 type Scheduler struct {
-	db  *sqlx.DB
-	log *slog.Logger
+	db       *sqlx.DB
+	log      *slog.Logger
+	settings *store.SettingsStore
+	// gov is set by WithGovernor and now is the injectable clock —
+	// time.Now by default, a test's fixed clock in cron_test.go.
+	gov *engine.Governor
+	now func() time.Time
 }
 
 func NewScheduler(db *sqlx.DB, log *slog.Logger) *Scheduler {
@@ -41,7 +55,18 @@ func NewScheduler(db *sqlx.DB, log *slog.Logger) *Scheduler {
 		log = slog.Default()
 	}
 
-	return &Scheduler{db: db, log: log}
+	return &Scheduler{db: db, log: log, settings: store.NewSettingsStore(db), now: time.Now}
+}
+
+// WithGovernor attaches the bandwidth governor and arms the "* * * * *"
+// entry that calls EvaluateSchedule — Start registers the entry for any
+// attached governor, whether or not the schedule is enabled; the
+// evaluator itself is the no-op while the schedule_enabled settings key
+// is false. The field is set before the cron goroutine can observe it,
+// so the attach needs no timing argument.
+func (s *Scheduler) WithGovernor(gov *engine.Governor) *Scheduler {
+	s.gov = gov
+	return s
 }
 
 // Start runs the cron until ctx ends, then stops it and waits for any
@@ -55,6 +80,20 @@ func (s *Scheduler) Start(ctx context.Context) {
 		// say so rather than run silently without the entry.
 		s.log.ErrorContext(ctx, "register cron entry failed", "schedule", rssPollSchedule, "err", err)
 		return
+	}
+	if s.gov != nil {
+		if _, err := c.AddFunc(scheduleEvalSpec, func() { s.evaluateOnce(ctx) }); err != nil {
+			s.log.ErrorContext(ctx, "register cron entry failed", "schedule", scheduleEvalSpec, "err", err)
+			return
+		}
+	}
+
+	// Apply the active cell at once rather than waiting for the first
+	// minute boundary — a restart inside a No Download window would
+	// otherwise leave running transfers live for up to a minute.
+	// Evaluated before c.Start so this call cannot overlap a tick.
+	if s.gov != nil {
+		s.evaluateOnce(ctx)
 	}
 
 	c.Start()
@@ -84,6 +123,56 @@ func (s *Scheduler) enqueueOnce(ctx context.Context, kind string) {
 			s.log.ErrorContext(ctx, "cron enqueue failed", "kind", kind, "err", err)
 		}
 	}
+}
+
+// evaluateOnce runs the minute tick of the bandwidth schedule. Errors
+// are logged, never returned — a missed minute is recovered by the next
+// tick, and the cron entry has no retry channel of its own.
+func (s *Scheduler) evaluateOnce(ctx context.Context) {
+	if err := s.EvaluateSchedule(ctx, s.now()); err != nil && ctx.Err() == nil {
+		s.log.ErrorContext(ctx, "schedule evaluation failed", "err", err)
+	}
+}
+
+// EvaluateSchedule reads the cell for now — day*24+hour with Monday as
+// day 0, in time.Local — resolves the mode and calls Governor.ApplyMode.
+// It is a no-op while schedule_enabled is false and idempotent inside
+// one cell: ApplyMode changes nothing at the engines when the resolved
+// mode is the one already applied.
+func (s *Scheduler) EvaluateSchedule(ctx context.Context, now time.Time) error {
+	if s.gov == nil {
+		return errors.New("jobs: schedule evaluation has no governor")
+	}
+
+	cells, enabled, err := s.settings.ScheduleSnapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("jobs: read bandwidth schedule snapshot: %w", err)
+	}
+	if !enabled {
+		return nil
+	}
+
+	local := now.In(time.Local)
+	// Weekday counts Sunday as 0; the grid counts Monday as 0.
+	day := (int(local.Weekday()) + 6) % 7
+	idx := day*24 + local.Hour()
+	var mode engine.Mode
+	switch cells[idx] {
+	case store.ScheduleNoDownload:
+		mode = engine.ModeNoDownload
+	case store.ScheduleDefault:
+		mode = engine.ModeDefault
+	case store.ScheduleAlternative:
+		mode = engine.ModeAlternative
+	default:
+		return fmt.Errorf("jobs: bandwidth schedule cell %d holds unknown mode %q", idx, cells[idx])
+	}
+
+	if err := s.gov.ApplyMode(ctx, mode); err != nil {
+		return fmt.Errorf("jobs: apply schedule mode %s: %w", mode, err)
+	}
+
+	return nil
 }
 
 // cronLogger bridges robfig/cron's Logger onto slog so recovered panics
