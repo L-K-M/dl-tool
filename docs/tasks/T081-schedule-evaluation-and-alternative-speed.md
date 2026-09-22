@@ -187,7 +187,11 @@ Rerunnable evidence on this commit:
 grep -rn "engine.NewRegistry\|engine.NewGovernor" internal/ cmd/ --include="*.go" | grep -v _test
 # → internal/api/server.go:240 builds the registry; cmd/dl-tool/main.go:260 builds the governor.
 
-# The scheduler's only call sites — main.go:232 constructs it before main.go:260 builds the governor.
+# No other file constructs a Scheduler.
+grep -rn "NewScheduler" internal/ cmd/ --include="*.go" | grep -v _test
+# → cmd/dl-tool/main.go:232 is the sole non-test construction site.
+
+# main.go:232 constructs the scheduler before main.go:260 builds the governor.
 grep -n "NewScheduler\|scheduler\.Start\|NewGovernor" cmd/dl-tool/main.go
 
 # api already imports jobs, so jobs cannot reach server.Engines through api (import cycle).
@@ -218,10 +222,12 @@ here (deciding files: this task's `## Files` table, docs/14-conventions.md §8.3
    class the owner applied to T071.
 2. Alternatively add `internal/api/server.go` to the table and move scheduler construction into
    `NewServer`, which already owns `engines` and a `store.NewTaskStore(db)`. A larger repair: it rewrites
-   T066's call site.
+   T066's call site at main.go:232 — so this remedy also needs `cmd/dl-tool/main.go` in the Files table
+   to retire the old construction site.
 3. Alternatively prescribe the package-global publish explicitly (`NewGovernor` records the process
    governor; `EvaluateSchedule` resolves it per tick; `NewScheduler` attaches the tasks store), amending
    the contract to say so. Keeps step 8's "no main.go edit" promise at the price of an uncontracted
    process singleton and a `WithGovernor` that production never calls.
 
-Status stays `todo` pending plan repair.
+Status stays `todo` pending plan repair — do not re-dispatch; the owner must pick remedy 1–3 or amend
+the contract first.
