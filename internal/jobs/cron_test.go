@@ -321,6 +321,30 @@ func TestDisabledScheduleDoesNothing(t *testing.T) {
 	require.Equal(t, engine.Mode(""), f.governor.Mode(), "a disabled schedule applies no mode")
 }
 
+func TestAppendedEventKeepsParkedMembership(t *testing.T) {
+	f := newScheduleFixture(t, engine.NameAria2)
+	ctx := t.Context()
+
+	f.writeGrid(t, true, map[int]store.ScheduleMode{10: store.ScheduleNoDownload})
+	task := f.addTask(t, engine.NameAria2, "downloading", "gid-one")
+
+	require.NoError(t, f.scheduler.EvaluateSchedule(ctx, scheduleTime(10, 0)))
+	require.Equal(t, "paused", f.taskState(t, task.ID))
+
+	// A reconcile-style info event appended after the park must not
+	// eject the row: parked membership follows the newest pause/resume
+	// event, never the newest event of any kind.
+	require.NoError(t, f.tasks.AppendEvent(ctx, task.ID, "info", engine.CodeTaskReconciled,
+		"reconciled while parked", nil))
+
+	parked, err := f.tasks.ListScheduleParked(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{task.ID}, parked, "an appended info event must not eject a parked task")
+
+	require.NoError(t, f.scheduler.EvaluateSchedule(ctx, scheduleTime(9, 0)))
+	require.Equal(t, "queued", f.taskState(t, task.ID), "the parked task must still be released")
+}
+
 func TestStartAppliesCellImmediately(t *testing.T) {
 	f := newScheduleFixture(t, engine.NameAria2)
 	f.writeGrid(t, true, map[int]store.ScheduleMode{10: store.ScheduleNoDownload})

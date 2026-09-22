@@ -395,17 +395,21 @@ SET state = 'paused', admission_pending = 0, updated_at = ?
 WHERE id = ? AND state IN (?)`
 
 	// The parked set of the No Download cell (T081): tasks currently
-	// paused whose most recent task_events row is the schedule's own
-	// pause. The (at, id) ordering is the event log's canonical order, so
-	// a user pause — writing task.paused after the park — takes the row
-	// out of the set and the scheduler can never resume what the
-	// operator parked. The literal is CodeTaskSchedulePaused's storage
-	// form; SQL cannot reach the Go constant, so the two are pinned
-	// together by the schedule tests through the real store.
+	// paused whose most recent membership-changing task_events row is
+	// the schedule's own pause. The subquery reads only the pause/resume
+	// vocabulary — an appended info event like task.reconciled must not
+	// eject a parked row and strand it paused — and the (at, id)
+	// ordering is the event log's canonical order, so a user pause
+	// writing task.paused after the park takes the row out of the set
+	// and the scheduler can never resume what the operator parked. The
+	// literals are the codes' storage forms; SQL cannot reach the Go
+	// constants, so the two are pinned together by the schedule tests
+	// through the real store.
 	queryListScheduleParked = `SELECT t.id FROM tasks t
 WHERE t.state = 'paused'
 AND (SELECT e.code FROM task_events e
      WHERE e.task_id = t.id
+       AND e.code IN ('task.schedule.paused', 'task.paused', 'task.resumed', 'task.schedule.resumed')
      ORDER BY e.at DESC, e.id DESC
      LIMIT 1) = 'task.schedule.paused'`
 
