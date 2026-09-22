@@ -148,6 +148,9 @@ type Server struct {
 	// rules owns the /rules operations of doc 05 section 10.2.
 	rules *RuleHandlers
 
+	// tokens owns the /api-tokens operations of doc 05 section 12.
+	tokens *TokenHandlers
+
 	// SSE owns the live-update endpoints: GET /events and GET /sync, and
 	// the hub they read from. It is exported for the composition root in
 	// cmd/dl-tool, which owns the *obs.Metrics instance whose
@@ -362,6 +365,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		// runs the rules pass through the ordinary task-creation path.
 		feeds:        NewFeedHandlers(db, searchDeps.HTTP, rss.NewParser(time.Now), creator, log),
 		rules:        NewRuleHandlers(db, creator),
+		tokens:       NewTokenHandlers(db),
 		RuleCreator:  creator,
 		WatchCreator: watchCreator,
 		SSE:          sseHandlers,
@@ -528,6 +532,7 @@ func (s *Server) registerOperations() {
 	RegisterSearchRoutes(s.API, s.search)
 	s.feeds.Register(s.API)
 	s.rules.Register(s.API)
+	s.tokens.Register(s.API)
 	s.SSE.RegisterOperations(s.API)
 
 	// The bulk-action and patch operations of docs/05-api-contract.md

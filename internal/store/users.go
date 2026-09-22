@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -20,6 +22,23 @@ type User struct {
 	LastLoginAt  *int64 `db:"last_login_at" json:"-"`
 	CreatedAt    int64  `db:"created_at" json:"-"`
 	UpdatedAt    int64  `db:"updated_at" json:"-"`
+}
+
+// APIToken is one row of the api_tokens table (docs/04-data-model.md
+// section 3.1). The bearer value itself is never stored, only its SHA-256
+// hex in TokenHash; TokenHash and RevokedAt never serialize, so the struct
+// can never leak them into a response.
+type APIToken struct {
+	ID         string `db:"id" json:"id"`
+	UserID     string `db:"user_id" json:"-"`
+	Name       string `db:"name" json:"name"`
+	TokenHash  string `db:"token_hash" json:"-"`
+	Prefix     string `db:"prefix" json:"prefix"`
+	LastUsedAt *int64 `db:"last_used_at" json:"-"`
+	ExpiresAt  *int64 `db:"expires_at" json:"expires_at"`
+	RevokedAt  *int64 `db:"revoked_at" json:"-"`
+	CreatedAt  int64  `db:"created_at" json:"created_at"`
+	UpdatedAt  int64  `db:"updated_at" json:"-"`
 }
 
 // Session is a cookie-authenticated login. The cookie value itself is never
@@ -93,6 +112,39 @@ SET last_used_at = ?, updated_at = ?
 WHERE id = ?
 AND revoked_at IS NULL
 AND (last_used_at IS NULL OR last_used_at < ?)`
+
+	// The caller owns every field of the row except updated_at, which
+	// mirrors created_at on insert, so the creation response can render
+	// exactly what was stored.
+	queryCreateAPIToken = `INSERT INTO api_tokens
+(id, user_id, name, token_hash, prefix, last_used_at, expires_at, revoked_at, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	// Revoked tokens stay in the table for the audit trail but are neither
+	// listed nor re-revocable, so both queries filter them out.
+	queryCountAPITokens = `SELECT COUNT(*) FROM api_tokens
+WHERE user_id = ? AND revoked_at IS NULL`
+
+	queryListAPITokens = `SELECT id, user_id, name, prefix, last_used_at, expires_at, created_at, updated_at
+FROM api_tokens
+WHERE user_id = ? AND revoked_at IS NULL
+ORDER BY created_at DESC, id DESC
+LIMIT ?`
+
+	// The cursor predicate is the keyset form of the page's ORDER BY — the
+	// same (created_at, id) tuple task_events uses.
+	queryListAPITokensBefore = `SELECT id, user_id, name, prefix, last_used_at, expires_at, created_at, updated_at
+FROM api_tokens
+WHERE user_id = ? AND revoked_at IS NULL
+AND (created_at < ? OR (created_at = ? AND id < ?))
+ORDER BY created_at DESC, id DESC
+LIMIT ?`
+
+	// A second revoke finds no row, so a repeated DELETE answers 404 like
+	// an unknown id.
+	queryRevokeAPIToken = `UPDATE api_tokens
+SET revoked_at = ?, updated_at = ?
+WHERE id = ? AND user_id = ? AND revoked_at IS NULL`
 )
 
 // CountUsers returns the number of rows in users — 0 before first-run setup, 1 after.
@@ -240,7 +292,7 @@ func UserByAPITokenHash(ctx context.Context, db *sqlx.DB, hash string) (User, er
 		return User{}, fmt.Errorf("store: user by api token hash: %w", err)
 	}
 
-	if _, err := db.ExecContext(ctx, queryTouchAPIToken, now, now, row.TokenID, now-apiTokenTouchIntervalMS); err != nil {
+	if err := NewUserStore(db).TouchAPIToken(ctx, row.TokenID, now); err != nil {
 		return User{}, fmt.Errorf("store: stamp api token use: %w", err)
 	}
 
@@ -316,4 +368,173 @@ func (row tokenUserRow) user() User {
 		CreatedAt:    row.CreatedAt,
 		UpdatedAt:    row.UpdatedAt,
 	}
+}
+
+// UserStore owns the api_tokens table: issue, list and revoke of
+// docs/05-api-contract.md section 12. The bearer resolution above stays a
+// package function for its existing caller; everything else goes through
+// this wrapper, like SettingsStore and TaskStore wrap theirs.
+type UserStore struct{ db *sqlx.DB }
+
+// NewUserStore wraps db. A nil db — the openapi subcommand — builds a store
+// whose calls fail on use, which serving prevents.
+func NewUserStore(db *sqlx.DB) *UserStore {
+	return &UserStore{db: db}
+}
+
+// CreateAPIToken inserts one api_tokens row. The caller owns every field:
+// t.ID (a tok_ ULID), t.TokenHash (the SHA-256 hex of the bearer value) and
+// t.Prefix (its first 8 characters) included, so the clear-text value never
+// reaches the store — only its hash does.
+func (s *UserStore) CreateAPIToken(ctx context.Context, t APIToken) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		queryCreateAPIToken,
+		t.ID, t.UserID, t.Name, t.TokenHash, t.Prefix, t.LastUsedAt, t.ExpiresAt, t.RevokedAt,
+		t.CreatedAt, t.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("store: create api token %q: %w", t.ID, err)
+	}
+
+	return nil
+}
+
+// ListAPITokens returns one page of the account's live tokens, newest first,
+// with the same cursor envelope as every other list endpoint
+// (docs/05-api-contract.md section 1.4): limit defaults to 100 and is
+// re-checked against the 1..500 range, total counts every live token ignoring
+// the cursor, and nextCursor is empty exactly on the last page. A cursor that
+// is not a page token is ErrStaleCursor; a well-formed one simply continues
+// the walk — there is one account, so there is no filter to bind it to.
+// Revoked rows are the audit trail only and never list.
+func (s *UserStore) ListAPITokens(
+	ctx context.Context,
+	userID string,
+	limit int,
+	cursor string,
+) ([]APIToken, string, int, error) {
+	if limit == 0 {
+		limit = taskListDefaultLimit
+	}
+	if limit < 1 || limit > taskListMaxLimit {
+		return nil, "", 0, fmt.Errorf("store: list api tokens: limit %d outside 1..%d", limit, taskListMaxLimit)
+	}
+
+	var page apiTokenPageCursor
+	if cursor != "" {
+		decoded, err := decodeAPITokenCursor(cursor)
+		if err != nil {
+			return nil, "", 0, fmt.Errorf("store: list api tokens: %w", err)
+		}
+		page = decoded
+	}
+
+	var total int
+	if err := s.db.GetContext(ctx, &total, queryCountAPITokens, userID); err != nil {
+		return nil, "", 0, fmt.Errorf("store: list api tokens: count: %w", err)
+	}
+
+	// One row past the limit decides whether another page exists, so
+	// nextCursor is empty exactly on the last page.
+	var tokens []APIToken
+	var err error
+	if cursor == "" {
+		err = s.db.SelectContext(ctx, &tokens, queryListAPITokens, userID, limit+1)
+	} else {
+		err = s.db.SelectContext(
+			ctx,
+			&tokens,
+			queryListAPITokensBefore,
+			userID, page.At, page.At, page.ID, limit+1,
+		)
+	}
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("store: list api tokens: read page: %w", err)
+	}
+
+	if len(tokens) <= limit {
+		return tokens, "", total, nil
+	}
+	tokens = tokens[:limit]
+
+	last := tokens[len(tokens)-1]
+	nextCursor, err := encodeAPITokenCursor(apiTokenPageCursor{At: last.CreatedAt, ID: last.ID})
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("store: list api tokens: encode cursor: %w", err)
+	}
+
+	return tokens, nextCursor, total, nil
+}
+
+// RevokeAPIToken sets revoked_at on the token owned by userID. The row is
+// kept — it is the audit trail — but it no longer lists or authenticates.
+// An unknown, foreign or already-revoked id is ErrNotFound.
+func (s *UserStore) RevokeAPIToken(ctx context.Context, userID, id string) error {
+	now := time.Now().UnixMilli()
+	result, err := s.db.ExecContext(ctx, queryRevokeAPIToken, now, now, id, userID)
+	if err != nil {
+		return fmt.Errorf("store: revoke api token %q: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: revoke api token %q: read rows affected: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: revoke api token %q: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+// TouchAPIToken stamps last_used_at, at most once per
+// apiTokenTouchIntervalMS: the update is a no-op while the stored stamp is
+// fresher, so a chatty bearer client never turns into a write per request.
+// The revoked_at recheck keeps a token revoked after its lookup unstamped.
+func (s *UserStore) TouchAPIToken(ctx context.Context, id string, at int64) error {
+	_, err := s.db.ExecContext(ctx, queryTouchAPIToken, at, at, id, at-apiTokenTouchIntervalMS)
+	if err != nil {
+		return fmt.Errorf("store: touch api token %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// apiTokenPageCursor is the decoded token page token: the (created_at, id) of
+// the last row of the page that issued it — the same keyset codec
+// task_events uses.
+type apiTokenPageCursor struct {
+	At int64  `json:"a"`
+	ID string `json:"i"`
+}
+
+// encodeAPITokenCursor renders a page token as base64 JSON — the same codec
+// every other list endpoint uses (docs/05-api-contract.md section 1.4).
+func encodeAPITokenCursor(c apiTokenPageCursor) (string, error) {
+	encoded, err := json.Marshal(c)
+	if err != nil {
+		return "", err
+	}
+
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+// decodeAPITokenCursor parses a page token. A token that is not base64 JSON
+// of the cursor shape is ErrStaleCursor: it belongs to no page, and the wire
+// outcome is the same 422 as any other stale cursor.
+func decodeAPITokenCursor(token string) (apiTokenPageCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return apiTokenPageCursor{}, fmt.Errorf("%w: token is not valid base64", ErrStaleCursor)
+	}
+
+	var cursor apiTokenPageCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil {
+		return apiTokenPageCursor{}, fmt.Errorf("%w: token is not a page cursor", ErrStaleCursor)
+	}
+	if cursor.ID == "" || cursor.At <= 0 {
+		return apiTokenPageCursor{}, fmt.Errorf("%w: token carries no row", ErrStaleCursor)
+	}
+
+	return cursor, nil
 }
