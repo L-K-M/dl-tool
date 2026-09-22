@@ -184,11 +184,11 @@ Rerunnable evidence on this commit:
 
 ```bash
 # The only production registry and governor; both call sites live outside the Files table.
-git grep -nE "engine.NewRegistry|engine.NewGovernor" HEAD -- '*.go' | grep -v _test | sed 's|^HEAD:||'
+git grep -nE "engine.NewRegistry|engine.NewGovernor" HEAD -- '*.go' | grep -v _test | sed 's|^[^:]*:||'
 # → internal/api/server.go:240 builds the registry; cmd/dl-tool/main.go:260 builds the governor.
 
 # No other file constructs a Scheduler.
-git grep -nE "NewScheduler" HEAD -- '*.go' | grep -v _test | sed 's|^HEAD:||'
+git grep -nE "NewScheduler" HEAD -- '*.go' | grep -v _test | sed 's|^[^:]*:||'
 # → cmd/dl-tool/main.go:232 is the sole non-test construction site.
 
 # main.go:232 constructs the scheduler before main.go:260 builds the governor.
