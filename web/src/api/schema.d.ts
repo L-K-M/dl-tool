@@ -648,6 +648,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/settings/schedule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Read the 24x7 bandwidth schedule
+     * @description The 168-cell grid and its enabled flag, plus the container time zone the cells are evaluated in and the cell in force at the moment of the call.
+     */
+    get: operations["get-schedule"];
+    /**
+     * Replace the 24x7 bandwidth schedule
+     * @description Replaces all 168 cells and the enabled flag in one transaction and answers the stored grid. A body that is not exactly 168 integers in 0..2 is 422 and nothing is written. timezone and active_mode are read-only: values a client sends are ignored.
+     */
+    put: operations["put-schedule"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/sync": {
     parameters: {
       query?: never;
@@ -1619,6 +1643,18 @@ export interface components {
       evaluated: number;
       /** Format: int64 */
       matched: number;
+    };
+    ScheduleBody: {
+      /**
+       * @description the cell in force at the moment of the call
+       * @enum {string}
+       */
+      readonly active_mode?: "no_download" | "default" | "alternative";
+      /** @description 168 cells indexed day*24+hour, day 0 = Monday */
+      cells: number[];
+      enabled: boolean;
+      /** @description IANA name of the zone the cells are evaluated in */
+      readonly timezone?: string;
     };
     ScoreFormat: {
       name: string;
@@ -3287,6 +3323,68 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-schedule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ScheduleBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "put-schedule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ScheduleBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ScheduleBody"];
+        };
       };
       /** @description Error */
       default: {

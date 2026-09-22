@@ -510,6 +510,7 @@ func (s *Server) registerOperations() {
 	s.auth.registerOperations(s.API)
 	s.tasks.registerOperations(s.API)
 	s.settings.registerOperations(s.API)
+	s.settings.registerScheduleOperations(s.API)
 	s.prefs.Register(s.API)
 	s.categories.Register(s.API)
 	s.fs.Register(s.API)

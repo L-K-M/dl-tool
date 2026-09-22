@@ -190,7 +190,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T077](T077-notification-delivery.md) | Deliver task events to notification channels | T054, T074 | done |
 | [T078](T078-completion-hook.md) | Run the completion hook as an argument vector | T074 | deferred |
 | [T079](T079-global-bandwidth-governor.md) | Fan global rate limits out to every engine | T016, T019, T027, T037 | done |
-| [T080](T080-schedule-grid-endpoints.md) | Store and serve the 24×7 schedule grid | T027, T079 | todo |
+| [T080](T080-schedule-grid-endpoints.md) | Store and serve the 24×7 schedule grid | T027, T079 | done |
 | [T081](T081-schedule-evaluation-and-alternative-speed.md) | Apply the active schedule cell every minute | T066, T079, T080 | todo |
 | [T082](T082-live-per-task-rate-limits.md) | Apply a per-task rate limit to a running task | T022, T037, T079 | todo |
 | [T083](T083-watch-folder-loader.md) | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | todo |
@@ -398,7 +398,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T077 | Deliver task events to notification channels | T054, T074 | yes | done | [T077](T077-notification-delivery.md) |
 | T078 | Run the completion hook as an argument vector | T074 | no | deferred | [T078](T078-completion-hook.md) |
 | T079 | Fan global rate limits out to every engine | T016, T019, T027, T037 | yes | done | [T079](T079-global-bandwidth-governor.md) |
-| T080 | Store and serve the 24×7 schedule grid | T027, T079 | yes | todo | [T080](T080-schedule-grid-endpoints.md) |
+| T080 | Store and serve the 24×7 schedule grid | T027, T079 | yes | done | [T080](T080-schedule-grid-endpoints.md) |
 | T081 | Apply the active schedule cell every minute | T066, T079, T080 | no | todo | [T081](T081-schedule-evaluation-and-alternative-speed.md) |
 | T082 | Apply a per-task rate limit to a running task | T022, T037, T079 | no | todo | [T082](T082-live-per-task-rate-limits.md) |
 | T083 | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | yes | todo | [T083](T083-watch-folder-loader.md) |

@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T080 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T027, T079 |
 | **Blocks** | T081, T108, T110, T118 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/server.go`, `internal/store/settings.go` |
@@ -106,11 +106,23 @@ value outside `0..2`.
 8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] A grid containing `0`, `1` and `2` round-trips byte-identically through `PUT` then `GET`.
-- [ ] `cells` of length 167 or 169 is `422` and nothing is written.
-- [ ] A cell value outside `0..2` is `422` and nothing is written.
-- [ ] `ReplaceSchedule` is transactional: a rejected write leaves all 168 stored rows unchanged.
-- [ ] Both responses carry the active `timezone` and `active_mode`, and both are read-only.
+- [x] A grid containing `0`, `1` and `2` round-trips byte-identically through `PUT` then `GET`.
+  `TestScheduleRoundTrips` PUTs a grid cycling 0,1,2 and asserts the response and a later GET
+  return the identical array.
+- [x] `cells` of length 167 or 169 is `422` and nothing is written.
+  `TestWrongLengthRejected` asserts both lengths answer `422` `/problems/validation-failed`, and
+  `TestRejectedPutLeavesGridUnchanged/short` asserts the stored grid survives.
+- [x] A cell value outside `0..2` is `422` and nothing is written.
+  `TestCellOutOfRangeRejected` asserts `3` and `-1` answer `422` with an `errors[].location`
+  naming `cells[42]`, and `TestRejectedPutLeavesGridUnchanged/out-of-range` asserts the stored
+  grid survives.
+- [x] `ReplaceSchedule` is transactional: a rejected write leaves all 168 stored rows unchanged.
+  `TestRejectedPutLeavesGridUnchanged` compares `store.Schedule` before and after both rejected
+  PUTs and asserts `schedule_enabled` is untouched too.
+- [x] Both responses carry the active `timezone` and `active_mode`, and both are read-only.
+  `TestTimezoneReported` asserts `time.Local.String()` on GET and PUT, asserts a client-sent
+  `timezone`/`active_mode` is ignored rather than echoed, and `TestScheduleRoundTrips` asserts
+  `active_mode` is the cell of the current hour.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -143,7 +155,66 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG="./internal/api/... ./internal/store/..." && echo SCHEDULE_OK`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	152.892s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.263s
+SCHEDULE_OK
+```
+
+`go test -count=1 -v -run 'TestScheduleRoundTrips|TestWrongLengthRejected|TestCellOutOfRangeRejected|TestRejectedPutLeavesGridUnchanged|TestTimezoneReported|TestReplaceScheduleMissingRowFails' ./internal/api/`:
+
+```
+=== RUN   TestScheduleRoundTrips
+--- PASS: TestScheduleRoundTrips (0.09s)
+=== RUN   TestWrongLengthRejected
+--- PASS: TestWrongLengthRejected (0.05s)
+=== RUN   TestCellOutOfRangeRejected
+--- PASS: TestCellOutOfRangeRejected (0.04s)
+=== RUN   TestRejectedPutLeavesGridUnchanged
+=== RUN   TestRejectedPutLeavesGridUnchanged/short
+=== RUN   TestRejectedPutLeavesGridUnchanged/out-of-range
+--- PASS: TestRejectedPutLeavesGridUnchanged (0.04s)
+=== RUN   TestTimezoneReported
+--- PASS: TestTimezoneReported (0.04s)
+=== RUN   TestReplaceScheduleMissingRowFails
+--- PASS: TestReplaceScheduleMissingRowFails (0.07s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	0.366s
+```
+
+`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`:
+
+```
+api/openapi.json
+internal/api/server.go
+internal/api/settings_schedule.go
+internal/api/settings_schedule_test.go
+internal/store/settings.go
+web/src/api/schema.d.ts
+```
+
+The four Files-table paths plus `api/openapi.json` and `web/src/api/schema.d.ts`, which
+docs/13-testing-and-verification.md section 7.1 makes part of the Files table of any task that
+registers a Huma operation; both were regenerated with `make gen`, not hand-edited.
+
+Interface-contract note: the contract block's `ReplaceSchedule(ctx, cells)` signature cannot
+satisfy step 4 (`schedule_enabled` written inside the same transaction as the cells), so the
+implemented signature is `ReplaceSchedule(ctx, enabled bool, cells [168]ScheduleMode)`. No other
+caller exists; the behaviour the steps specify is unchanged.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
