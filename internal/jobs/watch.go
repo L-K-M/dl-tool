@@ -116,6 +116,12 @@ func pollInterval(folder store.WatchFolder) time.Duration {
 type Watcher struct {
 	settings *store.SettingsStore
 	creator  TaskCreator
+	// scanMu guards scans, the per-folder lock map ScanOnce takes before
+	// touching a row's loaded set — the poll loop and an explicit scan
+	// (T107's POST /watch-folders/{id}/scan) can race the same folder, and
+	// MarkWatchFolderLoaded is a read-modify-write on one settings key.
+	scanMu sync.Mutex
+	scans  map[string]*sync.Mutex
 	// log is set by Scheduler.WithWatcher to the scheduler's logger;
 	// slog.Default is the fallback outside that attach.
 	log *slog.Logger
@@ -124,7 +130,7 @@ type Watcher struct {
 // NewWatcher builds the loader over the settings store and the injected
 // task-creation path.
 func NewWatcher(st *store.SettingsStore, creator TaskCreator) *Watcher {
-	return &Watcher{settings: st, creator: creator}
+	return &Watcher{settings: st, creator: creator, scans: map[string]*sync.Mutex{}}
 }
 
 func (w *Watcher) logger() *slog.Logger {
@@ -138,9 +144,9 @@ func (w *Watcher) logger() *slog.Logger {
 // Run watches every enabled folder until ctx ends. It calls newOSWatcher
 // for each folder; when registration fails it falls back to a time.Ticker
 // at the folder's poll_interval_s. Both paths call ScanOnce and nothing
-// else. One loop per folder keeps ScanOnce from ever running concurrently
-// with itself on the same row — MarkWatchFolderLoaded is a
-// read-modify-write on one settings key.
+// else. The folder list is read once at start — a row created while Run
+// is live is picked up on restart — and ScanOnce's per-folder lock keeps
+// a scan from running concurrently with itself on the same row.
 func (w *Watcher) Run(ctx context.Context) error {
 	folders, err := w.settings.ListEnabledWatchFolders(ctx)
 	if err != nil {
@@ -219,6 +225,12 @@ func (w *Watcher) ScanOnce(ctx context.Context, folderID string) (ScanResult, er
 		return ScanResult{}, errors.New("jobs: watcher has no task creator")
 	}
 
+	// One scan per folder at a time: the sweep and an explicit scan can
+	// race, and the loaded set is a read-modify-write.
+	lock := w.folderLock(folder.ID)
+	lock.Lock()
+	defer lock.Unlock()
+
 	started := time.Now()
 	result := ScanResult{Created: []string{}, Skipped: []SkippedFile{}}
 
@@ -249,10 +261,16 @@ func (w *Watcher) ScanOnce(ctx context.Context, folderID string) (ScanResult, er
 
 		// A .torrent-named directory, fifo or socket can never parse and a
 		// fifo's ReadFile would block the sweep — anything not a regular
-		// file is unreadable at this layer.
+		// file is unreadable at this layer. readdir reports DT_UNKNOWN on
+		// some filesystems (XFS without ftype, some NFS/CIFS mounts), so an
+		// unknown type falls back to lstat before the file is declared
+		// unreadable; a symlink stays unreadable either way.
 		if !entry.Type().IsRegular() {
-			result.Skipped = append(result.Skipped, SkippedFile{File: name, Reason: SkipUnreadable})
-			continue
+			info, statErr := entry.Info()
+			if statErr != nil || !info.Mode().IsRegular() {
+				result.Skipped = append(result.Skipped, SkippedFile{File: name, Reason: SkipUnreadable})
+				continue
+			}
 		}
 		blob, err := os.ReadFile(path)
 		if err != nil {
@@ -318,6 +336,24 @@ func (w *Watcher) ScanOnce(ctx context.Context, folderID string) (ScanResult, er
 	return result, nil
 }
 
+// folderLock returns the mutex serializing scans of one folder.
+func (w *Watcher) folderLock(folderID string) *sync.Mutex {
+	w.scanMu.Lock()
+	defer w.scanMu.Unlock()
+	lk, ok := w.scans[folderID]
+	if !ok {
+		lk = &sync.Mutex{}
+		w.scans[folderID] = lk
+	}
+
+	return lk
+}
+
+// watchLastErrorMax bounds the text a sweep writes into last_error — one
+// joined line per failing file would grow the column without limit on a
+// folder full of hand-off failures.
+const watchLastErrorMax = 4096
+
 // touch records the scan outcome on the folder row; a nil lastErr clears
 // last_error. A touch failure is logged, not raised — the scan result
 // already carries what happened.
@@ -325,6 +361,9 @@ func (w *Watcher) touch(ctx context.Context, folderID string, lastErr error) {
 	text := ""
 	if lastErr != nil {
 		text = lastErr.Error()
+		if len(text) > watchLastErrorMax {
+			text = text[:watchLastErrorMax] + "..."
+		}
 	}
 	if err := w.settings.TouchWatchFolder(ctx, folderID, time.Now().UnixMilli(), text); err != nil && ctx.Err() == nil {
 		w.logger().WarnContext(ctx, "watch folder touch failed", "folder_id", folderID, "err", err)

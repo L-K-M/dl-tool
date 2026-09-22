@@ -22,6 +22,16 @@ const inotifyMask = syscall.IN_CLOSE_WRITE | syscall.IN_MOVED_TO
 // an fd number closed under a blocked select never interrupts it.
 const inotifyWake = 200 * time.Millisecond
 
+// fdSetBitsPerWord matches syscall.FdSet's element width: int64 on 64-bit
+// Linux, int32 on 32-bit, so the bit indexing stays correct on both.
+const fdSetBitsPerWord = 32 << (^uintptr(0) >> 63)
+
+// inotifyFdSetLimit is the descriptor ceiling a select fd_set covers —
+// 1024 on every Linux arch. An fd at or above it cannot be expressed in
+// the bitmap, and indexing it would panic the read loop, so registration
+// degrades to polling instead.
+const inotifyFdSetLimit = 1024
+
 // The Linux build registers folders with inotify; every registration
 // failure falls back to the polling watcher instead of failing.
 func init() {
@@ -53,6 +63,10 @@ func newInotifyWatcher(folder store.WatchFolder) (folderWatcher, error) {
 	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC | syscall.IN_NONBLOCK)
 	if err != nil {
 		return pollFallback(fmt.Errorf("jobs: inotify init: %w", err))
+	}
+	if fd >= inotifyFdSetLimit {
+		_ = syscall.Close(fd)
+		return pollFallback(fmt.Errorf("jobs: inotify fd %d exceeds the select fd_set limit", fd))
 	}
 	if _, err := syscall.InotifyAddWatch(fd, folder.Path, inotifyMask); err != nil {
 		_ = syscall.Close(fd)
@@ -98,7 +112,8 @@ func (w *inotifyWatcher) run() {
 	// One event buffer covers a burst; a truncated read loses only the
 	// coalesced signal, which the tick re-issues anyway.
 	buf := make([]byte, 64*(syscall.SizeofInotifyEvent+syscall.NAME_MAX+1))
-	for {
+	fd := w.fd
+	for fd >= 0 {
 		select {
 		case <-w.done:
 			return
@@ -106,20 +121,21 @@ func (w *inotifyWatcher) run() {
 		}
 
 		var set syscall.FdSet
-		set.Bits[w.fd/64] |= 1 << (uint(w.fd) % 64)
+		set.Bits[fd/fdSetBitsPerWord] |= 1 << (uint(fd) % fdSetBitsPerWord)
 		tv := syscall.NsecToTimeval(int64(inotifyWake / time.Nanosecond))
-		n, err := syscall.Select(w.fd+1, &set, nil, nil, &tv)
+		n, err := syscall.Select(fd+1, &set, nil, nil, &tv)
 		switch {
-		case err != nil && errors.Is(err, syscall.EINTR):
-			// A signal only interrupted the wait; poll again.
-		case err != nil:
-			return
-		case n > 0 && set.Bits[w.fd/64]&(1<<(uint(w.fd)%64)) != 0:
-			if _, rerr := syscall.Read(w.fd, buf); rerr == nil {
+		case err == nil && n > 0 && set.Bits[fd/fdSetBitsPerWord]&(1<<(uint(fd)%fdSetBitsPerWord)) != 0:
+			if _, rerr := syscall.Read(fd, buf); rerr == nil {
 				w.notify()
-			} else if !errors.Is(rerr, syscall.EAGAIN) {
-				return
+			} else if !errors.Is(rerr, syscall.EAGAIN) && !errors.Is(rerr, syscall.EINTR) {
+				// The fd is unusable; degrade to the tick sweep below
+				// rather than dying — polling is the documented fallback,
+				// and a dead loop would silence the folder until restart.
+				fd = -1
 			}
+		case err != nil && !errors.Is(err, syscall.EINTR):
+			fd = -1
 		}
 
 		select {
@@ -128,6 +144,18 @@ func (w *inotifyWatcher) run() {
 		case <-w.ticker.C:
 			w.notify()
 		default:
+		}
+	}
+
+	// Degraded mode: the inotify fd failed mid-watch, so the folder is
+	// swept by the poll tick alone — the same fallback a registration
+	// failure gets.
+	for {
+		select {
+		case <-w.done:
+			return
+		case <-w.ticker.C:
+			w.notify()
 		}
 	}
 }

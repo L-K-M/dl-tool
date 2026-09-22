@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -1002,7 +1003,7 @@ w.delete_after_load, w.poll_interval_s, w.last_scan_at, w.last_error, w.created_
 const queryListEnabledWatchFolders = `SELECT ` + watchFolderColumns + `
 FROM watch_folders w LEFT JOIN categories c ON c.id = w.category_id
 WHERE w.enabled = 1
-ORDER BY w.id`
+ORDER BY w.created_at, w.id`
 
 // ListEnabledWatchFolders returns every row of watch_folders with
 // enabled = 1.
@@ -1122,6 +1123,14 @@ func (s *SettingsStore) WatchFolderLoaded(ctx context.Context, folderID, infohas
 	return slices.Contains(list, infohash), nil
 }
 
+// watchFolderLoadedMu serializes loaded-set appends process-wide: the
+// JSON array under one settings key is a read-modify-write, and two
+// overlapping deferred transactions that both read then both write lose
+// the earlier entry — or answer SQLITE_BUSY on the upgrade. Serializing
+// here rather than on the instance keeps the guarantee when a caller
+// holds a different SettingsStore over the same db.
+var watchFolderLoadedMu sync.Mutex
+
 // MarkWatchFolderLoaded adds infohash to the folder's loaded set in one
 // transaction when it is absent, keeping at most MaxWatchFolderLoaded
 // entries, oldest dropped first. Eviction is graceful but visible: a
@@ -1129,6 +1138,9 @@ func (s *SettingsStore) WatchFolderLoaded(ctx context.Context, folderID, infohas
 // SkipDuplicate on the next sweep — task dedup, not the loaded set, keeps
 // it from loading twice.
 func (s *SettingsStore) MarkWatchFolderLoaded(ctx context.Context, folderID, infohash string) error {
+	watchFolderLoadedMu.Lock()
+	defer watchFolderLoadedMu.Unlock()
+
 	key := watchFolderLoadedKey(folderID)
 
 	tx, err := s.db.BeginTxx(ctx, nil)

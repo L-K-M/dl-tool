@@ -2,9 +2,12 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/L-K-M/dl-tool/internal/jobs"
 )
@@ -115,5 +118,54 @@ func TestWatchCreatorSameDestinationLeavesEchoNull(t *testing.T) {
 	}
 	if requested != nil {
 		t.Errorf("requested_destination = %q, want null — requested and resolved agree", *requested)
+	}
+}
+
+// TestMapCreateError pins the sentinel translation the real path only
+// reaches on the commit-between-check-and-insert race: the all-refused
+// answer flattens rejected[] into the top-level detail, so the duplicate
+// crosses back by its detail prefix and path rejection by its problem
+// type. Both branches must stay pinned against drift in the create
+// endpoint's wording.
+func TestMapCreateError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{
+			name: "duplicate detail prefix",
+			err:  &huma.ErrorModel{Type: SlugUnsupportedScheme, Detail: fmt.Sprintf(duplicateDetailFormat, duplicateDetail, "tsk_123")},
+			want: jobs.ErrTorrentDuplicate,
+		},
+		{
+			name: "path rejected type",
+			err:  &huma.ErrorModel{Type: SlugPathRejected, Detail: "outside"},
+			want: jobs.ErrDestinationRejected,
+		},
+		{
+			name: "unrelated problem passes through",
+			err:  &huma.ErrorModel{Type: SlugValidationFailed, Detail: "nope"},
+			want: nil,
+		},
+		{
+			name: "non-problem error passes through",
+			err:  errors.New("engine offline"),
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mapCreateError(tc.err)
+			if tc.want == nil {
+				if !errors.Is(got, tc.err) {
+					t.Fatalf("mapCreateError() = %v, want the original error unchanged", got)
+				}
+				return
+			}
+			if !errors.Is(got, tc.want) {
+				t.Fatalf("mapCreateError() = %v, want errors.Is %v", got, tc.want)
+			}
+		})
 	}
 }

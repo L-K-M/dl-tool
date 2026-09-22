@@ -30,6 +30,20 @@ const watchTorrentV1 = "d8:announce35:http://tracker.example.com/announce" +
 const watchTorrentV2 = "d8:announce35:http://tracker.example.com/announce" +
 	"4:infod6:lengthi11e4:name9:other.txt12:piece lengthi16384e6:pieces20:" + watchPieces20 + "ee"
 
+// watchPiecesRoot32 is a syntactically valid BEP 52 pieces root.
+const watchPiecesRoot32 = "\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11" +
+	"\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"
+
+// watchTorrentV2Only is a meta-version-2 torrent with no pieces field:
+// InfohashV1 is empty and InfohashV2 carries the identity.
+const watchTorrentV2Only = "d4:infod9:file treed9:hello.txtd0:d6:lengthi11e11:pieces root32:" +
+	watchPiecesRoot32 + "eee12:meta versioni2e4:name9:hello.txt12:piece lengthi16384eee"
+
+// watchTorrentV2OnlyB is the same shape under a different name, so its
+// v2 infohash differs — two distinct v2-only torrents must both load.
+const watchTorrentV2OnlyB = "d4:infod9:file treed9:other.txtd0:d6:lengthi11e11:pieces root32:" +
+	watchPiecesRoot32 + "eee12:meta versioni2e4:name9:other.txt12:piece lengthi16384eee"
+
 // watchCreatorCall is one CreateFromTorrent invocation the fake recorded.
 type watchCreatorCall struct {
 	name     string
@@ -112,7 +126,12 @@ func runWatcher(t *testing.T, watcher *Watcher) {
 	}()
 	t.Cleanup(func() {
 		cancel()
-		require.NoError(t, <-done)
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("watcher.Run did not return after cancel")
+		}
 	})
 }
 
@@ -250,7 +269,10 @@ func TestRequestedDestinationRecorded(t *testing.T) {
 	// verbatim — resolution and the requested_destination echo are the
 	// create path's job (the api adapter test pins the echo landing).
 	dest := filepath.Join(t.TempDir(), "downloads")
-	categoryID := insertWatchCategory(t, db, "movies", dest)
+	// The category's save_path differs on purpose: if the watcher ever
+	// handed the category's path instead of the folder's destination, the
+	// assertion below would catch it.
+	categoryID := insertWatchCategory(t, db, "movies", filepath.Join(t.TempDir(), "category-save"))
 	folderID := store.NewID(store.PrefixWatchFolder)
 	now := time.Now().UnixMilli()
 	_, err := db.ExecContext(t.Context(), `INSERT INTO watch_folders
@@ -368,4 +390,31 @@ func TestLoadedSetKeysOnV1Hash(t *testing.T) {
 	loaded, err := st.WatchFolderLoaded(t.Context(), folderID, manifest.InfohashV1)
 	require.NoError(t, err)
 	require.True(t, loaded, "the v1 infohash is the loaded-set identity")
+}
+
+// TestLoadedSetKeysOnV2HashWhenNoV1 pins the fallback the v1 test cannot
+// reach: a v2-only torrent has an empty InfohashV1, and the loaded set
+// must key on InfohashV2 — otherwise every v2-only torrent after the
+// first collides on the empty key and reads as already_loaded.
+func TestLoadedSetKeysOnV2HashWhenNoV1(t *testing.T) {
+	db := newTestDB(t)
+	st := store.NewSettingsStore(db)
+	dir := t.TempDir()
+	folderID := insertWatchFolder(t, db, dir, t.TempDir(), 1, 0, 10)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.torrent"), []byte(watchTorrentV2Only), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.torrent"), []byte(watchTorrentV2OnlyB), 0o644))
+
+	manifest, err := uri.InspectTorrent([]byte(watchTorrentV2Only))
+	require.NoError(t, err)
+	require.Empty(t, manifest.InfohashV1, "fixture must be v2-only")
+	require.NotEmpty(t, manifest.InfohashV2)
+
+	result, err := NewWatcher(st, &fakeWatchCreator{}).ScanOnce(t.Context(), folderID)
+	require.NoError(t, err)
+	require.Len(t, result.Created, 2, "both distinct v2-only torrents load — no empty-key collision")
+	require.Empty(t, result.Skipped)
+
+	loaded, err := st.WatchFolderLoaded(t.Context(), folderID, manifest.InfohashV2)
+	require.NoError(t, err)
+	require.True(t, loaded, "the v2 infohash is the loaded-set identity when v1 is empty")
 }

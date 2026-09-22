@@ -49,24 +49,31 @@ func (c watchTaskCreator) CreateFromTorrent(ctx context.Context, name string, bl
 
 	output, err := c.tasks.CreateTasks(ctx, input)
 	if err != nil {
-		// The all-refused answer flattens the rejected[] entry's slug into
-		// its detail text, so the classified failures cross back by type
-		// and by the detail prefix duplicateRejection writes.
-		var model *huma.ErrorModel
-		if errors.As(err, &model) {
-			switch {
-			case model.Type == SlugPathRejected:
-				return "", fmt.Errorf("%w: %s", jobs.ErrDestinationRejected, model.Detail)
-			case strings.HasPrefix(model.Detail, duplicateDetail):
-				return "", fmt.Errorf("%w: %s", jobs.ErrTorrentDuplicate, model.Detail)
-			}
-		}
-
-		return "", err
+		return "", mapCreateError(err)
 	}
 	if len(output.Body.Created) != 1 {
 		return "", fmt.Errorf("api: watch folder file %q created %d tasks, want 1", name, len(output.Body.Created))
 	}
 
 	return output.Body.Created[0].ID, nil
+}
+
+// mapCreateError translates CreateTasks' failures back into the watcher's
+// classified errors. The all-refused answer flattens the rejected[] entry's
+// slug into its detail text, so the commit-between-check-and-insert
+// duplicate crosses back by the detail prefix duplicateRejection writes;
+// the path-rejected problem crosses back by type. Every other error
+// passes through unchanged.
+func mapCreateError(err error) error {
+	var model *huma.ErrorModel
+	if errors.As(err, &model) {
+		switch {
+		case model.Type == SlugPathRejected:
+			return fmt.Errorf("%w: %s", jobs.ErrDestinationRejected, model.Detail)
+		case strings.HasPrefix(model.Detail, duplicateDetail):
+			return fmt.Errorf("%w: %s", jobs.ErrTorrentDuplicate, model.Detail)
+		}
+	}
+
+	return err
 }

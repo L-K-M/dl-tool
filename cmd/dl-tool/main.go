@@ -265,11 +265,12 @@ func main() {
 			// containing the directory (doc 11 section 2); the value
 			// arrives already root-validated, and a resolve or seed error
 			// is logged and skipped, never fatal.
-			watcher := jobs.NewWatcher(store.NewSettingsStore(db), server.WatchCreator)
+			settingsStore := store.NewSettingsStore(db)
+			watcher := jobs.NewWatcher(settingsStore, server.WatchCreator)
 			if cfg.WatchDir != "" {
 				if root, _, err := fsx.ResolveDestinationRoot(cfg.DataRoots, cfg.WatchDir); err != nil {
 					logger.Warn("watch directory resolves outside the data roots; skipping seed", "path", cfg.WatchDir, "err", err)
-				} else if created, err := store.NewSettingsStore(db).SeedWatchFolder(ctx, cfg.WatchDir, root); err != nil {
+				} else if created, err := settingsStore.SeedWatchFolder(ctx, cfg.WatchDir, root); err != nil {
 					logger.Warn("watch folder seed failed", "path", cfg.WatchDir, "err", err)
 				} else if created {
 					logger.Info("seeded watch folder", "path", cfg.WatchDir, "destination", root)
