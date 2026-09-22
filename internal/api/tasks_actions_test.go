@@ -963,7 +963,8 @@ func TestPatchTaskAppliesRateLimit(t *testing.T) {
 		t.Errorf("dl_limit = %d, want %d", task.DLLimit, testDLLimit)
 	}
 
-	want := fmt.Sprintf("SetRateLimits aria2:%s %d nil", aria2GID, testDLLimit)
+	// ApplyTask hands the engine the bare ref, not the namespaced id.
+	want := fmt.Sprintf("SetRateLimits %s %d nil", aria2GID, testDLLimit)
 	if calls := env.aria2.recorded(); !slices.Equal(calls, []string{want}) {
 		t.Errorf("aria2 calls = %v, want exactly [%s]", calls, want)
 	}
@@ -983,7 +984,7 @@ func TestPatchTaskAppliesRateLimit(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("second patch status = %d, body %s", response.Code, response.Body.String())
 	}
-	want = fmt.Sprintf("SetRateLimits aria2:%s nil %d", aria2GID, testDLLimit)
+	want = fmt.Sprintf("SetRateLimits %s nil %d", aria2GID, testDLLimit)
 	if calls := env.aria2.recorded(); len(calls) != 2 || calls[1] != want {
 		t.Errorf("aria2 calls = %v, want the second to carry the up direction alone", calls)
 	}
@@ -1148,9 +1149,53 @@ func TestPatchTaskWithoutEngineHandle(t *testing.T) {
 	env.aria2.assertNoCalls(t)
 }
 
-// TestPatchTaskEngineUnavailable pins the 503 of doc 05 section 5.5: when
-// the engine cannot take the new limit, nothing is persisted.
-func TestPatchTaskEngineUnavailable(t *testing.T) {
+// TestPatchLimitOnRunningTask proves FR-094: a limit set on a task in
+// state downloading reaches the engine through ApplyTask without a
+// restart, re-add or recheck — the only engine call is the limit itself,
+// and the task's state and completed_bytes are untouched by it.
+func TestPatchLimitOnRunningTask(t *testing.T) {
+	env := newActionsTestEnv(t)
+
+	const completed = int64(12345)
+	id := env.seedActionTask(t, func(task *store.Task) {
+		task.State = "downloading"
+		task.CompletedBytes = completed
+	})
+
+	response := env.patchTask(t, id, map[string]any{"dl_limit": testDLLimit})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if task := decodeTaskBody(t, response); task.DLLimit != testDLLimit {
+		t.Errorf("dl_limit = %d, want %d", task.DLLimit, testDLLimit)
+	}
+
+	// Exactly one engine call — the limit itself. Any Pause, Resume,
+	// Remove or re-add alongside it would be the restart the requirement
+	// forbids.
+	want := fmt.Sprintf("SetRateLimits %s %d nil", aria2GID, testDLLimit)
+	if calls := env.aria2.recorded(); !slices.Equal(calls, []string{want}) {
+		t.Errorf("aria2 calls = %v, want exactly [%s]", calls, want)
+	}
+
+	var row struct {
+		State          string `db:"state"`
+		CompletedBytes int64  `db:"completed_bytes"`
+	}
+	if err := env.db.GetContext(t.Context(), &row,
+		`SELECT state, completed_bytes FROM tasks WHERE id = ?`, id); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if row.State != "downloading" || row.CompletedBytes != completed {
+		t.Errorf("row = %s/%d, want the untouched downloading/%d", row.State, row.CompletedBytes, completed)
+	}
+}
+
+// TestPatchLimitEngineUnavailable pins the 503 of doc 05 section 5.5: the
+// engine that cannot take the new limit answers engine-unavailable while
+// the row keeps the value, so the next spawn and the boot reconciliation
+// re-push it.
+func TestPatchLimitEngineUnavailable(t *testing.T) {
 	env := newActionsTestEnv(t)
 	env.aria2.limitsErr = engine.ErrUnavailable
 
@@ -1164,8 +1209,8 @@ func TestPatchTaskEngineUnavailable(t *testing.T) {
 		`SELECT dl_limit FROM tasks WHERE id = ?`, id); err != nil {
 		t.Fatalf("read dl_limit: %v", err)
 	}
-	if stored != 0 {
-		t.Errorf("stored dl_limit = %d, want the untouched default 0", stored)
+	if stored != testDLLimit {
+		t.Errorf("stored dl_limit = %d, want the kept value %d", stored, testDLLimit)
 	}
 }
 
@@ -2269,7 +2314,7 @@ func TestPatchTaskReloadsUnderTheLease(t *testing.T) {
 	// The decisive call: the limit reached the handle the release
 	// recorded. A pre-lease snapshot carries no handle and would have
 	// persisted the limit while the running transfer kept the old one.
-	want := fmt.Sprintf("SetRateLimits aria2:%s %d nil", aria2GID, testDLLimit)
+	want := fmt.Sprintf("SetRateLimits %s %d nil", aria2GID, testDLLimit)
 	if calls := env.aria2.recorded(); !slices.Equal(calls, []string{want}) {
 		t.Errorf("aria2 calls = %v, want exactly [%s]", calls, want)
 	}
