@@ -383,6 +383,32 @@ RETURNING id`
 
 	queryTaskAdmissionPending = `SELECT state, admission_pending FROM tasks WHERE id = ?`
 
+	// The schedule park's atomic landing (T081, FR-093): the same
+	// compare-and-swap and source-state allow-list shape
+	// queryPauseTaskWithCode carries — a task that moved on between the
+	// governor's scan and this write is left untouched. admission_pending
+	// clears with the state move: a queued row the admission pass still
+	// owns mid-release leaves the pass's ownership when the schedule
+	// parks it.
+	queryScheduleParkTask = `UPDATE tasks
+SET state = 'paused', admission_pending = 0, updated_at = ?
+WHERE id = ? AND state IN (?)`
+
+	// The parked set of the No Download cell (T081): tasks currently
+	// paused whose most recent task_events row is the schedule's own
+	// pause. The (at, id) ordering is the event log's canonical order, so
+	// a user pause — writing task.paused after the park — takes the row
+	// out of the set and the scheduler can never resume what the
+	// operator parked. The literal is CodeTaskSchedulePaused's storage
+	// form; SQL cannot reach the Go constant, so the two are pinned
+	// together by the schedule tests through the real store.
+	queryListScheduleParked = `SELECT t.id FROM tasks t
+WHERE t.state = 'paused'
+AND (SELECT e.code FROM task_events e
+     WHERE e.task_id = t.id
+     ORDER BY e.at DESC, e.id DESC
+     LIMIT 1) = 'task.schedule.paused'`
+
 	// The extractor's progress gauge (T074): written only while the row is
 	// extracting, so a late tick never revives a task the operator moved on.
 	querySetTaskExtractProgress = `UPDATE tasks
@@ -2005,6 +2031,111 @@ func (s *TaskStore) SetErrorCode(ctx context.Context, taskID, code, message stri
 	}
 
 	return nil
+}
+
+// The task_events codes of the schedule park and release (T081): the
+// parked set lives in the event log, not in a new column —
+// task.schedule.paused on park and task.schedule.resumed on release, so
+// the set survives a restart with no schema change. Declared next to
+// their emitting code per docs/14-conventions.md section 4; their
+// i18next keys are recorded in the task's Evidence because the locale
+// file sits outside its Files table.
+const (
+	CodeTaskSchedulePaused  = "task.schedule.paused"
+	CodeTaskScheduleResumed = "task.schedule.resumed"
+)
+
+// scheduleParkSources is the state set a No Download cell parks from —
+// the running transfer states plus queued, the parked set's whole
+// input. Seeding tasks and the post-download states are never
+// schedule-parked.
+var scheduleParkSources = []string{"downloading", "checking", "queued"}
+
+// ScheduleParked pauses one task for the schedule and records that the
+// schedule — not the user — paused it, by appending a task_events row
+// with code task.schedule.paused in the same transaction (T081,
+// FR-093). The parked set ListScheduleParked reads back is exactly
+// these rows. The write lands only while the row is in one of
+// scheduleParkSources: a task the operator paused first keeps its
+// task.paused tail and is never added to the set, and a task that moved
+// on between the governor's scan and this write reports
+// ErrTransitionConflict rather than being dragged into paused. A
+// missing id is ErrNotFound.
+func (s *TaskStore) ScheduleParked(ctx context.Context, taskID string) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: schedule-park task %q: %w", taskID, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of schedule park failed", "task_id", taskID, "error", err)
+		}
+	}()
+
+	var current string
+	err = tx.GetContext(ctx, &current, queryTaskState, taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: schedule-park task %q: %w", taskID, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("store: schedule-park task %q: read state: %w", taskID, err)
+	}
+	if !slices.Contains(scheduleParkSources, current) {
+		// The row left the pausable set between the governor's scan and
+		// this write — the user paused it, it completed or it moved on.
+		// Refusing here is what keeps a user pause out of the parked set:
+		// no task.schedule.paused row ever lands after the operator's
+		// task.paused.
+		return errTransitionConflict(taskID, current, "paused")
+	}
+
+	now := time.Now().UnixMilli()
+	query, args, err := sqlx.In(queryScheduleParkTask, now, taskID, scheduleParkSources)
+	if err != nil {
+		return fmt.Errorf("store: schedule-park task %q: %w", taskID, err)
+	}
+	// sqlx.In emits `?` placeholders — SQLite's bindvar, so Rebind is an
+	// identity here today; the canonical pairing keeps the statement
+	// correct were the store's bindvar ever to change.
+	query = tx.Rebind(query)
+
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("store: schedule-park task %q: %w", taskID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: schedule-park task %q: count rows: %w", taskID, err)
+	}
+	if affected == 0 {
+		return errTransitionConflict(taskID, current, "paused")
+	}
+
+	if err := insertTaskEvent(ctx, tx, taskID, "info", CodeTaskSchedulePaused, "paused by the download schedule", nil, now); err != nil {
+		return fmt.Errorf("store: schedule-park task %q: insert event: %w", taskID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: schedule-park task %q: commit: %w", taskID, err)
+	}
+
+	return nil
+}
+
+// ListScheduleParked returns the ids of the parked set: tasks currently
+// paused whose most recent task_events row carries
+// task.schedule.paused. A task the user paused has task.paused as its
+// most recent row and is never returned; a parked task the user resumed
+// has task.resumed and likewise left the set.
+func (s *TaskStore) ListScheduleParked(ctx context.Context) ([]string, error) {
+	var ids []string
+	if err := s.db.SelectContext(ctx, &ids, queryListScheduleParked); err != nil {
+		return nil, fmt.Errorf("store: list schedule-parked tasks: %w", err)
+	}
+
+	return ids, nil
 }
 
 // Delete removes the task row outright; task_events, task_files, tags and

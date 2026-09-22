@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T081 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T066, T079, T080 |
 | **Blocks** | T083, T110 |
 | **Parallel-safe** | no — extends `internal/jobs/cron.go`, `internal/engine/bandwidth.go` and `cmd/dl-tool/main.go` |
@@ -124,15 +124,34 @@ The parked set lives in `task_events`, not in a new column: `task.schedule.pause
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] The evaluator runs once a minute and is a no-op while `schedule_enabled` is false.
-- [ ] A `2` cell changes the aria2 global limit as well as the qBittorrent one.
-- [ ] A `0` cell pauses tasks; no engine receives a near-zero rate.
-- [ ] Leaving a `0` cell resumes exactly the parked ids and no user-paused task.
-- [ ] Repeated ticks within one cell issue no further engine calls.
-- [ ] A task dl-tool did not create is never paused, resumed or rate-limited.
-- [ ] With no TaskStore attached, a `0` cell makes `ApplyMode` return an error and issue no pause
-  call to any engine.
-- [ ] Review check (not assertable from `internal/jobs/cron_test.go`) — `cmd/dl-tool/main.go` builds
+- [x] The evaluator runs once a minute and is a no-op while `schedule_enabled` is false.
+  `scheduleEvalSpec = "* * * * *"` is registered by `Start` for any attached governor;
+  `TestDisabledScheduleDoesNothing` asserts the disabled tick issues zero engine calls and
+  leaves `Governor.Mode()` unset.
+- [x] A `2` cell changes the aria2 global limit as well as the qBittorrent one.
+  `TestAlternativeReachesAria2` asserts both fakes record the identical `("", 2048, 1024)`
+  `SetRateLimits` call after the `("", 100, 50)` default pair — one absolute value through
+  the same call, no `toggleSpeedLimitsMode`.
+- [x] A `0` cell pauses tasks; no engine receives a near-zero rate.
+  `TestNoDownloadPausesAndResumesSameSet` asserts `Pause` on the live handles and
+  `TestTickWithinCellIsIdempotent` asserts `rateCallCount() == 0` across the whole cell —
+  `ModeNoDownload` never calls `applyGlobal`.
+- [x] Leaving a `0` cell resumes exactly the parked ids and no user-paused task.
+  `TestNoDownloadPausesAndResumesSameSet` resumes the four parked ids and
+  `TestUserPausedTaskNotResumed` keeps the operator's `task.paused` row paused.
+- [x] Repeated ticks within one cell issue no further engine calls.
+  `TestTickWithinCellIsIdempotent` runs two ticks inside one `0` cell and two inside one `1`
+  cell and asserts the call counts and event count never move.
+- [x] A task dl-tool did not create is never paused, resumed or rate-limited.
+  The parked set and the pause fan-out are enumerated exclusively from the `tasks` table
+  (`SelectQueuedCandidates` + `ListNonTerminalByEngine`), which only ever holds dl-tool's
+  rows; the pause assertions match the recorded engine ids exactly, so nothing outside the
+  row set is ever addressed.
+- [x] With no TaskStore attached, a `0` cell makes `ApplyMode` return an error and issue no
+  pause call to any engine.
+  `TestNoDownloadWithoutTaskStoreFailsClosed` asserts the error surfaces through
+  `EvaluateSchedule`, `pauseList` stays empty and `Mode()` stays unset.
+- [x] Review check (not assertable from `internal/jobs/cron_test.go`) — `cmd/dl-tool/main.go` builds
   the governor with `.WithTasks(store.NewTaskStore(db))` and hands the same instance to
   `scheduler.WithGovernor`, so a `2` cell reaches the production engines and a `0` cell records
   `task.schedule.paused` rows (docs/14-conventions.md §8.3).
@@ -169,7 +188,75 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG="./internal/jobs/... ./internal/engine/..." && echo SCHED_EVAL_OK`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/jobs/... ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	21.110s
+ok  	github.com/L-K-M/dl-tool/internal/engine	30.994s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.292s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.099s
+SCHED_EVAL_OK
+```
+
+The five named tests plus the nil-store acceptance case, from a `-v` run of the same tree:
+
+```
+=== RUN   TestNoDownloadPausesAndResumesSameSet
+--- PASS: TestNoDownloadPausesAndResumesSameSet (0.71s)
+=== RUN   TestUserPausedTaskNotResumed
+--- PASS: TestUserPausedTaskNotResumed (0.54s)
+=== RUN   TestAlternativeReachesAria2
+--- PASS: TestAlternativeReachesAria2 (0.53s)
+=== RUN   TestTickWithinCellIsIdempotent
+--- PASS: TestTickWithinCellIsIdempotent (0.55s)
+=== RUN   TestDisabledScheduleDoesNothing
+--- PASS: TestDisabledScheduleDoesNothing (0.46s)
+=== RUN   TestNoDownloadWithoutTaskStoreFailsClosed
+--- PASS: TestNoDownloadWithoutTaskStoreFailsClosed (0.52s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.370s
+```
+
+Scope:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+internal/engine/bandwidth.go
+internal/jobs/cron.go
+internal/jobs/cron_test.go
+internal/store/tasks.go
+```
+
+Exactly the Files table and nothing else.
+
+Notes for the record, neither a `## Blocked`:
+
+- **i18next keys.** docs/14-conventions.md §4 asks for one key per new code in
+  `web/src/locales/en/*.json`, which sits outside this task's Files table — the T024
+  fallback applies: record them here. `task.schedule.paused` and `task.schedule.resumed`
+  each need an `event` key in `web/src/locales/en/errors.json` when a task that owns the
+  file lands; until then the event log falls back to the stored message.
+- **F125 remains open.** A task *created* inside a `0` cell is not re-parked —
+  `ApplyMode` is deliberately a no-op on an unchanged mode, per step 4, and admission
+  gating belongs to T098/the plan-level decision F125 records. Disclosed, not resolved.
+- **Park enumeration.** `ApplyMode` builds the pausable set from
+  `SelectQueuedCandidates` (every `queued` row, handle or not) and
+  `ListNonTerminalByEngine` (`downloading`/`checking`), so a queued task is parked
+  without an engine call while a live transfer is paused engine-side first. Engine
+  `ErrNotFound` on pause is tolerated — a forgotten handle is gone, not a failure.
 
 ## Blocked
 

@@ -226,16 +226,6 @@ func main() {
 				}
 			}()
 
-			// The cron scheduler enqueues the periodic jobs (rss_poll now,
-			// T081/T083/T091 extend it later). Start blocks until runCtx is
-			// cancelled in OnStop, then drains the in-flight entry.
-			scheduler := jobs.NewScheduler(db, logger)
-			runDone.Add(1)
-			go func() {
-				defer runDone.Done()
-				scheduler.Start(runCtx)
-			}()
-
 			metrics := obs.NewMetrics()
 			runDone.Add(2)
 			go func() {
@@ -256,13 +246,29 @@ func main() {
 			// the first admitted task already runs under them. A partial
 			// fan-out is a warn, never a boot failure: a down engine must not
 			// lock the UI out. Nothing re-pushes a missed fan-out yet — the
-			// settings write path (T092) owns that call site.
-			governor := engine.NewGovernor(server.Engines, store.NewSettingsStore(db))
+			// settings write path (T092) owns that call site. The parked-set
+			// store (T081) rides the same construction so the schedule's No
+			// Download cell can record and release the tasks it pauses.
+			governor := engine.NewGovernor(server.Engines, store.NewSettingsStore(db)).
+				WithTasks(store.NewTaskStore(db))
 			governorCtx, cancelGovernor := context.WithTimeout(ctx, governorBootTimeout)
 			if err := governor.LoadAndApply(governorCtx); err != nil {
 				logger.Warn("global rate limits not applied to every engine", "err", err)
 			}
 			cancelGovernor()
+
+			// The cron scheduler enqueues the periodic jobs (rss_poll now,
+			// T083/T091 extend it later) and, with the governor attached,
+			// applies the active schedule cell once a minute (T081). The
+			// attach lands before Start arms the entry, so the first tick
+			// already sees the live instance. Start blocks until runCtx is
+			// cancelled in OnStop, then drains the in-flight entry.
+			scheduler := jobs.NewScheduler(db, logger).WithGovernor(governor)
+			runDone.Add(1)
+			go func() {
+				defer runDone.Done()
+				scheduler.Start(runCtx)
+			}()
 
 			httpServer = &http.Server{
 				Addr:              cfg.HTTPAddr,
