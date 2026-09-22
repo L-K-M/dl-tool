@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T082 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T022, T037, T079 |
 | **Blocks** | T110 |
 | **Parallel-safe** | no — extends `internal/engine/bandwidth.go` and `internal/api/tasks_actions.go` |
@@ -91,11 +91,26 @@ type PatchTaskBody struct {
 8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] A limit set on a `downloading` task reaches the engine without a restart, re-add or recheck.
-- [ ] The task's state and `completed_bytes` are unchanged by the call.
-- [ ] `0` is applied as unlimited; a `nil` direction is left untouched at the engine.
-- [ ] yt-dlp's `ErrNotSupported` yields `200` with the value stored for the next spawn.
-- [ ] An unreachable engine yields `503` `/problems/engine-unavailable` and the row keeps the new value.
+- [x] A limit set on a `downloading` task reaches the engine without a restart, re-add or recheck.
+  `TestPatchLimitOnRunningTask` asserts the seeded `downloading` row earns exactly one engine call,
+  `SetRateLimits 2089b05ecca3d829 2097152 nil`; the stand-in records every call, so a Pause, Resume,
+  Remove or Add alongside it would appear. `TestApplyTaskNoLifecycleCalls` is the package-level proof:
+  the fake's embedded nil `Engine` panics on any method but `SetRateLimits`.
+- [x] The task's state and `completed_bytes` are unchanged by the call.
+  `TestPatchLimitOnRunningTask` reads the row back after the PATCH and asserts
+  `downloading`/`12345` — the seeded values.
+- [x] `0` is applied as unlimited; a `nil` direction is left untouched at the engine.
+  `TestApplyTaskZeroIsUnlimited` asserts the `("…", 0, 0)` call is recorded, not dropped, and
+  `TestApplyTaskNilDirectionLeftUntouched` asserts the unsent direction arrives as nil, not a guessed
+  value — the fake records the direction pointers verbatim.
+- [x] yt-dlp's `ErrNotSupported` yields `200` with the value stored for the next spawn.
+  `TestApplyTaskNotSupportedPropagates` proves the sentinel reaches the caller;
+  `applyLiveRateLimits` maps `ErrNotSupported` to nil after the row write, so the handler answers
+  `200` with the stored pair — the same branch `TestPatchLimitOnRunningTask` exercises on the
+  success path.
+- [x] An unreachable engine yields `503` `/problems/engine-unavailable` and the row keeps the new value.
+  `TestPatchLimitEngineUnavailable` sets `limitsErr = engine.ErrUnavailable`, asserts the 503
+  problem, and reads `dl_limit = 2097152` back from the row.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -128,7 +143,73 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG="./internal/engine/... ./internal/api/..." && echo TASK_LIMIT_OK`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	30.948s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.177s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.108s
+ok  	github.com/L-K-M/dl-tool/internal/api	160.758s
+TASK_LIMIT_OK
+```
+
+The five named tests, individually:
+
+```
+--- PASS: TestApplyTaskUsesBareEngineRef (0.00s)
+--- PASS: TestApplyTaskZeroIsUnlimited (0.00s)
+--- PASS: TestApplyTaskNoLifecycleCalls (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.097s
+--- PASS: TestPatchLimitOnRunningTask (0.45s)
+--- PASS: TestPatchLimitEngineUnavailable (0.42s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/api	2.029s
+```
+
+`make ci` on the same tree: lint, vet, typecheck, `test` (Go + 279 vitest cases),
+`compose-check` and `doclint` (2523 links, 0 errors) all green.
+
+Scope:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/api/tasks_actions.go
+internal/api/tasks_actions_test.go
+internal/engine/bandwidth.go
+internal/engine/bandwidth_test.go
+```
+
+Two contract details resolved against the existing code, neither a `## Blocked`:
+
+- `TaskHandlers` carries no `*engine.Governor` field and `NewTaskHandlers` lives in `tasks.go`,
+  outside the Files table. The handler calls the package-level
+  `engine.ApplyTask(ctx, h.engines, …)`, which consumes only the shared registry and takes no
+  lock — no governor is constructed per request. `Governor.ApplyTask` remains as the contract's
+  method, a thin delegation to the package function.
+- The engine call moved from before the row write to after it, per the contract's outcome
+  table: an unreachable engine answers `503` with the row already holding the new pair. The
+  mutators keep their engine-first order; only the rate limits changed sides.
+  `TestPatchTaskEngineUnavailable`, which pinned the old nothing-persisted semantics, became
+  `TestPatchLimitEngineUnavailable` asserting the kept value.
+- `applyPatchMutators` resolved the engine unconditionally once the task held a handle, so a
+  `dl_limit`-only patch against an unregistered engine 503'd before the row write — the
+  kept-value promise could not hold there. The lookup is now lazy (`needsEngine` covers exactly
+  the six mutator fields): a patch carrying no engine field persists without dialling the
+  engine, and a limit patch reaches `ApplyTask` — pinned by `TestPatchLimitEngineNotRegistered`
+  asserting 503 with the value kept.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

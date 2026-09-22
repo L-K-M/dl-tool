@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -14,13 +15,17 @@ import (
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
-// bandwidthCall records one Engine.SetRateLimits invocation; id stays the
-// argument verbatim so a test can see the governor sent the global "" id.
+// bandwidthCall records one Engine.SetRateLimits invocation verbatim —
+// the id and both direction pointers — so a test can see the governor
+// sent the global "" id and whether a direction was forwarded as nil.
 type bandwidthCall struct {
 	id   string
-	down int64
-	up   int64
+	down *int64
+	up   *int64
 }
+
+// p64 lifts a literal into the *int64 shape SetRateLimits takes.
+func p64(v int64) *int64 { return &v }
 
 // bandwidthEngine is the fake daemon the governor drives. The embedded nil
 // engine.Engine leaves every method the governor must not call a panic, so
@@ -40,7 +45,7 @@ func (e *bandwidthEngine) SetRateLimits(_ context.Context, id string, down, up *
 	if e.setErr != nil {
 		return e.setErr
 	}
-	e.calls = append(e.calls, bandwidthCall{id: id, down: *down, up: *up})
+	e.calls = append(e.calls, bandwidthCall{id: id, down: down, up: up})
 	return nil
 }
 
@@ -96,7 +101,7 @@ func TestApplyGlobalReachesEveryEngine(t *testing.T) {
 
 	for _, e := range []*bandwidthEngine{aria2, qbittorrent} {
 		require.Equal(t,
-			[]bandwidthCall{{id: "", down: 1048576, up: 524288}},
+			[]bandwidthCall{{id: "", down: p64(1048576), up: p64(524288)}},
 			e.calls,
 			"engine %s must receive the global pair with the empty id", e.name,
 		)
@@ -113,7 +118,7 @@ func TestZeroMeansUnlimited(t *testing.T) {
 	require.NoError(t, gov.ApplyGlobal(context.Background(), engine.RateLimits{Down: 0, Up: 0}))
 
 	// 0 is pushed as the literal unlimited value, never dropped as unset.
-	require.Equal(t, []bandwidthCall{{id: "", down: 0, up: 0}}, e.calls)
+	require.Equal(t, []bandwidthCall{{id: "", down: p64(0), up: p64(0)}}, e.calls)
 }
 
 func TestNotSupportedEngineSkipped(t *testing.T) {
@@ -128,7 +133,7 @@ func TestNotSupportedEngineSkipped(t *testing.T) {
 
 	require.Empty(t, unsupported.calls, "an ErrNotSupported engine mutates nothing")
 	require.Equal(t,
-		[]bandwidthCall{{id: "", down: 1048576, up: 0}},
+		[]bandwidthCall{{id: "", down: p64(1048576), up: p64(0)}},
 		ok.calls,
 		"the capable engine still receives the value",
 	)
@@ -159,7 +164,7 @@ func TestReadBackMismatchLogsOnly(t *testing.T) {
 	gov := engine.NewGovernor(reg, nil)
 	require.NoError(t, gov.ApplyGlobal(context.Background(), engine.RateLimits{Down: 1048576, Up: 524288}))
 
-	require.Equal(t, []bandwidthCall{{id: "", down: 1048576, up: 524288}}, mismatch.calls)
+	require.Equal(t, []bandwidthCall{{id: "", down: p64(1048576), up: p64(524288)}}, mismatch.calls)
 
 	logged := logs.String()
 	require.Contains(t, logged, "level=WARN")
@@ -187,7 +192,7 @@ func TestUnreachableEngineJoinedError(t *testing.T) {
 		"the joined error must name the engine that failed")
 
 	require.Equal(t,
-		[]bandwidthCall{{id: "", down: 1048576, up: 0}},
+		[]bandwidthCall{{id: "", down: p64(1048576), up: p64(0)}},
 		up.calls,
 		"one unreachable daemon must not block the other engine",
 	)
@@ -213,7 +218,7 @@ func TestHungEngineDoesNotStarveTheRest(t *testing.T) {
 	require.Contains(t, err.Error(), engine.NameAria2)
 
 	require.Equal(t,
-		[]bandwidthCall{{id: "", down: 1048576, up: 0}},
+		[]bandwidthCall{{id: "", down: p64(1048576), up: p64(0)}},
 		ok.calls,
 		"an engine parked on the context must not starve the fan-out behind it",
 	)
@@ -235,7 +240,7 @@ func TestLoadAndApplyPushesStoredLimits(t *testing.T) {
 
 	// Absent rows are the documented default: unlimited in both directions.
 	require.NoError(t, gov.LoadAndApply(context.Background()))
-	require.Equal(t, []bandwidthCall{{id: "", down: 0, up: 0}}, e.calls)
+	require.Equal(t, []bandwidthCall{{id: "", down: p64(0), up: p64(0)}}, e.calls)
 	require.Equal(t, engine.RateLimits{Down: 0, Up: 0}, gov.Current())
 
 	require.NoError(t, settings.SetInt64(context.Background(), "download_rate_limit", 2097152))
@@ -243,7 +248,7 @@ func TestLoadAndApplyPushesStoredLimits(t *testing.T) {
 
 	require.NoError(t, gov.LoadAndApply(context.Background()))
 	require.Equal(t,
-		[]bandwidthCall{{id: "", down: 0, up: 0}, {id: "", down: 2097152, up: 524288}},
+		[]bandwidthCall{{id: "", down: p64(0), up: p64(0)}, {id: "", down: p64(2097152), up: p64(524288)}},
 		e.calls,
 		"the stored pair must reach the engine verbatim, in bytes per second",
 	)
@@ -282,4 +287,190 @@ func TestMalformedStoredLimitErrorsRatherThanUnlimited(t *testing.T) {
 			`DELETE FROM settings WHERE key = 'download_rate_limit'`)
 		require.NoError(t, err)
 	}
+}
+
+// taskReadbackEngine adds the optional per-task read-back surface the
+// governor confirms through, answering the daemon truth the test
+// configures.
+type taskReadbackEngine struct {
+	*bandwidthEngine
+	down, up int64
+	err      error
+}
+
+func (e *taskReadbackEngine) TaskLimits(context.Context, string) (int64, int64, error) {
+	return e.down, e.up, e.err
+}
+
+func TestApplyTaskUsesBareEngineRef(t *testing.T) {
+	reg := engine.NewRegistry()
+	e := &bandwidthEngine{name: engine.NameAria2}
+	reg.Register(e)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), p64(524288)))
+
+	require.Equal(t,
+		[]bandwidthCall{{id: "2089b05ecca3d829", down: p64(1048576), up: p64(524288)}},
+		e.calls,
+		"the engine must receive the bare ref, stripped of its namespace",
+	)
+}
+
+func TestApplyTaskZeroIsUnlimited(t *testing.T) {
+	reg := engine.NewRegistry()
+	e := &bandwidthEngine{name: engine.NameQBittorrent}
+	reg.Register(e)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "qbittorrent:8f9c3a2b", p64(0), p64(0)))
+
+	// 0 is pushed as the literal unlimited value, never dropped as unset.
+	require.Equal(t, []bandwidthCall{{id: "8f9c3a2b", down: p64(0), up: p64(0)}}, e.calls)
+}
+
+func TestApplyTaskNilDirectionLeftUntouched(t *testing.T) {
+	reg := engine.NewRegistry()
+	e := &bandwidthEngine{name: engine.NameAria2}
+	reg.Register(e)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(2097152), nil))
+
+	// The unsent direction reaches the engine as nil — left unchanged —
+	// not as a guessed value like 0, which would mean unlimited.
+	require.Equal(t,
+		[]bandwidthCall{{id: "2089b05ecca3d829", down: p64(2097152), up: nil}},
+		e.calls,
+	)
+}
+
+func TestApplyTaskNoLifecycleCalls(t *testing.T) {
+	reg := engine.NewRegistry()
+	e := &bandwidthEngine{name: engine.NameAria2}
+	reg.Register(e)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), p64(524288)))
+
+	// The embedded nil Engine turns every lifecycle method — Pause,
+	// Resume, Remove — into a panic the moment it runs, so reaching this
+	// assertion at all proves the apply never touched them; the call log
+	// then pins the one call it is allowed to make.
+	require.Equal(t,
+		[]bandwidthCall{{id: "2089b05ecca3d829", down: p64(1048576), up: p64(524288)}},
+		e.calls,
+	)
+}
+
+func TestApplyTaskNotSupportedPropagates(t *testing.T) {
+	reg := engine.NewRegistry()
+	e := &bandwidthEngine{name: engine.NameAria2, setErr: engine.ErrNotSupported}
+	reg.Register(e)
+
+	gov := engine.NewGovernor(reg, nil)
+	err := gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), nil)
+
+	// yt-dlp's answer: the caller treats it as success and stores the
+	// value for the next spawn, so the sentinel must arrive intact.
+	require.ErrorIs(t, err, engine.ErrNotSupported)
+}
+
+func TestApplyTaskUnregisteredEngine(t *testing.T) {
+	gov := engine.NewGovernor(engine.NewRegistry(), nil)
+	err := gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), nil)
+
+	require.ErrorIs(t, err, engine.ErrUnavailable)
+	require.Contains(t, err.Error(), engine.NameAria2,
+		"the error must name the engine that is not registered",
+	)
+}
+
+func TestApplyTaskMalformedID(t *testing.T) {
+	reg := engine.NewRegistry()
+	e := &bandwidthEngine{name: engine.NameAria2}
+	reg.Register(e)
+
+	gov := engine.NewGovernor(reg, nil)
+	for _, id := range []string{"2089b05ecca3d829", ":2089b05ecca3d829", "aria2:", ""} {
+		require.Errorf(t, gov.ApplyTask(context.Background(), id, p64(1048576), nil),
+			"id %q has no usable engine namespace", id)
+	}
+	require.Empty(t, e.calls, "an id that cannot be routed reaches no engine")
+}
+
+func TestApplyTaskBothDirectionsNilCallsNothing(t *testing.T) {
+	reg := engine.NewRegistry()
+	e := &bandwidthEngine{name: engine.NameAria2}
+	reg.Register(e)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", nil, nil))
+	require.Empty(t, e.calls, "a patch with no direction touches no engine")
+}
+
+func TestApplyTaskReadBackMismatchLogsOnly(t *testing.T) {
+	reg := engine.NewRegistry()
+	mismatch := &taskReadbackEngine{
+		bandwidthEngine: &bandwidthEngine{name: engine.NameQBittorrent},
+		down:            2097152, // daemon kept a different value than the 1048576 sent
+		up:              524288,
+	}
+	reg.Register(mismatch)
+
+	logs := captureGovernorLogs(t)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "qbittorrent:8f9c3a2b", p64(1048576), p64(524288)))
+
+	require.Equal(t,
+		[]bandwidthCall{{id: "8f9c3a2b", down: p64(1048576), up: p64(524288)}},
+		mismatch.calls,
+	)
+
+	logged := logs.String()
+	require.Contains(t, logged, "level=WARN")
+	require.Contains(t, logged, "per-task download limit read back different")
+	require.Contains(t, logged, "sent_bps=1048576")
+	require.Contains(t, logged, "read_bps=2097152")
+	require.Contains(t, logged, "engine="+engine.NameQBittorrent)
+	require.NotContains(t, logged, "per-task upload limit read back different",
+		"the direction the daemon did hold must not warn")
+}
+
+func TestApplyTaskNilDirectionSkipsReadBackComparison(t *testing.T) {
+	reg := engine.NewRegistry()
+	probe := &taskReadbackEngine{
+		bandwidthEngine: &bandwidthEngine{name: engine.NameAria2},
+		down:            1048576, // matches what was sent
+		up:              524288,  // the daemon holds a limit the patch never touched
+	}
+	reg.Register(probe)
+
+	logs := captureGovernorLogs(t)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), nil))
+
+	require.NotContains(t, logs.String(), "read back different",
+		"a direction the patch left as nil must not be compared against the daemon",
+	)
+}
+
+func TestApplyTaskReadBackErrorStillSucceeds(t *testing.T) {
+	reg := engine.NewRegistry()
+	probe := &taskReadbackEngine{
+		bandwidthEngine: &bandwidthEngine{name: engine.NameQBittorrent},
+		err:             errors.New("daemon query failed"),
+	}
+	reg.Register(probe)
+
+	gov := engine.NewGovernor(reg, nil)
+	require.NoError(t, gov.ApplyTask(context.Background(), "qbittorrent:8f9c3a2b", p64(1048576), p64(524288)))
+
+	require.Equal(t,
+		[]bandwidthCall{{id: "8f9c3a2b", down: p64(1048576), up: p64(524288)}},
+		probe.calls,
+		"a failed read-back must not fail an apply that already succeeded",
+	)
 }
