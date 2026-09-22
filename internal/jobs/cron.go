@@ -89,6 +89,12 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}
 
 	c.Start()
+	// Apply the active cell at once rather than waiting for the first
+	// minute boundary — a restart inside a No Download window would
+	// otherwise leave running transfers live for up to a minute.
+	if s.gov != nil {
+		s.evaluateOnce(ctx)
+	}
 	<-ctx.Done()
 	// Stop returns a context that completes when running entries finish.
 	<-c.Stop().Done()

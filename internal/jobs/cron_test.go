@@ -321,6 +321,43 @@ func TestDisabledScheduleDoesNothing(t *testing.T) {
 	require.Equal(t, engine.Mode(""), f.governor.Mode(), "a disabled schedule applies no mode")
 }
 
+func TestStartAppliesCellImmediately(t *testing.T) {
+	f := newScheduleFixture(t, engine.NameAria2)
+	f.writeGrid(t, true, map[int]store.ScheduleMode{10: store.ScheduleNoDownload})
+	task := f.addTask(t, engine.NameAria2, "downloading", "gid-one")
+	aria2 := f.engines[engine.NameAria2]
+
+	// The injected clock sits inside the 0 cell; the real clock does not
+	// matter — Start must evaluate before the first minute tick.
+	f.scheduler.now = func() time.Time { return scheduleTime(10, 30) }
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		f.scheduler.Start(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		row, err := f.tasks.Get(t.Context(), task.ID)
+		// The park commits after the engine pause lands; wait for the
+		// state, not the pause list, so the assertions below are stable.
+		return err == nil && row.State == "paused"
+	}, 2*time.Second, 10*time.Millisecond,
+		"Start must apply the active cell without waiting for a minute boundary",
+	)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not drain after ctx cancel")
+	}
+
+	require.Equal(t, []string{"aria2:gid-one"}, aria2.pauseList())
+	require.Equal(t, "paused", f.taskState(t, task.ID))
+	require.Equal(t, store.CodeTaskSchedulePaused, f.eventCodes(t, task.ID)[0])
+}
+
 func TestNoDownloadWithoutTaskStoreFailsClosed(t *testing.T) {
 	db := newTestDB(t)
 	ctx := t.Context()

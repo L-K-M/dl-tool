@@ -203,30 +203,33 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/jobs/... ./internal/engine/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	21.110s
-ok  	github.com/L-K-M/dl-tool/internal/engine	30.994s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.292s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.099s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	21.275s
+ok  	github.com/L-K-M/dl-tool/internal/engine	30.268s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.260s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.075s
 SCHED_EVAL_OK
 ```
 
-The five named tests plus the nil-store acceptance case, from a `-v` run of the same tree:
+The five named tests plus the nil-store acceptance case and the review-added
+startup-evaluation case, from a `-v` run of the same tree:
 
 ```
 === RUN   TestNoDownloadPausesAndResumesSameSet
---- PASS: TestNoDownloadPausesAndResumesSameSet (0.71s)
+--- PASS: TestNoDownloadPausesAndResumesSameSet (0.65s)
 === RUN   TestUserPausedTaskNotResumed
---- PASS: TestUserPausedTaskNotResumed (0.54s)
+--- PASS: TestUserPausedTaskNotResumed (0.57s)
 === RUN   TestAlternativeReachesAria2
---- PASS: TestAlternativeReachesAria2 (0.53s)
+--- PASS: TestAlternativeReachesAria2 (0.50s)
 === RUN   TestTickWithinCellIsIdempotent
---- PASS: TestTickWithinCellIsIdempotent (0.55s)
+--- PASS: TestTickWithinCellIsIdempotent (0.53s)
 === RUN   TestDisabledScheduleDoesNothing
---- PASS: TestDisabledScheduleDoesNothing (0.46s)
+--- PASS: TestDisabledScheduleDoesNothing (0.36s)
+=== RUN   TestStartAppliesCellImmediately
+--- PASS: TestStartAppliesCellImmediately (0.52s)
 === RUN   TestNoDownloadWithoutTaskStoreFailsClosed
---- PASS: TestNoDownloadWithoutTaskStoreFailsClosed (0.52s)
+--- PASS: TestNoDownloadWithoutTaskStoreFailsClosed (0.45s)
 PASS
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.370s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	4.651s
 ```
 
 Scope:
