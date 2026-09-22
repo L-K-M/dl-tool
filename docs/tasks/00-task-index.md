@@ -401,7 +401,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T080 | Store and serve the 24×7 schedule grid | T027, T079 | yes | done | [T080](T080-schedule-grid-endpoints.md) |
 | T081 | Apply the active schedule cell every minute | T066, T079, T080 | no | done | [T081](T081-schedule-evaluation-and-alternative-speed.md) |
 | T082 | Apply a per-task rate limit to a running task | T022, T037, T079 | no | done | [T082](T082-live-per-task-rate-limits.md) |
-| T083 | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | yes | todo | [T083](T083-watch-folder-loader.md) |
+| T083 | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | no | todo | [T083](T083-watch-folder-loader.md) |
 | T084 | Issue, list and revoke API tokens | T008, T009 | yes | todo | [T084](T084-api-tokens.md) |
 | T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | todo | [T091](T091-database-backup-and-retention.md) |
 | T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | todo | [T092](T092-settings-and-system-info.md) |
