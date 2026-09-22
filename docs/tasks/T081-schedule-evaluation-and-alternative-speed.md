@@ -7,10 +7,10 @@
 | **Status** | todo |
 | **Depends on** | T066, T079, T080 |
 | **Blocks** | T083, T110 |
-| **Parallel-safe** | no — extends `internal/jobs/cron.go` and `internal/engine/bandwidth.go` |
+| **Parallel-safe** | no — extends `internal/jobs/cron.go`, `internal/engine/bandwidth.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-091](../02-requirements.md#fr-091-apply-alternative-speeds-to-every-engine), [FR-093](../02-requirements.md#fr-093-apply-the-active-schedule-cell-every-minute) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0017](../decisions/0017-exclusive-control-of-engines.md) |
-| **Est. size** | 2 new files, ~300 LOC |
+| **Est. size** | 1 new file, ~300 LOC plus the composition-root wiring this repair assigns to `cmd/dl-tool/main.go` |
 
 ## Goal
 While the schedule is enabled, a cron entry evaluates the active cell once a minute and fans the result out
@@ -33,6 +33,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/jobs/cron_test.go` | create | Boundary, idempotence, user-pause and alternative-speed cases. |
 | `internal/engine/bandwidth.go` | modify | Add `ApplyMode`, the paused-set bookkeeping and `Mode()`. |
 | `internal/store/tasks.go` | modify | Add `ScheduleParked` and `ListScheduleParked`. |
+| `cmd/dl-tool/main.go` | modify | Attach the parked-set store to the governor and the live governor to the scheduler. |
 
 No other file may be modified.
 
@@ -72,6 +73,13 @@ func (g *Governor) ApplyMode(ctx context.Context, m Mode) error
 
 // Mode returns the mode last applied.
 func (g *Governor) Mode() Mode
+
+// WithTasks attaches the TaskStore ApplyMode uses for the parked set; it returns g so the
+// composition root chains it off T079's NewGovernor(reg, st), whose signature does not change.
+// A nil store leaves the engine-side fan-out working, but ApplyMode must reject a `0` cell before
+// pausing any engine, since without the store the parked ids could never be resumed; production
+// always attaches it.
+func (g *Governor) WithTasks(ts *store.TaskStore) *Governor
 ```
 
 ```go
@@ -103,8 +111,12 @@ The parked set lives in `task_events`, not in a new column: `task.schedule.pause
 6. Implement the release path: on a change away from `ModeNoDownload`, resume exactly the ids returned by
    `ListScheduleParked` and append `task.schedule.resumed` to each.
 7. Add `ScheduleParked` and `ListScheduleParked` to `internal/store/tasks.go` with explicit column lists.
-8. Attach the governor from the existing `Scheduler` construction site; do not edit `cmd/dl-tool/main.go` in
-   this task, because T066's `Start(ctx)` already owns that call site.
+8. Edit `cmd/dl-tool/main.go`: attach the parked-set store at the existing governor construction —
+   `engine.NewGovernor(server.Engines, store.NewSettingsStore(db)).WithTasks(store.NewTaskStore(db))`
+   — and move the `jobs.NewScheduler(db, logger)` construction with its `Start(runCtx)` goroutine
+   below the `LoadAndApply` block, calling `scheduler.WithGovernor(governor)` between construction
+   and `Start`. Attaching before the cron goroutine runs needs no timing argument: the `gov` field
+   is set before any entry can observe it.
 9. Create `internal/jobs/cron_test.go` with an injected clock: assert `1 → 0 → 1` pauses then resumes the
    same ids; assert a task the user paused before the `0` cell is not resumed; assert `2` pushes the
    alternative pair to the aria2 fake as well as the qBittorrent fake; assert repeated ticks inside one cell
@@ -118,6 +130,12 @@ The parked set lives in `task_events`, not in a new column: `task.schedule.pause
 - [ ] Leaving a `0` cell resumes exactly the parked ids and no user-paused task.
 - [ ] Repeated ticks within one cell issue no further engine calls.
 - [ ] A task dl-tool did not create is never paused, resumed or rate-limited.
+- [ ] With no TaskStore attached, a `0` cell makes `ApplyMode` return an error and issue no pause
+  call to any engine.
+- [ ] Review check (not assertable from `internal/jobs/cron_test.go`) — `cmd/dl-tool/main.go` builds
+  the governor with `.WithTasks(store.NewTaskStore(db))` and hands the same instance to
+  `scheduler.WithGovernor`, so a `2` cell reaches the production engines and a `0` cell records
+  `task.schedule.paused` rows (docs/14-conventions.md §8.3).
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -231,3 +249,14 @@ here (deciding files: this task's `## Files` table, docs/14-conventions.md §8.3
 
 Status stays `todo` pending plan repair — do not re-dispatch; the owner must pick remedy 1–3 or amend
 the contract first.
+
+**Repair applied 2026-09-22.** The ruling picked remedy 1, the smallest interpretation consistent with
+the accepted ADRs and the merged code: this task's `## Files` table now carries `cmd/dl-tool/main.go`,
+and the contract pins the seams — `Governor.WithTasks` delivers the `*store.TaskStore` the parked-set
+bookkeeping needs while leaving T079's `NewGovernor(reg, st)` signature untouched — the nil-store
+rejection the contract mandates is covered by a new acceptance item exercised from
+`internal/jobs/cron_test.go`, so `internal/engine/bandwidth_test.go` stays out of scope — and step 8
+now attaches the live instance with
+`scheduler.WithGovernor(governor)` instead of forbidding the file. The gap is registered as F671 and
+marked resolved by this repair, as is the stale '2 new files' count in the `Est. size` row (F502).
+The index row stays `todo`; the next loop iteration implements the task.
