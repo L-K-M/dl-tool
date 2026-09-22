@@ -10,7 +10,7 @@
 | **Parallel-safe** | no — it also edits the shared files `internal/jobs/cron.go`, `internal/store/settings.go`, `internal/api/server.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-043](../02-requirements.md#fr-043-import-torrent-files-from-a-watch-folder), [FR-044](../02-requirements.md#fr-044-report-the-effective-destination) |
 | **Decisions** | [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md), [ADR-0012](../decisions/0012-single-data-mount.md) |
-| **Est. size** | 4 new files, ~460 LOC plus the composition-root wiring this repair assigns to `internal/api/server.go` and `cmd/dl-tool/main.go` |
+| **Est. size** | 5 new files, ~540 LOC plus the composition-root wiring this repair assigns to `internal/api/server.go` and `cmd/dl-tool/main.go` |
 
 ## Goal
 A `.torrent` file dropped into an enabled watch folder becomes a task in that folder's destination and
@@ -35,6 +35,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/store/settings.go` | modify | Add `WatchFolder`, `ListEnabledWatchFolders`, `GetWatchFolder`, `TouchWatchFolder`, `SeedWatchFolder` and the loaded-set pair. |
 | `internal/jobs/cron.go` | modify | Add `Scheduler.WithWatcher` and start `Run` beside the cron entries. |
 | `internal/api/watchcreator.go` | create | `watchTaskCreator`, the `jobs.TaskCreator` adapter over `TaskHandlers.CreateTasks`. |
+| `internal/api/watchcreator_test.go` | create | The adapter's slug/detail → sentinel mapping exercised against the real create path. |
 | `internal/api/server.go` | modify | Add the exported `Server.WatchCreator` field and build it in `NewServer`. |
 | `cmd/dl-tool/main.go` | modify | Attach the watcher to the scheduler and seed `cfg.WatchDir`. |
 
@@ -173,7 +174,10 @@ func (s *SettingsStore) TouchWatchFolder(ctx context.Context, id string, at int6
 func (s *SettingsStore) SeedWatchFolder(ctx context.Context, path, destination string) (created bool, err error)
 
 // MaxWatchFolderLoaded bounds the per-folder loaded set; the oldest entries drop first, the
-// same trim AppendExtractPassword applies.
+// same trim AppendExtractPassword applies. Eviction is graceful but visible: a still-present
+// file whose infohash was trimmed re-surfaces as SkipDuplicate on the next sweep — task dedup,
+// not the loaded set, keeps it from loading twice — and a SkipDuplicate file is never unlinked,
+// even when delete_after_load is set.
 const MaxWatchFolderLoaded = 4096
 
 // WatchFolderLoaded reports whether the folder's loaded set already holds infohash. The set is
@@ -217,12 +221,17 @@ for when the two differ, per the Task object in
    `syscall.IN_CLOSE_WRITE | syscall.IN_MOVED_TO` and installing itself into `newOSWatcher` from `init()`.
    Any registration error returns the polling watcher instead of failing. The inotify watcher still
    ticks at the folder's `poll_interval_s` between events: NFS and CIFS mounts accept the registration
-   but never deliver remote writes, so the sweep is what keeps the one-interval bound there.
-8. Edit `internal/jobs/cron.go`: add `Scheduler.WithWatcher` and run `watcher.Run` on the scheduler
-   context inside `Start` beside the cron entries, joining it during the drain. Edit
-   `cmd/dl-tool/main.go`: build `jobs.NewWatcher(store.NewSettingsStore(db), server.WatchCreator)` and
-   attach it at the existing `NewScheduler` construction chain, and when `cfg.WatchDir` is non-empty
-   seed one enabled row — `SeedWatchFolder(ctx, cfg.WatchDir, root)` with `root` the
+   but never deliver remote writes, so the sweep is what keeps the one-interval bound there. The event
+   path and the tick share one loop per folder (or a per-folder mutex), so `ScanOnce` never runs
+   concurrently with itself — `MarkWatchFolderLoaded` is a read-modify-write on one settings key.
+8. Create `internal/api/watchcreator.go` and edit `internal/api/server.go` to export
+   `Server.WatchCreator`, filled in `NewServer` as `watchTaskCreator{tasks: tasks}` at the site that
+   builds `RuleCreator`. Edit `internal/jobs/cron.go`: add `Scheduler.WithWatcher` and run
+   `watcher.Run` on the scheduler context inside `Start` beside the cron entries, joining it during
+   the drain. Edit `cmd/dl-tool/main.go`: build
+   `jobs.NewWatcher(store.NewSettingsStore(db), server.WatchCreator)` and attach it at the existing
+   `NewScheduler` construction chain, and when `cfg.WatchDir` is non-empty seed one enabled row —
+   `SeedWatchFolder(ctx, cfg.WatchDir, root)` with `root` the
    `fsx.ResolveDestinationRoot(cfg.DataRoots, cfg.WatchDir)` result, the containing data root —
    before the watcher starts. `cfg.WatchDir` arrives already root-validated (`config.Load` warns and
    clears an out-of-roots value); a resolve or seed error is logged and skipped, never fatal.
@@ -232,7 +241,12 @@ for when the two differ, per the Task object in
    assert a creator answering `ErrTorrentDuplicate` yields `torrent_duplicate` and one answering
    `ErrDestinationRejected` yields `path_rejected`; assert a failing hand-off leaves the file; assert the
    fallback path runs when `newOSWatcher` errors.
-10. Run the verification command and paste its output under `## Evidence`.
+10. Create `internal/api/watchcreator_test.go`: drive `watchTaskCreator` (or `Server.WatchCreator`) into
+    the real `CreateTasks` responses — a live task carrying the blob's infohash answers
+    `jobs.ErrTorrentDuplicate`, and a destination outside the roots answers
+    `jobs.ErrDestinationRejected` — so the slug and `Detail`-prefix mapping is pinned against drift in
+    the create endpoint's wording.
+11. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
 - [ ] A dropped `.torrent` becomes a task within one poll interval, in the folder's destination.
@@ -250,12 +264,14 @@ for when the two differ, per the Task object in
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-make lint && make test PKG="./internal/jobs/... ./internal/store/..." && echo WATCH_OK
+make lint && make test PKG="./internal/jobs/... ./internal/store/... ./internal/api/..." && echo WATCH_OK
 ```
-Expected: `ok  github.com/L-K-M/dl-tool/internal/jobs` and `ok  github.com/L-K-M/dl-tool/internal/store`,
-with `TestDroppedTorrentBecomesTask`, `TestDeleteAfterLoadOnlyOnSuccess`, `TestSecondScanSkipsLoaded`,
-`TestNonTorrentSkipped`, `TestRequestedDestinationRecorded` and `TestFallsBackToPolling` each reported as
-`--- PASS`. The final line of stdout is exactly `WATCH_OK`. No `FAIL`.
+Expected: `ok  github.com/L-K-M/dl-tool/internal/jobs`, `ok  github.com/L-K-M/dl-tool/internal/store` and
+`ok  github.com/L-K-M/dl-tool/internal/api`, with `TestDroppedTorrentBecomesTask`,
+`TestDeleteAfterLoadOnlyOnSuccess`, `TestSecondScanSkipsLoaded`, `TestNonTorrentSkipped`,
+`TestRequestedDestinationRecorded` and `TestFallsBackToPolling` in jobs plus the adapter-mapping tests
+of step 10 in api each reported as `--- PASS`. The final line of stdout is exactly `WATCH_OK`.
+No `FAIL`.
 
 Also confirm scope:
 ```bash
