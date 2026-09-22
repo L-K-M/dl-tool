@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # SHA-256 (ADR-0021). Upstream's tarball ships a static 7zzs — the only build
 # carrying the RAR codec that runs on musl; Alpine's 7zip package compiles it
 # out and the tarball's dynamic 7zz is glibc-linked.
-FROM --platform=$BUILDPLATFORM alpine:3.22 AS sevenzip
+FROM --platform=$BUILDPLATFORM alpine:3.24 AS sevenzip
 ARG TARGETARCH
 # The three defaults below ARE the pin: the only place the 7-Zip version and
 # hashes are recorded. Bumps follow the ADR-0018 cadence.
@@ -45,7 +45,7 @@ RUN apk add --no-cache xz && \
     xz -dc /tmp/7z.tar.xz | tar -xf - -C /tmp 7zzs; \
     install -m 0755 /tmp/7zzs /7zz
 
-FROM alpine:3.22
+FROM alpine:3.24
 RUN apk add --no-cache su-exec ca-certificates tzdata nodejs
 COPY --from=build /out/dl-tool /usr/local/bin/dl-tool
 COPY --from=sevenzip /7zz /usr/local/bin/7zz
