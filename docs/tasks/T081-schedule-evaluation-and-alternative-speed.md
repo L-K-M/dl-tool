@@ -154,4 +154,74 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+The contract attaches the bandwidth governor to the Scheduler with `WithGovernor(gov *engine.Governor)`,
+but no file in the `## Files` table can supply one — and step 8 forbids the only file that can. The only
+`*engine.Registry` in the process is `server.Engines`, built inside `api.NewServer` from `cfg`
+(`internal/api/server.go:240`); the only `*engine.Governor` is built from it at `cmd/dl-tool/main.go:260`.
+The only `Scheduler` construction site is `cmd/dl-tool/main.go:232` — the "existing `Scheduler`
+construction site" step 8 names — which (a) is in a file step 8 forbids editing and (b) runs *before* the
+governor exists, so even a hand-off cannot precede `Start`. `NewScheduler` cannot build the governor
+itself: `internal/jobs` holds only the `*sqlx.DB`, it cannot import `internal/api` (that package already
+imports `internal/jobs` in `internal/api/search.go` — an import cycle), and rebuilding adapters from
+`db` needs `cfg` and the concrete adapter packages, which docs/14-conventions.md §§8.1/8.3 reserve for
+the composition root. `NewScheduler(db, log)` also cannot gain a governor parameter: its signature is
+pinned by the uneditable call at main.go:232. docs/14-conventions.md §8.3 counts a setter with no caller
+as not done, and every in-scope alternative is an improvisation the plan never specified:
+
+- **An empty-registry governor** built inside `NewScheduler` gives `WithGovernor` a caller, but
+  `ApplyGlobal` fans out to zero engines and `ModeNoDownload` pauses nothing engine-side — rows read
+  `paused` while transfers keep writing. That is the "built and never wired" failure §8.3 exists to
+  catch, hidden behind green unit tests that inject fakes.
+- **A package-global governor** that `NewGovernor` publishes and `EvaluateSchedule` resolves per tick is
+  the only in-table mechanism that can reach the live instance, but it replaces the documented attach
+  (production would never call `WithGovernor`), adds a process singleton the contract does not describe,
+  and still cannot attach eagerly: the scheduler is constructed at main.go:232, the governor at
+  main.go:260, so the contract's own field shape (`gov *engine.Governor`, "set by WithGovernor") holds
+  no value at the time the one permitted call site runs.
+
+Rerunnable evidence on this commit:
+
+```bash
+# The only production registry and governor; both call sites live outside the Files table.
+grep -rn "engine.NewRegistry\|engine.NewGovernor" internal/ cmd/ --include="*.go" | grep -v _test
+# → internal/api/server.go:240 builds the registry; cmd/dl-tool/main.go:260 builds the governor.
+
+# The scheduler's only call sites — main.go:232 constructs it before main.go:260 builds the governor.
+grep -n "NewScheduler\|scheduler\.Start\|NewGovernor" cmd/dl-tool/main.go
+
+# api already imports jobs, so jobs cannot reach server.Engines through api (import cycle).
+grep -rn "internal/jobs" internal/api/*.go | grep -v _test
+# → internal/api/search.go:25
+
+# The Governor's only store collaborator; SettingsStore exposes no TaskStore for the parked set.
+grep -n "func NewGovernor\|type SettingsStore struct\|func (s \*TaskStore) Settings" \
+    internal/engine/bandwidth.go internal/store/settings.go
+# → NewGovernor(reg *Registry, st *store.SettingsStore); SettingsStore.db is unexported;
+#   only TaskStore.Settings() exists — the wrong direction.
+```
+
+A second gap rides the same missing caller: the contract moves the paused-set bookkeeping into
+`internal/engine/bandwidth.go` (`ApplyMode` calls `ScheduleParked`/`ListScheduleParked` and scans the
+pausable states), which needs `*store.TaskStore`. `NewGovernor(reg, st)` is pinned by the main.go:260
+call and `SettingsStore.db` is unexported, so the Governor's tasks collaborator needs a delivery call
+site (e.g. `gov.WithTasks(...)`) invoked by the same caller that would invoke `WithGovernor` — which
+does not exist either.
+
+Remedies for the owner — the choice changes the composition root or the contract, so it is not made
+here (deciding files: this task's `## Files` table, docs/14-conventions.md §8.3):
+
+1. Add `cmd/dl-tool/main.go` to this task's `## Files` table. The repair is a few lines: construct the
+   scheduler with `jobs.NewScheduler(db, logger)` after `engine.NewGovernor` (or keep the order and call
+   `scheduler.WithGovernor(governor)` after it), and attach the tasks collaborator at the same site —
+   e.g. widen `NewGovernor(reg, st, ts)` or add `governor.WithTasks(store.NewTaskStore(db))`. Same repair
+   class the owner applied to T071.
+2. Alternatively add `internal/api/server.go` to the table and move scheduler construction into
+   `NewServer`, which already owns `engines` and a `store.NewTaskStore(db)`. A larger repair: it rewrites
+   T066's call site.
+3. Alternatively prescribe the package-global publish explicitly (`NewGovernor` records the process
+   governor; `EvaluateSchedule` resolves it per tick; `NewScheduler` attaches the tasks store), amending
+   the contract to say so. Keeps step 8's "no main.go edit" promise at the price of an uncontracted
+   process singleton and a `WithGovernor` that production never calls.
+
+Status stays `todo` pending plan repair.
