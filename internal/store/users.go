@@ -531,7 +531,7 @@ func decodeAPITokenCursor(token string) (apiTokenPageCursor, error) {
 	if err := json.Unmarshal(decoded, &cursor); err != nil {
 		return apiTokenPageCursor{}, fmt.Errorf("%w: token is not a page cursor", ErrStaleCursor)
 	}
-	if cursor.ID == "" {
+	if cursor.ID == "" || cursor.At <= 0 {
 		return apiTokenPageCursor{}, fmt.Errorf("%w: token carries no row", ErrStaleCursor)
 	}
 

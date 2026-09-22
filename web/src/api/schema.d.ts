@@ -1132,7 +1132,7 @@ export interface components {
        * Format: date-time
        * @description RFC 3339 expiry; null means the token never expires
        */
-      expires_at: string | null;
+      expires_at?: string;
       /** @description Display label shown in the token list */
       name: string;
     };

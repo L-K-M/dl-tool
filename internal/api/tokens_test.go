@@ -311,6 +311,9 @@ func TestTokenNeverLogged(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
+	if len(records) == 0 {
+		t.Fatal("no log records captured; the leak check would pass vacuously")
+	}
 	for _, record := range records {
 		var line strings.Builder
 		line.WriteString(record.Message)

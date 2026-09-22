@@ -52,7 +52,7 @@ type ListTokensInput struct {
 type CreateTokenInput struct {
 	Body struct {
 		Name      string     `json:"name"       required:"true" minLength:"1" doc:"Display label shown in the token list"`
-		ExpiresAt *time.Time `json:"expires_at" doc:"RFC 3339 expiry; null means the token never expires"`
+		ExpiresAt *time.Time `json:"expires_at,omitempty" doc:"RFC 3339 expiry; null means the token never expires"`
 	}
 }
 
