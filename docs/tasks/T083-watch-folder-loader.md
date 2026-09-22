@@ -310,27 +310,28 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/jobs/... ./internal/store/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	39.835s
-ok  	github.com/L-K-M/dl-tool/internal/store	101.464s
-ok  	github.com/L-K-M/dl-tool/internal/api	191.019s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	27.563s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.446s
+ok  	github.com/L-K-M/dl-tool/internal/api	155.403s
 WATCH_OK
 ```
 
 The six named jobs tests and the adapter-mapping tests, individually:
 
 ```
---- PASS: TestDroppedTorrentBecomesTask (0.74s)
---- PASS: TestDeleteAfterLoadOnlyOnSuccess (0.43s)
---- PASS: TestSecondScanSkipsLoaded (0.49s)
---- PASS: TestNonTorrentSkipped (0.44s)
---- PASS: TestRequestedDestinationRecorded (0.36s)
---- PASS: TestFallsBackToPolling (0.45s)
-ok  	github.com/L-K-M/dl-tool/internal/jobs	4.001s
---- PASS: TestWatchCreatorDuplicateMapsToSentinel (0.50s)
---- PASS: TestWatchCreatorPathRejectedMapsToSentinel (0.40s)
---- PASS: TestWatchCreatorRequestedDestinationEcho (0.43s)
---- PASS: TestWatchCreatorSameDestinationLeavesEchoNull (0.44s)
-ok  	github.com/L-K-M/dl-tool/internal/api	2.836s
+--- PASS: TestDroppedTorrentBecomesTask (0.61s)
+--- PASS: TestDeleteAfterLoadOnlyOnSuccess (0.38s)
+--- PASS: TestSecondScanSkipsLoaded (0.33s)
+--- PASS: TestNonTorrentSkipped (0.36s)
+--- PASS: TestRequestedDestinationRecorded (0.35s)
+--- PASS: TestFallsBackToPolling (0.34s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	3.436s
+--- PASS: TestWatchCreatorDuplicateMapsToSentinel (0.48s)
+--- PASS: TestWatchCreatorPathRejectedMapsToSentinel (0.46s)
+--- PASS: TestWatchCreatorRequestedDestinationEcho (0.39s)
+--- PASS: TestWatchCreatorSameDestinationLeavesEchoNull (0.40s)
+--- PASS: TestMapCreateError (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/api	2.844s
 ```
 
 `make ci` on the same tree: lint, vet, typecheck, `test` (Go + 279 vitest cases),
