@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T084 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T008, T009 |
 | **Blocks** | T106, T107, T120 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/auth.go`, `internal/api/server.go`, `internal/store/users.go` |
@@ -108,11 +108,20 @@ Statuses: `200`/`201`/`204` · `401` for a revoked or expired token · `404`.
 7. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] The clear-text token appears in the creation response and in no other response, ever.
-- [ ] `GET /api-tokens` returns `prefix` and `name` only, never a token value.
-- [ ] A revoked token's next request returns `401`.
-- [ ] An expired token returns `401` without being revoked.
-- [ ] The token value appears in no log record and no error message.
+- [x] The clear-text token appears in the creation response and in no other response, ever —
+  `TokenView` has no secret member (`internal/api/tokens.go`), proven by `TestTokenRevealedOnce`.
+- [x] `GET /api-tokens` returns `prefix` and `name` only, never a token value — `TestListHasNoSecret`
+  also asserts neither the value nor its SHA-256 hash appears.
+- [x] A revoked token's next request returns `401` — `TestRevokedTokenIs401` (seeded row) and
+  `TestDeleteRevokesImmediately` (through `DELETE /api-tokens/{id}`).
+- [x] An expired token returns `401` without being revoked — `TestExpiredTokenIs401` (seeded row) and
+  `TestExpiredCreatedTokenIs401` (through `POST` with a past `expires_at`).
+- [x] The token value appears in no log record and no error message — `TestTokenNeverLogged` scans
+  every captured slog record across issue, use and revoke; the store never sees the clear value.
+- [x] Review check — step 4's `auth.go` behaviour predates this task: T008's
+  `queryUserByAPITokenHash` already filters `revoked_at`/`expires_at` in SQL, and its stamp now
+  delegates to `UserStore.TouchAPIToken`, whose `WHERE` clause bounds `last_used_at` to one write per
+  minute. `auth.go` is not in the Files table and needed no edit.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -143,7 +152,60 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG="./internal/api/... ./internal/store/..." && echo TOKENS_OK`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	158.370s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.866s
+TOKENS_OK
+```
+
+The five named tests plus the endpoint-level additions, individually:
+
+```
+--- PASS: TestTokenRevealedOnce (0.45s)
+--- PASS: TestListHasNoSecret (0.43s)
+--- PASS: TestDeleteRevokesImmediately (0.38s)
+--- PASS: TestExpiredCreatedTokenIs401 (0.35s)
+--- PASS: TestTokenListPaginates (0.43s)
+--- PASS: TestTokenNeverLogged (0.41s)
+--- PASS: TestRevokedTokenIs401 (0.42s)
+--- PASS: TestExpiredTokenIs401 (0.39s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.521s
+```
+
+Scope (the Files-table paths plus the §7.1-implicit generated pair `api/openapi.json` and
+`web/src/api/schema.d.ts`):
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/server.go
+internal/api/tokens.go
+internal/api/tokens_test.go
+internal/store/users.go
+web/src/api/schema.d.ts
+```
+
+Interface-contract adaptations, same file scope: `UserStore.CreateAPIToken` takes the prepared
+`APIToken` row (the `CreateSession`/`CreateCategory` convention) instead of the sketched
+`(userID, name, expiresAt) → (id, prefix, hash)` — the sketch cannot hand the caller the reveal-once
+value, and per step 2 the `dlt_` + 32-hex value is minted in `tokens.go` from `crypto/rand`, so only
+its hash and prefix cross the store boundary. `ListAPITokens` also returns `total` (the §1.4
+envelope requires it). The middleware caller of `UserByAPITokenHash` is `auth.go`, outside the Files
+table, so its signature is unchanged and it delegates the throttled stamp to `TouchAPIToken`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

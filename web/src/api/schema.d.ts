@@ -4,6 +4,50 @@
  */
 
 export interface paths {
+  "/api-tokens": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the API tokens
+     * @description Every live token of the operator account, cursor-paginated newest first. Items carry id, name, prefix and timestamps only — a token value is never returned again after creation. Revoked tokens are the audit trail and do not list.
+     */
+    get: operations["list-api-tokens"];
+    put?: never;
+    /**
+     * Issue an API token
+     * @description Mints a bearer token and returns its value exactly once; only the SHA-256 hash and the 8-character prefix are stored. The value is never logged and no later response repeats it.
+     */
+    post: operations["create-api-token"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api-tokens/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Revoke an API token
+     * @description Sets revoked_at immediately, so the next request carrying the token answers 401. The row is kept as the audit trail; an unknown or already-revoked id is 404 /problems/not-found.
+     */
+    delete: operations["revoke-api-token"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/auth/login": {
     parameters: {
       query?: never;
@@ -1083,6 +1127,37 @@ export interface components {
       /** @description One entry per URI the submission refused; empty when everything was created */
       rejected: components["schemas"]["RejectedURI"][] | null;
     };
+    CreateTokenInputBody: {
+      /**
+       * Format: date-time
+       * @description RFC 3339 expiry; null means the token never expires
+       */
+      expires_at: string | null;
+      /** @description Display label shown in the token list */
+      name: string;
+    };
+    CreateTokenOutputBody: {
+      /** Format: date-time */
+      created_at: string;
+      /**
+       * Format: date-time
+       * @description RFC 3339 expiry, or null when the token never expires
+       */
+      expires_at: string | null;
+      /** @description The tok_ id of the token */
+      id: string;
+      /**
+       * Format: date-time
+       * @description Last authenticated request, or null
+       */
+      last_used_at: string | null;
+      /** @description Display label */
+      name: string;
+      /** @description First 8 characters of the token value, display only */
+      prefix: string;
+      /** @description The bearer token, revealed exactly once: dlt_ plus 32 hex characters */
+      token: string;
+    };
     DeleteTaskOutputBody: {
       /**
        * Format: int64
@@ -1421,6 +1496,17 @@ export interface components {
       /**
        * Format: int64
        * @description Rows matching the filter, ignoring the cursor
+       */
+      total: number;
+    };
+    ListTokensOutputBody: {
+      /** @description One page of live tokens, newest first; never carries a token value */
+      items: components["schemas"]["TokenView"][] | null;
+      /** @description Token for the next page; null on the last page */
+      next_cursor: string | null;
+      /**
+       * Format: int64
+       * @description Live tokens of the account, ignoring the cursor
        */
       total: number;
     };
@@ -1905,6 +1991,26 @@ export interface components {
       /** Format: int64 */
       max_per_run?: number;
     };
+    TokenView: {
+      /** Format: date-time */
+      created_at: string;
+      /**
+       * Format: date-time
+       * @description RFC 3339 expiry, or null when the token never expires
+       */
+      expires_at: string | null;
+      /** @description The tok_ id of the token */
+      id: string;
+      /**
+       * Format: date-time
+       * @description Last authenticated request, or null
+       */
+      last_used_at: string | null;
+      /** @description Display label */
+      name: string;
+      /** @description First 8 characters of the token value, display only */
+      prefix: string;
+    };
     TrackerDTO: {
       message: string;
       /** Format: int64 */
@@ -1951,6 +2057,103 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  "list-api-tokens": {
+    parameters: {
+      query?: {
+        /** @description Page size */
+        limit?: number;
+        /** @description Opaque page token from a previous response */
+        cursor?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListTokensOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-api-token": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateTokenInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreateTokenOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "revoke-api-token": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tok_ id of the token */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "post-auth-login": {
     parameters: {
       query?: never;
