@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/L-K-M/dl-tool/internal/store"
 	"github.com/L-K-M/dl-tool/internal/uri"
@@ -362,7 +363,13 @@ func (w *Watcher) touch(ctx context.Context, folderID string, lastErr error) {
 	if lastErr != nil {
 		text = lastErr.Error()
 		if len(text) > watchLastErrorMax {
-			text = text[:watchLastErrorMax] + "..."
+			// Cut on a rune boundary — the column is read through the JSON
+			// API, and a mid-rune cut would surface as mojibake.
+			cut := text[:watchLastErrorMax]
+			for len(cut) > 0 && !utf8.RuneStart(cut[len(cut)-1]) {
+				cut = cut[:len(cut)-1]
+			}
+			text = cut + "..."
 		}
 	}
 	if err := w.settings.TouchWatchFolder(ctx, folderID, time.Now().UnixMilli(), text); err != nil && ctx.Err() == nil {

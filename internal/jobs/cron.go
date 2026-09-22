@@ -82,7 +82,9 @@ func (s *Scheduler) WithWatcher(w *Watcher) *Scheduler {
 	if w == nil {
 		return s
 	}
-	w.log = s.log
+	if w.log == nil {
+		w.log = s.log
+	}
 	s.watcher = w
 	return s
 }
@@ -122,8 +124,18 @@ func (s *Scheduler) Start(ctx context.Context) {
 		loops.Add(1)
 		go func() {
 			defer loops.Done()
-			if err := s.watcher.Run(ctx); err != nil && ctx.Err() == nil {
-				s.log.ErrorContext(ctx, "watch folder loader stopped", "err", err)
+			for {
+				if err := s.watcher.Run(ctx); err != nil && ctx.Err() == nil {
+					s.log.ErrorContext(ctx, "watch folder loader stopped; restarting", "err", err)
+				}
+				// A returned Run — whether it errored or not — restarts
+				// after a minute: the folder list failing once must not
+				// leave the loader dead for the process's lifetime.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Minute):
+				}
 			}
 		}()
 	}
