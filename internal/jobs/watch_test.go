@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
@@ -417,4 +419,37 @@ func TestLoadedSetKeysOnV2HashWhenNoV1(t *testing.T) {
 	loaded, err := st.WatchFolderLoaded(t.Context(), folderID, manifest.InfohashV2)
 	require.NoError(t, err)
 	require.True(t, loaded, "the v2 infohash is the loaded-set identity when v1 is empty")
+}
+
+// TestLastErrorTruncatesOnRuneBoundary pins the bounded last_error text:
+// whatever the cap lands on, the stored string stays valid UTF-8 and
+// boundary-aligned caps keep the full rune.
+func TestLastErrorTruncatesOnRuneBoundary(t *testing.T) {
+	db := newTestDB(t)
+	st := store.NewSettingsStore(db)
+	folderID := insertWatchFolder(t, db, t.TempDir(), t.TempDir(), 1, 0, 10)
+
+	// "é" is two bytes; an ASCII cap boundary inside one is where a raw
+	// byte cut would break the rune.
+	pad := strings.Repeat("a", watchLastErrorMax-2) + "é" + strings.Repeat("b", 100)
+	watcher := NewWatcher(st, &fakeWatchCreator{})
+	watcher.touch(t.Context(), folderID, errors.New(pad))
+
+	folder, err := st.GetWatchFolder(t.Context(), folderID)
+	require.NoError(t, err)
+	require.NotNil(t, folder.LastError)
+	require.True(t, utf8.ValidString(*folder.LastError), "last_error must stay valid UTF-8")
+	require.True(t, strings.HasSuffix(*folder.LastError, "..."), "the truncation marker is appended")
+	require.Contains(t, *folder.LastError, "é", "a boundary-aligned rune is kept whole")
+
+	// The mid-rune case: put the é so the cap lands inside it.
+	pad = strings.Repeat("a", watchLastErrorMax-1) + "é" + strings.Repeat("b", 100)
+	watcher.touch(t.Context(), folderID, errors.New(pad))
+
+	folder, err = st.GetWatchFolder(t.Context(), folderID)
+	require.NoError(t, err)
+	require.NotNil(t, folder.LastError)
+	require.True(t, utf8.ValidString(*folder.LastError), "a mid-rune cap still yields valid UTF-8")
+	require.True(t, strings.HasSuffix(*folder.LastError, "..."))
+	require.NotContains(t, *folder.LastError, "é", "the truncated rune is dropped whole")
 }

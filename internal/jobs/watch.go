@@ -364,9 +364,10 @@ func (w *Watcher) touch(ctx context.Context, folderID string, lastErr error) {
 		text = lastErr.Error()
 		if len(text) > watchLastErrorMax {
 			// Cut on a rune boundary — the column is read through the JSON
-			// API, and a mid-rune cut would surface as mojibake.
+			// API, and a mid-rune cut would surface as mojibake. A prefix
+			// is aligned only when the first excluded byte starts a rune.
 			cut := text[:watchLastErrorMax]
-			for len(cut) > 0 && !utf8.RuneStart(cut[len(cut)-1]) {
+			for len(cut) > 0 && !utf8.RuneStart(text[len(cut)]) {
 				cut = cut[:len(cut)-1]
 			}
 			text = cut + "..."
