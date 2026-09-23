@@ -99,14 +99,15 @@ func (h *SystemHandlers) CreateBackup(ctx context.Context, in *struct{}) (*Creat
 Worked response, `201`:
 
 ```json
-{"path":"/config/backups/dl-tool.db.20260901T094500Z.bak","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}
+{"path":"/config/backups/dl-tool.db.20260901T094500.000000000Z.bak","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}
 ```
 
 ## Steps
 1. Create `internal/store/maintenance.go` with `BackupInto`. Build the target name as
    `dl-tool.db.` + `time.Now().UTC().Format(backupTimestampFormat)` + `.bak` — the constant already
    exists in `internal/store/db.go` — and never reuse a name.
-2. Create the temporary target inside `dir` with `os.CreateTemp` + `O_CREATE|O_EXCL` and mode `0600`,
+2. Create the temporary target inside `dir` with `os.CreateTemp(dir, "dl-tool.db.*.tmp")` — already
+   `O_CREATE|O_EXCL` and mode `0600` —
    close it, then execute `VACUUM INTO ?` against it. Integrity-check the output, enforce `0600`,
    fsync it, `os.Rename` it to the final name, fsync the directory and `os.Stat` it for `SizeBytes`.
    On any error remove the temporary file before returning.
