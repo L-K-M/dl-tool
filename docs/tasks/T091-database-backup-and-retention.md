@@ -202,7 +202,11 @@ Remedies — either unblocks the task:
 1. Restate this file in the adjudicated `dl-tool.db.<UTC>.bak` form: the contract comment, the prune
    glob (made timestamp-exact so `pre-migration` and `replaced` infixes stay excluded, as §6
    requires), step 1, step 4, the worked response and the criterion's glob; and give step 1
-   sub-second precision (or name `backupTimestampFormat`) so criterion 2 can hold.
+   sub-second precision (or name `backupTimestampFormat`) so criterion 2 can hold. Pin the glob to
+   accept that format's fractional-second suffix while still excluding the infixes — e.g.
+   `dl-tool.db.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9]*Z.bak`, which matches both
+   `dl-tool.db.20260901T120000Z.bak` and `dl-tool.db.20260901T120000.000000000Z.bak` but neither
+   `dl-tool.db.pre-migration-*.bak` nor `dl-tool.db.replaced-*.bak`.
 2. Or rule that `dl-tool-<UTC>.db` is the intended new scheme and re-adjudicate the docs: doc 04 §6,
    doc 05 §13, doc 17 §3.2 and §3.4 and their change logs — noting the pre-migration and
    replaced-database families stay `.bak`, which `dl-tool-*.db` then excludes by construction.
@@ -213,14 +217,14 @@ Rerunnable evidence on this commit:
 
 ```bash
 # The docs' adjudicated form and the recorded resolution.
-git grep -n "dl-tool\.db" HEAD -- docs/04-data-model.md docs/05-api-contract.md \
+git grep -n -E "dl-tool\.db" HEAD -- docs/04-data-model.md docs/05-api-contract.md \
   docs/17-operations-and-runbook.md
-git grep -n "backup-naming\|dl-tool.db.<UTC>.bak" HEAD -- docs/05-api-contract.md \
+git grep -n -E "backup-naming|dl-tool\.db\.<UTC>\.bak" HEAD -- docs/05-api-contract.md \
   docs/17-operations-and-runbook.md
 
 # This file's conflicting form.
 grep -n "dl-tool-" docs/tasks/T091-database-backup-and-retention.md
 
 # The existing backup family in code.
-grep -n "backupTimestampFormat\|pre-migration" internal/store/db.go
+grep -n -E "backupTimestampFormat|pre-migration" internal/store/db.go
 ```
