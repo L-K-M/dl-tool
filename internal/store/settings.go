@@ -890,6 +890,104 @@ func (s *SettingsStore) TouchNotificationChannel(ctx context.Context, id string,
 	return nil
 }
 
+const queryCreateNotificationChannel = `INSERT INTO notification_channels
+(id, kind, name, enabled, config_json, secret_enc, event_mask, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+// CreateNotificationChannel inserts one row; a name already taken is
+// ErrConflict. The caller owns ch.ID (an ntf_ ULID) and every column —
+// enabled as the stored 0/1 flag, secret_enc already sealed.
+func (s *SettingsStore) CreateNotificationChannel(ctx context.Context, ch NotificationChannel) error {
+	now := time.Now().UnixMilli()
+	if _, err := s.db.ExecContext(
+		ctx, queryCreateNotificationChannel,
+		ch.ID, ch.Kind, ch.Name, ch.Enabled, ch.ConfigJSON, ch.SecretEnc, ch.EventMask, now, now,
+	); err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("store: create notification channel %s: %w", ch.Name, ErrConflict)
+		}
+
+		return fmt.Errorf("store: create notification channel %s: %w", ch.Name, err)
+	}
+
+	return nil
+}
+
+// NotificationChannelPatch carries the fields a PATCH may write; a nil
+// member leaves its column untouched. kind is absent deliberately: it is
+// immutable, and the API rejects a change before the store is called.
+// SecretSet distinguishes "leave secret_enc" from "write SecretEnc" —
+// a nil SecretEnc with SecretSet true clears the stored secret, which
+// COALESCE alone cannot express.
+type NotificationChannelPatch struct {
+	Name       *string
+	Enabled    *int
+	ConfigJSON *string
+	SecretSet  bool
+	SecretEnc  *string
+	EventMask  *string
+}
+
+// queryUpdateNotificationChannel merges the patch inside the UPDATE: a
+// NULL argument leaves its column untouched, so two concurrent PATCHes
+// cannot lose each other's field. The secret member is the exception:
+// SecretSet gates the write so a clear-to-NULL is expressible.
+const queryUpdateNotificationChannel = `UPDATE notification_channels
+SET name = COALESCE(?, name), enabled = COALESCE(?, enabled),
+    config_json = COALESCE(?, config_json),
+    secret_enc = CASE WHEN ? THEN ? ELSE secret_enc END,
+    event_mask = COALESCE(?, event_mask), updated_at = ?
+WHERE id = ?`
+
+// UpdateNotificationChannel writes the addressed row's patch. ErrNotFound
+// means id addresses no row; ErrConflict means the new name belongs to
+// another row.
+func (s *SettingsStore) UpdateNotificationChannel(ctx context.Context, id string, p NotificationChannelPatch) error {
+	result, err := s.db.ExecContext(
+		ctx, queryUpdateNotificationChannel,
+		p.Name, p.Enabled, p.ConfigJSON, p.SecretSet, p.SecretEnc, p.EventMask, time.Now().UnixMilli(), id,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("store: update notification channel %s: %w", id, ErrConflict)
+		}
+
+		return fmt.Errorf("store: update notification channel %s: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update notification channel %s: read rows affected: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: update notification channel %s: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+const queryDeleteNotificationChannel = `DELETE FROM notification_channels WHERE id = ?`
+
+// DeleteNotificationChannel removes the row. Pending webhook jobs naming
+// it fail their delivery lookup and are dropped by the handler.
+// ErrNotFound means id addresses no row.
+func (s *SettingsStore) DeleteNotificationChannel(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, queryDeleteNotificationChannel, id)
+	if err != nil {
+		return fmt.Errorf("store: delete notification channel %s: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete notification channel %s: read rows affected: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: delete notification channel %s: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
 const (
 	// notificationSecretInfo is the HKDF info string separating the
 	// notification-channel seal from every other use of the at-rest key
