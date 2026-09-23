@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T106 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T077, T084 |
 | **Blocks** | T108, T120 |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/server.go`, `internal/store/settings.go` |
@@ -116,12 +116,12 @@ SSRF guard at save time and again at send time, with a blocked target returning 
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] One channel of each of the four kinds can be created, patched, listed and deleted.
-- [ ] No read response contains the stored secret; `secret_set` reports its presence.
-- [ ] `"__redacted__"` leaves the secret unchanged and `null` clears it.
-- [ ] A mask holding only `completed` receives a `completed` event and not an `error` one.
-- [ ] Changing `kind` is `422`; a duplicate `name` is `409`.
-- [ ] `POST /notifications/{id}/test` returns the upstream status line and body verbatim.
+- [x] One channel of each of the four kinds can be created, patched, listed and deleted.
+- [x] No read response contains the stored secret; `secret_set` reports its presence.
+- [x] `"__redacted__"` leaves the secret unchanged and `null` clears it.
+- [x] A mask holding only `completed` receives a `completed` event and not an `error` one.
+- [x] Changing `kind` is `422`; a duplicate `name` is `409`.
+- [x] `POST /notifications/{id}/test` returns the upstream status line and body verbatim.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -155,7 +155,46 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```
+$ make lint && make test PKG="./internal/api/... ./internal/store/..." && echo NOTIFY_API_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	169.719s
+ok  	github.com/L-K-M/dl-tool/internal/store	77.119s
+NOTIFY_API_OK
+```
+
+Named tests (verbose run, all `--- PASS`): `TestChannelCrudAllKinds`, `TestSecretNeverReturned`,
+`TestRedactedLeavesSecret`, `TestNullClearsSecret`, `TestEventMaskFilters`, `TestKindImmutable`,
+`TestDuplicateNameConflict`, `TestTestReturnsRawUpstreamReply`, plus `TestUnknownConfigKeyRejected`,
+`TestConfigURLBlocked` and `TestChannelNotFound`.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/notifications.go
+internal/api/notifications_test.go
+internal/api/server.go
+internal/store/settings.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are the `make gen` output of the five newly registered
+Huma operations — implicitly part of the Files table under the §7.1 standing exception of
+`docs/13-testing-and-verification.md` (regenerated, not hand-edited).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

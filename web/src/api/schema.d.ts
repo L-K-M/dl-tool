@@ -536,6 +536,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/notifications": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the notification channels
+     * @description Every channel sorted by name. No response member carries the stored secret: secret_set reports whether one is stored.
+     */
+    get: operations["list-notification-channels"];
+    put?: never;
+    /**
+     * Create a notification channel
+     * @description Creates one channel of kind webhook, ntfy, gotify or apprise. kind and name are required; enabled defaults true, event_mask defaults ["*"]. The config key set is fixed per kind and an unknown key is 422; every URL in config is checked against the SSRF guard and a blocked target is 403 /problems/ssrf-blocked. A duplicate name is 409 /problems/conflict.
+     */
+    post: operations["create-notification-channel"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/notifications/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete a notification channel
+     * @description Removes the channel row; pending deliveries to it die with it. No task and no file is touched.
+     */
+    delete: operations["delete-notification-channel"];
+    options?: never;
+    head?: never;
+    /**
+     * Update a notification channel
+     * @description Partial update of name, enabled, config, secret and event_mask; omitted fields are untouched. kind is immutable: a patch changing it is 422. secret is write-only — a string replaces, "__redacted__" leaves it unchanged and null clears it. Renaming onto an existing name is 409 /problems/conflict.
+     */
+    patch: operations["patch-notification-channel"];
+    trace?: never;
+  };
+  "/notifications/{id}/test": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Deliver a test event to a channel
+     * @description Sends one synthetic event — code selects the template, default task.completed — to exactly this channel and returns the raw upstream reply: the status line and the first 8 KiB of body verbatim, so a failing channel is diagnosable without reading the server log. A channel that answered is always 200 with ok reflecting the upstream status; an unreachable channel is 200 with response null and the transport failure in error. A disabled channel is still testable. The send is not recorded against event_mask and writes no task_events row. 403 /problems/ssrf-blocked when the target resolves to a blocked address.
+     */
+    post: operations["test-notification-channel"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/prefs": {
     parameters: {
       query?: never;
@@ -1028,6 +1096,42 @@ export interface components {
       /** Format: int64 */
       task_count: number;
     };
+    ChannelView: {
+      config: {
+        [key: string]: unknown;
+      };
+      /** Format: date-time */
+      created_at: string;
+      enabled: boolean;
+      event_mask: string[] | null;
+      id: string;
+      /** @enum {string} */
+      kind: "webhook" | "ntfy" | "gotify" | "apprise";
+      last_error: string | null;
+      /** Format: date-time */
+      last_send_at: string | null;
+      name: string;
+      secret_set: boolean;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    ChannelWriteBody: {
+      /** @description Non-secret configuration; the key set is fixed per kind */
+      config?: {
+        [key: string]: unknown;
+      };
+      enabled?: boolean;
+      /** @description task_events.code values, or ["*"] for every code; default ["*"] */
+      event_mask?: string[] | null;
+      /**
+       * @description Immutable after creation
+       * @enum {string}
+       */
+      kind?: "webhook" | "ntfy" | "gotify" | "apprise";
+      name?: string;
+      /** @description Write-only; __redacted__ leaves the stored secret, null clears it */
+      secret?: unknown;
+    };
     CreateCategoryInputBody: {
       /** @description Unique category name; never carries a / */
       name: string;
@@ -1443,6 +1547,9 @@ export interface components {
     ListCategoriesOutputBody: {
       categories: components["schemas"]["CategoryDTO"][] | null;
     };
+    ListChannelsOutputBody: {
+      channels: components["schemas"]["ChannelView"][] | null;
+    };
     ListEnginesOutputBody: {
       engines: components["schemas"]["EngineDTO"][] | null;
     };
@@ -1676,6 +1783,27 @@ export interface components {
       progress: number;
       /** Format: int64 */
       upload_rate: number;
+    };
+    RawReply: {
+      /** Format: int64 */
+      elapsed_ms: number;
+      error: string | null;
+      ok: boolean;
+      request: components["schemas"]["RawRequest"];
+      response: components["schemas"]["RawResponse"];
+    };
+    RawRequest: {
+      method: string;
+      url: string;
+    };
+    RawResponse: {
+      body: string;
+      headers: {
+        [key: string]: string;
+      };
+      /** Format: int64 */
+      status: number;
+      status_line: string;
     };
     RejectedURI: {
       detail: string;
@@ -1965,6 +2093,10 @@ export interface components {
       error: string | null;
       ok: boolean;
       server: string;
+    };
+    TestInputBody: {
+      /** @description task_events.code value of the synthetic event; default task.completed */
+      code?: string;
     };
     TestRuleInputBody: {
       /** @description Feed ids; the default is rule.feeds resolved by url, else every enabled feed */
@@ -3150,6 +3282,170 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["TestIndexerOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-notification-channels": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListChannelsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-notification-channel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ChannelWriteBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ChannelView"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-notification-channel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The ntf_… channel id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-notification-channel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The ntf_… channel id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ChannelWriteBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ChannelView"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "test-notification-channel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The ntf_… channel id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TestInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RawReply"];
         };
       };
       /** @description Error */

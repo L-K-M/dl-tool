@@ -148,6 +148,10 @@ type Server struct {
 	// rules owns the /rules operations of doc 05 section 10.2.
 	rules *RuleHandlers
 
+	// notifications owns the /notifications operations of doc 05 section
+	// 14, including the test send.
+	notifications *NotificationHandlers
+
 	// tokens owns the /api-tokens operations of doc 05 section 12.
 	tokens *TokenHandlers
 
@@ -344,6 +348,15 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	// .torrent takes the identical create path an uploaded one does.
 	watchCreator := watchTaskCreator{tasks: tasks}
 
+	// The /notifications test send delivers through the same SSRF-guarded
+	// client the search and feed paths share; with no Deps — the openapi
+	// subcommand and router-only tests — a fresh guarded client over the
+	// same guard keeps the operation wired rather than nil.
+	notifyHTTP := searchDeps.HTTP
+	if notifyHTTP == nil {
+		notifyHTTP = secure.NewClient(taskGuard)
+	}
+
 	server := &Server{
 		Router:     root,
 		Base:       base,
@@ -363,8 +376,11 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		// fan-out; its item parser is T067's parse.go and its grab
 		// creator the shared ruleTaskCreator, so a 200 that adds items
 		// runs the rules pass through the ordinary task-creation path.
-		feeds:        NewFeedHandlers(db, searchDeps.HTTP, rss.NewParser(time.Now), creator, log),
-		rules:        NewRuleHandlers(db, creator),
+		feeds: NewFeedHandlers(db, searchDeps.HTTP, rss.NewParser(time.Now), creator, log),
+		rules: NewRuleHandlers(db, creator),
+		notifications: NewNotificationHandlers(
+			db, cfg.SecretKey, notifyHTTP, taskGuard, net.DefaultResolver,
+		),
 		tokens:       NewTokenHandlers(db),
 		RuleCreator:  creator,
 		WatchCreator: watchCreator,
@@ -532,6 +548,7 @@ func (s *Server) registerOperations() {
 	RegisterSearchRoutes(s.API, s.search)
 	s.feeds.Register(s.API)
 	s.rules.Register(s.API)
+	s.notifications.Register(s.API)
 	s.tokens.Register(s.API)
 	s.SSE.RegisterOperations(s.API)
 
