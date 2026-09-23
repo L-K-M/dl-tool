@@ -301,6 +301,45 @@ func TestPreflightBlocksNonStandardHTTPPort(t *testing.T) {
 	}
 }
 
+// TestPreflightBlocksNonStandardHTTPPortMixedCase pins the scheme-case
+// regression: schemes are case-insensitive and the submission's raw
+// spelling reaches preflight, so "HTTP://…:8080" must hit the same port
+// rule "http://…:8080" does — an uppercase scheme is no bypass.
+func TestPreflightBlocksNonStandardHTTPPortMixedCase(t *testing.T) {
+	guard := newSSRFGuard(slog.New(slog.NewJSONHandler(io.Discard, nil)), false)
+
+	for _, raw := range []string{
+		"HTTP://public.example:8080/x",
+		"Https://public.example:8443/x",
+		"HtTp://127.0.0.1:8080/x",
+	} {
+		err := secure.PreflightURI(t.Context(), guard, ssrfResolver, raw)
+		if !errors.Is(err, secure.ErrSSRFBlocked) {
+			t.Errorf("PreflightURI(%q) = %v, want ErrSSRFBlocked", raw, err)
+			continue
+		}
+		var blocked *secure.BlockedError
+		if !errors.As(err, &blocked) {
+			t.Fatalf("PreflightURI(%q) error = %T, want *secure.BlockedError", raw, err)
+		}
+		if blocked.Reason != "port" {
+			t.Errorf("PreflightURI(%q) reason = %q, want port", raw, blocked.Reason)
+		}
+	}
+}
+
+// TestCreateTasksBlocksMixedCaseSchemeURI pins the end-to-end reachability
+// of the scheme-case hole: uri.Normalize keeps the submitted scheme's case
+// in the normalised URI, so an uppercase HTTP URI must face the same port
+// rule as the lowercase form and never reach an engine.
+func TestCreateTasksBlocksMixedCaseSchemeURI(t *testing.T) {
+	env := newSSRFEnv(t)
+
+	resp := env.createTasks(t, map[string]any{"uris": []string{"HTTP://public.example:8080/x.iso"}})
+	assertProblem(t, resp, http.StatusForbidden, SlugSSRFBlocked)
+	assertNoEngineAdd(t, env)
+}
+
 // TestPreflightAllowsSFTPOnPort2222 pins step 2's other half: the
 // file-transfer schemes carry no port constraint; the address check alone
 // decides.

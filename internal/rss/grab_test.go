@@ -404,6 +404,30 @@ func (c *cancelFirstCreator) CreateForRule(ctx context.Context, g GrabRequest) (
 	return c.recordingCreator.CreateForRule(ctx, g)
 }
 
+// TestMalformedItemDoesNotWedgeRulePass pins the regression: a stored
+// download_url that fails normalisation is remote feed content, and one
+// bad enclosure beside valid items must neither abort the pass nor stop
+// the valid grabs from committing.
+func TestMalformedItemDoesNotWedgeRulePass(t *testing.T) {
+	db := newTestDB(t)
+	feed := newFeed(t, db, testFeedURL)
+	now := testNow.UnixMilli()
+
+	bad := grabItem(feed.ID, "id-bad", "release bad", now+100)
+	bad.DownloadURL = strPtr("ed2k://|file|release bad|1|0123456789abcdef0123456789abcdef|/")
+	seedItems(t, db,
+		grabItem(feed.ID, "id-1", "release one", now+200),
+		bad,
+		grabItem(feed.ID, "id-2", "release two", now),
+	)
+	seedRule(t, db, RuleDoc{})
+	creator := &recordingCreator{tasks: store.NewTaskStore(db)}
+
+	require.NoError(t, RunAllRules(t.Context(), db, feed.ID, creator, now))
+	require.Equal(t, 2, creator.count(), "the valid items still commit their grabs")
+	require.Len(t, matchRows(t, db), 2)
+}
+
 // TestPollRulePassSurvivesPollContextCancel: the rule pass commits grabs
 // the fetch already paid for, and recordSuccess has stored the validators
 // that make the next poll answer 304 — so a poll context cancelled mid-pass

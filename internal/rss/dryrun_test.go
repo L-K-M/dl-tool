@@ -200,6 +200,99 @@ func TestDryRunIsReproducibleWithIgnoreState(t *testing.T) {
 	require.Equal(t, ReasonDuplicateInfoHash, stateful.Results[0].Reason)
 }
 
+// TestDryRunStatefulSeesTaskInfohash pins dry-run/live parity on the
+// tasks-table rung of dbState.HasInfoHash: a live non-removed task holding
+// the item's info hash rejects it with duplicate_infohash exactly like a
+// committed grab — and a 'removed' tombstone holds no identity, so the
+// same item matches again.
+func TestDryRunStatefulSeesTaskInfohash(t *testing.T) {
+	db := newTestDB(t)
+	feed := newFeed(t, db, "https://example.com/taskhash.xml")
+
+	hash := "dcb9178653b651c7ca4526e11fa8e22f74e2fd7a"
+	item := dryRunItem(feed.ID, "hashed", "ubuntu release", 1)
+	item.InfoHash = &hash
+	seedDryRunItems(t, db, []store.FeedItem{item})
+
+	_, err := store.NewTaskStore(db).Create(t.Context(), store.Task{
+		Engine: "qbittorrent", SourceKind: "magnet", Name: "held",
+		Destination: "/data", InfohashV1: &hash,
+	})
+	require.NoError(t, err)
+
+	stateful, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule: dryRunDoc(), FeedIDs: []string{feed.ID}, IgnoreState: false,
+	})
+	require.NoError(t, err)
+	require.Len(t, stateful.Results, 1)
+	require.False(t, stateful.Results[0].Matched)
+	require.Equal(t, ReasonDuplicateInfoHash, stateful.Results[0].Reason)
+
+	_, err = db.ExecContext(t.Context(), `UPDATE tasks SET state = 'removed'`)
+	require.NoError(t, err)
+	retry, err := DryRun(t.Context(), db, DryRunRequest{
+		Rule: dryRunDoc(), FeedIDs: []string{feed.ID}, IgnoreState: false,
+	})
+	require.NoError(t, err)
+	require.Len(t, retry.Results, 1)
+	require.True(t, retry.Results[0].Matched)
+}
+
+// TestDryRunBestScoreCountsSentOnly pins the live predicate of
+// dbState.BestScoreForContentKey — MAX(score) over 'sent' rows — against
+// both divergence shapes: a newest non-'sent' row must not set the bar,
+// and the best 'sent' score must, wherever it sits in matched_at order.
+func TestDryRunBestScoreCountsSentOnly(t *testing.T) {
+	db := newTestDB(t)
+	feed := newFeed(t, db, "https://example.com/bestscore.xml")
+	require.NoError(t, store.CreateRule(t.Context(), db, store.Rule{
+		ID: testRuleID, Name: "grabbed", Enabled: true, DefinitionJSON: "{}",
+	}))
+
+	// The item's content key is its identity — no episode key, no hash —
+	// and its title scores 50 through the rule's one weighted format.
+	seedDryRunItems(t, db, []store.FeedItem{
+		dryRunItem(feed.ID, "id-x", "ubuntu studio release", 1),
+	})
+	doc := dryRunDoc()
+	doc.Score = &ScoreSpec{Formats: []ScoreFormat{{Name: "w", Pattern: "studio", Weight: 50}}}
+
+	seedMatch := func(id, status string, score, matchedAt int64) {
+		t.Helper()
+		_, err := db.ExecContext(t.Context(),
+			`INSERT INTO rule_matches
+			(id, rule_id, content_key, title, status, score, matched_at, created_at, updated_at)
+			VALUES (?, ?, 'id-x', 'x', ?, ?, ?, ?, ?)`,
+			id, testRuleID, status, score, matchedAt, matchedAt, matchedAt)
+		require.NoError(t, err)
+	}
+	run := func() DryRunItem {
+		t.Helper()
+		report, err := DryRun(t.Context(), db, DryRunRequest{
+			Rule: doc, FeedIDs: []string{feed.ID}, IgnoreState: false,
+		})
+		require.NoError(t, err)
+		require.Len(t, report.Results, 1)
+		return report.Results[0]
+	}
+
+	// A newest 'failed' row at 99 is no committed grab: the item matches.
+	seedMatch("rm_fail", matchFailed, 99, 200)
+	require.True(t, run().Matched, "a non-sent row must not wedge the content key")
+
+	// An older 'sent' row at 80 still beats the item's 50: already_have.
+	seedMatch("rm_sent_high", matchSent, 80, 100)
+	row := run()
+	require.False(t, row.Matched)
+	require.Equal(t, ReasonAlreadyHave, row.Reason)
+
+	// A newer 'sent' row below the max changes nothing: the best stands.
+	seedMatch("rm_sent_low", matchSent, 30, 300)
+	row = run()
+	require.False(t, row.Matched)
+	require.Equal(t, ReasonAlreadyHave, row.Reason)
+}
+
 // TestDryRunWritesNothing pins the side-effect-free contract: the grab and
 // seen-episode tables hold the same row counts afterwards, with the run
 // reading the real schema (ignore_state=false).

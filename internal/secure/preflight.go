@@ -48,7 +48,12 @@ func PreflightURI(ctx context.Context, g *Guard, r Resolver, rawURI string) erro
 	if !found {
 		return nil
 	}
-	switch strings.ToLower(scheme) {
+	// Schemes are case-insensitive and callers pass the URI as submitted —
+	// the normaliser keeps the raw scheme case — so lowercase once and let
+	// every governed-scheme check below, the port rule included, compare
+	// the same form.
+	scheme = strings.ToLower(scheme)
+	switch scheme {
 	case "http", "https", "ftp", "ftps", "sftp":
 	default:
 		return nil

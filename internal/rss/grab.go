@@ -406,9 +406,9 @@ func RunRule(ctx context.Context, db *sqlx.DB, ruleID string, limit int,
 		return CommitReport{}, fmt.Errorf("rss: run rule %s: %w", rule.ID, err)
 	}
 	report, err := Commit(ctx, db, doc, rule, cands, tc, now)
-	// Steps 1 and 3 remove items before evaluation, so evaluated counts
-	// decisions only, not the stored item set — the same accounting the
-	// dry run reports.
+	// Steps 1 and 3 remove items before evaluation and step 12 drops an
+	// unroutable download_url, so evaluated counts decisions only, not
+	// the stored item set — the same accounting the dry run reports.
 	report.Evaluated = len(decisions)
 
 	return report, err

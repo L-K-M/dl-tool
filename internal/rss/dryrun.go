@@ -4,9 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha1"
-	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -103,51 +101,6 @@ func (StatelessState) BestScoreForContentKey(context.Context, string) (int, bool
 	return 0, false, nil
 }
 
-// dryRunState is the State of an ignore_state=false dry run: the real
-// rule_matches and rule_seen_episodes tables, read-only. The rule under
-// test is unsaved, so its SeenEpisode lookups carry an empty rule id and
-// can never hit a committed row.
-type dryRunState struct{ db *sqlx.DB }
-
-// HasInfoHash reports whether the grab table already holds the hash.
-func (s dryRunState) HasInfoHash(ctx context.Context, hash string) (bool, error) {
-	var n int
-	if err := s.db.GetContext(ctx, &n,
-		`SELECT COUNT(*) FROM rule_matches WHERE info_hash = ?`, hash); err != nil {
-		return false, fmt.Errorf("rss: dry run: lookup info hash: %w", err)
-	}
-
-	return n > 0, nil
-}
-
-// SeenEpisode reports whether the rule already stored the episode key.
-func (s dryRunState) SeenEpisode(ctx context.Context, ruleID, key string) (bool, error) {
-	var n int
-	if err := s.db.GetContext(ctx, &n,
-		`SELECT COUNT(*) FROM rule_seen_episodes WHERE rule_id = ? AND episode_key = ?`,
-		ruleID, key); err != nil {
-		return false, fmt.Errorf("rss: dry run: lookup episode key: %w", err)
-	}
-
-	return n > 0, nil
-}
-
-// BestScoreForContentKey returns the score of the newest stored grab for
-// the key, ok=false when there is none.
-func (s dryRunState) BestScoreForContentKey(ctx context.Context, key string) (int, bool, error) {
-	var score int
-	err := s.db.GetContext(ctx, &score,
-		`SELECT score FROM rule_matches WHERE content_key = ? ORDER BY matched_at DESC LIMIT 1`, key)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, fmt.Errorf("rss: dry run: lookup content key: %w", err)
-	}
-
-	return score, true, nil
-}
-
 // DryRun selects the items, runs Evaluate and builds the report. It opens
 // no transaction and writes nothing. ErrNotFound is returned when a named
 // feed id does not exist.
@@ -167,7 +120,13 @@ func DryRun(ctx context.Context, db *sqlx.DB, req DryRunRequest) (DryRunReport, 
 	feedByID := map[string]FeedRef{}
 	feedName := map[string]string{}
 	var items []store.FeedItem
-	var state State = dryRunState{db: db}
+	// A stateful run reads through the production dbState, so the report
+	// is the live answer — every rung of its dedup ladder, tasks table
+	// and 'sent'-only best score included — never a parallel lookup that
+	// could drift from it. The rule under test is unsaved, so its
+	// SeenEpisode lookups carry an empty rule id and can never hit a
+	// committed row.
+	var state State = dbState{db: db}
 	if len(req.Titles) > 0 {
 		if len(req.Titles) > dryRunMaxTitles {
 			return DryRunReport{}, fmt.Errorf("rss: dry run: at most %d titles, got %d",
@@ -268,8 +227,9 @@ func DryRun(ctx context.Context, db *sqlx.DB, req DryRunRequest) (DryRunReport, 
 		}
 		report.Results = append(report.Results, row)
 	}
-	// Steps 1 and 3 of the algorithm remove items before evaluation, so
-	// evaluated counts results only, not the stored item set.
+	// Steps 1 and 3 of the algorithm remove items before evaluation and
+	// step 12 drops an unroutable download_url, so evaluated counts
+	// results only, not the stored item set.
 	report.Evaluated = len(report.Results)
 
 	return report, nil

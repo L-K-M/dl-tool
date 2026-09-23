@@ -303,6 +303,7 @@ func TestRuleDocumentValidation(t *testing.T) {
 		{"bad min_size", map[string]any{"min_size": "1024"}, nil, "body.definition.match.min_size"},
 		{"bad max_size", map[string]any{"max_size": "8 gigs"}, nil, "body.definition.match.max_size"},
 		{"bad published_after", map[string]any{"published_after": "2026-01-01"}, nil, "body.definition.match.published_after"},
+		{"zero episode filter", map[string]any{}, map[string]any{"episode": map[string]any{"filter": "0x;"}}, "body.definition.episode.filter"},
 		{"bad field", map[string]any{"fields": []string{"title", "comment"}}, nil, "body.definition.match.fields[1]"},
 		{"unservable field", map[string]any{"fields": []string{"description"}}, nil, "body.definition.match.fields[0]"},
 		{"empty any_of entry", map[string]any{"any_of": []string{""}}, nil, "body.definition.match.any_of[0]"},

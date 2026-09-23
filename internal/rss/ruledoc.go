@@ -187,8 +187,16 @@ func (d RuleDoc) Validate() []FieldError {
 	}
 
 	if d.Episode != nil && d.Episode.Filter != "" {
-		if _, err := ParseEpisodeFilter(d.Episode.Filter); err != nil {
+		filter, err := ParseEpisodeFilter(d.Episode.Filter)
+		switch {
+		case err != nil:
 			add("episode.filter", "%v", err)
+		case filter.Season == 0 && len(filter.Tokens) == 0:
+			// "0x;" parses to the zero EpisodeFilter, which Match reads
+			// as match-everything — the rejection newRuleEval applies at
+			// evaluation, moved here so the save path answers 422
+			// instead of storing a rule that fails every pass.
+			add("episode.filter", "%q selects no season", d.Episode.Filter)
 		}
 	}
 
