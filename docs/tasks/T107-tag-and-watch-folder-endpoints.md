@@ -164,21 +164,25 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	168.087s
-ok  	github.com/L-K-M/dl-tool/internal/store	75.616s
+ok  	github.com/L-K-M/dl-tool/internal/api	167.985s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.328s
 REACHABILITY_OK
 ```
 
-Named tests (verbose run, all `--- PASS`):
+Named tests (verbose run, all `--- PASS`, plus the review-added coverage):
 
 ```
-$ go test -race -count=1 -v -run 'TestRenameTagKeepsTasks|TestDeleteTagKeepsTasks|TestRenameOntoExistingIsConflict|TestScanCreatesTaskImmediately|TestWatchFolderOutsideRootsRejected' ./internal/api/
---- PASS: TestRenameTagKeepsTasks (0.51s)
---- PASS: TestDeleteTagKeepsTasks (0.46s)
---- PASS: TestRenameOntoExistingIsConflict (0.37s)
---- PASS: TestScanCreatesTaskImmediately (0.43s)
---- PASS: TestWatchFolderOutsideRootsRejected (0.42s)
-ok  	github.com/L-K-M/dl-tool/internal/api	3.345s
+$ go test -count=1 -v -run 'TestRenameTag|TestDeleteTag|TestRenameOnto|TestTagName|TestTagPathName|TestScanCreates|TestWatchFolderOutside|TestWatchFolderValidation|TestScanDeleted' ./internal/api/
+--- PASS: TestRenameTagKeepsTasks (0.08s)
+--- PASS: TestDeleteTagKeepsTasks (0.03s)
+--- PASS: TestRenameOntoExistingIsConflict (0.04s)
+--- PASS: TestTagNameValidation (0.04s)
+--- PASS: TestScanCreatesTaskImmediately (0.03s)
+--- PASS: TestWatchFolderOutsideRootsRejected (0.03s)
+--- PASS: TestTagPathNameDecodesOnce (0.00s)
+--- PASS: TestWatchFolderValidation (0.03s)
+--- PASS: TestScanDeletedDirectoryIsUnprocessable (0.05s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.368s
 ```
 
 Scope check:
