@@ -1151,7 +1151,7 @@ export interface components {
         | "queue_up"
         | "queue_down"
         | "queue_bottom";
-      /** @description Only meaningful with remove; the data unlink arrives with the delete endpoint's own task */
+      /** @description Only meaningful with remove; unlinks the recorded files through the same six-step executor as DELETE /tasks/{id} */
       delete_data?: boolean;
       /** @description Task ids; one outcome per entry, in request order */
       ids: string[] | null;
