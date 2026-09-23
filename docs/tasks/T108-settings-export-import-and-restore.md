@@ -290,7 +290,8 @@ Additions to the record:
   `todo` re-selects it on every iteration. The row is set to `deferred`, the status the picker skips
   (the T091 precedent, #267), so the queue can proceed to T110 — whose `Depends on` is all `done` —
   and the other eligible rows. This chooses neither remedy: the owner still decides, and
-  un-deferring is a one-word flip back to `todo`. FR-145 and FR-146 stay `must`; the deferral parks
+  un-deferring is a one-word flip back to `todo` in each of the three status cells (see the
+  reactivation trigger below). FR-145 and FR-146 stay `must`; the deferral parks
   the task rather than waiving the requirements.
 - Downstream impact is nil beyond what already stands: the only dependent is T121 (`Depends on`:
   T053, T091, T092, T096, T108), and it is already unreachable behind T091's deferral through
