@@ -344,6 +344,7 @@ func main() {
 	})
 	cli.Root().AddCommand(versionCmd())
 	cli.Root().AddCommand(openapiCmd())
+	cli.Root().AddCommand(restoreCmd())
 	cli.Run()
 }
 
@@ -416,6 +417,48 @@ func versionCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// restoreCmd is the dl-tool restore --from <file> of
+// docs/17-operations-and-runbook.md section 3.4. It never touches the HTTP
+// server: store.RestoreFrom owns the four refusal gates and the staged
+// atomic replacement, and a refusal or failure exits 1 with the named
+// error — humacli's Run drops a RunE return, so the command exits like the
+// boot failure paths rather than relying on cobra's error propagation.
+func restoreCmd() *cobra.Command {
+	var from string
+	cmd := &cobra.Command{
+		Use:   "restore",
+		Short: "Replace the database with a backup file",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if from == "" {
+				fmt.Fprintln(os.Stderr, "restore: --from <file> is required")
+				os.Exit(exitFailure)
+			}
+
+			ctx := context.Background()
+			cfg, err := config.Load(ctx)
+			if err != nil {
+				logConfigError(err)
+				os.Exit(exitFailure)
+			}
+
+			tasks, err := store.RestoreFrom(ctx, cfg.DBPath, cfg.ConfigDir, from)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "restore:", err)
+				os.Exit(exitFailure)
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "restored %d tasks\n", tasks); err != nil {
+				return fmt.Errorf("write restore result: %w", err)
+			}
+
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&from, "from", "", "backup file inside DLTOOL_CONFIG_DIR")
+
+	return cmd
 }
 
 // openapiCmd prints the canonical (empty base path) OpenAPI document; the
