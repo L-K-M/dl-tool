@@ -30,6 +30,7 @@ const (
 	channelNameTakenDetail     = "a notification channel with that name already exists"
 	channelKindImmutableDetail = "kind is immutable after creation"
 	channelSecretDetail        = "secret must be a JSON string or null"
+	channelMaskDetail          = "event_mask entries must be non-empty task_events.code values"
 	channelBlockedDetail       = "a config URL resolved to a blocked address"
 
 	// channelTestName and channelTestMessage are the synthetic event's
@@ -62,12 +63,34 @@ type ChannelView struct {
 // string replaces it — and *string collapses null and absent into the
 // same nil. "__redacted__" is a rendered form and leaves the secret too.
 type ChannelWriteBody struct {
-	Kind      string          `json:"kind,omitempty"       enum:"webhook,ntfy,gotify,apprise" doc:"Immutable after creation"`
-	Name      *string         `json:"name,omitempty"`
-	Enabled   *bool           `json:"enabled,omitempty"`
-	Config    map[string]any  `json:"config,omitempty"     doc:"Non-secret configuration; the key set is fixed per kind"`
-	Secret    json.RawMessage `json:"secret,omitempty"     doc:"Write-only; __redacted__ leaves the stored secret, null clears it"`
-	EventMask []string        `json:"event_mask,omitempty" doc:"task_events.code values, or [\"*\"] for every code; default [\"*\"]"`
+	Kind      string         `json:"kind,omitempty"       enum:"webhook,ntfy,gotify,apprise" doc:"Immutable after creation"`
+	Name      *string        `json:"name,omitempty"`
+	Enabled   *bool          `json:"enabled,omitempty"`
+	Config    map[string]any `json:"config,omitempty"     doc:"Non-secret configuration; the key set is fixed per kind"`
+	Secret    channelSecret  `json:"secret,omitempty"     doc:"Write-only; __redacted__ leaves the stored secret, null clears it"`
+	EventMask []string       `json:"event_mask,omitempty" doc:"task_events.code values, or [\"*\"] for every code; default [\"*\"]"`
+}
+
+// channelSecret is the write-only secret member's wire type. On decode it
+// keeps the raw JSON — absent, null or a string, the tri-state
+// secretPatch reads — and Schema publishes the contract as string|null,
+// not the "unknown" a bare json.RawMessage generates.
+type channelSecret json.RawMessage
+
+// UnmarshalJSON stores the member's raw bytes verbatim.
+func (s *channelSecret) UnmarshalJSON(raw []byte) error {
+	return (*json.RawMessage)(s).UnmarshalJSON(raw)
+}
+
+// MarshalJSON re-emits the stored raw bytes; the member is write-only, so
+// this runs only for schema machinery, never a channel response.
+func (s channelSecret) MarshalJSON() ([]byte, error) {
+	return json.RawMessage(s).MarshalJSON()
+}
+
+// Schema publishes the wire contract: a string, or null to clear.
+func (channelSecret) Schema(_ huma.Registry) *huma.Schema {
+	return &huma.Schema{Type: huma.TypeString, Nullable: true}
 }
 
 // CreateChannelInput is the JSON body of POST /notifications.
@@ -282,13 +305,18 @@ func (h *NotificationHandlers) Create(ctx context.Context, in *CreateChannelInpu
 	if err != nil {
 		return nil, internalFailure(ctx, "encode notification channel config", err)
 	}
-	_, enc, err := h.secretPatch(in.Body.Secret)
+	_, enc, err := h.secretPatch(json.RawMessage(in.Body.Secret))
 	if err != nil {
 		return nil, h.secretError(ctx, err)
 	}
 	mask := in.Body.EventMask
 	if mask == nil {
 		mask = []string{"*"}
+	}
+	for _, code := range mask {
+		if code == "" {
+			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, channelMaskDetail)
+		}
 	}
 	maskJSON, err := encodeChannelJSON(mask)
 	if err != nil {
@@ -366,13 +394,18 @@ func (h *NotificationHandlers) Patch(ctx context.Context, in *PatchChannelInput)
 		}
 		patch.ConfigJSON = &encoded
 	}
-	set, enc, err := h.secretPatch(in.Body.Secret)
+	set, enc, err := h.secretPatch(json.RawMessage(in.Body.Secret))
 	if err != nil {
 		return nil, h.secretError(ctx, err)
 	}
 	patch.SecretSet = set
 	patch.SecretEnc = enc
 	if in.Body.EventMask != nil {
+		for _, code := range in.Body.EventMask {
+			if code == "" {
+				return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, channelMaskDetail)
+			}
+		}
 		encoded, err := encodeChannelJSON(in.Body.EventMask)
 		if err != nil {
 			return nil, internalFailure(ctx, "encode notification channel event_mask", err)
@@ -517,15 +550,16 @@ func (h *NotificationHandlers) validateConfig(ctx context.Context, kind string, 
 // channelURLValues flattens a URL-carrying config member to the strings
 // the preflight checks: a bare string, a string array or — the dict form
 // apprise's urls member also takes — an object whose every value is a
-// string. The bool reports whether the shape was one of those three;
-// anything else is a 422 so no URL slips past the check.
+// string. The bool reports whether the shape was one of those three with
+// no empty entries; anything else is a 422 so no URL — and no empty
+// stand-in for one — slips past the check.
 func channelURLValues(value any) ([]string, bool) {
 	switch typed := value.(type) {
 	case nil:
 		return nil, true
 	case string:
 		if typed == "" {
-			return nil, true
+			return nil, false
 		}
 
 		return []string{typed}, true
@@ -533,12 +567,10 @@ func channelURLValues(value any) ([]string, bool) {
 		out := make([]string, 0, len(typed))
 		for _, item := range typed {
 			s, ok := item.(string)
-			if !ok {
+			if !ok || s == "" {
 				return nil, false
 			}
-			if s != "" {
-				out = append(out, s)
-			}
+			out = append(out, s)
 		}
 
 		return out, true
@@ -546,12 +578,10 @@ func channelURLValues(value any) ([]string, bool) {
 		out := make([]string, 0, len(typed))
 		for _, item := range typed {
 			s, ok := item.(string)
-			if !ok {
+			if !ok || s == "" {
 				return nil, false
 			}
-			if s != "" {
-				out = append(out, s)
-			}
+			out = append(out, s)
 		}
 
 		return out, true
@@ -612,15 +642,20 @@ func encodeChannelJSON(value any) (string, error) {
 // channelView renders one store row through the wire shape: no secret
 // member exists, secret_set reports whether secret_enc is stored, and the
 // unix-millisecond columns become times. A malformed stored column is a
-// decode error, never a silently empty member.
+// decode error; a blank one — only writable outside this API — renders as
+// the member's empty form rather than failing the whole listing.
 func channelView(ch store.NotificationChannel) (ChannelView, error) {
 	var config map[string]any
-	if err := json.Unmarshal([]byte(ch.ConfigJSON), &config); err != nil {
-		return ChannelView{}, fmt.Errorf("decode config_json of %s: %w", ch.ID, err)
+	if ch.ConfigJSON != "" {
+		if err := json.Unmarshal([]byte(ch.ConfigJSON), &config); err != nil {
+			return ChannelView{}, fmt.Errorf("decode config_json of %s: %w", ch.ID, err)
+		}
 	}
 	var mask []string
-	if err := json.Unmarshal([]byte(ch.EventMask), &mask); err != nil {
-		return ChannelView{}, fmt.Errorf("decode event_mask of %s: %w", ch.ID, err)
+	if ch.EventMask != "" {
+		if err := json.Unmarshal([]byte(ch.EventMask), &mask); err != nil {
+			return ChannelView{}, fmt.Errorf("decode event_mask of %s: %w", ch.ID, err)
+		}
 	}
 
 	view := ChannelView{

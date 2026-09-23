@@ -405,7 +405,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T084 | Issue, list and revoke API tokens | T008, T009 | yes | done | [T084](T084-api-tokens.md) |
 | T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | deferred | [T091](T091-database-backup-and-retention.md) |
 | T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | todo | [T092](T092-settings-and-system-info.md) |
-| T106 | Manage notification channels and test one | T077, T084 | yes | done | [T106](T106-notification-channel-endpoints.md) |
+| T106 | Manage notification channels and test one | T077, T084 | no | done | [T106](T106-notification-channel-endpoints.md) |
 | T107 | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | yes | todo | [T107](T107-tag-and-watch-folder-endpoints.md) |
 | T108 | Export and import portable settings, and restore from the CLI | T080, T106, T107 | yes | todo | [T108](T108-settings-export-import-and-restore.md) |
 | T110 | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | no | todo | [T110](T110-bandwidth-precedence-and-dst.md) |

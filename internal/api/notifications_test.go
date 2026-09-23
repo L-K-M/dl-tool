@@ -267,9 +267,9 @@ func newReplyStub(t *testing.T, status int, respBody string) *replyStub {
 		stub.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		if _, err := w.Write([]byte(respBody)); err != nil {
-			t.Errorf("stub write: %v", err)
-		}
+		// A write error means the client hung up mid-reply; reporting it
+		// from the server's goroutine is unsafe anyway.
+		_, _ = w.Write([]byte(respBody))
 	}))
 	t.Cleanup(stub.srv.Close)
 
@@ -345,6 +345,11 @@ func TestChannelCrudAllKinds(t *testing.T) {
 		}
 		if len(created.Config) != len(tc.config) {
 			t.Errorf("%s config = %v, want %v echoed", tc.kind, created.Config, tc.config)
+		}
+		for key, want := range tc.config {
+			if got := created.Config[key]; fmt.Sprintf("%v", got) != fmt.Sprintf("%v", want) {
+				t.Errorf("%s config[%q] = %v, want %v", tc.kind, key, got, want)
+			}
 		}
 		if since := time.Since(created.CreatedAt); since < 0 || since > time.Minute {
 			t.Errorf("%s created_at = %v, want the stored timestamp — never epoch 0", tc.kind, created.CreatedAt)
@@ -659,6 +664,9 @@ func TestTestReturnsRawUpstreamReply(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("disabled channel test status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
 	}
+	if stub.count() != 2 {
+		t.Errorf("stub saw %d requests, want the disabled channel's test send too", stub.count())
+	}
 
 	// No test send writes a task_events row (doc 05 §14.1).
 	var events int
@@ -724,9 +732,10 @@ func TestConfigURLBlocked(t *testing.T) {
 	})
 	assertProblem(t, response, http.StatusForbidden, SlugSSRFBlocked)
 
-	// A URL member in a shape none of the three forms take is 422, never
-	// a silent pass around the guard.
-	for _, urls := range []any{42, map[string]any{"k": 42}} {
+	// A URL member in a shape none of the three forms take — and an empty
+	// string, which is no URL — is 422, never a silent pass around the
+	// guard.
+	for _, urls := range []any{42, "", map[string]any{"k": 42}, []any{""}} {
 		response = env.createChannel(t, map[string]any{
 			"kind":   "apprise",
 			"name":   fmt.Sprintf("bad-shape-%v", urls),
@@ -737,6 +746,66 @@ func TestConfigURLBlocked(t *testing.T) {
 
 	if channels := decodeChannelList(t, env.getChannels(t)); len(channels) != 0 {
 		t.Errorf("channels = %+v, want every blocked write refused", channels)
+	}
+}
+
+// TestEventMaskRejectsEmptyEntries pins the strictness rule on mask
+// contents: a "" entry is no task_events.code value — it would store a
+// channel that never fires, so both writes 422 instead.
+func TestEventMaskRejectsEmptyEntries(t *testing.T) {
+	env := newNotifyTestEnv(t, nil)
+
+	response := env.createChannel(t, map[string]any{
+		"kind":       "webhook",
+		"name":       "hooks",
+		"config":     map[string]any{"url": "https://hook.example.com/in"},
+		"event_mask": []string{""},
+	})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+	response = env.createChannel(t, map[string]any{
+		"kind":   "webhook",
+		"name":   "hooks",
+		"config": map[string]any{"url": "https://hook.example.com/in"},
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	id := decodeChannelBody(t, response).ID
+
+	response = env.patchChannel(t, id, map[string]any{"event_mask": []string{""}})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+}
+
+// TestUnreachableChannelReply pins the other half of doc 05 §14.1: a
+// channel that cannot be reached still answers 200, with response null
+// and the transport failure in error.
+func TestUnreachableChannelReply(t *testing.T) {
+	stub := newReplyStub(t, http.StatusOK, `{}`)
+	client := stubbedClient(t, stub.srv.URL)
+	env := newNotifyTestEnv(t, client)
+	id := env.seedChannel(
+		t, "webhook", "gone", 1,
+		map[string]any{"url": stub.srv.URL}, []string{"*"}, "",
+	)
+	stub.srv.Close()
+
+	response := env.testChannel(t, id, map[string]any{})
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var reply jobs.RawReply
+	if err := json.Unmarshal(response.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("decode reply %q: %v", response.Body.String(), err)
+	}
+	if reply.OK {
+		t.Errorf("ok = true, want false for an unreachable channel")
+	}
+	if reply.Response != nil {
+		t.Errorf("response = %+v, want null — the channel never answered", reply.Response)
+	}
+	if reply.Error == nil || *reply.Error == "" {
+		t.Errorf("error = %v, want the transport failure named", reply.Error)
 	}
 }
 

@@ -1130,7 +1130,7 @@ export interface components {
       kind?: "webhook" | "ntfy" | "gotify" | "apprise";
       name?: string;
       /** @description Write-only; __redacted__ leaves the stored secret, null clears it */
-      secret?: unknown;
+      secret?: string | null;
     };
     CreateCategoryInputBody: {
       /** @description Unique category name; never carries a / */
