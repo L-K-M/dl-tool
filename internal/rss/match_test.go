@@ -555,25 +555,43 @@ func TestStateErrorPropagates(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestUnroutableItemErrors: a matched item whose download_url cannot be
-// normalised or routed is a store-invariant breach — it aborts the pass
-// with an error rather than vanishing silently.
-func TestUnroutableItemErrors(t *testing.T) {
+// TestMissingDownloadURLErrors: a NULL download_url is a store-invariant
+// breach — the parser only stores items carrying a download URI — so it
+// still aborts the pass with an error rather than vanishing silently.
+func TestMissingDownloadURLErrors(t *testing.T) {
 	doc := RuleDoc{}
 	doc.ApplyDefaults()
-	rule := store.Rule{ID: testRuleID}
 
 	noURL := matchItem("u1", "Ubuntu ISO")
 	noURL.DownloadURL = nil
-	_, _, err := Evaluate(t.Context(), doc, rule,
+	_, _, err := Evaluate(t.Context(), doc, store.Rule{ID: testRuleID},
 		[]store.FeedItem{noURL}, testFeedScope, emptyState(), testNow.UnixMilli())
 	require.Error(t, err)
+}
 
-	badURL := matchItem("u2", "Ubuntu ISO")
-	badURL.DownloadURL = strPtr("nzb://example.com/1")
-	_, _, err = Evaluate(t.Context(), doc, rule,
-		[]store.FeedItem{badURL}, testFeedScope, emptyState(), testNow.UnixMilli())
-	require.Error(t, err)
+// TestUnroutableItemIsSkipped pins the feed-content reality of step 12:
+// tiers A and B store enclosure URLs verbatim, so a stored download_url
+// that fails normalisation or routing is bad feed content, not an
+// invariant breach. The item leaves the candidate set like a step-1 miss
+// — no Decision, since section 5.1 has no reason code for it — and the
+// rest of the pass still evaluates, so one malformed enclosure can never
+// wedge every rule that matched it.
+func TestUnroutableItemIsSkipped(t *testing.T) {
+	doc := RuleDoc{}
+	doc.ApplyDefaults()
+
+	ed2k := matchItem("u2", "Ubuntu ISO")
+	ed2k.DownloadURL = strPtr("ed2k://|file|x|1|0123456789abcdef0123456789abcdef|/")
+	relative := matchItem("u3", "Ubuntu ISO")
+	relative.DownloadURL = strPtr("files/ubuntu.iso")
+	valid := matchItem("u4", "Ubuntu ISO")
+
+	decisions, cands, err := Evaluate(t.Context(), doc, store.Rule{ID: testRuleID},
+		[]store.FeedItem{ed2k, relative, valid}, testFeedScope, emptyState(), testNow.UnixMilli())
+	require.NoError(t, err)
+	require.Len(t, decisions, 1)
+	require.Len(t, cands, 1)
+	require.Equal(t, "itm_u4", decisions[0].ItemID)
 }
 
 // TestUnknownMatchFieldErrors: a match.fields entry the store cannot serve

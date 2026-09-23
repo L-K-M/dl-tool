@@ -333,7 +333,10 @@ For each enabled rule, ordered by `(priority ASC, name ASC)`, over the candidate
 14. **Commit.** Insert `rule_matches`, insert `rule_seen_episodes`, set `rule.last_match_at = item.published_at`, enforce `throttle.max_per_run`. The task itself is created through the ordinary task-creation path: the destination is re-checked against the configured roots and the concurrency limits apply exactly as in [`05-api-contract.md`](05-api-contract.md) §5.11 — a rejected destination leaves the item ungrabbed with `rule_matches.status = 'failed'`, never an unaccounted task, while a task merely held by admission control is a normal grab. Like a failed hand-off (step 13), a breach is retryable: a `failed` row must not mark the episode seen, and the item re-enters the candidate set on later runs until it succeeds. A retry **updates** the existing `(rule_id, feed_item_id)` row's `matched_at` and `last_error` instead of inserting another, so a permanently broken rule cannot grow the table without bound, and `max_per_run` counts grabs only — failed attempts never consume a slot, so one broken rule cannot starve its own or another rule's successful grabs.
 
 Steps 1 and 3 remove an item from the candidate set before evaluation; they produce no reason code and the
-item does not appear in a dry run's `results`. Losers from step 13 are written with
+item does not appear in a dry run's `results`. A stored `download_url` that fails normalisation or routing
+at step 12 leaves the set the same way — enclosure URLs are feed content, stored verbatim, so a malformed
+one is logged and skipped rather than aborting the pass; a missing `download_url` remains a store-invariant
+breach and fails the run. Losers from step 13 are written with
 `rule_matches.status = 'fallback'` and the winner with `'queued'`, then `'sent'` once the task exists.
 
 ### 5.1 Rejection reason codes

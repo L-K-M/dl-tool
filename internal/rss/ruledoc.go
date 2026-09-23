@@ -187,8 +187,16 @@ func (d RuleDoc) Validate() []FieldError {
 	}
 
 	if d.Episode != nil && d.Episode.Filter != "" {
-		if _, err := ParseEpisodeFilter(d.Episode.Filter); err != nil {
+		filter, err := ParseEpisodeFilter(d.Episode.Filter)
+		switch {
+		case err != nil:
 			add("episode.filter", "%v", err)
+		case filter.IsZero():
+			// "0x;" parses to the zero EpisodeFilter, which Match reads
+			// as match-everything. Reject at save so the API answers 422;
+			// newRuleEval applies the same check at evaluation, so rules
+			// stored before this validation still fail closed.
+			add("episode.filter", "%q selects no season", d.Episode.Filter)
 		}
 	}
 
@@ -324,6 +332,14 @@ func parseIECSize(s string) (int64, error) {
 type EpisodeFilter struct {
 	Season int
 	Tokens []EpisodeToken
+}
+
+// IsZero reports the match-everything filter: a non-empty document value
+// such as "0x;" that parsed to no season and no tokens. Validate and
+// newRuleEval must reject it identically, so the predicate lives here —
+// the one place both layers share.
+func (f EpisodeFilter) IsZero() bool {
+	return f.Season == 0 && len(f.Tokens) == 0
 }
 
 // EpisodeToken is a single number, an inclusive range, or an open-ended

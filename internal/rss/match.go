@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
@@ -234,7 +235,7 @@ func newRuleEval(doc RuleDoc, rule store.Rule) (*ruleEval, error) {
 			if err != nil {
 				return nil, fmt.Errorf("episode.filter: %w", err)
 			}
-			if filter.Season == 0 && len(filter.Tokens) == 0 {
+			if filter.IsZero() {
 				// A "0x;"-shaped filter parses to the zero EpisodeFilter,
 				// which Match reads as match-everything — the worst
 				// failure mode for a grabbing tool. Reject it here so a
@@ -459,23 +460,30 @@ func (e *ruleEval) evaluateItem(ctx context.Context, item store.FeedItem, feed F
 		return reject(ReasonBelowMinimumScore, fmt.Sprintf("score=%d < minimum=%d", d.Score, e.scoreMinimum))
 	}
 
-	// Step 12 — collect, routing exactly like a pasted URI. An item whose
-	// stored download_url cannot be normalised or routed is a
-	// store-invariant breach (the parser only stores items with a
-	// download URI), not a rule outcome — and no reason code of section
-	// 5.1 covers it, so it aborts the pass with an explicit error instead
-	// of vanishing silently. Never log the raw URL: it may carry userinfo.
+	// Step 12 — collect, routing exactly like a pasted URI. A nil
+	// download_url is a store-invariant breach — the parser only stores
+	// items carrying a download URI — so it still aborts the pass loudly.
+	// A stored URL that fails normalisation or routing is different:
+	// tiers A and B record enclosure URLs verbatim, so it is bad feed
+	// content, not corruption. It leaves the candidate set with no
+	// Decision — section 5.1 has no reason code for it, the same absence
+	// steps 1 and 3 have — and the pass continues, so one malformed item
+	// can never wedge every rule that matched it. Never log the raw URL:
+	// it may carry userinfo.
 	if item.DownloadURL == nil {
 		return Decision{}, nil, false, fmt.Errorf("rss: evaluate rule %s: item %s: no download_url", e.rule.ID, item.Identity)
 	}
 	norm, err := uri.Normalize(*item.DownloadURL)
 	if err != nil {
-		return Decision{}, nil, false, fmt.Errorf("rss: evaluate rule %s: item %s: %w", e.rule.ID, item.Identity, err)
+		slog.WarnContext(ctx, "rss: skipping item whose download_url cannot be normalised",
+			"rule_id", e.rule.ID, "item", item.Identity, "error", err)
+		return Decision{}, nil, false, nil
 	}
 	name, err := engine.Route(norm, nil)
 	if err != nil {
-		return Decision{}, nil, false, fmt.Errorf("rss: evaluate rule %s: item %s: route: %w",
-			e.rule.ID, item.Identity, err)
+		slog.WarnContext(ctx, "rss: skipping item whose download_url no engine routes",
+			"rule_id", e.rule.ID, "item", item.Identity, "error", err)
+		return Decision{}, nil, false, nil
 	}
 
 	d.Matched, d.MatchedBy, d.Highlight = true, matchedBy, highlight
