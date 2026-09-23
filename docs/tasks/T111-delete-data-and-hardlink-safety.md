@@ -169,12 +169,13 @@ Checking formatting...
 All matched files use Prettier code style!
 $ make test PKG="./internal/fsx/... ./internal/api/..."
 go test -race -count=1 ./internal/fsx/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/fsx	2.726s
-ok  	github.com/L-K-M/dl-tool/internal/api	188.774s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.684s
+ok  	github.com/L-K-M/dl-tool/internal/api	171.294s
 DELETE_DATA_OK
 ```
 
-The named tests, each `--- PASS`:
+The named tests (plus `TestUnlinkFailureContinues`, added in review to pin the executor's
+warn-and-continue unlink tolerance), each `--- PASS`:
 
 ```
 === RUN   TestHardlinkedCopySurvives
@@ -183,13 +184,17 @@ The named tests, each `--- PASS`:
 --- PASS: TestOneEscapingTargetAbortsAll (0.00s)
 === RUN   TestOnlyRecordedFilesUnlinked
 --- PASS: TestOnlyRecordedFilesUnlinked (0.00s)
+=== RUN   TestUnlinkFailureContinues
+--- PASS: TestUnlinkFailureContinues (0.00s)
 === RUN   TestMissingFileCounted
 --- PASS: TestMissingFileCounted (0.00s)
-ok  	github.com/L-K-M/dl-tool/internal/fsx	0.018s
---- PASS: TestEngineStoppedBeforeUnlink (0.13s)
+ok  	github.com/L-K-M/dl-tool/internal/fsx	0.008s
+--- PASS: TestDeleteKeepsData (0.11s)
+--- PASS: TestDeleteRejectsEscapingPath (0.11s)
+--- PASS: TestEngineStoppedBeforeUnlink (0.07s)
 --- PASS: TestUnreachableEngineDeletesNothing (0.07s)
---- PASS: TestDataDeletedEventWritten (0.05s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.284s
+--- PASS: TestDataDeletedEventWritten (0.07s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.369s
 ```
 
 Scope check:

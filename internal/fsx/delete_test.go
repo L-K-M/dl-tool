@@ -151,6 +151,45 @@ func TestOnlyRecordedFilesUnlinked(t *testing.T) {
 	}
 }
 
+// TestUnlinkFailureContinues pins the tolerance the delete path had before
+// the executor: an unlink that errors for a reason other than ENOENT is
+// logged and the pass continues — the remaining targets are still unlinked
+// and the call still succeeds, because the operation is irreversible and
+// the counts report what actually happened. The failing target here is a
+// recorded path that names a non-empty directory, which unlink refuses.
+func TestUnlinkFailureContinues(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "task")
+
+	present := writeRecordedFile(t, taskDir, "present.bin", []byte("present"))
+	// A recorded path that is a non-empty directory: os.Remove refuses it
+	// with ENOTEMPTY, the "other failure" branch of the unlink loop.
+	blocked := filepath.Join(taskDir, "blocked")
+	writeRecordedFile(t, blocked, "inside.bin", []byte("inside"))
+
+	result, err := DeleteData(t.Context(), []string{root}, taskDir, []Target{
+		{Path: blocked, Bytes: 0},
+		{Path: present, Bytes: 7},
+	})
+	if err != nil {
+		t.Fatalf("DeleteData returned an error for a failed unlink: %v", err)
+	}
+	if result.FilesUnlinked != 1 || result.Missing != 0 {
+		t.Errorf("counts = %d files, %d missing; want 1, 0 — the failed unlink must not abort the pass",
+			result.FilesUnlinked, result.Missing)
+	}
+	if _, err := os.Stat(present); !os.IsNotExist(err) {
+		t.Errorf("the later target was not unlinked: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(blocked, "inside.bin")); err != nil {
+		t.Errorf("the refused target's content was touched: %v", err)
+	}
+	// The task directory still holds the refused directory, so it stays.
+	if _, err := os.Stat(taskDir); err != nil {
+		t.Errorf("the non-empty task directory was removed: %v", err)
+	}
+}
+
 // TestMissingFileCounted pins the recorded-but-gone file: it is counted in
 // missing, not an error, and the recorded byte total is summed from the
 // files that were actually unlinked.
