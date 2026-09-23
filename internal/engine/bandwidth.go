@@ -510,10 +510,38 @@ func (g *Governor) parkTask(ctx context.Context, t store.Task) error {
 		return errors.New("engine: governor has no task store; refusing a no-download pause")
 	}
 
-	return g.parkOne(ctx, t.ID, pausableTask{
-		engine: t.Engine, ref: t.EngineRef,
-		live: t.State == "downloading" || t.State == "checking",
-	})
+	// The live rule pausableTasks applies: the running states, plus a
+	// queued row the admission pass still owns mid-release. Task does
+	// not carry admission_pending — only the candidate projection does —
+	// and the distinction matters only when a handle exists to pause,
+	// so the lookup runs for exactly that case.
+	live := t.State == "downloading" || t.State == "checking"
+	if !live && t.State == "queued" && t.EngineRef != nil {
+		var err error
+		live, err = g.queuedAdmissionPending(ctx, t.ID)
+		if err != nil {
+			return fmt.Errorf("task %s: %w", t.ID, err)
+		}
+	}
+
+	return g.parkOne(ctx, t.ID, pausableTask{engine: t.Engine, ref: t.EngineRef, live: live})
+}
+
+// queuedAdmissionPending reports whether the admission pass still owns
+// the queued task id mid-release — the live signal parkTask cannot read
+// off a store.Task row.
+func (g *Governor) queuedAdmissionPending(ctx context.Context, id string) (bool, error) {
+	candidates, err := g.tasks.SelectQueuedCandidates(ctx, 0)
+	if err != nil {
+		return false, fmt.Errorf("engine: list queued tasks for the no-download pause: %w", err)
+	}
+	for _, cand := range candidates {
+		if cand.ID == id {
+			return cand.AdmissionPending != 0, nil
+		}
+	}
+
+	return false, nil
 }
 
 // resumeParked releases the parked set on a change away from
