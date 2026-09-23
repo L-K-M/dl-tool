@@ -108,9 +108,10 @@ func (h *SettingsHandlers) PutSchedule(ctx context.Context, in *PutScheduleInput
 // scheduleBody renders the stored grid into the wire shape: the
 // schedule_enabled flag, the cells as wire integers, the container's TZ
 // name — the one zone the cells are evaluated in, never a client-sent
-// value — and the cell in force at the moment of the call. Until T110's
-// evaluation lands, that active cell is the cell of the current local
-// hour.
+// value — and the cell in force at the moment of the call. That active
+// cell is the cell of the current local hour: the wall-clock read is
+// the whole of T110's evaluation, so the repeated and skipped DST hours
+// need no handling here either.
 func (h *SettingsHandlers) scheduleBody(ctx context.Context) (ScheduleBody, error) {
 	modes, enabled, err := h.settings.ScheduleSnapshot(ctx)
 	if err != nil {
@@ -150,13 +151,15 @@ func localZoneName() string {
 }
 
 // activeScheduleIndex resolves the grid index the current local hour
-// addresses: day*24+hour with Monday as day 0. T110 owns the DST
-// repeated- and skipped-hour rules; until it lands, the cell of the
-// current hour stands in for the cell in force.
+// addresses: day*24+hour with Monday as day 0, the same wall-clock read
+// jobs.activeCell makes on the evaluation side — T110's DST rule is
+// exactly this read, so the reported cell in force and the applied one
+// can never diverge across a transition.
 func activeScheduleIndex(now time.Time) int {
-	day := (int(now.Weekday()) + 6) % 7
+	local := now.In(time.Local)
+	day := (int(local.Weekday()) + 6) % 7
 
-	return day*24 + now.Hour()
+	return day*24 + local.Hour()
 }
 
 // CellToMode translates one wire integer of doc 05 section 11.2 into the

@@ -8,6 +8,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+	// Embedded zone database: the DST tests load Europe/Zurich and must
+	// not depend on the host's /usr/share/zoneinfo — slim containers
+	// and Windows hosts can lack it. Test binaries only.
+	_ "time/tzdata"
 
 	"github.com/stretchr/testify/require"
 
@@ -255,8 +259,10 @@ func TestAlternativeReachesAria2(t *testing.T) {
 	ctx := t.Context()
 
 	f.writeGrid(t, true, map[int]store.ScheduleMode{11: store.ScheduleAlternative})
-	require.NoError(t, f.settings.SetInt64(ctx, "download_rate_limit", 100))
-	require.NoError(t, f.settings.SetInt64(ctx, "upload_rate_limit", 50))
+	// The stored global pair sits above the alternative pair, so the
+	// cell term wins the min() of FR-096.
+	require.NoError(t, f.settings.SetInt64(ctx, "download_rate_limit", 10485760))
+	require.NoError(t, f.settings.SetInt64(ctx, "upload_rate_limit", 2097152))
 	require.NoError(t, f.settings.SetInt64(ctx, "alt_download_rate_limit", 2048))
 	require.NoError(t, f.settings.SetInt64(ctx, "alt_upload_rate_limit", 1024))
 
@@ -269,7 +275,7 @@ func TestAlternativeReachesAria2(t *testing.T) {
 	// qBittorrent one, through no toggleSpeedLimitsMode equivalent.
 	for _, e := range f.engines {
 		require.Equal(t,
-			[]scheduleRateCall{{id: "", down: 100, up: 50}, {id: "", down: 2048, up: 1024}},
+			[]scheduleRateCall{{id: "", down: 10485760, up: 2097152}, {id: "", down: 2048, up: 1024}},
 			e.rateCalls,
 			"engine %s must receive the default pair then the alternative pair", e.name,
 		)
@@ -287,17 +293,29 @@ func TestApplyGlobalHonoursAlternativeCell(t *testing.T) {
 	require.NoError(t, f.scheduler.EvaluateSchedule(ctx, scheduleTime(11, 0)))
 	require.Equal(t, engine.ModeAlternative, f.governor.Mode())
 
-	// A global-limit write inside the 2 cell must not push the global
-	// pair — the engines run the pair the active cell names.
+	// A global-limit write inside the 2 cell stores the pair and
+	// re-resolves the chain: min(cell, global) decides what the engines
+	// hear. A stored pair above the cell never displaces the cell pair…
+	require.NoError(t, f.settings.SetInt64(ctx, "download_rate_limit", 10000))
+	require.NoError(t, f.settings.SetInt64(ctx, "upload_rate_limit", 5000))
+	require.NoError(t, f.governor.ApplyGlobal(ctx, engine.RateLimits{Down: 10000, Up: 5000}))
+
+	// …and a stored pair below it wins the minimum instead.
+	require.NoError(t, f.settings.SetInt64(ctx, "download_rate_limit", 100))
+	require.NoError(t, f.settings.SetInt64(ctx, "upload_rate_limit", 50))
 	require.NoError(t, f.governor.ApplyGlobal(ctx, engine.RateLimits{Down: 100, Up: 50}))
 
 	aria2 := f.engines[engine.NameAria2]
 	require.Equal(t,
-		[]scheduleRateCall{{id: "", down: 2048, up: 1024}, {id: "", down: 2048, up: 1024}},
+		[]scheduleRateCall{
+			{id: "", down: 2048, up: 1024},
+			{id: "", down: 2048, up: 1024},
+			{id: "", down: 100, up: 50},
+		},
 		aria2.rateCalls,
-		"a global write inside the alternative cell re-applies the cell pair, not the global one",
+		"a global write inside the alternative cell re-resolves min(cell, global)",
 	)
-	require.Equal(t, engine.RateLimits{Down: 2048, Up: 1024}, f.governor.Current())
+	require.Equal(t, engine.RateLimits{Down: 100, Up: 50}, f.governor.Current())
 	require.Equal(t, engine.ModeAlternative, f.governor.Mode())
 }
 
@@ -432,4 +450,83 @@ func TestNoDownloadWithoutTaskStoreFailsClosed(t *testing.T) {
 	require.Error(t, scheduler.EvaluateSchedule(ctx, scheduleTime(10, 0)))
 	require.Empty(t, aria2.pauseList(), "no engine may see a pause the parked set could not record")
 	require.Equal(t, engine.Mode(""), governor.Mode(), "a failed cell is not recorded as applied")
+}
+
+// withLocalZone pins time.Local — the container's TZ — for a DST test
+// and restores it, so the scheduler reads wall-clock hours in the zone
+// the container would run in.
+func withLocalZone(t *testing.T, name string) {
+	t.Helper()
+
+	zone, err := time.LoadLocation(name)
+	require.NoError(t, err)
+	previous := time.Local
+	time.Local = zone
+	t.Cleanup(func() { time.Local = previous })
+}
+
+// TestDSTRepeatedHourAppliedTwice is the FR-097 fall-back rule in
+// Europe/Zurich: on 2026-10-25 the clock repeats 02:00 — 02:30 happens
+// once at 00:30 UTC in CEST and again at 01:30 UTC in CET. Both
+// wall-clock occurrences read Sunday's 02:00 cell, so the cell is in
+// force for the whole repeated hour: the first pass parks the task and
+// the second keeps it parked — an implementation resolving the cell off
+// the UTC instant would read hour 1's default cell at 01:30 UTC and
+// release it an hour early.
+func TestDSTRepeatedHourAppliedTwice(t *testing.T) {
+	withLocalZone(t, "Europe/Zurich")
+	f := newScheduleFixture(t, engine.NameAria2)
+	ctx := t.Context()
+
+	// Sunday is day 6, so hour 2 addresses cell 146.
+	f.writeGrid(t, true, map[int]store.ScheduleMode{6*24 + 2: store.ScheduleNoDownload})
+
+	task := f.addTask(t, engine.NameAria2, "downloading", "gid-fall")
+
+	// First occurrence of 02:30, still CEST.
+	require.NoError(t, f.scheduler.EvaluateSchedule(ctx,
+		time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC)))
+	require.Equal(t, engine.ModeNoDownload, f.governor.Mode())
+	require.Equal(t, "paused", f.taskState(t, task.ID))
+
+	// Second occurrence of 02:30, now CET: the same cell applies again.
+	require.NoError(t, f.scheduler.EvaluateSchedule(ctx,
+		time.Date(2026, 10, 25, 1, 30, 0, 0, time.UTC)))
+	require.Equal(t, engine.ModeNoDownload, f.governor.Mode())
+	require.Equal(t, "paused", f.taskState(t, task.ID),
+		"the repeated hour's second pass must keep the cell in force")
+
+	// 03:30 CET — the hour after the transition — is a different cell
+	// and releases the parked set.
+	require.NoError(t, f.scheduler.EvaluateSchedule(ctx,
+		time.Date(2026, 10, 25, 2, 30, 0, 0, time.UTC)))
+	require.Equal(t, engine.ModeDefault, f.governor.Mode())
+	require.Equal(t, "queued", f.taskState(t, task.ID))
+}
+
+// TestDSTSkippedHourNeverApplied is the FR-097 spring-forward rule in
+// Europe/Zurich: on 2026-03-29 the clock jumps from 01:59:59 CET to
+// 03:00:00 CEST, so no instant reads the 02:00 wall clock. Ticking
+// through the transition must never apply Sunday's 02:00 cell.
+func TestDSTSkippedHourNeverApplied(t *testing.T) {
+	withLocalZone(t, "Europe/Zurich")
+	f := newScheduleFixture(t, engine.NameAria2)
+	ctx := t.Context()
+
+	f.writeGrid(t, true, map[int]store.ScheduleMode{6*24 + 2: store.ScheduleNoDownload})
+	task := f.addTask(t, engine.NameAria2, "downloading", "gid-spring")
+
+	// Step quarter-hour instants from 00:45 CET through 04:00 CEST —
+	// across the 02:00 gap no instant may resolve the No Download cell.
+	aria2 := f.engines[engine.NameAria2]
+	for instant := time.Date(2026, 3, 28, 23, 45, 0, 0, time.UTC); !instant.After(time.Date(2026, 3, 29, 2, 0, 0, 0, time.UTC)); instant = instant.Add(15 * time.Minute) {
+		require.NoError(t, f.scheduler.EvaluateSchedule(ctx, instant))
+		require.Equal(t, "downloading", f.taskState(t, task.ID),
+			"instant %s must not apply the skipped 02:00 cell", instant)
+	}
+	require.Equal(t, engine.ModeDefault, f.governor.Mode())
+	require.Empty(t, aria2.pauseList(),
+		"the skipped hour's cell is never applied — no pause may land")
+	require.Empty(t, f.eventCodes(t, task.ID),
+		"a cell no wall clock ever reads must not park the task")
 }

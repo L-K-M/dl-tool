@@ -8,9 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+	// Embedded zone database: TestScheduleReportsTimezone loads
+	// Europe/Zurich and must not depend on the host's zoneinfo files.
+	// Test binaries only.
+	_ "time/tzdata"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/L-K-M/dl-tool/internal/api"
 	"github.com/L-K-M/dl-tool/internal/engine"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
@@ -307,8 +312,7 @@ func TestApplyTaskUsesBareEngineRef(t *testing.T) {
 	e := &bandwidthEngine{name: engine.NameAria2}
 	reg.Register(e)
 
-	gov := engine.NewGovernor(reg, nil)
-	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), p64(524288)))
+	require.NoError(t, engine.ApplyTask(context.Background(), reg, "aria2:2089b05ecca3d829", p64(1048576), p64(524288)))
 
 	require.Equal(t,
 		[]bandwidthCall{{id: "2089b05ecca3d829", down: p64(1048576), up: p64(524288)}},
@@ -322,8 +326,7 @@ func TestApplyTaskZeroIsUnlimited(t *testing.T) {
 	e := &bandwidthEngine{name: engine.NameQBittorrent}
 	reg.Register(e)
 
-	gov := engine.NewGovernor(reg, nil)
-	require.NoError(t, gov.ApplyTask(context.Background(), "qbittorrent:8f9c3a2b", p64(0), p64(0)))
+	require.NoError(t, engine.ApplyTask(context.Background(), reg, "qbittorrent:8f9c3a2b", p64(0), p64(0)))
 
 	// 0 is pushed as the literal unlimited value, never dropped as unset.
 	require.Equal(t, []bandwidthCall{{id: "8f9c3a2b", down: p64(0), up: p64(0)}}, e.calls)
@@ -334,8 +337,7 @@ func TestApplyTaskNilDirectionLeftUntouched(t *testing.T) {
 	e := &bandwidthEngine{name: engine.NameAria2}
 	reg.Register(e)
 
-	gov := engine.NewGovernor(reg, nil)
-	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(2097152), nil))
+	require.NoError(t, engine.ApplyTask(context.Background(), reg, "aria2:2089b05ecca3d829", p64(2097152), nil))
 
 	// The unsent direction reaches the engine as nil — left unchanged —
 	// not as a guessed value like 0, which would mean unlimited.
@@ -350,8 +352,7 @@ func TestApplyTaskNoLifecycleCalls(t *testing.T) {
 	e := &bandwidthEngine{name: engine.NameAria2}
 	reg.Register(e)
 
-	gov := engine.NewGovernor(reg, nil)
-	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), p64(524288)))
+	require.NoError(t, engine.ApplyTask(context.Background(), reg, "aria2:2089b05ecca3d829", p64(1048576), p64(524288)))
 
 	// The embedded nil Engine turns every lifecycle method — Pause,
 	// Resume, Remove — into a panic the moment it runs, so reaching this
@@ -368,8 +369,7 @@ func TestApplyTaskNotSupportedPropagates(t *testing.T) {
 	e := &bandwidthEngine{name: engine.NameAria2, setErr: engine.ErrNotSupported}
 	reg.Register(e)
 
-	gov := engine.NewGovernor(reg, nil)
-	err := gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), nil)
+	err := engine.ApplyTask(context.Background(), reg, "aria2:2089b05ecca3d829", p64(1048576), nil)
 
 	// yt-dlp's answer: the caller treats it as success and stores the
 	// value for the next spawn, so the sentinel must arrive intact.
@@ -377,8 +377,7 @@ func TestApplyTaskNotSupportedPropagates(t *testing.T) {
 }
 
 func TestApplyTaskUnregisteredEngine(t *testing.T) {
-	gov := engine.NewGovernor(engine.NewRegistry(), nil)
-	err := gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), nil)
+	err := engine.ApplyTask(context.Background(), engine.NewRegistry(), "aria2:2089b05ecca3d829", p64(1048576), nil)
 
 	require.ErrorIs(t, err, engine.ErrUnavailable)
 	require.Contains(t, err.Error(), engine.NameAria2,
@@ -391,9 +390,8 @@ func TestApplyTaskMalformedID(t *testing.T) {
 	e := &bandwidthEngine{name: engine.NameAria2}
 	reg.Register(e)
 
-	gov := engine.NewGovernor(reg, nil)
 	for _, id := range []string{"2089b05ecca3d829", ":2089b05ecca3d829", "aria2:", ""} {
-		require.Errorf(t, gov.ApplyTask(context.Background(), id, p64(1048576), nil),
+		require.Errorf(t, engine.ApplyTask(context.Background(), reg, id, p64(1048576), nil),
 			"id %q has no usable engine namespace", id)
 	}
 	require.Empty(t, e.calls, "an id that cannot be routed reaches no engine")
@@ -404,8 +402,7 @@ func TestApplyTaskBothDirectionsNilCallsNothing(t *testing.T) {
 	e := &bandwidthEngine{name: engine.NameAria2}
 	reg.Register(e)
 
-	gov := engine.NewGovernor(reg, nil)
-	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", nil, nil))
+	require.NoError(t, engine.ApplyTask(context.Background(), reg, "aria2:2089b05ecca3d829", nil, nil))
 	require.Empty(t, e.calls, "a patch with no direction touches no engine")
 }
 
@@ -420,8 +417,7 @@ func TestApplyTaskReadBackMismatchLogsOnly(t *testing.T) {
 
 	logs := captureGovernorLogs(t)
 
-	gov := engine.NewGovernor(reg, nil)
-	require.NoError(t, gov.ApplyTask(context.Background(), "qbittorrent:8f9c3a2b", p64(1048576), p64(524288)))
+	require.NoError(t, engine.ApplyTask(context.Background(), reg, "qbittorrent:8f9c3a2b", p64(1048576), p64(524288)))
 
 	require.Equal(t,
 		[]bandwidthCall{{id: "8f9c3a2b", down: p64(1048576), up: p64(524288)}},
@@ -449,8 +445,7 @@ func TestApplyTaskNilDirectionSkipsReadBackComparison(t *testing.T) {
 
 	logs := captureGovernorLogs(t)
 
-	gov := engine.NewGovernor(reg, nil)
-	require.NoError(t, gov.ApplyTask(context.Background(), "aria2:2089b05ecca3d829", p64(1048576), nil))
+	require.NoError(t, engine.ApplyTask(context.Background(), reg, "aria2:2089b05ecca3d829", p64(1048576), nil))
 
 	require.NotContains(t, logs.String(), "read back different",
 		"a direction the patch left as nil must not be compared against the daemon",
@@ -465,12 +460,245 @@ func TestApplyTaskReadBackErrorStillSucceeds(t *testing.T) {
 	}
 	reg.Register(probe)
 
-	gov := engine.NewGovernor(reg, nil)
-	require.NoError(t, gov.ApplyTask(context.Background(), "qbittorrent:8f9c3a2b", p64(1048576), p64(524288)))
+	require.NoError(t, engine.ApplyTask(context.Background(), reg, "qbittorrent:8f9c3a2b", p64(1048576), p64(524288)))
 
 	require.Equal(t,
 		[]bandwidthCall{{id: "8f9c3a2b", down: p64(1048576), up: p64(524288)}},
 		probe.calls,
 		"a failed read-back must not fail an apply that already succeeded",
 	)
+}
+
+// parkFakeEngine records the calls the resolved apply path may make —
+// SetRateLimits verbatim and Pause — so a test can prove the resolved
+// value is what the engine heard and that a No Download cell sent none.
+// The embedded nil engine.Engine keeps every other method a panic.
+type parkFakeEngine struct {
+	*bandwidthEngine
+	pauses []string
+}
+
+func newParkFakeEngine(name string) *parkFakeEngine {
+	return &parkFakeEngine{bandwidthEngine: &bandwidthEngine{name: name}}
+}
+
+func (e *parkFakeEngine) Pause(_ context.Context, id string) error {
+	e.pauses = append(e.pauses, id)
+	return nil
+}
+
+// newGovernorStore opens a throwaway store for the resolve tests: the
+// parked set and the settings rows are real tables, like the schedule
+// tests' fixture.
+func newGovernorStore(t *testing.T) (*store.TaskStore, *store.SettingsStore) {
+	t.Helper()
+	root := t.TempDir()
+	db, err := store.Open(t.Context(),
+		filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	return store.NewTaskStore(db), store.NewSettingsStore(db)
+}
+
+// addGovernedTask inserts one task row carrying per-task limits; an
+// empty ref leaves engine_ref NULL — a task the admission pass never
+// handed to an engine.
+func addGovernedTask(t *testing.T, tasks *store.TaskStore, engineName, state, ref string, dl, ul int64) store.Task {
+	t.Helper()
+
+	var engineRef *string
+	if ref != "" {
+		engineRef = &ref
+	}
+	task, err := tasks.Create(t.Context(), store.Task{
+		Engine: engineName, EngineRef: engineRef, SourceKind: "http",
+		Name: "task " + engineName + "/" + ref, Destination: "/data", State: state,
+		DLLimit: dl, ULLimit: ul,
+	})
+	require.NoError(t, err)
+
+	return task
+}
+
+// TestEffectiveWorkedCase is the literal worked example of FR-096:
+// alternative-speed cell 5242880, global 10485760, per-task 1048576 —
+// the per-task term wins.
+func TestEffectiveWorkedCase(t *testing.T) {
+	rate, pause := engine.Effective(engine.ModeAlternative, 5242880, 10485760, 1048576)
+	require.Equal(t, int64(1048576), rate)
+	require.False(t, pause)
+}
+
+// TestZeroExcludedFromMin: a 0 term means unlimited and is excluded from
+// the minimum — it must never win it.
+func TestZeroExcludedFromMin(t *testing.T) {
+	rate, pause := engine.Effective(engine.ModeDefault, 0, 10485760, 1048576)
+	require.Equal(t, int64(1048576), rate, "the zero cell term is excluded, not the minimum")
+	require.False(t, pause)
+}
+
+// TestAllZeroIsUnlimited: every term at 0 resolves to 0, unlimited.
+func TestAllZeroIsUnlimited(t *testing.T) {
+	rate, pause := engine.Effective(engine.ModeDefault, 0, 0, 0)
+	require.Zero(t, rate)
+	require.False(t, pause)
+}
+
+// TestEffectivePrecedence is the rest of the chain's table: each term
+// winning in turn.
+func TestEffectivePrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		cell, global, task int64
+		want               int64
+	}{
+		{"cell wins", 524288, 10485760, 1048576, 524288},
+		{"global wins", 2097152, 1048576, 5242880, 1048576},
+		{"task wins", 2097152, 10485760, 524288, 524288},
+		{"zero task excluded", 1048576, 524288, 0, 524288},
+		{"zero global excluded", 1048576, 0, 524288, 524288},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rate, pause := engine.Effective(engine.ModeDefault, tc.cell, tc.global, tc.task)
+			require.Equal(t, tc.want, rate)
+			require.False(t, pause)
+		})
+	}
+}
+
+// TestNoDownloadPausesNotThrottles: a No Download cell is a pause, never
+// a near-zero rate — Effective reports pause, and through the governor
+// no engine sees a rate at all: not through the global fan-out and not
+// through a task apply.
+func TestNoDownloadPausesNotThrottles(t *testing.T) {
+	rate, pause := engine.Effective(engine.ModeNoDownload, 5242880, 10485760, 1048576)
+	require.Zero(t, rate)
+	require.True(t, pause)
+
+	tasks, settings := newGovernorStore(t)
+	reg := engine.NewRegistry()
+	e := newParkFakeEngine(engine.NameAria2)
+	reg.Register(e)
+	gov := engine.NewGovernor(reg, settings).WithTasks(tasks)
+
+	require.NoError(t, gov.ApplyMode(t.Context(), engine.ModeNoDownload))
+	require.NoError(t, gov.ApplyGlobal(t.Context(), engine.RateLimits{Down: 1048576, Up: 524288}))
+	require.Empty(t, e.calls, "a no-download cell sends no rate, not even a global one")
+
+	task := addGovernedTask(t, tasks, engine.NameAria2, "downloading", "gid-throttle", 1048576, 524288)
+	require.NoError(t, gov.ApplyTask(t.Context(), task))
+	require.Empty(t, e.calls, "the paused task receives no rate")
+	require.Equal(t, []string{"aria2:gid-throttle"}, e.pauses,
+		"the pause reaches the engine as a pause, not a throttle")
+
+	stored, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "paused", stored.State)
+
+	// The parked task requeues on the cell change — the T081
+	// park-and-release bookkeeping ends the pause.
+	require.NoError(t, gov.ApplyMode(t.Context(), engine.ModeDefault))
+	stored, err = tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "queued", stored.State)
+}
+
+// TestApplyTaskResolvesThroughTheChain is the worked case of FR-096 end
+// to end: alternative-speed cell 5242880 / 262144, global 10485760 /
+// 2097152, per-task 1048576 / 131072 — the engine-global receives
+// min(cell, global) and the task min(cell, global, task).
+func TestApplyTaskResolvesThroughTheChain(t *testing.T) {
+	tasks, settings := newGovernorStore(t)
+	reg := engine.NewRegistry()
+	e := newParkFakeEngine(engine.NameAria2)
+	reg.Register(e)
+	gov := engine.NewGovernor(reg, settings).WithTasks(tasks)
+
+	require.NoError(t, settings.SetInt64(t.Context(), "download_rate_limit", 10485760))
+	require.NoError(t, settings.SetInt64(t.Context(), "upload_rate_limit", 2097152))
+	require.NoError(t, settings.SetInt64(t.Context(), "alt_download_rate_limit", 5242880))
+	require.NoError(t, settings.SetInt64(t.Context(), "alt_upload_rate_limit", 262144))
+	require.NoError(t, gov.ApplyMode(t.Context(), engine.ModeAlternative))
+
+	task := addGovernedTask(t, tasks, engine.NameAria2, "downloading", "gid-worked", 1048576, 131072)
+	require.NoError(t, gov.ApplyTask(t.Context(), task))
+
+	require.Equal(t,
+		[]bandwidthCall{
+			{id: "", down: p64(5242880), up: p64(262144)},
+			{id: "gid-worked", down: p64(1048576), up: p64(131072)},
+		},
+		e.calls,
+		"the engine-global is min(cell, global) and the per-task push min(cell, global, task)",
+	)
+}
+
+// TestApplyTaskParksUnderNoDownload: Resolve's pause takes the T081
+// park path — engine pause first, then the parked-set row move — and
+// the release machinery requeues the task on the cell change.
+func TestApplyTaskParksUnderNoDownload(t *testing.T) {
+	tasks, settings := newGovernorStore(t)
+	reg := engine.NewRegistry()
+	e := newParkFakeEngine(engine.NameAria2)
+	reg.Register(e)
+	gov := engine.NewGovernor(reg, settings).WithTasks(tasks)
+
+	require.NoError(t, gov.ApplyMode(t.Context(), engine.ModeNoDownload))
+
+	task := addGovernedTask(t, tasks, engine.NameAria2, "downloading", "gid-park", 1048576, 524288)
+	require.NoError(t, gov.ApplyTask(t.Context(), task))
+
+	require.Equal(t, []string{"aria2:gid-park"}, e.pauses)
+	require.Empty(t, e.calls)
+	stored, err := tasks.Get(t.Context(), task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "paused", stored.State)
+
+	parked, err := tasks.ListScheduleParked(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{task.ID}, parked,
+		"the task joins the parked set the cell change releases")
+}
+
+// TestApplyTaskWithoutHandleSkipsPush: a task the admission pass has not
+// handed an engine has no handle to push to; the resolve still runs and
+// the stored limits apply at admission.
+func TestApplyTaskWithoutHandleSkipsPush(t *testing.T) {
+	tasks, settings := newGovernorStore(t)
+	reg := engine.NewRegistry()
+	e := newParkFakeEngine(engine.NameAria2)
+	reg.Register(e)
+	gov := engine.NewGovernor(reg, settings).WithTasks(tasks)
+
+	task := addGovernedTask(t, tasks, engine.NameAria2, "queued", "", 1048576, 524288)
+	require.NoError(t, gov.ApplyTask(t.Context(), task))
+	require.Empty(t, e.calls)
+}
+
+// TestScheduleReportsTimezone: the body GET /settings/schedule renders
+// names the container zone — here Europe/Zurich — and the cell in
+// force. The assertion lives in this external test package because
+// package jobs cannot import internal/api — api imports jobs — while
+// engine_test may.
+func TestScheduleReportsTimezone(t *testing.T) {
+	zone, err := time.LoadLocation("Europe/Zurich")
+	require.NoError(t, err)
+	previous := time.Local
+	time.Local = zone
+	t.Cleanup(func() { time.Local = previous })
+
+	root := t.TempDir()
+	db, err := store.Open(t.Context(),
+		filepath.Join(root, "dl-tool.db"), filepath.Join(root, "backups"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	handlers := api.NewSettingsHandlers(db, engine.NewRegistry())
+	out, err := handlers.GetSchedule(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, "Europe/Zurich", out.Body.Timezone,
+		"the schedule response carries the container's TZ, never a client-sent zone")
+	require.Equal(t, string(store.ScheduleDefault), out.Body.ActiveMode,
+		"a fresh all-default grid reports the default cell in force")
 }

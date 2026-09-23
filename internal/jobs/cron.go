@@ -179,11 +179,25 @@ func (s *Scheduler) evaluateOnce(ctx context.Context) {
 	}
 }
 
-// EvaluateSchedule reads the cell for now — day*24+hour with Monday as
-// day 0, in time.Local — resolves the mode and calls Governor.ApplyMode.
-// It is a no-op while schedule_enabled is false and idempotent inside
-// one cell: ApplyMode changes nothing at the engines when the resolved
-// mode is the one already applied.
+// activeCell resolves the grid cell in force at now: the wall-clock
+// hour and weekday of now in time.Local — the container's TZ — index
+// the grid day*24+hour with Monday as day 0. Daylight saving needs no
+// special case: on the repeated hour of a fall-back transition both
+// wall-clock occurrences read the same cell, so it is applied twice,
+// and on the skipped hour of a spring-forward transition no wall-clock
+// instant reads the cell, so it is never applied.
+func activeCell(cells [168]store.ScheduleMode, now time.Time) store.ScheduleMode {
+	local := now.In(time.Local)
+	// Weekday counts Sunday as 0; the grid counts Monday as 0.
+	day := (int(local.Weekday()) + 6) % 7
+	return cells[day*24+local.Hour()]
+}
+
+// EvaluateSchedule reads the cell for now through activeCell, resolves
+// the mode and calls Governor.ApplyMode. It is a no-op while
+// schedule_enabled is false and idempotent inside one cell: ApplyMode
+// changes nothing at the engines when the resolved mode is the one
+// already applied.
 func (s *Scheduler) EvaluateSchedule(ctx context.Context, now time.Time) error {
 	if s.gov == nil {
 		return errors.New("jobs: schedule evaluation has no governor")
@@ -197,12 +211,9 @@ func (s *Scheduler) EvaluateSchedule(ctx context.Context, now time.Time) error {
 		return nil
 	}
 
-	local := now.In(time.Local)
-	// Weekday counts Sunday as 0; the grid counts Monday as 0.
-	day := (int(local.Weekday()) + 6) % 7
-	idx := day*24 + local.Hour()
+	cell := activeCell(cells, now)
 	var mode engine.Mode
-	switch cells[idx] {
+	switch cell {
 	case store.ScheduleNoDownload:
 		mode = engine.ModeNoDownload
 	case store.ScheduleDefault:
@@ -210,7 +221,7 @@ func (s *Scheduler) EvaluateSchedule(ctx context.Context, now time.Time) error {
 	case store.ScheduleAlternative:
 		mode = engine.ModeAlternative
 	default:
-		return fmt.Errorf("jobs: bandwidth schedule cell %d holds unknown mode %q", idx, cells[idx])
+		return fmt.Errorf("jobs: bandwidth schedule cell at %s holds unknown mode %q", now.In(time.Local), cell)
 	}
 
 	if err := s.gov.ApplyMode(ctx, mode); err != nil {
