@@ -267,6 +267,10 @@ Review dispositions on the GLM round covering `77dbd5d`:
   file, and the Files table is modify-only (0 new files). The guard is a
   defense-in-depth for a path `ApplyMode` never reaches; the public-surface
   proof is `TestNoDownloadPausesNotThrottles` asserting no rate is sent.
+- Third round (`58e023b`, zero actionable): applied `_ "time/tzdata"` in both
+  test files that call `time.LoadLocation`, so the DST and timezone tests do not
+  depend on the host's zoneinfo database. Test binaries only — production builds
+  are untouched.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

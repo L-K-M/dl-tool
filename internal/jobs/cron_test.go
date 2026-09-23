@@ -8,6 +8,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+	// Embedded zone database: the DST tests load Europe/Zurich and must
+	// not depend on the host's /usr/share/zoneinfo — slim containers
+	// and Windows hosts can lack it. Test binaries only.
+	_ "time/tzdata"
 
 	"github.com/stretchr/testify/require"
 

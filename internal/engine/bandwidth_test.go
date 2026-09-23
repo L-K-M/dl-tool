@@ -8,6 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	// Embedded zone database: TestScheduleReportsTimezone loads
+	// Europe/Zurich and must not depend on the host's zoneinfo files.
+	// Test binaries only.
+	_ "time/tzdata"
 
 	"github.com/stretchr/testify/require"
 
