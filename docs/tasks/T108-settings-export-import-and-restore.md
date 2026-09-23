@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T108 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | deferred — see `## Blocked` |
 | **Depends on** | T080, T106, T107 |
 | **Blocks** | T121 |
 | **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/api/server.go`, `internal/store/db.go` |
@@ -184,4 +184,121 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+The restore half of this file contradicts the documents that own restore behaviour on three facts
+the task must act on — the schema gate's name and semantics, the gate set, and the replacement
+procedure. This file's `RestoreFrom` contract predates the adjudication it conflicts with: it was
+written in 7134d6e (2026-09-01) and is an ancestor of 7925568 "Make database recovery crash-safe"
+(later the same day), which rewrote [`docs/17-operations-and-runbook.md` §3.4](../17-operations-and-runbook.md#34-dl-tool-restore---from-file),
+[`docs/04-data-model.md` §6](../04-data-model.md#6-backup-and-restore) and
+[FR-146](../02-requirements.md#fr-146-restore-a-backup-from-the-command-line) into the four-gate,
+staged-atomic form. The 2026-09-02 consistency review (36f3af6) touched this file's import wording
+but not the restore contract. So the restore half here is the stale side of an adjudicated change —
+the same posture as T091's `dl-tool-<UTC>.db` name.
+
+The three contradictions:
+
+1. **Schema gate name and semantics.** This file specifies `restore_schema_mismatch` — "MAX(version_id)
+   in the backup differs from the highest embedded migration" — in the contract comment, the sentinel
+   `ErrRestoreSchemaMismatch`, the seventh acceptance criterion and the Verification block's
+   `TestRestoreRefusesSchemaMismatch`. The documents say only a *newer* backup is refused, under a
+   different name: doc 17 §3.4's gate table names `restore_schema_too_new` and states "Older is
+   valid"; doc 04 §6 states the command "accepts schema versions at or below the embedded maximum;
+   boot migrates an older restore forward"; FR-146 states "refuse a backup whose schema is newer than
+   the binary ... An older schema is accepted and migrates forward at the next boot" and its Verify
+   step requires restoring an older schema and observing the forward migration. Read literally, this
+   file makes restoring an older nightly backup impossible — the exact flow FR-146, which this task
+   claims to implement, requires.
+2. **The gate set.** This file specifies three gates and repeats "the three gates" under Out of
+   scope. Doc 17 §3.4 specifies four, adding `restore_source_rejected` — resolve to a regular file
+   inside `DLTOOL_CONFIG_DIR`, rejecting the live database, lock and sidecars. This file requires the
+   path check ("src must resolve inside DLTOOL_CONFIG_DIR", step 7 "Accept only a file inside
+   DLTOOL_CONFIG_DIR") but names no refusal for it and omits the reject-live-database/lock/sidecar
+   detail.
+3. **The replacement procedure.** This file specifies "renames the current database to
+   `dl-tool.db.replaced-<UTC>.bak`, copies the backup into place with mode 0600, removes any stale
+   `-wal` and `-shm`". Between that rename and the copy completing, no valid `dl-tool.db` exists; a
+   crash leaves a partial live file — the window 7925568 closed. Doc 17 §3.4 specifies a staged
+   procedure instead: copy the source to `dl-tool.db.restore-<ULID>.tmp` with `O_EXCL`, mode `0600`
+   and fsync, integrity-check the staged copy; preserve the live database through `VACUUM INTO` to
+   `dl-tool.db.replaced-<UTC>.bak`; `PRAGMA wal_checkpoint(TRUNCATE)`, close handles, remove the
+   sidecars; then atomically rename the staged file over `DLTOOL_DB_PATH` and fsync the directory —
+   "a crash yields either the complete old file or the complete checked replacement". Doc 04 §6
+   repeats that procedure, and doc 17's change log records the adjudication: "Made migration backup
+   and database restore idempotent, lock-protected and crash-safe" (2026-09-01).
+
+Every candidate diff contradicts a written requirement — the stop condition, not a judgment call:
+
+- Implementing this file literally (refuse any differing schema version, three gates,
+  rename-then-copy) violates FR-146's "older schema is accepted", doc 04 §6's "at or below the
+  embedded maximum", doc 17 §3.4's gate names and staged procedure, and reopens the crash window the
+  adjudication closed.
+- Implementing the documents' form (four gates, `restore_schema_too_new`, staged rename) overrides
+  this file's interface contract, the `ErrRestoreSchemaMismatch` sentinel, the seventh acceptance
+  criterion and the Verification block's named tests.
+- A hybrid (this file's refusal names over the documents' semantics) still overrides doc 17 §3.4's
+  `restore_schema_too_new` name and the contract's "differs" language.
+
+The export/import half is unaffected: `ExportDocument`, `ImportInput`, `ImportReport` and the
+conflict keys match doc 05 §11.5. The task still cannot land partially — the Definition of Done ties
+the code, the Evidence and both index flips to one commit, and this file's Verification requires
+`TestRestoreRefusesSchemaMismatch` and `TestRestoreRefusesRunningServer` to PASS in that commit.
+
+Remedies — either unblocks the task:
+
+1. Restate this file's restore half in the adjudicated form: four gates with doc 17's refusal names
+   (`restore_server_running`, `restore_source_rejected`, `restore_schema_too_new` refusing only a
+   backup newer than the embedded maximum, `restore_integrity_failed`), the §3.4 staged procedure or
+   an explicitly equivalent crash-safe sequence, and update the sentinels, steps 6–8, the acceptance
+   criteria and the Verification block's test names to match.
+2. Or rule that this file's contract is the intended spec and re-adjudicate the docs: doc 17 §3.4's
+   gate table and five-step procedure plus its change log, doc 04 §6's "at or below the embedded
+   maximum" sentence and procedure paragraph, and FR-146's "newer than the binary" / "older schema is
+   accepted" / Verify wording — noting that this reverses the recorded crash-safety fix and removes
+   the documented older-backup restore path.
+
+The file that should answer it: this task file, after the owner picks 1 or 2.
+
+Rerunnable evidence on this commit:
+
+```bash
+# This file's contract: three gates, mismatch-on-difference, rename-then-copy.
+grep -n -E "restore_|RestoreFrom|three gates|differs" \
+  docs/tasks/T108-settings-export-import-and-restore.md
+
+# The adjudicated docs: four gates, too-new-only, staged atomic procedure.
+grep -n -E "restore_schema_too_new|restore_source_rejected|Older is valid|embedded maximum" \
+  docs/17-operations-and-runbook.md docs/04-data-model.md
+grep -n -E "newer than the binary|[Oo]lder schema|forward migration" docs/02-requirements.md
+
+# Ordering: this contract predates the crash-safe adjudication.
+git merge-base --is-ancestor 7134d6e 7925568 && echo "task contract predates adjudication"
+```
+
+### 2026-09-23 — verified on cc90704, row set to `deferred`
+
+The blocker is unchanged on cc90704, the head of `main` at evaluation time. Re-running the evidence
+block above prints the same three facts: this file's contract still specifies three gates,
+`restore_schema_mismatch` on any differing version and rename-then-copy; docs 17 §3.4 and 04 §6
+still specify four gates, `restore_schema_too_new` (older valid) and the staged atomic procedure;
+FR-146 still requires accepting an older schema and migrating it forward. Neither remedy above has
+been picked.
+
+Additions to the record:
+
+- The picker takes the topmost eligible `todo` row, and T108 heads the eligible set, so leaving it
+  `todo` re-selects it on every iteration. The row is set to `deferred`, the status the picker skips
+  (the T091 precedent, #267), so the queue can proceed to T110 — whose `Depends on` is all `done` —
+  and the other eligible rows. This chooses neither remedy: the owner still decides, and
+  un-deferring is a one-word flip back to `todo`. FR-145 and FR-146 stay `must`; the deferral parks
+  the task rather than waiving the requirements.
+- Downstream impact is nil beyond what already stands: the only dependent is T121 (`Depends on`:
+  T053, T091, T092, T096, T108), and it is already unreachable behind T091's deferral through
+  T092/T096. T110, T111 and T120 are eligible without T108.
+- Reactivation trigger: flip both T108 rows in `00-task-index.md` — the `## M6` milestone-table row
+  and the `## Roster` detail-table row — and this file's `**Status**` row back to `todo` in the same
+  change that lands the chosen remedy (remedy 1 rewrites this file; remedy 2 re-adjudicates doc 17
+  §3.4, doc 04 §6 and FR-146), so the deferral cannot outlive its cause.
+- T108 sits in M6, whose exit checkpoint ("auto-extract, the watch folder and the 24×7 grid all work
+  end to end") does not name restore — but the plan-wide Definition of Done requires every row
+  `done` or `deferred`, so this record is where the gap stays visible until the owner rules.
