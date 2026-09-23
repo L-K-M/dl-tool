@@ -234,7 +234,7 @@ Notes for the record, neither a `## Blocked`:
   what FR-097 states.
 - **The PATCH rate path still bypasses the chain** (`internal/api/tasks_actions.go`
   calls the package-level `engine.ApplyTask` directly). Rerouting it through
-  `Governor.ApplyTask` needs that file — and probably `server.go` wiring to hand
+  `Governor.ApplyTask` needs that file — and `server.go` wiring to hand
   the handler a governor — both outside this Files table. The gap: a PATCH can
   push raw per-task values during a `0` cell or above the active cell/global bound
   until the next tick. Same family as F125; it belongs to whichever task owns the
