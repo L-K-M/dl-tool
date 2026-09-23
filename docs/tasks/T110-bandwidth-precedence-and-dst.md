@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T110 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T079, T080, T081, T082 |
 | **Blocks** | T118 |
 | **Parallel-safe** | no — extends `internal/engine/bandwidth.go` and `internal/jobs/cron.go` |
@@ -108,13 +108,13 @@ at the moment of the call, so the UI can display both beside the grid and in the
 8. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `Effective` is the only implementation of the precedence chain in the repository.
-- [ ] The worked case yields `1048576`, the per-task value.
-- [ ] `0` is excluded from the minimum, not treated as the smallest value.
-- [ ] All three terms `0` yields `0`, meaning unlimited.
-- [ ] A `No Download` cell pauses; no engine ever receives a near-zero rate.
-- [ ] The repeated DST hour applies its cell twice and the skipped hour not at all, in `Europe/Zurich`.
-- [ ] `GET /settings/schedule` reports the active time-zone name.
+- [x] `Effective` is the only implementation of the precedence chain in the repository.
+- [x] The worked case yields `1048576`, the per-task value.
+- [x] `0` is excluded from the minimum, not treated as the smallest value.
+- [x] All three terms `0` yields `0`, meaning unlimited.
+- [x] A `No Download` cell pauses; no engine ever receives a near-zero rate.
+- [x] The repeated DST hour applies its cell twice and the skipped hour not at all, in `Europe/Zurich`.
+- [x] `GET /settings/schedule` reports the active time-zone name.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -150,7 +150,88 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG="./internal/engine/... ./internal/jobs/... ./internal/api/..." && echo PRECEDENCE_OK`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/engine/... ./internal/jobs/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	36.047s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.337s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.005s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	30.582s
+ok  	github.com/L-K-M/dl-tool/internal/api	172.653s
+PRECEDENCE_OK
+```
+
+The seven named tests, from a `-v` run of the same tree:
+
+```
+=== RUN   TestEffectiveWorkedCase
+--- PASS: TestEffectiveWorkedCase (0.00s)
+=== RUN   TestZeroExcludedFromMin
+--- PASS: TestZeroExcludedFromMin (0.00s)
+=== RUN   TestAllZeroIsUnlimited
+--- PASS: TestAllZeroIsUnlimited (0.00s)
+=== RUN   TestNoDownloadPausesNotThrottles
+--- PASS: TestNoDownloadPausesNotThrottles (0.41s)
+=== RUN   TestScheduleReportsTimezone
+--- PASS: TestScheduleReportsTimezone (0.43s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine	1.944s
+=== RUN   TestDSTRepeatedHourAppliedTwice
+--- PASS: TestDSTRepeatedHourAppliedTwice (0.53s)
+=== RUN   TestDSTSkippedHourNeverApplied
+--- PASS: TestDSTSkippedHourNeverApplied (0.61s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/jobs	2.203s
+```
+
+Scope:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/api/settings_schedule.go
+internal/engine/bandwidth.go
+internal/engine/bandwidth_test.go
+internal/jobs/cron.go
+internal/jobs/cron_test.go
+```
+
+Exactly the Files table and nothing else.
+
+Notes for the record, neither a `## Blocked`:
+
+- **`TestScheduleReportsTimezone` lives in `internal/engine/bandwidth_test.go`, not
+  `cron_test.go`.** Step 7 groups the schedule-response assertion with the DST tests,
+  but `package jobs` cannot import `internal/api` — api imports jobs, so the test
+  would be an import cycle. `bandwidth_test.go` is `package engine_test`, an external
+  test package that may import api legally, and `api.NewSettingsHandlers(db, reg)`
+  plus `GetSchedule` is the exported seam the assertion needs — no HTTP or auth
+  plumbing. The test sets `time.Local` to `Europe/Zurich` and asserts the response
+  body's `timezone` and `active_mode`.
+- **`Governor.ApplyTask` takes `store.Task`.** T082's method signature
+  `(ctx, engineTaskID, down, up)` could not route through `Resolve` — it had no task
+  term. The raw fan-out survives unchanged as the package-level `engine.ApplyTask`,
+  which the PATCH handler (`internal/api/tasks_actions.go`, outside this Files
+  table) still calls; the Governor method now resolves `min(cell, global, task)`
+  and pushes through that same fan-out, so the engine call and read-back still live
+  in exactly one place.
+- **F125 stays open.** A task *created* inside a `0` cell is still not re-parked by
+  the minute tick — `ApplyMode` is idempotent within a cell and `parkAll` only runs
+  on the transition. T110's `parkTask` covers the per-task apply path: a task
+  applied during a `0` cell resolves `pause` and parks through the T081
+  bookkeeping. The DST tests assert the cell's effect at tick granularity, which is
+  what FR-097 states.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

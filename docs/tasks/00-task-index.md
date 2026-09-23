@@ -200,7 +200,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T106](T106-notification-channel-endpoints.md) | Manage notification channels and test one | T077, T084 | done |
 | [T107](T107-tag-and-watch-folder-endpoints.md) | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | done |
 | [T108](T108-settings-export-import-and-restore.md) | Export and import portable settings, and restore from the CLI | T080, T106, T107 | deferred |
-| [T110](T110-bandwidth-precedence-and-dst.md) | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | todo |
+| [T110](T110-bandwidth-precedence-and-dst.md) | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | done |
 | [T111](T111-delete-data-and-hardlink-safety.md) | Delete downloaded data safely and prove hardlink survival | T023, T076 | todo |
 | [T117](T117-rss-settings-section.md) | Build the RSS settings section | T053, T065, T066, T068, T092 | todo |
 | [T118](T118-bandwidth-settings-and-schedule-grid.md) | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | todo |
@@ -408,7 +408,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T106 | Manage notification channels and test one | T077, T084 | no | done | [T106](T106-notification-channel-endpoints.md) |
 | T107 | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | yes | done | [T107](T107-tag-and-watch-folder-endpoints.md) |
 | T108 | Export and import portable settings, and restore from the CLI | T080, T106, T107 | no | deferred | [T108](T108-settings-export-import-and-restore.md) |
-| T110 | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | no | todo | [T110](T110-bandwidth-precedence-and-dst.md) |
+| T110 | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | no | done | [T110](T110-bandwidth-precedence-and-dst.md) |
 | T111 | Delete downloaded data safely and prove hardlink survival | T023, T076 | no | todo | [T111](T111-delete-data-and-hardlink-safety.md) |
 | T117 | Build the RSS settings section | T053, T065, T066, T068, T092 | no | todo | [T117](T117-rss-settings-section.md) |
 | T118 | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | no | todo | [T118](T118-bandwidth-settings-and-schedule-grid.md) |

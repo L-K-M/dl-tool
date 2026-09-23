@@ -56,6 +56,28 @@ const (
 	ModeAlternative Mode = "alternative"
 )
 
+// Effective resolves one direction of the precedence chain of
+// docs/06-download-engines.md section 10 — the single implementation of
+// it, so no handler, adapter or job re-derives a rate.
+//
+//	effective = min(cell, global, task)
+//
+// in bytes per second. 0 means unlimited and is EXCLUDED from the min();
+// if every term is 0 the result is 0, meaning unlimited. A
+// ModeNoDownload cell is not a rate at all: Effective reports pause true
+// and the caller pauses the task instead of sending one.
+func Effective(mode Mode, cell, global, task int64) (rate int64, pause bool) {
+	if mode == ModeNoDownload {
+		return 0, true
+	}
+	for _, term := range []int64{cell, global, task} {
+		if term > 0 && (rate == 0 || term < rate) {
+			rate = term
+		}
+	}
+	return rate, false
+}
+
 // Governor owns the global bandwidth state and is the only caller of
 // Engine.SetRateLimits with an empty id. The registry is the enabled set:
 // the composition root registers exactly the engines the environment
@@ -133,14 +155,22 @@ func (g *Governor) ApplyGlobal(ctx context.Context, l RateLimits) error {
 	g.mu.Lock()
 	mode := g.mode
 	g.mu.Unlock()
-	if mode == ModeAlternative {
+	switch mode {
+	case ModeNoDownload:
+		// The active cell is a pause, not a rate: a global write fans
+		// nothing out. The cell change re-reads the settings rows, so
+		// the stored pair still lands then — and Current keeps
+		// reporting what the engines actually run until it does.
+		slog.DebugContext(ctx, "engine: global rate-limit write deferred by the no-download cell")
+		return nil
+	case ModeAlternative:
 		// A write during an alternative cell must not leave the
 		// engines on the global pair until the cell changes —
-		// re-apply the pair the cell names.
+		// re-resolve the chain so the cell term still bounds them.
 		return g.applyCellLimits(ctx, mode)
+	default:
+		return g.applyGlobal(ctx, l)
 	}
-
-	return g.applyGlobal(ctx, l)
 }
 
 // applyGlobal is ApplyGlobal's body, callable with applyMu already held
@@ -304,29 +334,49 @@ func (g *Governor) ApplyMode(ctx context.Context, m Mode) error {
 	return nil
 }
 
-// applyCellLimits fans out the limit pair a Default or Alternative cell
-// names and then releases the parked set — the limits land first so a
-// resumed task never runs one engine call under the stale pair.
+// applyCellLimits resolves the pair the cell of m names through the
+// precedence chain — min(cell, global) per direction, the task term
+// absent from a global fan-out — pushes it and then releases the parked
+// set: the limits land first so a resumed task never runs one engine
+// call under the stale pair.
 func (g *Governor) applyCellLimits(ctx context.Context, m Mode) error {
-	var l RateLimits
-	var err error
-	if m == ModeAlternative {
-		l, err = g.loadLimits(
-			ctx, settingAltDownloadRateLimit, settingAltUploadRateLimit,
-			defaultAltDownloadRateLimit, defaultAltUploadRateLimit,
-		)
-	} else {
-		l, err = g.loadLimits(ctx, settingDownloadRateLimit, settingUploadRateLimit, 0, 0)
+	cell, err := g.cellLimits(ctx, m)
+	if err != nil {
+		return err
 	}
+	global, err := g.loadLimits(ctx, settingDownloadRateLimit, settingUploadRateLimit, 0, 0)
 	if err != nil {
 		return err
 	}
 
-	if err := g.applyGlobal(ctx, l); err != nil {
+	if err := g.applyGlobal(ctx, effectiveLimits(m, cell, global)); err != nil {
 		return err
 	}
 
 	return g.resumeParked(ctx)
+}
+
+// cellLimits returns the pair the cell of m names: the stored
+// alternative pair for ModeAlternative, the stored global pair for every
+// other mode — Default or the pre-apply state, where the cell term and
+// the global term are the same pair.
+func (g *Governor) cellLimits(ctx context.Context, m Mode) (RateLimits, error) {
+	if m == ModeAlternative {
+		return g.loadLimits(ctx, settingAltDownloadRateLimit, settingAltUploadRateLimit,
+			defaultAltDownloadRateLimit, defaultAltUploadRateLimit)
+	}
+	return g.loadLimits(ctx, settingDownloadRateLimit, settingUploadRateLimit, 0, 0)
+}
+
+// effectiveLimits resolves the engine-global pair of a Default or
+// Alternative cell: min(cell, global) per direction, the task term
+// absent — a global fan-out has no task. The pause Effective reports
+// for a No Download cell is unreachable here: ApplyMode sends that cell
+// to parkAll instead.
+func effectiveLimits(m Mode, cell, global RateLimits) RateLimits {
+	down, _ := Effective(m, cell.Down, global.Down, 0)
+	up, _ := Effective(m, cell.Up, global.Up, 0)
+	return RateLimits{Down: down, Up: up}
 }
 
 // pausableTask is one parked-set candidate: the task id's engine name
@@ -410,31 +460,60 @@ func (g *Governor) parkAll(ctx context.Context) error {
 
 	var errs []error
 	for id, task := range pausable {
-		if task.ref != nil && task.live {
-			e, ok := g.reg.Get(task.engine)
-			if !ok {
-				errs = append(errs, fmt.Errorf("task %s: %w: %s is not registered", id, ErrUnavailable, task.engine))
-				continue
-			}
-			// The handle is the engine-namespaced form — "aria2:<gid>",
-			// the TaskInfo.ID shape; the adapter strips its own
-			// namespace. A handle the engine already forgot is gone, not
-			// a pause failure: park the row and let the reconciler sort
-			// out the rest.
-			if err := e.Pause(ctx, namespacedHandle(task.engine, *task.ref)); err != nil && !errors.Is(err, ErrNotFound) {
-				errs = append(errs, fmt.Errorf("task %s: %w", id, err))
-				continue
-			}
-		}
-
-		if err := g.tasks.ScheduleParked(ctx, id); err != nil &&
-			!errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrIllegalTransition) &&
-			!errors.Is(err, store.ErrTransitionConflict) {
-			errs = append(errs, fmt.Errorf("task %s: %w", id, err))
+		if err := g.parkOne(ctx, id, task); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
 	return errors.Join(errs...)
+}
+
+// parkOne pauses one parked-set candidate engine-side when its transfer
+// may be live, then moves the row into the parked set. Engine first, so
+// an engine failure leaves the state untouched — a task whose engine
+// refuses is not parked and is retried on the next tick. A candidate
+// that vanished or moved on between the scan and the park is skipped:
+// its outcome — gone or already out of the pausable states — is the one
+// the cell wanted.
+func (g *Governor) parkOne(ctx context.Context, id string, task pausableTask) error {
+	if task.ref != nil && task.live {
+		e, ok := g.reg.Get(task.engine)
+		if !ok {
+			return fmt.Errorf("task %s: %w: %s is not registered", id, ErrUnavailable, task.engine)
+		}
+		// The handle is the engine-namespaced form — "aria2:<gid>",
+		// the TaskInfo.ID shape; the adapter strips its own
+		// namespace. A handle the engine already forgot is gone, not
+		// a pause failure: park the row and let the reconciler sort
+		// out the rest.
+		if err := e.Pause(ctx, namespacedHandle(task.engine, *task.ref)); err != nil && !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("task %s: %w", id, err)
+		}
+	}
+
+	if err := g.tasks.ScheduleParked(ctx, id); err != nil &&
+		!errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrIllegalTransition) &&
+		!errors.Is(err, store.ErrTransitionConflict) {
+		return fmt.Errorf("task %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// parkTask is the No Download branch of ApplyTask: the same engine
+// pause and parked-set move the cell's parkAll runs, for the one task
+// whose resolve reported pause. A nil TaskStore fails closed before any
+// engine is touched, the same refusal parkAll makes — parking without
+// the store would strand an id nothing can resume.
+func (g *Governor) parkTask(ctx context.Context, t store.Task) error {
+	if g.tasks == nil {
+		return errors.New("engine: governor has no task store; refusing a no-download pause")
+	}
+
+	return g.parkOne(ctx, t.ID, pausableTask{
+		engine: t.Engine, ref: t.EngineRef,
+		live: t.State == "downloading" || t.State == "checking",
+	})
 }
 
 // resumeParked releases the parked set on a change away from
@@ -472,13 +551,70 @@ func (g *Governor) resumeParked(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// ApplyTask is the Governor method of the T082 contract; it delegates to
-// the package-level ApplyTask because the call consumes only the
-// registry — Current, Mode, the settings rows and the parked-set store
-// are the global pair's bookkeeping, none of which a per-task apply
-// reads — and takes no lock for the same reason.
-func (g *Governor) ApplyTask(ctx context.Context, engineTaskID string, down, up *int64) error {
-	return ApplyTask(ctx, g.reg, engineTaskID, down, up)
+// Resolve computes both directions of the precedence chain for one task
+// — the call ApplyTask makes, so a stored per-task limit reaches an
+// engine only through min(cell, global, task). The mode selects the
+// cell pair: ModeAlternative reads the stored alternative pair, every
+// other mode — Default or the pre-apply state — the stored global pair;
+// the global term is always download_rate_limit / upload_rate_limit. A
+// ModeNoDownload cell is a pause, not a rate, and nothing is sent.
+// A pair the settings table cannot answer degrades to the pair last
+// fanned out — never weaker than what the engines already enforce,
+// where a guessed 0 would silently unthrottle.
+func (g *Governor) Resolve(ctx context.Context, t store.Task) (l RateLimits, pause bool) {
+	g.mu.Lock()
+	mode := g.mode
+	g.mu.Unlock()
+	if mode == ModeNoDownload {
+		return RateLimits{}, true
+	}
+
+	global, err := g.loadLimits(ctx, settingDownloadRateLimit, settingUploadRateLimit, 0, 0)
+	if err != nil {
+		global = g.fallbackLimits(ctx, err)
+	}
+	cell := global
+	if mode == ModeAlternative {
+		cell, err = g.loadLimits(ctx, settingAltDownloadRateLimit, settingAltUploadRateLimit,
+			defaultAltDownloadRateLimit, defaultAltUploadRateLimit)
+		if err != nil {
+			cell = g.fallbackLimits(ctx, err)
+		}
+	}
+
+	down, pauseDown := Effective(mode, cell.Down, global.Down, t.DLLimit)
+	up, pauseUp := Effective(mode, cell.Up, global.Up, t.ULLimit)
+
+	return RateLimits{Down: down, Up: up}, pauseDown || pauseUp
+}
+
+// fallbackLimits substitutes the pair last fanned out when the settings
+// row Resolve wanted is unreadable.
+func (g *Governor) fallbackLimits(ctx context.Context, err error) RateLimits {
+	slog.WarnContext(ctx, "engine: stored rate limits unreadable; resolving against the applied pair", "err", err)
+	return g.Current()
+}
+
+// ApplyTask is the Governor method of the T110 contract: Resolve decides
+// what the chain allows — min(cell, global, task) per direction — and
+// the result is what the engine hears, so no caller computes a rate
+// itself. A No Download cell is a pause, not a rate: Resolve reports
+// pause and the task is parked through the T081 bookkeeping instead of
+// one being sent. A task the admission pass has not handed an engine
+// yet has no handle to push to; its stored limits apply at admission.
+// The push itself delegates to the package-level ApplyTask of T082 —
+// the raw fan-out the PATCH handler also uses — so the engine call and
+// its read-back live in exactly one place.
+func (g *Governor) ApplyTask(ctx context.Context, t store.Task) error {
+	l, pause := g.Resolve(ctx, t)
+	if pause {
+		return g.parkTask(ctx, t)
+	}
+	if t.EngineRef == nil {
+		return nil
+	}
+
+	return ApplyTask(ctx, g.reg, namespacedHandle(t.Engine, *t.EngineRef), &l.Down, &l.Up)
 }
 
 // ApplyTask pushes a per-task limit to the engine that owns the task, in
