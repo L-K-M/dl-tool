@@ -1282,8 +1282,14 @@ func preserveWALBeside(source, databaseDir, finalPath string) error {
 
 	_, copyErr := io.Copy(temporaryFile, wal)
 	syncErr := temporaryFile.Sync()
-	if err := errors.Join(copyErr, syncErr, wal.Close(), temporaryFile.Close()); err != nil {
+	walCloseErr := wal.Close()
+	if err := errors.Join(copyErr, syncErr, temporaryFile.Close()); err != nil {
 		return removeTemporaryBackup(temporaryPath, fmt.Errorf("store: copy preserve WAL %q: %w", source+"-wal", err))
+	}
+	// The copied frames are already durable; a close hiccup on the
+	// read-only live WAL must not abort the restore.
+	if walCloseErr != nil {
+		slog.Warn("store: closing live WAL after copy preserve", "path", source+"-wal", "err", walCloseErr)
 	}
 	if err := os.Chmod(temporaryPath, databaseFileMode); err != nil {
 		return removeTemporaryBackup(temporaryPath, fmt.Errorf("store: secure WAL backup: %w", err))

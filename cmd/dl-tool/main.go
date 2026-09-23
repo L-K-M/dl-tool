@@ -112,7 +112,13 @@ func main() {
 			// a named variable released when OnStart returns at shutdown.
 			processLock, lockErr := store.AcquireProcessLock(cfg.DBPath)
 			if lockErr != nil {
-				logger.Error("database lock failed", "err_code", "database_locked", "err", lockErr)
+				// database_locked names the held-flock refusal; a
+				// directory or open failure is a different fault.
+				errCode := "database_locked"
+				if !errors.Is(lockErr, store.ErrDatabaseLocked) {
+					errCode = "database_lock_failed"
+				}
+				logger.Error("database lock failed", "err_code", errCode, "err", lockErr)
 				os.Exit(exitFailure)
 			}
 			defer processLock.Release()
