@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T091 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | deferred — see `## Blocked` |
 | **Depends on** | T006, T012, T066 |
 | **Blocks** | T092, T121 |
 | **Parallel-safe** | no — it edits `internal/jobs/cron.go` and `internal/api/server.go` |
@@ -171,6 +171,105 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 <Agent pastes command output here before marking done.>
+
+## Blocked — 2026-09-23: the `## Files` table lacks the wiring file and the store test file
+
+The `dl-tool.db.<UTC>.bak` remedy below resolved the naming contradiction; the contract is now
+self-consistent. Implementing it still cannot stay inside `## Files`: two files the work
+requires are not listed.
+
+### Gap 1 — `cmd/dl-tool/main.go`: the nightly entries cannot be armed
+
+Step 8 puts three entries on T066's `Scheduler`: the `0 3 * * *` backup + `PruneBackups(7)` +
+the two nightly prunes, and `@hourly` `PruneSearchJobs`. The nightly entry calls
+`BackupInto(ctx, dir)` / `PruneBackups(ctx, dir, 7)` where `dir` is the backup directory —
+`filepath.Join(cfg.ConfigDir, "backups")`, the same join `store.Open` receives at
+`cmd/dl-tool/main.go:105` and step 6 hands the API handler from `cfg.ConfigDir`.
+
+`NewScheduler(db, log)` is called exactly once, at `cmd/dl-tool/main.go:288`, chained with
+`WithGovernor`/`WithWatcher` — the attach pattern this task would extend. That file is not in
+`## Files`, and every in-table route to the directory fails:
+
+- `*sqlx.DB` exposes no DSN, and `filepath.Dir(cfg.DBPath)` is not the backup dir:
+  `DLTOOL_DB_PATH` is validated independently of `DLTOOL_CONFIG_DIR`
+  (`internal/config/config.go` — "the database may live elsewhere"), while backups are
+  defined as `ConfigDir/backups` (doc 04 §6's `/config/backups/`).
+- `store.Open`'s `backupDir` parameter is retained nowhere reachable; recording it would edit
+  `internal/store/db.go` — also outside the table.
+- No `settings` row carries a config path; the migrations seed only `max_active_total`,
+  `max_active_per_engine` and `min_free_space`.
+- Re-reading `DLTOOL_CONFIG_DIR` inside `internal/jobs` bypasses `config.Load`'s
+  validation and normalisation and duplicates its default — a second parser for a setting
+  the config package owns.
+- Arming the entries with no directory — a `WithMaintenance` nothing calls — leaves the
+  nightly job dead, the §8.3 "built and never wired" defect the acceptance criteria exist
+  to forbid.
+- The only in-table wiring — a second `Scheduler` owned by `api.NewServer` — is production
+  architecture no document describes: it either double-registers `rss_poll` on a second cron
+  runtime or needs a maintenance-only Start variant, and both exceed "add three entries to
+  T066's `Scheduler`".
+
+This is F087's defect class — an entry with no legal call site — and the documented remedy is
+the same one T083's repaired table shows: a `cmd/dl-tool/main.go` row for the attach.
+
+### Gap 2 — `internal/store/maintenance_test.go`: four Verification tests have no home
+
+F607 already recorded this: Verification expects `TestBackupIntoIsConsistent`,
+`TestBackupNamesNeverCollide`, `TestPruneBackupsKeepsSeven` and
+`TestPruneTaskEventsRespectsWindow` under `github.com/L-K-M/dl-tool/internal/store`, but the
+Files table's only test file is `internal/api/system_test.go`, whose stated purpose is the
+step-10 API cases ("Success, conflict and partial-file cases"). The four store-level tests
+would compile in package `api`, but housing them there widens the file beyond its listed
+purpose — the narrower-scope recording the Files-table rule exists to prevent.
+
+### Remedies — either unblocks the task
+
+1. Add two rows to `## Files` — `internal/store/maintenance_test.go | create` for the four
+   store-level cases, and `cmd/dl-tool/main.go | edit` to attach the maintenance store and
+   `filepath.Join(cfg.ConfigDir, backupsDirName)` to the scheduler chain beside
+   `WithGovernor`/`WithWatcher` — plus a step-8 clause naming that call site. The same
+   `*store.MaintenanceStore` should go to the scheduler and `NewSystemHandlers` so the
+   `ErrBackupRunning` lock spans the cron entry and `POST /system/backup`.
+2. Or rule that the maintenance entries run on a dedicated `Scheduler` inside
+   `internal/api/server.go` — a composition root doc 14 §8.3 names — and say so in step 8.
+   The store test file is needed under either remedy.
+
+Worth settling in the same repair: the contract's `(s *Store)` receiver. The aggregate
+`store.Store` does not exist (F086/F601); the merged precedent substitutes the concrete
+domain store — here `MaintenanceStore`, matching `TaskStore`/`SettingsStore` — which is what
+an implementation will produce regardless. Naming it removes one more planned-vs-merged
+drift.
+
+Rerunnable evidence on this commit:
+
+```bash
+# The only Scheduler construction site — outside the Files table.
+grep -rn "NewScheduler(" cmd/ internal/ --include="*.go" | grep -v _test
+
+# The backup dir exists only as a ConfigDir join in the composition root.
+grep -n "backupsDirName" cmd/dl-tool/main.go
+
+# DBPath is independent of ConfigDir — Dir(db) is not the backup dir.
+grep -n "envDBPath\|filepath.Dir(cfg.DBPath)" internal/config/config.go
+
+# The Files table and the test file the Verification names but omits.
+sed -n '/^## Files/,/^No other/p' docs/tasks/T091-database-backup-and-retention.md
+```
+
+### Deferral mechanics — same shape as the first record
+
+- The picker takes the topmost eligible `todo` row and T091 heads the eligible set, so
+  leaving it `todo` re-selects it on every iteration. The row is set to `deferred` — the
+  status the picker skips — in this file's `**Status**` cell and both `00-task-index.md`
+  rows (the T078/#250 precedent, and the first T091 deferral, #267). This chooses neither
+  remedy; un-deferring flips the same three cells back to `todo`.
+- The deferral stalls T092 — its `Depends on` names T091 — and through it T096, T117, T118,
+  T119 and T121, exactly as the first record walked. Eligible with T091 parked: T108 (T080,
+  T106, T107 all `done`), T120 (T053, T084, T106) and the M7 yt-dlp chain T087→T089→T090.
+- Reactivation trigger: flip both index rows and the `**Status**` cell back to `todo` in the
+  same change that lands the chosen remedy, so the deferral cannot outlive its cause.
+- M6's exit checkpoint still cannot exit while this deferral stands; the gap stays visible
+  through this record and the checkpoint.
 
 ## Blocked — resolved
 

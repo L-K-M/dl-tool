@@ -195,7 +195,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T082](T082-live-per-task-rate-limits.md) | Apply a per-task rate limit to a running task | T022, T037, T079 | done |
 | [T083](T083-watch-folder-loader.md) | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | done |
 | [T084](T084-api-tokens.md) | Issue, list and revoke API tokens | T008, T009 | done |
-| [T091](T091-database-backup-and-retention.md) | Back up the database on demand and prune on a schedule | T006, T012, T066 | todo |
+| [T091](T091-database-backup-and-retention.md) | Back up the database on demand and prune on a schedule | T006, T012, T066 | deferred |
 | [T092](T092-settings-and-system-info.md) | Serve settings and system info without leaking secrets | T005, T027, T091 | todo |
 | [T106](T106-notification-channel-endpoints.md) | Manage notification channels and test one | T077, T084 | done |
 | [T107](T107-tag-and-watch-folder-endpoints.md) | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | done |
@@ -403,7 +403,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T082 | Apply a per-task rate limit to a running task | T022, T037, T079 | no | done | [T082](T082-live-per-task-rate-limits.md) |
 | T083 | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | no | done | [T083](T083-watch-folder-loader.md) |
 | T084 | Issue, list and revoke API tokens | T008, T009 | yes | done | [T084](T084-api-tokens.md) |
-| T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | todo | [T091](T091-database-backup-and-retention.md) |
+| T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | deferred | [T091](T091-database-backup-and-retention.md) |
 | T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | todo | [T092](T092-settings-and-system-info.md) |
 | T106 | Manage notification channels and test one | T077, T084 | no | done | [T106](T106-notification-channel-endpoints.md) |
 | T107 | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | yes | done | [T107](T107-tag-and-watch-folder-endpoints.md) |
