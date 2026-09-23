@@ -223,27 +223,32 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	182.032s
-ok  	github.com/L-K-M/dl-tool/internal/store	76.196s
+ok  	github.com/L-K-M/dl-tool/internal/api	186.251s
+ok  	github.com/L-K-M/dl-tool/internal/store	79.357s
 BACKUP_OK
 ```
 
 Named tests (verbose run, each `--- PASS`):
 
 ```
-$ go test -race -count=1 -v ./internal/api/ -run 'TestExportExcludesEverySecret|TestExportImportRoundTrip|TestDryRunWritesNothing|TestImportIsTransactional|TestNewerDocumentVersionConflict|TestRestoreRefusesRunningServer|TestRestoreRejectsForeignSource|TestRestoreRefusesSchemaTooNew|TestRestoreRefusesCorrupt|TestRestoreAcceptsOlderSchema|TestRestoreFailureLeavesOriginal'
---- PASS: TestExportExcludesEverySecret (0.47s)
---- PASS: TestExportImportRoundTrip (1.08s)
---- PASS: TestDryRunWritesNothing (1.25s)
---- PASS: TestImportIsTransactional (1.08s)
---- PASS: TestNewerDocumentVersionConflict (0.44s)
---- PASS: TestRestoreRefusesRunningServer (0.50s)
---- PASS: TestRestoreRejectsForeignSource (0.51s)
---- PASS: TestRestoreRefusesSchemaTooNew (0.59s)
+$ go test -race -count=1 -v ./internal/api/... ./internal/store/... -run 'TestExportExcludesEverySecret|TestExportImportRoundTrip|TestDryRunWritesNothing|TestImportIsTransactional|TestNewerDocumentVersionConflict|TestRestoreRefusesRunningServer|TestRestoreRefusesWhileServerLockHeld|TestRestoreRejectsForeignSource|TestRestoreRefusesSchemaTooNew|TestRestoreRefusesCorrupt|TestRestoreReplacesCorruptDatabase|TestRestoreAcceptsOlderSchema|TestRestoreFailureLeavesOriginal|TestProcessLockCreatesDatabaseDirectory|TestRejectRowErrorMapsSchemaConstraints'
+--- PASS: TestExportExcludesEverySecret (0.46s)
+--- PASS: TestExportImportRoundTrip (1.06s)
+--- PASS: TestDryRunWritesNothing (1.21s)
+--- PASS: TestImportIsTransactional (1.05s)
+--- PASS: TestNewerDocumentVersionConflict (0.39s)
+--- PASS: TestRestoreRefusesRunningServer (0.53s)
+--- PASS: TestRestoreRejectsForeignSource (0.59s)
+--- PASS: TestRestoreRefusesSchemaTooNew (0.57s)
 --- PASS: TestRestoreRefusesCorrupt (0.37s)
---- PASS: TestRestoreAcceptsOlderSchema (1.08s)
---- PASS: TestRestoreFailureLeavesOriginal (0.85s)
-ok  	github.com/L-K-M/dl-tool/internal/api	9.532s
+--- PASS: TestRestoreAcceptsOlderSchema (0.98s)
+--- PASS: TestRestoreFailureLeavesOriginal (0.91s)
+--- PASS: TestRejectRowErrorMapsSchemaConstraints (0.41s)
+--- PASS: TestRestoreRefusesWhileServerLockHeld (0.83s)
+--- PASS: TestProcessLockCreatesDatabaseDirectory (0.00s)
+--- PASS: TestRestoreReplacesCorruptDatabase (0.67s)
+ok  	github.com/L-K-M/dl-tool/internal/api	11.528s
+ok  	github.com/L-K-M/dl-tool/internal/store	1.073s [no tests to run]
 ```
 
 Scope check:
