@@ -399,9 +399,11 @@ func (h *WatchFolderHandlers) Scan(ctx context.Context, in *ScanWatchFolderInput
 		}
 		// A directory deleted or denied between the folder's creation and
 		// this scan is operator-fixable — repoint or delete the row — so
-		// the answer is 422, not a server error.
+		// the answer is 422, not a server error. Any other read failure
+		// (I/O errors and the like) is genuinely internal.
 		var pathErr *fs.PathError
-		if errors.As(err, &pathErr) {
+		if errors.As(err, &pathErr) &&
+			(errors.Is(pathErr.Err, fs.ErrNotExist) || errors.Is(pathErr.Err, fs.ErrPermission)) {
 			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity,
 				"the folder's directory could not be read: "+pathErr.Err.Error())
 		}
