@@ -253,9 +253,10 @@ Additions to the record:
   T108 and T120 follow once T106/T107 land; the M7 rows that do not pass through T091/T092
   are unaffected.
 - Reactivation trigger: flip both T091 rows in `00-task-index.md` — the `## M6`
-  milestone-table row and the `## Roster` detail-table row — back to `todo` in the same
-  change that lands the chosen remedy (remedy 1 rewrites this file; remedy 2 re-adjudicates
-  docs 04 §6, 05 §13 and 17 §3.2/§3.4), so the deferral cannot outlive its cause.
+  milestone-table row and the `## Roster` detail-table row — and this file's `**Status**`
+  row back to `todo` in the same change that lands the chosen remedy (remedy 1 rewrites
+  this file; remedy 2 re-adjudicates docs 04 §6, 05 §13 and 17 §3.2/§3.4), so the deferral
+  cannot outlive its cause.
 - M6's exit checkpoint names the settings sections, and T117–T119 need T092, which needs
   this task — so the milestone cannot exit while this deferral stands. The gap stays
   visible through this record and the checkpoint.
