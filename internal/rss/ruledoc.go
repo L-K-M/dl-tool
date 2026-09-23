@@ -193,9 +193,9 @@ func (d RuleDoc) Validate() []FieldError {
 			add("episode.filter", "%v", err)
 		case filter.IsZero():
 			// "0x;" parses to the zero EpisodeFilter, which Match reads
-			// as match-everything — the rejection newRuleEval applies at
-			// evaluation, moved here so the save path answers 422
-			// instead of storing a rule that fails every pass.
+			// as match-everything. Reject at save so the API answers 422;
+			// newRuleEval applies the same check at evaluation, so rules
+			// stored before this validation still fail closed.
 			add("episode.filter", "%q selects no season", d.Episode.Filter)
 		}
 	}
