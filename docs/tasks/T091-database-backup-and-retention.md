@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T091 |
 | **Milestone** | M6 |
-| **Status** | deferred — see `## Blocked` |
+| **Status** | deferred — see the open `## Blocked — 2026-09-23` record |
 | **Depends on** | T006, T012, T066 |
 | **Blocks** | T092, T121 |
 | **Parallel-safe** | no — it edits `internal/jobs/cron.go` and `internal/api/server.go` |
@@ -183,12 +183,13 @@ requires are not listed.
 Step 8 puts three entries on T066's `Scheduler`: the `0 3 * * *` backup + `PruneBackups(7)` +
 the two nightly prunes, and `@hourly` `PruneSearchJobs`. The nightly entry calls
 `BackupInto(ctx, dir)` / `PruneBackups(ctx, dir, 7)` where `dir` is the backup directory —
-`filepath.Join(cfg.ConfigDir, "backups")`, the same join `store.Open` receives at
-`cmd/dl-tool/main.go:105` and step 6 hands the API handler from `cfg.ConfigDir`.
+`filepath.Join(cfg.ConfigDir, "backups")`, the same join `store.Open` receives in
+`cmd/dl-tool/main.go` (the `backupsDirName` grep below) and step 6 hands the API handler
+from `cfg.ConfigDir`.
 
-`NewScheduler(db, log)` is called exactly once, at `cmd/dl-tool/main.go:288`, chained with
-`WithGovernor`/`WithWatcher` — the attach pattern this task would extend. That file is not in
-`## Files`, and every in-table route to the directory fails:
+`NewScheduler(db, log)` is called exactly once, in `cmd/dl-tool/main.go`'s OnStart, chained
+with `WithGovernor`/`WithWatcher` — the attach pattern this task would extend. That file is
+not in `## Files`, and every in-table route to the directory fails:
 
 - `*sqlx.DB` exposes no DSN, and `filepath.Dir(cfg.DBPath)` is not the backup dir:
   `DLTOOL_DB_PATH` is validated independently of `DLTOOL_CONFIG_DIR`
