@@ -232,6 +232,36 @@ Notes for the record, neither a `## Blocked`:
   applied during a `0` cell resolves `pause` and parks through the T081
   bookkeeping. The DST tests assert the cell's effect at tick granularity, which is
   what FR-097 states.
+- **The PATCH rate path still bypasses the chain** (`internal/api/tasks_actions.go`
+  calls the package-level `engine.ApplyTask` directly). Rerouting it through
+  `Governor.ApplyTask` needs that file — and probably `server.go` wiring to hand
+  the handler a governor — both outside this Files table. The gap: a PATCH can
+  push raw per-task values during a `0` cell or above the active cell/global bound
+  until the next tick. Same family as F125; it belongs to whichever task owns the
+  per-task limit write path (T118 candidates).
+- **No re-push on a loosening change.** `applyCellLimits` fans out
+  `min(cell, global)` engine-wide; a running task with a stored per-task limit
+  keeps its last (tighter) push when the cell/global pair loosens, until a PATCH
+  or re-submission re-resolves it. Conservative direction only — never a limit
+  violation. There is currently no sweep that re-applies `Resolve` to running
+  tasks; if one is wanted it is a follow-up, not this task.
+
+Review dispositions on the GLM round covering `77dbd5d`:
+
+- Applied: `queuedAdmissionPending` treats a task absent from the queued set as
+  live so the engine pause still lands (a vanished row means the task moved on
+  mid-release, and `parkOne` already swallows `ErrNotFound`); `effectiveLimits`
+  panics on `ModeNoDownload` rather than silently fanning out unlimited; the
+  unknown-mode error names the cell's local timestamp again (the `activeCell`
+  refactor had dropped the index).
+- Declined: renaming `Governor.ApplyTask` — the contract names the method and the
+  delegation is documented; clearing engine-side limits before park via nil
+  pointers — `nil` means leave-unchanged in the T082 contract and a parked
+  transfer cannot run; passing `nil` for resolved `0` — `0` must be pushed
+  verbatim as unlimited (`TestApplyTaskZeroIsUnlimited` pins it); moving
+  `TestScheduleReportsTimezone` into `internal/api`'s test package — that file is
+  outside the Files table; `time.Local` restore — already in place via
+  `t.Cleanup`; `_ "time/tzdata"` — the image installs `tzdata` (Dockerfile).
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

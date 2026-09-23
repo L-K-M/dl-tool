@@ -221,7 +221,7 @@ func (s *Scheduler) EvaluateSchedule(ctx context.Context, now time.Time) error {
 	case store.ScheduleAlternative:
 		mode = engine.ModeAlternative
 	default:
-		return fmt.Errorf("jobs: bandwidth schedule cell holds unknown mode %q", cell)
+		return fmt.Errorf("jobs: bandwidth schedule cell at %s holds unknown mode %q", now.In(time.Local), cell)
 	}
 
 	if err := s.gov.ApplyMode(ctx, mode); err != nil {

@@ -370,10 +370,14 @@ func (g *Governor) cellLimits(ctx context.Context, m Mode) (RateLimits, error) {
 
 // effectiveLimits resolves the engine-global pair of a Default or
 // Alternative cell: min(cell, global) per direction, the task term
-// absent — a global fan-out has no task. The pause Effective reports
-// for a No Download cell is unreachable here: ApplyMode sends that cell
-// to parkAll instead.
+// absent — a global fan-out has no task. A No Download cell must never
+// reach this function: ApplyMode sends it to parkAll, and resolving it
+// here would fan out {0, 0} — unlimited, the opposite of a pause — so
+// the misuse panics rather than silently unthrottling.
 func effectiveLimits(m Mode, cell, global RateLimits) RateLimits {
+	if m == ModeNoDownload {
+		panic("engine: effectiveLimits must not resolve a no-download cell")
+	}
 	down, _ := Effective(m, cell.Down, global.Down, 0)
 	up, _ := Effective(m, cell.Up, global.Up, 0)
 	return RateLimits{Down: down, Up: up}
@@ -541,7 +545,11 @@ func (g *Governor) queuedAdmissionPending(ctx context.Context, id string) (bool,
 		}
 	}
 
-	return false, nil
+	// Absent from the queued set: the row moved on between the caller's
+	// read and this scan — assume the transfer is live so the engine
+	// still hears the pause. A handle the engine already forgot answers
+	// ErrNotFound, which parkOne swallows.
+	return true, nil
 }
 
 // resumeParked releases the parked set on a change away from
