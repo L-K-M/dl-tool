@@ -323,7 +323,96 @@ func TestWatchFolderOutsideRootsRejected(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"watch_folders":[]`) {
-		t.Errorf("watch folder list = %s, want \"watch_folders\":[] — no row written", response.Body.String())
+	var list struct {
+		WatchFolders []WatchFolderView `json:"watch_folders"`
 	}
+	if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode watch folder list %q: %v", response.Body.String(), err)
+	}
+	if len(list.WatchFolders) != 0 {
+		t.Errorf("watch folders = %+v, want no row written", list.WatchFolders)
+	}
+}
+
+// TestTagPathNameDecodesOnce locks the decode-exactly-once invariant:
+// chi has already unescaped the path segment, so tagPathName must answer
+// the decoded name — and leave a literal %25 untouched as %, not a
+// second decode pass.
+func TestTagPathNameDecodesOnce(t *testing.T) {
+	name, err := tagPathName("50%25%20off")
+	if err != nil {
+		t.Fatalf("tagPathName: %v", err)
+	}
+	if name != "50% off" {
+		t.Errorf("name = %q, want %q — one decode, not two", name, "50% off")
+	}
+
+	if _, err := tagPathName("a%2Fb"); err == nil {
+		t.Error("tagPathName accepted a decoded /, want an invalid-name error")
+	}
+}
+
+// TestWatchFolderValidation pins the 422s the schema and handler enforce
+// on PATCH: a poll interval below 1 and an empty path or destination
+// string are refused the same way they are on create.
+func TestWatchFolderValidation(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	watchDir := filepath.Join(env.dataRoot, "watch")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("make watch dir: %v", err)
+	}
+	response := env.createWatchFolder(t, map[string]any{
+		"path":        watchDir,
+		"destination": env.dataRoot,
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	folder := decodeWatchFolderBody(t, response)
+
+	for _, body := range []map[string]any{
+		{"poll_interval_s": 0},
+		{"poll_interval_s": -3},
+		{"path": ""},
+		{"destination": ""},
+	} {
+		response = env.api.Patch("/watch-folders/"+folder.ID, body, "Authorization: Bearer "+env.bearer)
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+	}
+
+	response = env.createWatchFolder(t, map[string]any{
+		"path":            filepath.Join(env.dataRoot, "other"),
+		"destination":     env.dataRoot,
+		"poll_interval_s": 0,
+	})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+}
+
+// TestScanDeletedDirectoryIsUnprocessable pins the scan error contract:
+// a folder whose directory went away since its creation is 422
+// /problems/validation-failed — the operator repoints or deletes the
+// row — never a 500.
+func TestScanDeletedDirectoryIsUnprocessable(t *testing.T) {
+	env := newTasksTestEnv(t)
+
+	watchDir := filepath.Join(env.dataRoot, "watch")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("make watch dir: %v", err)
+	}
+	response := env.createWatchFolder(t, map[string]any{
+		"path":        watchDir,
+		"destination": env.dataRoot,
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	folder := decodeWatchFolderBody(t, response)
+
+	if err := os.RemoveAll(watchDir); err != nil {
+		t.Fatalf("remove watch dir: %v", err)
+	}
+
+	response = env.scanWatchFolder(t, folder.ID)
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 }

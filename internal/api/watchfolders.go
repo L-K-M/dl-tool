@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"time"
 
@@ -75,9 +76,9 @@ type CreateWatchFolderInput struct {
 type PatchWatchFolderInput struct {
 	ID   string `path:"id" doc:"The wfd_… folder id"`
 	Body struct {
-		Path            *string             `json:"path,omitempty"             doc:"New watched directory; must resolve inside a configured data root"`
+		Path            *string             `json:"path,omitempty"        minLength:"1" doc:"New watched directory; must resolve inside a configured data root"`
 		Enabled         *bool               `json:"enabled,omitempty"`
-		Destination     *string             `json:"destination,omitempty"      doc:"New destination; must resolve inside a configured data root"`
+		Destination     *string             `json:"destination,omitempty" minLength:"1" doc:"New destination; must resolve inside a configured data root"`
 		Category        watchFolderCategory `json:"category,omitempty"         doc:"Category name, or null to clear"`
 		DeleteAfterLoad *bool               `json:"delete_after_load,omitempty"`
 		PollIntervalS   *int                `json:"poll_interval_s,omitempty" minimum:"1" doc:"Polling fallback interval in seconds"`
@@ -364,6 +365,12 @@ func (h *WatchFolderHandlers) Patch(ctx context.Context, in *PatchWatchFolderInp
 
 	updated, err := h.settings.GetWatchFolder(ctx, in.ID)
 	if err != nil {
+		// A concurrent delete landing between the committed update and
+		// the read is "the resource no longer exists", not a server bug.
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, FromStore(err)
+		}
+
 		return nil, internalFailure(ctx, "read back watch folder", err)
 	}
 
@@ -389,6 +396,14 @@ func (h *WatchFolderHandlers) Scan(ctx context.Context, in *ScanWatchFolderInput
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, FromStore(err)
+		}
+		// A directory deleted or denied between the folder's creation and
+		// this scan is operator-fixable — repoint or delete the row — so
+		// the answer is 422, not a server error.
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity,
+				"the folder's directory could not be read: "+pathErr.Err.Error())
 		}
 
 		return nil, internalFailure(ctx, "scan watch folder "+in.ID, err)

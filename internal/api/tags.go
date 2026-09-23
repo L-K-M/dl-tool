@@ -88,8 +88,9 @@ func (h *TagHandlers) Register(hapi huma.API) {
 }
 
 // PatchTag serves PATCH /tags/{name}. The response is the row read back
-// under its new name; a read-back ErrNotFound is the row vanishing after
-// a committed rename, an internal failure rather than a second 404.
+// under its new name; a read-back ErrNotFound is a concurrent delete or
+// second rename landing between the committed write and the read, so the
+// truthful answer is 404, not a 500.
 func (h *TagHandlers) PatchTag(ctx context.Context, in *PatchTagInput) (*TagOutput, error) {
 	name, err := tagPathName(in.Name)
 	if err != nil {
@@ -109,6 +110,10 @@ func (h *TagHandlers) PatchTag(ctx context.Context, in *PatchTagInput) (*TagOutp
 
 	tag, err := h.settings.TagByName(ctx, in.Body.NewName)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, FromStore(err)
+		}
+
 		return nil, internalFailure(ctx, "read back tag", err)
 	}
 
