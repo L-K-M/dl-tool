@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T091 |
 | **Milestone** | M6 |
-| **Status** | deferred — see `## Blocked` |
+| **Status** | todo |
 | **Depends on** | T006, T012, T066 |
 | **Blocks** | T092, T121 |
 | **Parallel-safe** | no — it edits `internal/jobs/cron.go` and `internal/api/server.go` |
@@ -55,16 +55,24 @@ type BackupResult struct {
 
 // BackupInto writes a consistent snapshot into dir using SQLite's VACUUM INTO.
 //
-// It generates the name dl-tool-<UTC RFC3339 basic>.db, writes to "<name>.partial" inside dir so an
-// interrupted statement never produces a file that looks like a good backup, then renames it into
-// place. It returns ErrBackupRunning when another backup holds the in-process lock.
+// It generates the name dl-tool.db.<UTC>.bak — where <UTC> is the existing backupTimestampFormat
+// ("20060102T150405.000000000Z") so two runs in one second never collide — creates the unique
+// temporary target inside dir with O_CREATE|O_EXCL and mode 0600 and closes it before running the
+// statement (VACUUM INTO requires a missing or empty target), then integrity-checks the output,
+// enforces 0600, fsyncs it, renames it into place and fsyncs the directory. An interrupted
+// statement never produces a file that looks like a good backup. It returns ErrBackupRunning when
+// another backup holds the in-process lock.
 func (s *Store) BackupInto(ctx context.Context, dir string) (BackupResult, error)
 
 // ErrBackupRunning maps to 409 /problems/conflict.
 var ErrBackupRunning = errors.New("store: a backup is already running")
 
-// PruneBackups deletes all but the newest keep files matching dl-tool-*.db in dir.
+// PruneBackups deletes all but the newest keep files matching exactly dl-tool.db.<UTC>.bak in dir —
+// the glob dl-tool.db.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9]*Z.bak, whose timestamp-shaped
+// middle segment excludes the dl-tool.db.pre-migration-*.bak and dl-tool.db.replaced-*.bak families,
+// which this job must never count or prune (docs/04-data-model.md §6).
 func (s *Store) PruneBackups(ctx context.Context, dir string, keep int) (deleted int, err error)
+
 
 // Retention windows from docs/04-data-model.md §7. now is injected so the tests are deterministic.
 func (s *Store) PruneTaskEvents(ctx context.Context, now time.Time) (int64, error)   // at < now-90d
@@ -91,19 +99,23 @@ func (h *SystemHandlers) CreateBackup(ctx context.Context, in *struct{}) (*Creat
 Worked response, `201`:
 
 ```json
-{"path":"/config/backups/dl-tool-20260901T094500Z.db","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}
+{"path":"/config/backups/dl-tool.db.20260901T094500Z.bak","size_bytes":4194304,"created_at":"2026-09-01T09:45:00Z"}
 ```
 
 ## Steps
-1. Create `internal/store/maintenance.go` with `BackupInto`. Build the target name from
-   `time.Now().UTC().Format("20060102T150405Z")` and never reuse a name.
-2. Execute `VACUUM INTO ?` against the `.partial` path, then `os.Rename` it to the final name and `os.Stat`
-   it for `SizeBytes`. On any error remove the `.partial` file before returning.
+1. Create `internal/store/maintenance.go` with `BackupInto`. Build the target name as
+   `dl-tool.db.` + `time.Now().UTC().Format(backupTimestampFormat)` + `.bak` — the constant already
+   exists in `internal/store/db.go` — and never reuse a name.
+2. Create the temporary target inside `dir` with `os.CreateTemp` + `O_CREATE|O_EXCL` and mode `0600`,
+   close it, then execute `VACUUM INTO ?` against it. Integrity-check the output, enforce `0600`,
+   fsync it, `os.Rename` it to the final name, fsync the directory and `os.Stat` it for `SizeBytes`.
+   On any error remove the temporary file before returning.
 3. Guard the whole operation with a `sync.Mutex` held for its duration; a second concurrent call returns
    `ErrBackupRunning` immediately rather than blocking.
-4. Implement `PruneBackups`: list `dl-tool-*.db` in `dir`, sort by name descending — the timestamp format
-   sorts lexicographically — and remove everything past `keep`. Never touch a `.partial` file younger than
-   one hour.
+4. Implement `PruneBackups`: list the glob `dl-tool.db.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9]*Z.bak`
+   in `dir` — timestamp-shaped, so the `pre-migration` and `replaced` families are excluded by
+   construction — sort by name descending (the timestamp format sorts lexicographically) and remove
+   everything past `keep`. Never touch a temporary `*.tmp` file younger than one hour.
 5. Implement `PruneTaskEvents`, `PruneDoneJobs` and `PruneSearchJobs` with the exact windows and columns of
    doc 04 §7. `search_results` follows its `ON DELETE CASCADE`; write no separate delete for it.
 6. Create `internal/api/system.go` with `SystemHandlers`, its constructor taking the store and the config
@@ -115,14 +127,15 @@ Worked response, `201`:
 9. Edit `internal/api/server.go` to register the operation as `create-backup` on `POST /system/backup`.
 10. Create `internal/api/system_test.go`: a successful backup returns `201` and a file that opens and
     answers `PRAGMA integrity_check` with `ok`; a second concurrent call returns `409`; and a forced
-    failure mid-statement leaves no file matching `dl-tool-*.db`.
+    failure mid-statement leaves no file matching `dl-tool.db.*.bak`.
 
 ## Acceptance criteria
 - [ ] The snapshot opens independently and `PRAGMA integrity_check` returns `ok`.
 - [ ] Two backups started in the same second produce two different file names.
 - [ ] A concurrent second call returns `409` `/problems/conflict` and writes no file.
-- [ ] A failed statement leaves no file matching `dl-tool-*.db` in the backup directory.
-- [ ] Eight nightly runs leave exactly seven files.
+- [ ] A failed statement leaves no file matching `dl-tool.db.*.bak` in the backup directory.
+- [ ] Eight nightly runs leave exactly seven files, and `dl-tool.db.pre-migration-*.bak` and
+  `dl-tool.db.replaced-*.bak` files in the same directory are never counted or pruned.
 - [ ] `PruneTaskEvents` deletes rows older than 90 days and leaves a row exactly 89 days old.
 - [ ] A produced backup is `0600`, and its temporary target was created with `O_CREATE|O_EXCL`.
 
@@ -158,7 +171,16 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Evidence
 <Agent pastes command output here before marking done.>
 
-## Blocked
+## Blocked — resolved
+
+**Remedy 1 was applied.** The file now uses the adjudicated `dl-tool.db.<UTC>.bak` form throughout:
+the contract names `backupTimestampFormat` (`20060102T150405.000000000Z`, so the same-second
+criterion holds), `PruneBackups` uses the timestamp-exact glob that excludes the `pre-migration` and
+`replaced` families, the staging recipe follows doc 04 §6 (`O_CREATE|O_EXCL` temporary, integrity
+check, fsync, rename, fsync dir), and the worked response and criteria name the `.bak` glob. The
+original record is preserved below.
+
+---
 
 The backup file name is specified two different ways, and the choice decides the on-disk name, the
 `PruneBackups` glob and the `path` the endpoint returns — a fact this task must act on, not a detail
