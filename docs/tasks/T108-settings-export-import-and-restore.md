@@ -223,8 +223,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	181.680s
-ok  	github.com/L-K-M/dl-tool/internal/store	76.500s
+ok  	github.com/L-K-M/dl-tool/internal/api	182.032s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.196s
 BACKUP_OK
 ```
 
@@ -273,9 +273,15 @@ Review hardening beyond the letter of the contract, all inside the Files table:
   `database_locked`; `TestRestoreRefusesWhileServerLockHeld` proves the two ends meet and that
   releasing the lock frees the restore.
 - `preserveLiveDatabase` falls back to a byte-copy `.replaced-*.bak` when `VACUUM INTO` cannot read
-  a corrupt live database — a corrupt file is the common reason to restore at all;
-  `TestRestoreReplacesCorruptDatabase` covers it. `backupReplacedDatabase` also frees the
-  `CreateTemp` name before `VACUUM INTO`, which refuses an existing output file on some builds.
+  a corrupt live database — a corrupt file is the common reason to restore at all — and preserves a
+  live `-wal` beside it as `.bak-wal` since the copy runs before the checkpoint and committed frames
+  may exist only there; `TestRestoreReplacesCorruptDatabase` covers it. `backupReplacedDatabase` also
+  frees the `CreateTemp` name before `VACUUM INTO`, which refuses an existing output file on some
+  builds.
+- The process-lock handle stays reachable for the server lifetime (`defer` in `OnStart` — an
+  unreachable `*os.File` finalizer would silently drop the flock), and `acquireDatabaseLock` creates
+  the database directory itself so first boot does not fail the acquire with ENOENT.
+  `TestProcessLockCreatesDatabaseDirectory` covers the fresh-directory acquire.
 - `checkStagedSchema` re-reads the schema version from the staged bytes after the copy, closing a
   source-swap race between the schema gate and the copy.
 - Row writes feed `rejectRowError`: a constraint the conflict keys cannot catch (CHECK, NOT NULL)

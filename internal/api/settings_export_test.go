@@ -6,6 +6,7 @@
 package api
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1126,6 +1127,17 @@ func TestRestoreRefusesWhileServerLockHeld(t *testing.T) {
 	}
 }
 
+// TestProcessLockCreatesDatabaseDirectory covers first boot: the lock
+// file sits beside a database whose directory does not exist yet, so
+// acquiring it must create the directory rather than fail.
+func TestProcessLockCreatesDatabaseDirectory(t *testing.T) {
+	lock, err := store.AcquireProcessLock(filepath.Join(t.TempDir(), "fresh", "dl-tool.db"))
+	if err != nil {
+		t.Fatalf("AcquireProcessLock in a fresh directory: %v", err)
+	}
+	lock.Release()
+}
+
 // TestRestoreReplacesCorruptDatabase covers the disaster case: the live
 // database is unreadable, VACUUM INTO cannot preserve it, and the
 // restore still completes — the wreck is byte-copied into the
@@ -1135,13 +1147,29 @@ func TestRestoreReplacesCorruptDatabase(t *testing.T) {
 	fixture.seedMarker(t)
 	ctx := t.Context()
 
+	// Consolidate the WAL so the main file is complete, then let one
+	// commit land in the WAL only. Corrupting the whole main file after
+	// that leaves the WAL covering just this insert's pages — VACUUM
+	// INTO must read the others, fails on the garbage, and the preserve
+	// falls back to a byte copy.
+	if _, err := fixture.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatalf("checkpoint live database: %v", err)
+	}
 	backup := filepath.Join(fixture.configDir, "backup.db")
 	makeBackup(t, fixture.db, backup)
 
-	// Truncate the live database to garbage; its handle is never used
-	// again, the file replacement is what matters.
-	if err := os.WriteFile(fixture.dbPath, []byte("corrupt beyond readability"), 0o600); err != nil {
+	if _, err := fixture.db.ExecContext(
+		ctx,
+		`INSERT INTO categories (id, name, save_path, created_at, updated_at) VALUES (?, 'wal-marker', '/data', 0, 0)`,
+		store.NewID(store.PrefixCategory),
+	); err != nil {
+		t.Fatalf("commit WAL-resident row: %v", err)
+	}
+	if err := os.WriteFile(fixture.dbPath, bytes.Repeat([]byte{0xde}, 8192), 0o600); err != nil {
 		t.Fatalf("corrupt live database: %v", err)
+	}
+	if _, err := os.Stat(fixture.dbPath + "-wal"); err != nil {
+		t.Fatalf("expected a live WAL to preserve: %v", err)
 	}
 
 	tasks, err := store.RestoreFrom(ctx, fixture.dbPath, fixture.configDir, backup)
@@ -1157,6 +1185,9 @@ func TestRestoreReplacesCorruptDatabase(t *testing.T) {
 	)
 	if err != nil || len(matches) == 0 {
 		t.Fatalf("no replaced-database preserve: %v, matches %v", err, matches)
+	}
+	if _, err := os.Stat(matches[0] + "-wal"); err != nil {
+		t.Errorf("live WAL was not preserved beside %s: %v", matches[0], err)
 	}
 
 	restored, err := sqlx.Open("sqlite", "file:"+fixture.dbPath+"?mode=ro")

@@ -106,11 +106,16 @@ func main() {
 			// beside the database for the process lifetime, so a second
 			// server exits database_locked and `dl-tool restore` refuses
 			// with restore_server_running instead of swapping the file
-			// out from under a live instance.
-			if _, err := store.AcquireProcessLock(cfg.DBPath); err != nil {
-				logger.Error("database lock failed", "err_code", "database_locked", "err", err)
+			// out from under a live instance. The handle must stay
+			// reachable — an unreachable *os.File's finalizer would close
+			// the descriptor and silently drop the flock — so it lives in
+			// a named variable released when OnStart returns at shutdown.
+			processLock, lockErr := store.AcquireProcessLock(cfg.DBPath)
+			if lockErr != nil {
+				logger.Error("database lock failed", "err_code", "database_locked", "err", lockErr)
 				os.Exit(exitFailure)
 			}
+			defer processLock.Release()
 
 			db, err := store.Open(ctx, cfg.DBPath, filepath.Join(cfg.ConfigDir, backupsDirName))
 			if err != nil {

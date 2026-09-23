@@ -300,14 +300,15 @@ func limitImportBody(ctx huma.Context, next func(huma.Context)) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxImportBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		detail := "the import document could not be read"
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			detail = fmt.Sprintf("the import document exceeds %d bytes", maxImportBodyBytes)
+			writeProblem(w, Problem(SlugPayloadTooLarge, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("the import document exceeds %d bytes", maxImportBodyBytes)))
 		} else {
 			logFromContext(ctx.Context()).Warn("import body read failed", "err", err)
+			writeProblem(w, Problem(SlugValidationFailed, http.StatusBadRequest,
+				"the import document could not be read"))
 		}
-		writeProblem(w, Problem(SlugPayloadTooLarge, http.StatusRequestEntityTooLarge, detail))
 
 		return
 	}

@@ -121,13 +121,8 @@ func open(ctx context.Context, dbPath, backupDir string, mountInfo io.Reader) (*
 }
 
 func prepareDatabasePath(dbPath string) error {
-	directory := filepath.Dir(dbPath)
-	if err := os.MkdirAll(directory, databaseDirectoryMode); err != nil {
-		return fmt.Errorf("store: create database directory %q: %w", directory, err)
-	}
-
-	if err := os.Chmod(directory, databaseDirectoryMode); err != nil {
-		return fmt.Errorf("store: secure database directory %q: %w", directory, err)
+	if err := prepareDatabaseDirectory(filepath.Dir(dbPath)); err != nil {
+		return err
 	}
 
 	info, err := os.Lstat(dbPath)
@@ -146,6 +141,21 @@ func prepareDatabasePath(dbPath string) error {
 
 	if err := os.Chmod(dbPath, databaseFileMode); err != nil {
 		return fmt.Errorf("store: secure database file %q: %w", dbPath, err)
+	}
+
+	return nil
+}
+
+// prepareDatabaseDirectory creates the database directory with the
+// 0700 data mode, or tightens an existing one. The process-lock path
+// needs it too: the lock sits beside the database, and the lock is
+// acquired before Open ever runs on a first boot.
+func prepareDatabaseDirectory(directory string) error {
+	if err := os.MkdirAll(directory, databaseDirectoryMode); err != nil {
+		return fmt.Errorf("store: create database directory %q: %w", directory, err)
+	}
+	if err := os.Chmod(directory, databaseDirectoryMode); err != nil {
+		return fmt.Errorf("store: secure database directory %q: %w", directory, err)
 	}
 
 	return nil
@@ -858,6 +868,13 @@ func (l *ProcessLock) Release() {
 // naming the PID the holder recorded — ErrDatabaseLocked on the server
 // path, ErrRestoreServerRunning on the restore path.
 func acquireDatabaseLock(path string, busy error) (*databaseLock, error) {
+	// The lock is taken before Open, so on a first boot its directory
+	// does not exist yet — create it rather than failing the acquire
+	// with a misleading busy error.
+	if err := prepareDatabaseDirectory(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, databaseFileMode)
 	if err != nil {
 		return nil, fmt.Errorf("store: open process lock %q: %w", path, err)
@@ -1108,7 +1125,7 @@ func preserveLiveDatabase(ctx context.Context, dbPath, databaseDir string) error
 		if copyErr != nil {
 			return errors.Join(err, copyErr, db.Close())
 		}
-		slog.Warn("store: vacuum preserve failed; preserved live database by file copy",
+		slog.Warn("store: vacuum preserve failed; preserved live database (and any WAL) by file copy",
 			"path", backupPath, "err", err)
 	}
 
@@ -1196,6 +1213,12 @@ func backupReplacedDatabase(ctx context.Context, db *sqlx.DB, dbPath, databaseDi
 // unique temporary name, mode 0600, fsync, atomic rename, directory
 // fsync. Whatever bytes exist are kept; nothing here can make a corrupt
 // file readable.
+//
+// The copy runs before the checkpoint, so the newest committed frames
+// may exist only in dbPath's -wal — and the sidecar-removal loop then
+// deletes that WAL. The fallback therefore preserves a live -wal beside
+// the backup as "<name>.replaced-<UTC>.bak-wal", keeping those commits
+// recoverable; -shm is skipped because SQLite rebuilds it.
 func copyReplacedDatabase(dbPath, databaseDir string) (string, error) {
 	temporaryFile, err := os.CreateTemp(databaseDir, "."+filepath.Base(dbPath)+".replaced-*.tmp")
 	if err != nil {
@@ -1227,11 +1250,49 @@ func copyReplacedDatabase(dbPath, databaseDir string) (string, error) {
 	if err := renameNoReplace(temporaryPath, finalPath); err != nil {
 		return "", removeTemporaryBackup(temporaryPath, fmt.Errorf("store: rename replaced-database backup to %q: %w", finalPath, err))
 	}
+	if err := preserveWALBeside(dbPath, databaseDir, finalPath); err != nil {
+		return "", err
+	}
 	if err := syncPath(databaseDir); err != nil {
 		return "", err
 	}
 
 	return finalPath, nil
+}
+
+// preserveWALBeside byte-copies source's -wal sidecar to
+// "<finalPath>-wal" when one exists, under the same temporary-name,
+// fsync and atomic-rename rules as the main copy. A missing WAL is a
+// no-op; any other failure aborts the restore rather than silently
+// dropping committed frames.
+func preserveWALBeside(source, databaseDir, finalPath string) error {
+	wal, err := os.Open(source + "-wal")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: open live WAL %q for copy preserve: %w", source+"-wal", err)
+	}
+
+	temporaryFile, err := os.CreateTemp(databaseDir, "."+filepath.Base(source)+".replaced-wal-*.tmp")
+	if err != nil {
+		return errors.Join(fmt.Errorf("store: create temporary WAL backup: %w", err), wal.Close())
+	}
+	temporaryPath := temporaryFile.Name()
+
+	_, copyErr := io.Copy(temporaryFile, wal)
+	syncErr := temporaryFile.Sync()
+	if err := errors.Join(copyErr, syncErr, wal.Close(), temporaryFile.Close()); err != nil {
+		return removeTemporaryBackup(temporaryPath, fmt.Errorf("store: copy preserve WAL %q: %w", source+"-wal", err))
+	}
+	if err := os.Chmod(temporaryPath, databaseFileMode); err != nil {
+		return removeTemporaryBackup(temporaryPath, fmt.Errorf("store: secure WAL backup: %w", err))
+	}
+	if err := renameNoReplace(temporaryPath, finalPath+"-wal"); err != nil {
+		return removeTemporaryBackup(temporaryPath, fmt.Errorf("store: rename WAL backup to %q: %w", finalPath+"-wal", err))
+	}
+
+	return nil
 }
 
 // restoredTaskCount reads the task count of the freshly installed
