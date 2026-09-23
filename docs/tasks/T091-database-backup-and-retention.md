@@ -159,4 +159,72 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+The backup file name is specified two different ways, and the choice decides the on-disk name, the
+`PruneBackups` glob and the `path` the endpoint returns — a fact this task must act on, not a detail
+it can pick. This file's interface contract, steps, worked response and acceptance criterion all say
+`dl-tool-<UTC RFC3339 basic>.db`, pruned by the glob `dl-tool-*.db`. The documents that own the fact
+say `dl-tool.db.<UTC>.bak`, and they record that the question was already adjudicated:
+
+- [`docs/04-data-model.md` §6](../04-data-model.md#6-backup-and-restore) — the fact's home per
+  [`docs/00-INDEX.md`](../00-INDEX.md) — shows
+  `VACUUM INTO '/config/backups/dl-tool.db.20260901T120000Z.bak'` and scopes nightly retention to
+  "the newest 7 files matching exactly `dl-tool.db.<UTC>.bak`".
+- [`docs/05-api-contract.md` §13](../05-api-contract.md#13-system-endpoints) — the response shape's
+  home — returns `.../dl-tool.db.20260901T094500Z.bak`, and its change log records the fix: "the
+  `POST /system/backup` example path now uses the `dl-tool.db.<UTC>.bak` form owned by
+  `04-data-model.md` §6".
+- [`docs/17-operations-and-runbook.md`](../17-operations-and-runbook.md) §3.2 and §3.4 use the `.bak`
+  form throughout, and its change log states the backup-naming open question was resolved to that
+  form. Existing code agrees: `internal/store/db.go` writes
+  `dl-tool.db.pre-migration-<from>-to-<to>.<UTC>.bak`.
+
+So the question was asked and answered once already; the `.db` form here is the stale half of a
+resolved contradiction. Implementing it anyway overrides doc 04's retention pattern and doc 05's
+response contract and reverses that recorded resolution; implementing `.bak` instead overrides this
+file's interface contract, step 1, step 4, the worked response and the `dl-tool-*.db` criterion.
+Either diff contradicts a written requirement — the stop condition, not a judgment call.
+
+The name is not cosmetic. Under `dl-tool.db.*.bak` a naive glob also matches
+`dl-tool.db.pre-migration-*.bak` and the restore flow's `dl-tool.db.replaced-<UTC>.bak`, which doc 04
+§6 says this job must never count or prune — "matching exactly `dl-tool.db.<UTC>.bak`" has to mean a
+timestamp-shaped middle segment. Under `dl-tool-*.db` the exclusion is structural instead, which may
+be why this file's form exists; but the docs were never re-adjudicated to it, and T108's restore and
+doc 17 §3.4 still speak `.bak`.
+
+A second, smaller tension the repair should settle at the same time: step 1's `20060102T150405Z` is
+second-precision, so two backups in the same second collide on `O_EXCL`, yet the second acceptance
+criterion requires distinct names. The existing `backupTimestampFormat` in `internal/store/db.go`
+(`20060102T150405.000000000Z`) already solves this and matches the pre-migration family.
+
+Remedies — either unblocks the task:
+
+1. Restate this file in the adjudicated `dl-tool.db.<UTC>.bak` form: the contract comment, the prune
+   glob (made timestamp-exact so `pre-migration` and `replaced` infixes stay excluded, as §6
+   requires), step 1, step 4, the worked response and the criterion's glob; and give step 1
+   sub-second precision (or name `backupTimestampFormat`) so criterion 2 can hold. Pin the glob to
+   accept that format's fractional-second suffix while still excluding the infixes — e.g.
+   `dl-tool.db.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9]*Z.bak`, which matches both
+   `dl-tool.db.20260901T120000Z.bak` and `dl-tool.db.20260901T120000.000000000Z.bak` but neither
+   `dl-tool.db.pre-migration-*.bak` nor `dl-tool.db.replaced-*.bak`.
+2. Or rule that `dl-tool-<UTC>.db` is the intended new scheme and re-adjudicate the docs: doc 04 §6,
+   doc 05 §13, doc 17 §3.2 and §3.4 and their change logs — noting the pre-migration and
+   replaced-database families stay `.bak`, which `dl-tool-*.db` then excludes by construction.
+
+The file that should answer it: this task file, after the owner picks 1 or 2.
+
+Rerunnable evidence on this commit:
+
+```bash
+# The docs' adjudicated form and the recorded resolution.
+git grep -n -E "dl-tool\.db" HEAD -- docs/04-data-model.md docs/05-api-contract.md \
+  docs/17-operations-and-runbook.md
+git grep -n -E "backup-naming|dl-tool\.db\.<UTC>\.bak" HEAD -- docs/05-api-contract.md \
+  docs/17-operations-and-runbook.md
+
+# This file's conflicting form.
+grep -n "dl-tool-" docs/tasks/T091-database-backup-and-retention.md
+
+# The existing backup family in code.
+grep -n -E "backupTimestampFormat|pre-migration" internal/store/db.go
+```
