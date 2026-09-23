@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T091 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | deferred — see `## Blocked` |
 | **Depends on** | T006, T012, T066 |
 | **Blocks** | T092, T121 |
 | **Parallel-safe** | no — it edits `internal/jobs/cron.go` and `internal/api/server.go` |
@@ -228,3 +228,34 @@ grep -n "dl-tool-" docs/tasks/T091-database-backup-and-retention.md
 # The existing backup family in code.
 grep -n -E "backupTimestampFormat|pre-migration" internal/store/db.go
 ```
+
+### 2026-09-23 — re-verified on eee12ef, row set to `deferred`
+
+The blocker is unchanged on eee12ef, the head of `main` (the merge of #266). Re-running
+the evidence block above prints the same three facts: doc 04 §6, doc 05 §13 and doc 17
+§3.2/§3.4 name `dl-tool.db.<UTC>.bak` and record the 2026-09-01 resolution in their change
+logs; this file's contract, steps, worked response and criterion still name
+`dl-tool-<UTC RFC3339 basic>.db` / `dl-tool-*.db`; `internal/store/db.go` still writes the
+`.bak` pre-migration family through `backupTimestampFormat`. Neither remedy above has been
+picked.
+
+Additions to the record:
+
+- The picker takes the topmost eligible `todo` row, and T091 heads the eligible set, so
+  leaving it `todo` re-selects it on every iteration and nothing below it can start. The
+  row is set to `deferred`, the status the picker skips (the T078 precedent, #250), so the
+  queue can proceed to T106. This chooses neither remedy: the owner still decides, and
+  un-deferring is a one-word flip back to `todo`. FR-142 stays a `must`; the deferral parks
+  the task rather than waiving the requirement.
+- Unlike T078, this deferral stalls downstream work: T092's `Depends on` names T091, and a
+  `deferred` entry is not `done`, so T092 — and through it T096, T117, T118, T119 and T121
+  — stay unreachable until the row flips back. T106, T107, T110 and T111 are eligible now;
+  T108 and T120 follow once T106/T107 land; the M7 rows that do not pass through T091/T092
+  are unaffected.
+- Reactivation trigger: flip both T091 rows in `00-task-index.md` — the `## M6`
+  milestone-table row and the `## Roster` detail-table row — back to `todo` in the same
+  change that lands the chosen remedy (remedy 1 rewrites this file; remedy 2 re-adjudicates
+  docs 04 §6, 05 §13 and 17 §3.2/§3.4), so the deferral cannot outlive its cause.
+- M6's exit checkpoint names the settings sections, and T117–T119 need T092, which needs
+  this task — so the milestone cannot exit while this deferral stands. The gap stays
+  visible through this record and the checkpoint.
