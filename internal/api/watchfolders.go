@@ -300,9 +300,9 @@ func (h *WatchFolderHandlers) Create(ctx context.Context, in *CreateWatchFolderI
 // Patch serves PATCH /watch-folders/{id}. The row is fetched first so a
 // missing id is 404 before any body member is judged; each provided
 // member is then validated and merged by one UpdateWatchFolder — the
-// response is the row read back, and a read-back ErrNotFound is the row
-// vanishing after a committed update, an internal failure rather than a
-// second 404.
+// response is the row read back, and a read-back ErrNotFound — the row
+// vanishing after a committed update — maps to 404 like any other
+// missing row, not an internal failure.
 func (h *WatchFolderHandlers) Patch(ctx context.Context, in *PatchWatchFolderInput) (*WatchFolderOutput, error) {
 	if _, err := h.settings.GetWatchFolder(ctx, in.ID); err != nil {
 		return nil, FromStore(err)
