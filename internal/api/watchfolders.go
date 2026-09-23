@@ -331,7 +331,7 @@ func (h *WatchFolderHandlers) Patch(ctx context.Context, in *PatchWatchFolderInp
 	}
 	if raw := json.RawMessage(in.Body.Category); len(raw) > 0 {
 		patch.CategorySet = true
-		if !bytes.Equal(raw, []byte("null")) {
+		if !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			var name string
 			if err := json.Unmarshal(raw, &name); err != nil {
 				return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, watchFolderCategoryDetail)
