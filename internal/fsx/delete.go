@@ -61,10 +61,9 @@ func DeleteData(ctx context.Context, roots []string, taskDir string, targets []T
 	// failure discards the whole batch.
 	for _, target := range targets {
 		if _, err := ResolveDestination(roots, target.Path); err != nil {
-			// The wrapped error keeps the resolver's verdict: a real
-			// rejection stays errors.Is ErrPathRejected, while an
-			// operational failure — a vanished root — is not misreported
-			// as one.
+			// Wrap the resolver's verdict verbatim: a real rejection
+			// stays errors.Is ErrPathRejected and any detail the
+			// resolver wrapped is not erased.
 			return DeleteResult{}, fmt.Errorf("fsx: delete target %s: %w", target.Path, err)
 		}
 	}

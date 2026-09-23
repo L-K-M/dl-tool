@@ -691,7 +691,7 @@ func TestDataDeletedEventWritten(t *testing.T) {
 func TestBulkRemoveDeletesDataPerID(t *testing.T) {
 	env := newDeleteTestEnv(t)
 
-	good, _ := env.seedDownloadedTask(t, []seededFile{
+	good, goodDest := env.seedDownloadedTask(t, []seededFile{
 		{path: "good/file.bin", size: 128},
 	}, nil)
 	// (engine, engine_ref) is unique, so the second fixture needs its own
@@ -725,10 +725,10 @@ func TestBulkRemoveDeletesDataPerID(t *testing.T) {
 	// The good id ran the whole executor: engine stopped, recorded file
 	// unlinked, its now-empty own directory gone, the row tombstoned and
 	// the event written.
-	if _, err := os.Stat(filepath.Join(destination, "good", "file.bin")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(goodDest, "good", "file.bin")); !os.IsNotExist(err) {
 		t.Errorf("the good task's file survived: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(destination, "good")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(goodDest, "good")); !os.IsNotExist(err) {
 		t.Errorf("the good task's emptied directory survived: %v", err)
 	}
 	assertTombstone(t, env.taskRow(t, good))
