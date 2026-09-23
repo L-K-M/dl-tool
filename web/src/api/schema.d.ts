@@ -841,6 +841,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/tags/{name}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete a tag
+     * @description Detaches the tag from every task and deletes the row. No task is ever deleted by this call.
+     */
+    delete: operations["delete-tag"];
+    options?: never;
+    head?: never;
+    /**
+     * Rename a tag
+     * @description Renames the tag in place, so every task carrying it carries the new name at once; the tag id is unchanged and no task row is touched. Renaming onto an existing name is 409 /problems/conflict, never a silent merge.
+     */
+    patch: operations["patch-tag"];
+    trace?: never;
+  };
   "/tasks": {
     parameters: {
       query?: never;
@@ -1017,6 +1041,74 @@ export interface paths {
      * @description Removes the named announce urls — at most 100 per request — from the swarm. A pseudo-tracker row (DHT, PeX, LSD) cannot be removed and answers 422. 422 when the task is not a BitTorrent task.
      */
     delete: operations["remove-task-tracker"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/watch-folders": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the watch folders
+     * @description Every watch_folders row, enabled or not, oldest first. A disabled folder still lists so the scan button can reach it.
+     */
+    get: operations["list-watch-folders"];
+    put?: never;
+    /**
+     * Create a watch folder
+     * @description Watches one directory for dropped .torrent files, which become tasks through the ordinary creation path. path and destination are resolved against the configured roots; outside them is 403 /problems/path-rejected. A second folder on the same path is 409 /problems/conflict; an unknown category or a poll_interval_s below 1 is 422.
+     */
+    post: operations["create-watch-folder"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/watch-folders/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete a watch folder
+     * @description Removes the row so the loader stops watching the directory. The directory and its contents are never touched.
+     */
+    delete: operations["delete-watch-folder"];
+    options?: never;
+    head?: never;
+    /**
+     * Update a watch folder
+     * @description Partial update of path, enabled, destination, category, delete_after_load and poll_interval_s; omitted members are untouched and a null category clears it. Provided paths resolve against the configured roots like create's; a path another folder watches is 409 /problems/conflict.
+     */
+    patch: operations["patch-watch-folder"];
+    trace?: never;
+  };
+  "/watch-folders/{id}/scan": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Scan a watch folder now
+     * @description Scans that one directory immediately — the same synchronous, idempotent sweep the loader runs on a tick — and returns what it did: every file counted, the task ids created and the skipped files with their reason. A disabled folder still scans; the scan is what the button does, not the schedule.
+     */
+    post: operations["scan-watch-folder"];
+    delete?: never;
     options?: never;
     head?: never;
     patch?: never;
@@ -1261,6 +1353,23 @@ export interface components {
       prefix: string;
       /** @description The bearer token, revealed exactly once: dlt_ plus 32 hex characters */
       token: string;
+    };
+    CreateWatchFolderInputBody: {
+      /** @description Category name the created tasks carry; must exist */
+      category?: string;
+      /** @description Unlink the source .torrent after the engine accepts the task; default false */
+      delete_after_load?: boolean;
+      /** @description Destination of tasks the folder creates; must resolve inside a configured data root */
+      destination: string;
+      /** @description Default true; a disabled folder is not watched but still scans on demand */
+      enabled?: boolean;
+      /** @description Directory the loader watches; must resolve inside a configured data root */
+      path: string;
+      /**
+       * Format: int64
+       * @description Polling fallback interval in seconds; default 10
+       */
+      poll_interval_s?: number;
     };
     DeleteTaskOutputBody: {
       /**
@@ -1617,6 +1726,9 @@ export interface components {
        */
       total: number;
     };
+    ListWatchFoldersOutputBody: {
+      watch_folders: components["schemas"]["WatchFolderView"][] | null;
+    };
     Listing: {
       directories: components["schemas"]["Entry"][] | null;
       /** Format: int64 */
@@ -1736,6 +1848,10 @@ export interface components {
       /** Format: int64 */
       priority?: number;
     };
+    PatchTagInputBody: {
+      /** @description Rename; must be non-empty and carry no , or / */
+      new_name: string;
+    };
     PatchTaskBody: {
       /** @description Category name; must already exist */
       category?: string;
@@ -1771,6 +1887,21 @@ export interface components {
     PatchTaskFilesInputBody: {
       /** @description Unlisted indices are untouched */
       files: components["schemas"]["FileSelection"][] | null;
+    };
+    PatchWatchFolderInputBody: {
+      /** @description Category name, or null to clear */
+      category?: string | null;
+      delete_after_load?: boolean;
+      /** @description New destination; must resolve inside a configured data root */
+      destination?: string;
+      enabled?: boolean;
+      /** @description New watched directory; must resolve inside a configured data root */
+      path?: string;
+      /**
+       * Format: int64
+       * @description Polling fallback interval in seconds
+       */
+      poll_interval_s?: number;
     };
     PeerDTO: {
       address: string;
@@ -1857,6 +1988,14 @@ export interface components {
       evaluated: number;
       /** Format: int64 */
       matched: number;
+    };
+    ScanResult: {
+      created: string[] | null;
+      /** Format: int64 */
+      elapsed_ms: number;
+      /** Format: int64 */
+      scanned: number;
+      skipped: components["schemas"]["SkippedFile"][] | null;
     };
     ScheduleBody: {
       /**
@@ -1946,6 +2085,10 @@ export interface components {
       setup_token: string;
       /** @description Operator username */
       username: string;
+    };
+    SkippedFile: {
+      file: string;
+      reason: string;
     };
     StartSearchInputBody: {
       /** @description Newznab category ids; empty means no category filter */
@@ -2173,6 +2316,23 @@ export interface components {
       locale: string;
       /** @description Account username */
       username: string;
+    };
+    WatchFolderView: {
+      category: string | null;
+      /** Format: date-time */
+      created_at: string;
+      delete_after_load: boolean;
+      destination: string;
+      enabled: boolean;
+      id: string;
+      last_error: string | null;
+      /** Format: date-time */
+      last_scan_at: string | null;
+      path: string;
+      /** Format: int64 */
+      poll_interval_s: number;
+      /** Format: date-time */
+      updated_at: string;
     };
     WouldDo: {
       category: string;
@@ -3986,6 +4146,72 @@ export interface operations {
       };
     };
   };
+  "delete-tag": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tag's name, percent-encoded */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-tag": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The tag's current name, percent-encoded */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PatchTagInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TagDTO"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "list-tasks": {
     parameters: {
       query?: {
@@ -4486,6 +4712,166 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-watch-folders": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListWatchFoldersOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-watch-folder": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateWatchFolderInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WatchFolderView"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-watch-folder": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The wfd_… folder id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-watch-folder": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The wfd_… folder id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PatchWatchFolderInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WatchFolderView"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "scan-watch-folder": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The wfd_… folder id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ScanResult"];
+        };
       };
       /** @description Error */
       default: {
