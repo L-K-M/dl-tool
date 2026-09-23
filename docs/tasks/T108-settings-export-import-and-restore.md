@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T108 |
 | **Milestone** | M6 |
-| **Status** | deferred — see `## Blocked` |
+| **Status** | todo |
 | **Depends on** | T080, T106, T107 |
 | **Blocks** | T121 |
 | **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/api/server.go`, `internal/store/db.go` |
@@ -97,20 +97,34 @@ lands or none does. Paths are re-validated against the importing host's roots; a
 ```go
 package store
 
-// RestoreFrom replaces the live database with the backup at src. src must resolve inside
-// DLTOOL_CONFIG_DIR. The three gates run in this order and each is a named refusal, exit code 1:
+// RestoreFrom replaces the live database with the backup at src, following the staged procedure of
+// docs/17-operations-and-runbook.md §3.4. The four gates run in this order and each is a named
+// refusal, exit code 1:
 //
-//	restore_server_running  — an exclusive lock on the target database is already held
-//	restore_schema_mismatch — MAX(version_id) in the backup differs from the highest embedded migration
+//	restore_server_running  — flock(LOCK_EX|LOCK_NB) on the stable process lock fails
+//	restore_source_rejected — src does not resolve to a regular file inside DLTOOL_CONFIG_DIR,
+//	                          or names the live database, its lock or its sidecars
+//	restore_schema_too_new  — MAX(version_id) in the backup exceeds the highest embedded migration;
+//	                          an older schema is accepted and migrates forward at the next boot
 //	restore_integrity_failed — PRAGMA integrity_check on the backup, opened read-only, is not "ok"
 //
-// On success it renames the current database to dl-tool.db.replaced-<UTC>.bak, copies the backup
-// into place with mode 0600, removes any stale -wal and -shm, and returns the restored task count.
+//	Any failure to open or read the backup as a database at all instead refuses as
+//	restore_integrity_failed, whichever gate encounters it.
+//
+// Every gate completes before the command changes the live database. On success it copies src to a
+// unique dl-tool.db.restore-<ULID>.tmp beside dbPath with O_EXCL, mode 0600 and fsync, then
+// integrity-checks the staged copy; preserves the live database through VACUUM INTO to
+// dl-tool.db.replaced-<UTC>.bak (integrity-checked, fsynced, renamed into place, directory fsynced);
+// checkpoints with PRAGMA wal_checkpoint(TRUNCATE), closes every handle and removes the stale -wal
+// and -shm sidecars; then atomically renames the staged file over dbPath and fsyncs the directory.
+// A crash yields either the complete old file or the complete checked replacement. It returns the
+// restored task count.
 func RestoreFrom(ctx context.Context, dbPath, configDir, src string) (tasks int, err error)
 
 var (
 	ErrRestoreServerRunning  = errors.New("store: restore_server_running")
-	ErrRestoreSchemaMismatch = errors.New("store: restore_schema_mismatch")
+	ErrRestoreSourceRejected = errors.New("store: restore_source_rejected")
+	ErrRestoreSchemaTooNew   = errors.New("store: restore_schema_too_new")
 	ErrRestoreIntegrity      = errors.New("store: restore_integrity_failed")
 )
 ```
@@ -124,18 +138,22 @@ var (
 4. Apply a committing import inside one `sqlx.Tx`, honouring `on_conflict` per the matching keys above.
 5. Re-validate every path against the importing host's roots, recording a failure in `rejected[]` with
    `/problems/path-rejected`.
-6. Add `RestoreFrom` and the three sentinels to `internal/store/db.go`, running the gates in the documented
-   order and touching the live database only after all three pass.
+6. Add `RestoreFrom` and the four sentinels to `internal/store/db.go`, running the gates in the
+   documented order and following §3.4's staged procedure: the live database is changed only after
+   all four gates pass, and any failure before the final atomic rename removes only the temporary
+   stage.
 7. Add the `restore --from <file>` subcommand to `cmd/dl-tool/main.go` through the existing `humacli`
    wiring, printing the named refusal and exiting `1` on any gate, and printing the restored task count on
-   success. Accept only a file inside `DLTOOL_CONFIG_DIR`.
+   success. Map the `DLTOOL_CONFIG_DIR` path rejection to `restore_source_rejected`.
 8. Create `internal/api/settings_export_test.go`: export from a populated instance and grep the document for
    a session id, a password hash, a token prefix, an indexer API key and an engine secret, asserting none
    appear; import into an empty instance and assert the seven collections match; assert a dry run writes
    nothing and reports the same counts as the commit; assert `on_conflict: skip` keeps the existing row and
    `overwrite` replaces it; assert a newer `document_version` is `409`; assert `RestoreFrom` refuses a
-   locked database, a foreign schema version and a corrupt file with the three named errors, and that the
-   live database is untouched in each case.
+   locked database, a source outside `DLTOOL_CONFIG_DIR` (and the live database, lock or sidecars), a
+   newer schema version and a corrupt file with the four named errors; that the live database is
+   untouched in each case; that an older-schema backup restores and migrates forward on next open; and
+   that a failure injected before the atomic rename leaves the original database intact.
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -145,7 +163,15 @@ var (
 - [ ] A committing import is transactional: a rejected row leaves the database unchanged.
 - [ ] A `document_version` newer than the binary is `409` `/problems/conflict`.
 - [ ] `restore --from` refuses with `restore_server_running` while a server holds the database.
-- [ ] `restore --from` refuses with `restore_schema_mismatch` on a foreign schema version.
+- [ ] `restore --from` refuses with `restore_source_rejected` for a path outside `DLTOOL_CONFIG_DIR`
+  or naming the live database, its lock or its sidecars, and the live database is untouched.
+- [ ] `restore --from` refuses with `restore_schema_too_new` on a backup newer than the embedded
+  migration maximum, printing both versions; an older-schema backup is accepted and migrates forward
+  at the next boot.
+- [ ] `restore --from` refuses with `restore_integrity_failed` on a corrupt file, and the live
+  database is untouched.
+- [ ] A failure injected before the final atomic rename leaves the original database intact, and a
+  successful restore reports the source's task count.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -154,8 +180,9 @@ make lint && make test PKG="./internal/api/... ./internal/store/..." && echo BAC
 ```
 Expected: `ok  github.com/L-K-M/dl-tool/internal/api` and `ok  github.com/L-K-M/dl-tool/internal/store`,
 with `TestExportExcludesEverySecret`, `TestExportImportRoundTrip`, `TestDryRunWritesNothing`,
-`TestImportIsTransactional`, `TestNewerDocumentVersionConflict`, `TestRestoreRefusesRunningServer` and
-`TestRestoreRefusesSchemaMismatch` each reported as `--- PASS`. The final line of stdout is exactly
+`TestImportIsTransactional`, `TestNewerDocumentVersionConflict`, `TestRestoreRefusesRunningServer`,
+`TestRestoreRejectsForeignSource`, `TestRestoreRefusesSchemaTooNew`, `TestRestoreRefusesCorrupt`,
+`TestRestoreAcceptsOlderSchema` and `TestRestoreFailureLeavesOriginal` each reported as `--- PASS`. The final line of stdout is exactly
 `BACKUP_OK`. No `FAIL`.
 
 Also confirm scope:
@@ -173,7 +200,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT include the `ui_prefs` document in the export; doc 05 §11.4 keeps it out and
   [T129](T129-ui-prefs-document.md) owns it.
 - Do NOT add `POST /system/backup` or the nightly `VACUUM INTO` job; T091 owns both.
-- Do NOT restore while the server is running, or skip any of the three gates.
+- Do NOT restore while the server is running, or skip any of the four gates.
 
 ## Forbidden shortcuts
 - Do NOT skip/xfail a test, weaken an assertion, or delete a test to make a check pass.
@@ -183,7 +210,16 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Evidence
 <Agent pastes command output here before marking done.>
 
-## Blocked
+## Blocked — resolved
+
+**Remedy 1 was applied.** The restore half now matches the adjudicated form of doc 17 §3.4, doc 04
+§6 and FR-146: four gates (`restore_server_running`, `restore_source_rejected`,
+`restore_schema_too_new` — older schemas accepted, forward-migrated at boot — and
+`restore_integrity_failed`), the staged atomic replacement procedure that never leaves a window
+without a valid `dl-tool.db`, the renamed sentinels, and updated steps, acceptance criteria and
+Verification test names. The original record is preserved below.
+
+---
 
 The restore half of this file contradicts the documents that own restore behaviour on three facts
 the task must act on — the schema gate's name and semantics, the gate set, and the replacement

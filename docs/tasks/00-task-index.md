@@ -195,11 +195,11 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T082](T082-live-per-task-rate-limits.md) | Apply a per-task rate limit to a running task | T022, T037, T079 | done |
 | [T083](T083-watch-folder-loader.md) | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | done |
 | [T084](T084-api-tokens.md) | Issue, list and revoke API tokens | T008, T009 | done |
-| [T091](T091-database-backup-and-retention.md) | Back up the database on demand and prune on a schedule | T006, T012, T066 | deferred |
+| [T091](T091-database-backup-and-retention.md) | Back up the database on demand and prune on a schedule | T006, T012, T066 | todo |
 | [T092](T092-settings-and-system-info.md) | Serve settings and system info without leaking secrets | T005, T027, T091 | todo |
 | [T106](T106-notification-channel-endpoints.md) | Manage notification channels and test one | T077, T084 | done |
 | [T107](T107-tag-and-watch-folder-endpoints.md) | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | done |
-| [T108](T108-settings-export-import-and-restore.md) | Export and import portable settings, and restore from the CLI | T080, T106, T107 | deferred |
+| [T108](T108-settings-export-import-and-restore.md) | Export and import portable settings, and restore from the CLI | T080, T106, T107 | todo |
 | [T110](T110-bandwidth-precedence-and-dst.md) | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | done |
 | [T111](T111-delete-data-and-hardlink-safety.md) | Delete downloaded data safely and prove hardlink survival | T023, T076 | todo |
 | [T117](T117-rss-settings-section.md) | Build the RSS settings section | T053, T065, T066, T068, T092 | todo |
@@ -403,11 +403,11 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T082 | Apply a per-task rate limit to a running task | T022, T037, T079 | no | done | [T082](T082-live-per-task-rate-limits.md) |
 | T083 | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | no | done | [T083](T083-watch-folder-loader.md) |
 | T084 | Issue, list and revoke API tokens | T008, T009 | yes | done | [T084](T084-api-tokens.md) |
-| T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | deferred | [T091](T091-database-backup-and-retention.md) |
+| T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | todo | [T091](T091-database-backup-and-retention.md) |
 | T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | todo | [T092](T092-settings-and-system-info.md) |
 | T106 | Manage notification channels and test one | T077, T084 | no | done | [T106](T106-notification-channel-endpoints.md) |
 | T107 | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | yes | done | [T107](T107-tag-and-watch-folder-endpoints.md) |
-| T108 | Export and import portable settings, and restore from the CLI | T080, T106, T107 | no | deferred | [T108](T108-settings-export-import-and-restore.md) |
+| T108 | Export and import portable settings, and restore from the CLI | T080, T106, T107 | no | todo | [T108](T108-settings-export-import-and-restore.md) |
 | T110 | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | no | done | [T110](T110-bandwidth-precedence-and-dst.md) |
 | T111 | Delete downloaded data safely and prove hardlink survival | T023, T076 | no | todo | [T111](T111-delete-data-and-hardlink-safety.md) |
 | T117 | Build the RSS settings section | T053, T065, T066, T068, T092 | no | todo | [T117](T117-rss-settings-section.md) |
