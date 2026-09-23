@@ -271,6 +271,12 @@ Review dispositions on the GLM round covering `77dbd5d`:
   test files that call `time.LoadLocation`, so the DST and timezone tests do not
   depend on the host's zoneinfo database. Test binaries only — production builds
   are untouched.
+- Fourth round (`0224aff`, zero actionable): declined deduplicating the
+  `day*24+hour` read into `internal/store` and a targeted
+  `TaskStore.AdmissionPending` accessor — both need files outside the Files
+  table. The api/jobs helpers cross-reference each other in comments, and the
+  per-task candidate scan runs only for a queued task holding a handle under a
+  `0` cell — the same O(queue) `parkAll` already pays once per transition.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
