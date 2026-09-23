@@ -347,8 +347,10 @@ func TestChannelCrudAllKinds(t *testing.T) {
 			t.Errorf("%s config = %v, want %v echoed", tc.kind, created.Config, tc.config)
 		}
 		for key, want := range tc.config {
-			if got := created.Config[key]; fmt.Sprintf("%v", got) != fmt.Sprintf("%v", want) {
-				t.Errorf("%s config[%q] = %v, want %v", tc.kind, key, got, want)
+			wantJSON, _ := json.Marshal(want)
+			gotJSON, _ := json.Marshal(created.Config[key])
+			if string(gotJSON) != string(wantJSON) {
+				t.Errorf("%s config[%q] = %v, want %v", tc.kind, key, created.Config[key], want)
 			}
 		}
 		if since := time.Since(created.CreatedAt); since < 0 || since > time.Minute {
