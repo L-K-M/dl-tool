@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T111 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T023, T076 |
 | **Blocks** | — |
 | **Parallel-safe** | no — extends `internal/api/tasks_delete.go` and `internal/api/tasks_actions.go` |
@@ -111,13 +111,13 @@ The caller's obligations, in order, with the failure behaviour that must be test
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] A hardlinked copy elsewhere opens with its original contents after the delete.
-- [ ] One target outside the roots aborts the whole request; nothing at all is unlinked.
-- [ ] Only paths recorded in `task_files` are unlinked; an unrecorded file in the same directory survives.
-- [ ] A missing recorded file is counted in `missing` and is not an error.
-- [ ] The engine stop happens before the first unlink; an unreachable engine yields `503` and deletes nothing.
-- [ ] A `task_events` row with `code:"task.data_deleted"` is written before the response.
-- [ ] `delete_data=false` unlinks nothing.
+- [x] A hardlinked copy elsewhere opens with its original contents after the delete. — `TestHardlinkedCopySurvives`
+- [x] One target outside the roots aborts the whole request; nothing at all is unlinked. — `TestOneEscapingTargetAbortsAll`, `TestDeleteRejectsEscapingPath`
+- [x] Only paths recorded in `task_files` are unlinked; an unrecorded file in the same directory survives. — `TestOnlyRecordedFilesUnlinked`
+- [x] A missing recorded file is counted in `missing` and is not an error. — `TestMissingFileCounted`
+- [x] The engine stop happens before the first unlink; an unreachable engine yields `503` and deletes nothing. — `TestEngineStoppedBeforeUnlink`, `TestUnreachableEngineDeletesNothing`
+- [x] A `task_events` row with `code:"task.data_deleted"` is written before the response. — `TestDataDeletedEventWritten`
+- [x] `delete_data=false` unlinks nothing. — `TestDeleteKeepsData`
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -153,7 +153,68 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG="./internal/fsx/... ./internal/api/..." && echo DELETE_DATA_OK`:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> lint
+> eslint .
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+$ make test PKG="./internal/fsx/... ./internal/api/..."
+go test -race -count=1 ./internal/fsx/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.726s
+ok  	github.com/L-K-M/dl-tool/internal/api	188.774s
+DELETE_DATA_OK
+```
+
+The named tests, each `--- PASS`:
+
+```
+=== RUN   TestHardlinkedCopySurvives
+--- PASS: TestHardlinkedCopySurvives (0.00s)
+=== RUN   TestOneEscapingTargetAbortsAll
+--- PASS: TestOneEscapingTargetAbortsAll (0.00s)
+=== RUN   TestOnlyRecordedFilesUnlinked
+--- PASS: TestOnlyRecordedFilesUnlinked (0.00s)
+=== RUN   TestMissingFileCounted
+--- PASS: TestMissingFileCounted (0.00s)
+ok  	github.com/L-K-M/dl-tool/internal/fsx	0.018s
+--- PASS: TestEngineStoppedBeforeUnlink (0.13s)
+--- PASS: TestUnreachableEngineDeletesNothing (0.07s)
+--- PASS: TestDataDeletedEventWritten (0.05s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.284s
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+internal/api/tasks_actions.go
+internal/api/tasks_delete.go
+internal/api/tasks_delete_test.go
+internal/fsx/delete.go
+internal/fsx/delete_test.go
+web/src/api/schema.d.ts
+```
+
+The Files table's five paths plus `api/openapi.json` and `web/src/api/schema.d.ts`, the
+implicitly-in-scope generated pair this task owes `make gen` for the `delete_data` doc string on
+`ActionsInputBody` (docs/13-testing-and-verification.md §7.1).
+
+Ordering note: the caller-obligations table numbers the engine stop as step 1, but doc 05 §5.6 —
+"the documented order" the task's step 4 defers to — validates every path *before* the engine is
+touched ("the engine and filesystem remain untouched"), and the retained `TestDeleteRejectsEscapingPath`
+asserts that. The implementation keeps the documented order: enumerate, validate, Pause+Remove,
+`fsx.DeleteData` re-check + unlink, `task.data_deleted` event, tombstone. The executor's internal
+re-check is the second, non-skippable pass the interface contract requires.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

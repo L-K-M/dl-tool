@@ -2,13 +2,16 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -29,6 +32,7 @@ type deleteTestEnv struct {
 	api      humatest.TestAPI
 	db       *sqlx.DB
 	aria2    *actionEngine
+	engines  *engine.Registry
 	dataRoot string
 	bearer   string
 }
@@ -78,6 +82,7 @@ func newDeleteTestEnv(t *testing.T) *deleteTestEnv {
 		api:      humatest.Wrap(t, server.API),
 		db:       db,
 		aria2:    aria2,
+		engines:  server.Engines,
 		dataRoot: dataRoot,
 		bearer:   seedLiveAPIToken(t, db, user.ID),
 	}
@@ -534,5 +539,214 @@ func TestDeleteForceComplete(t *testing.T) {
 	}
 	if !slices.Equal(codes, []string{eventTaskForceCompleted}) {
 		t.Errorf("event codes = %v, want [task.force_completed]", codes)
+	}
+}
+
+// unlinkProbeEngine is an actionEngine whose Remove first runs a probe,
+// so a test can observe the filesystem at the moment the engine still
+// holds the handle — the witness that the stop precedes every unlink.
+type unlinkProbeEngine struct {
+	*actionEngine
+	onRemove func()
+}
+
+func (e *unlinkProbeEngine) Remove(ctx context.Context, id string) error {
+	e.onRemove()
+
+	return e.actionEngine.Remove(ctx, id)
+}
+
+// TestEngineStoppedBeforeUnlink pins the ordering of doc 05 section 5.6
+// for a seeding task: the engine still holds the payload, so Pause and
+// Remove must both land before the first unlink — proven by the probe
+// finding the recorded file on disk inside Remove.
+func TestEngineStoppedBeforeUnlink(t *testing.T) {
+	env := newDeleteTestEnv(t)
+
+	recorded := filepath.Join(env.dataRoot, "seeding", "payload.iso")
+	var presentAtRemove bool
+	probe := &unlinkProbeEngine{
+		actionEngine: newActionEngine(engine.NameQBittorrent, acceptsBitTorrent),
+		onRemove: func() {
+			_, err := os.Stat(recorded)
+			presentAtRemove = err == nil
+		},
+	}
+	env.engines.Register(probe)
+
+	// The engine column is constrained to the real engine names, so the
+	// probe plays qBittorrent, which this env does not register.
+	ref := qbtHash
+	id, _ := env.seedDownloadedTask(t, []seededFile{
+		{path: "seeding/payload.iso", size: 4096},
+	}, func(task *store.Task) {
+		task.Engine = engine.NameQBittorrent
+		task.EngineRef = &ref
+		task.SourceKind = "torrent"
+		task.State = string(engine.StateSeeding)
+	})
+
+	response := env.deleteTask(t, id, "delete_data=true")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	if !presentAtRemove {
+		t.Error("the recorded file was already gone inside Remove — an unlink preceded the engine stop")
+	}
+	if _, err := os.Stat(recorded); !os.IsNotExist(err) {
+		t.Errorf("recorded file still present after the delete: %v", err)
+	}
+
+	calls := []string{"Pause qbittorrent:" + ref, "Remove qbittorrent:" + ref}
+	if got := probe.recorded(); !slices.Equal(got, calls) {
+		t.Errorf("probe calls = %v, want %v", got, calls)
+	}
+	assertTombstone(t, env.taskRow(t, id))
+}
+
+// TestUnreachableEngineDeletesNothing pins the step-3 failure for a
+// seeding task: an unreachable engine is 503, Remove is never attempted
+// behind the failed Pause, and the task and every byte stay in place.
+func TestUnreachableEngineDeletesNothing(t *testing.T) {
+	env := newDeleteTestEnv(t)
+	env.aria2.pauseErr = engine.ErrUnavailable
+
+	id, destination := env.seedDownloadedTask(t, []seededFile{
+		{path: "payload.iso", size: 4096},
+	}, func(task *store.Task) {
+		task.State = string(engine.StateSeeding)
+	})
+
+	response := env.deleteTask(t, id, "delete_data=true")
+	assertProblem(t, response, http.StatusServiceUnavailable, SlugEngineUnavailable)
+
+	if calls := env.aria2.recorded(); !slices.Equal(calls, []string{"Pause aria2:" + aria2GID}) {
+		t.Errorf("aria2 calls = %v, want only the failed Pause — Remove was never attempted", calls)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "payload.iso")); err != nil {
+		t.Errorf("the recorded file was unlinked despite the 503: %v", err)
+	}
+
+	row := env.taskRow(t, id)
+	if row.State != string(engine.StateSeeding) {
+		t.Errorf("state = %q, want unchanged seeding", row.State)
+	}
+	if row.EngineRef == nil || *row.EngineRef != aria2GID {
+		t.Errorf("engine_ref = %v, want the retained handle", row.EngineRef)
+	}
+	if events := env.taskEventRows(t, id); len(events) != 0 {
+		t.Errorf("events = %v, want none", events)
+	}
+}
+
+// TestDataDeletedEventWritten pins step 5: the warn-level
+// task.data_deleted row — the file count and the byte total in detail —
+// commits in the same transaction as the tombstone, so it is readable
+// already when the 200 response arrives.
+func TestDataDeletedEventWritten(t *testing.T) {
+	env := newDeleteTestEnv(t)
+
+	id, _ := env.seedDownloadedTask(t, []seededFile{
+		{path: "a.bin", size: 100},
+		{path: "b.bin", size: 200},
+	}, nil)
+
+	response := env.deleteTask(t, id, "delete_data=true")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	event := dataDeletedEvent(t, env.taskEventRows(t, id))
+	if event.Level != "warn" {
+		t.Errorf("task.data_deleted level = %q, want warn", event.Level)
+	}
+	var detail struct {
+		Files int   `json:"files"`
+		Bytes int64 `json:"bytes"`
+	}
+	if err := json.Unmarshal([]byte(*event.DetailJSON), &detail); err != nil {
+		t.Fatalf("decode detail %q: %v", *event.DetailJSON, err)
+	}
+	if detail.Files != 2 || detail.Bytes != 300 {
+		t.Errorf("detail = %+v, want 2 files and 300 bytes", detail)
+	}
+
+	// Both rows share the transaction's `at`, so their readback order is
+	// not pinned — the set is.
+	codes := make([]string, 0, 2)
+	for _, row := range env.taskEventRows(t, id) {
+		codes = append(codes, row.Code)
+	}
+	slices.Sort(codes)
+	if !slices.Equal(codes, []string{"task.data_deleted", "task.removed"}) {
+		t.Errorf("event codes = %v, want exactly task.removed and task.data_deleted", codes)
+	}
+}
+
+// TestBulkRemoveDeletesDataPerID pins the shared executor under POST
+// /tasks/actions: every id of a remove with delete_data runs the six
+// steps, one escaping path is that id's path-rejected outcome, an unknown
+// id is its not-found, and the batch itself stays 200.
+func TestBulkRemoveDeletesDataPerID(t *testing.T) {
+	env := newDeleteTestEnv(t)
+
+	good, _ := env.seedDownloadedTask(t, []seededFile{
+		{path: "good/file.bin", size: 128},
+	}, nil)
+	// (engine, engine_ref) is unique, so the second fixture needs its own
+	// handle even though both rows point at the same stand-in.
+	badRef := "1a2b3c4d5e6f7088"
+	bad, destination := env.seedDownloadedTask(t, []seededFile{
+		{path: "keep.bin", size: 64},
+		{path: "../../../../etc/passwd", size: 1, alreadyGone: true},
+	}, func(task *store.Task) {
+		task.EngineRef = &badRef
+	})
+
+	response := env.api.Post("/tasks/actions", map[string]any{
+		"ids":         []string{good, bad, unknownID},
+		"action":      actionRemove,
+		"delete_data": true,
+	}, "Authorization: Bearer "+env.bearer)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	want := []ActionResult{
+		{ID: good, Ok: true},
+		{ID: bad, Ok: false, Type: SlugPathRejected, Detail: fmt.Sprintf(pathRejectedDetail, 1)},
+		{ID: unknownID, Ok: false, Type: SlugNotFound, Detail: detailTaskNotFound},
+	}
+	if results := decodeActionsBody(t, response).Results; !reflect.DeepEqual(results, want) {
+		t.Errorf("results = %+v, want %+v", results, want)
+	}
+
+	// The good id ran the whole executor: engine stopped, recorded file
+	// unlinked, its now-empty own directory gone, the row tombstoned and
+	// the event written.
+	if _, err := os.Stat(filepath.Join(destination, "good", "file.bin")); !os.IsNotExist(err) {
+		t.Errorf("the good task's file survived: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "good")); !os.IsNotExist(err) {
+		t.Errorf("the good task's emptied directory survived: %v", err)
+	}
+	assertTombstone(t, env.taskRow(t, good))
+	dataDeletedEvent(t, env.taskEventRows(t, good))
+
+	// The bad id never reached the engine or the filesystem: exactly one
+	// Pause/Remove pair ran for the whole batch, the recorded file stays
+	// and the row is untouched.
+	if calls := env.aria2.recorded(); !slices.Equal(calls, []string{"Pause aria2:" + aria2GID, "Remove aria2:" + aria2GID}) {
+		t.Errorf("aria2 calls = %v, want the good id's one Pause/Remove pair only", calls)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "keep.bin")); err != nil {
+		t.Errorf("the rejected task's file was unlinked: %v", err)
+	}
+	if row := env.taskRow(t, bad); row.State != string(engine.StateDownloading) {
+		t.Errorf("rejected task state = %q, want unchanged downloading", row.State)
+	}
+	if events := env.taskEventRows(t, bad); len(events) != 0 {
+		t.Errorf("rejected task events = %v, want none", events)
 	}
 }

@@ -56,7 +56,7 @@ const (
 	operationTaskActions = "task-actions"
 	operationPatchTask   = "patch-task"
 
-	queryActionTasks = `SELECT id, engine, engine_ref, state, error_code FROM tasks WHERE id IN (?)`
+	queryActionTasks = `SELECT id, engine, engine_ref, state, error_code, destination FROM tasks WHERE id IN (?)`
 
 	emptyIDsDetail      = "ids is required; send between 1 and 500 task ids"
 	tooManyIDsFormat    = "ids holds %d entries; send between 1 and %d"
@@ -149,7 +149,7 @@ type ActionsInput struct {
 	Body struct {
 		IDs        []string `json:"ids"        minItems:"1" maxItems:"500" doc:"Task ids; one outcome per entry, in request order"`
 		Action     string   `json:"action"     enum:"pause,resume,remove,recheck,force_complete,queue_top,queue_up,queue_down,queue_bottom" doc:"The action applied to every id"`
-		DeleteData bool     `json:"delete_data,omitempty" doc:"Only meaningful with remove; the data unlink arrives with the delete endpoint's own task"`
+		DeleteData bool     `json:"delete_data,omitempty" doc:"Only meaningful with remove; unlinks the recorded files through the same six-step executor as DELETE /tasks/{id}"`
 	}
 }
 
@@ -218,13 +218,15 @@ type sequentialEngine interface {
 }
 
 // actionTask is the slice of a tasks row an action needs: the engine
-// routing, the engine handle and the state-machine input.
+// routing, the engine handle, the state-machine input and the
+// destination a remove with delete_data resolves its targets against.
 type actionTask struct {
-	ID        string  `db:"id"`
-	Engine    string  `db:"engine"`
-	EngineRef *string `db:"engine_ref"`
-	State     string  `db:"state"`
-	ErrorCode *string `db:"error_code"`
+	ID          string  `db:"id"`
+	Engine      string  `db:"engine"`
+	EngineRef   *string `db:"engine_ref"`
+	State       string  `db:"state"`
+	ErrorCode   *string `db:"error_code"`
+	Destination string  `db:"destination"`
 }
 
 // Actions serves POST /tasks/actions (FR-014): one of the nine actions
@@ -281,6 +283,15 @@ func (h *TaskHandlers) Actions(ctx context.Context, in *ActionsInput) (*ActionsO
 		task, ok := tasks[id]
 		if !ok {
 			results = append(results, actionFailure(id, SlugNotFound, detailTaskNotFound))
+
+			continue
+		}
+		// A remove carrying delete_data runs the six steps of doc 05
+		// section 5.6 — the same executor the single delete calls — so it
+		// takes its own path instead of the plain
+		// engine-call-plus-transition of applyAction.
+		if in.Body.Action == actionRemove && in.Body.DeleteData {
+			results = append(results, h.removeWithData(ctx, task))
 
 			continue
 		}
@@ -734,6 +745,84 @@ func (h *TaskHandlers) transitionAction(ctx context.Context, task actionTask, ta
 
 		return actionFailure(task.ID, SlugInternal, detailActionFailed)
 	}
+}
+
+// removeWithData is the bulk remove's delete_data path: the six steps of
+// doc 05 section 5.6 run for this one id, through the same fsx.DeleteData
+// executor the single delete calls. Every failure lands as this id's
+// outcome — the batch itself never fails on one bad id.
+func (h *TaskHandlers) removeWithData(ctx context.Context, task actionTask) ActionResult {
+	// Steps 1 and 2: enumerate the recorded targets and validate every
+	// resolved path before any side effect — one escape is this id's
+	// path-rejected outcome with the engine and the filesystem untouched.
+	files, err := h.tasks.ListFiles(ctx, task.ID)
+	if err != nil {
+		logFromContext(ctx).Error("list task files for remove", slog.String("task_id", task.ID), slog.Any("err", err))
+
+		return actionFailure(task.ID, SlugInternal, detailActionFailed)
+	}
+	targets := recordedTargets(task.Destination, files)
+
+	if rejected := rejectedPaths(h.roots, targets); len(rejected) > 0 {
+		return actionFailure(task.ID, SlugPathRejected, fmt.Sprintf(pathRejectedDetail, len(rejected)))
+	}
+
+	// Step 3: the engine handle is dropped — Pause then Remove, retaining
+	// payload data — before the first unlink, so no file is still open by
+	// the engine. An unreachable engine is this id's failure; the row and
+	// every byte stay.
+	if err := h.stopTaskAtEngine(ctx, task); err != nil {
+		return engineFailure(ctx, task.ID, err)
+	}
+
+	// Step 4: the shared executor re-checks the targets and unlinks them.
+	result, err := fsx.DeleteData(ctx, h.roots, ownDir(task.Destination, targets), targets)
+	switch {
+	case err == nil:
+	case errors.Is(err, fsx.ErrPathRejected):
+		return actionFailure(task.ID, SlugPathRejected, err.Error())
+	default:
+		logFromContext(ctx).Error("unlink recorded task data failed", slog.String("task_id", task.ID), slog.Any("err", err))
+
+		return actionFailure(task.ID, SlugInternal, detailActionFailed)
+	}
+
+	// Steps 5 and 6: the task.data_deleted event, the task.removed event
+	// and the tombstone columns, in one transaction.
+	err = h.tasks.MarkRemoved(ctx, task.ID, &store.DeletedData{
+		Files: result.FilesUnlinked,
+		Bytes: result.BytesUnlinked,
+	})
+	switch {
+	case err == nil:
+		return ActionResult{ID: task.ID, Ok: true}
+	case errors.Is(err, store.ErrNotFound):
+		return actionFailure(task.ID, SlugNotFound, detailTaskNotFound)
+	case errors.Is(err, store.ErrIllegalTransition), errors.Is(err, store.ErrTransitionConflict):
+		return actionFailure(task.ID, SlugValidationFailed, detailIllegalState)
+	default:
+		logFromContext(ctx).Error("mark task removed failed", slog.String("task_id", task.ID), slog.Any("err", err))
+
+		return actionFailure(task.ID, SlugInternal, detailActionFailed)
+	}
+}
+
+// stopTaskAtEngine is step 3 of the delete sequence for one action row:
+// Pause so the engine closes the files, then Remove, which always retains
+// the payload data. A task the admission pass has not handed to an engine
+// yet carries no engine_ref and needs no round-trip.
+func (h *TaskHandlers) stopTaskAtEngine(ctx context.Context, task actionTask) error {
+	e, err := h.engineFor(ctx, task)
+	if err != nil || e == nil {
+		return err
+	}
+
+	id := engineTaskID(task.Engine, task.EngineRef)
+	if err := e.Pause(ctx, id); err != nil {
+		return err
+	}
+
+	return e.Remove(ctx, id)
 }
 
 // recheck applies the recheck action through the optional capability

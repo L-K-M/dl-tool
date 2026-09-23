@@ -9,10 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -49,13 +46,6 @@ type DeleteTaskOutput struct {
 		BytesUnlinked int64 `json:"bytes_unlinked" doc:"Recorded byte total of the unlinked files"`
 		Missing       int   `json:"missing"        doc:"Recorded files that were already gone"`
 	}
-}
-
-// deleteTarget is one recorded file resolved against tasks.destination,
-// with the recorded size the byte total is summed from (step 1).
-type deleteTarget struct {
-	path  string
-	bytes int64
 }
 
 // DeleteTask serves DELETE /tasks/{id}. delete_data=false (the default)
@@ -107,15 +97,18 @@ func (h *TaskHandlers) DeleteTask(ctx context.Context, in *DeleteTaskInput) (*De
 			return nil, err
 		}
 
-		// Step 4: one unlink per recorded file, then the task's own
+		// Step 4: the shared executor re-checks every target and then
+		// runs one unlink per recorded file, plus the task's own
 		// directory only while it is empty.
-		files, bytes, missing := unlinkTargets(ctx, targets)
-		removeOwnDir(ctx, h.roots, task.Destination, targets)
+		result, err := fsx.DeleteData(ctx, h.roots, ownDir(task.Destination, targets), targets)
+		if err != nil {
+			return nil, deleteDataProblem(ctx, err)
+		}
 
 		output.Body.DeleteData = true
-		output.Body.FilesUnlinked = files
-		output.Body.BytesUnlinked = bytes
-		output.Body.Missing = missing
+		output.Body.FilesUnlinked = result.FilesUnlinked
+		output.Body.BytesUnlinked = result.BytesUnlinked
+		output.Body.Missing = result.Missing
 	} else if err := h.removeEngineHandle(ctx, task, detachAfterPause); err != nil {
 		return nil, err
 	}
@@ -158,28 +151,38 @@ func (h *TaskHandlers) forceCompleteTask(ctx context.Context, task store.Task) (
 // destination (doc 05 section 5.6 step 1). filepath.Join cleans the result,
 // so a recorded "../.." is folded to where it really points before the
 // validation of step 2 judges it.
-func recordedTargets(destination string, files []store.TaskFile) []deleteTarget {
-	targets := make([]deleteTarget, 0, len(files))
+func recordedTargets(destination string, files []store.TaskFile) []fsx.Target {
+	targets := make([]fsx.Target, 0, len(files))
 	for _, file := range files {
-		targets = append(targets, deleteTarget{
-			path:  filepath.Join(destination, file.Path),
-			bytes: file.SizeBytes,
+		targets = append(targets, fsx.Target{
+			Path:  filepath.Join(destination, file.Path),
+			Bytes: file.SizeBytes,
 		})
 	}
 
 	return targets
 }
 
+// rejectedPaths collects every resolved target that fails the configured
+// roots check (step 2) — shared by the single delete's 403 errors[] and
+// the bulk remove's per-id outcome. The executor re-runs the same check
+// inside fsx.DeleteData before the first unlink.
+func rejectedPaths(roots []string, targets []fsx.Target) []string {
+	var rejected []string
+	for _, target := range targets {
+		if _, err := fsx.ResolveDestination(roots, target.Path); err != nil {
+			rejected = append(rejected, target.Path)
+		}
+	}
+
+	return rejected
+}
+
 // validateTargets re-checks every resolved target against the configured
 // roots (step 2), collecting every failure first: one escaping path aborts
 // the whole request before the engine or the filesystem is touched.
-func validateTargets(roots []string, targets []deleteTarget) error {
-	var failures []string
-	for _, target := range targets {
-		if _, err := fsx.ResolveDestination(roots, target.path); err != nil {
-			failures = append(failures, target.path)
-		}
-	}
+func validateTargets(roots []string, targets []fsx.Target) error {
+	failures := rejectedPaths(roots, targets)
 	if len(failures) == 0 {
 		return nil
 	}
@@ -248,65 +251,29 @@ func engineFailureProblem(ctx context.Context, operation, taskID string, err err
 	return internalFailure(ctx, operation, fmt.Errorf("task %s: %w", taskID, err))
 }
 
-// unlinkTargets performs step 4: one unlink per recorded file, counting
-// what happened. A recorded file that no longer exists is missing, not an
-// error. A hardlinked file's removal is expected and safe: the library
-// copy survives on its own name (ADR-0012), which is why nothing here
-// detects or warns about hardlinks. An unlink failing for any other reason
-// is logged and left in place — the operation is irreversible, so it
-// continues and the counts report what was actually unlinked.
-func unlinkTargets(ctx context.Context, targets []deleteTarget) (files int, bytes int64, missing int) {
-	for _, target := range targets {
-		switch err := os.Remove(target.path); {
-		case err == nil:
-			files++
-			bytes += target.bytes
-		case errors.Is(err, fs.ErrNotExist):
-			missing++
-		default:
-			logFromContext(ctx).Warn("unlink of recorded task file failed",
-				slog.String("path", target.path), slog.Any("err", err))
-		}
+// deleteDataProblem maps the executor's failure onto the response: a
+// target that slipped past the caller's pre-check — a path swapped after
+// it validated — is still the 403 of step 2, and nothing was unlinked.
+func deleteDataProblem(ctx context.Context, err error) error {
+	if errors.Is(err, fsx.ErrPathRejected) {
+		return Problem(SlugPathRejected, http.StatusForbidden, err.Error())
 	}
 
-	return files, bytes, missing
-}
-
-// removeOwnDir takes the task's own directory with it, only while it is
-// empty: os.Remove of a directory fails while anything lives inside it,
-// which is exactly that rule, so a non-empty directory is simply left in
-// place. The destination itself is never the task's own, and the directory
-// must still resolve inside the roots like every other target.
-func removeOwnDir(ctx context.Context, roots []string, destination string, targets []deleteTarget) {
-	dir := ownDir(destination, targets)
-	if dir == "" {
-		return
-	}
-	if _, err := fsx.ResolveDestination(roots, dir); err != nil {
-		logFromContext(ctx).Warn("task's own directory does not resolve inside the data roots; leaving it in place",
-			slog.String("dir", dir), slog.Any("err", err))
-
-		return
-	}
-
-	if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		logFromContext(ctx).Warn("removal of the task's own directory failed",
-			slog.String("dir", dir), slog.Any("err", err))
-	}
+	return internalFailure(ctx, "unlink recorded task data", err)
 }
 
 // ownDir is the one directory every recorded target shares when it is not
 // the destination itself — the only directory that belongs to the task
 // alone. It is "" when the targets span several directories or sit
 // directly in the shared destination.
-func ownDir(destination string, targets []deleteTarget) string {
+func ownDir(destination string, targets []fsx.Target) string {
 	if len(targets) == 0 {
 		return ""
 	}
 
-	dir := filepath.Dir(targets[0].path)
+	dir := filepath.Dir(targets[0].Path)
 	for _, target := range targets[1:] {
-		if filepath.Dir(target.path) != dir {
+		if filepath.Dir(target.Path) != dir {
 			return ""
 		}
 	}
