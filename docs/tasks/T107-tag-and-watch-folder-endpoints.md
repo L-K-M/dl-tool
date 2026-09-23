@@ -172,17 +172,17 @@ REACHABILITY_OK
 Named tests (verbose run, all `--- PASS`, plus the review-added coverage):
 
 ```
-$ go test -count=1 -v -run 'TestRenameTag|TestDeleteTag|TestRenameOnto|TestTagName|TestTagPathName|TestScanCreates|TestWatchFolderOutside|TestWatchFolderValidation|TestScanDeleted' ./internal/api/
---- PASS: TestRenameTagKeepsTasks (0.08s)
---- PASS: TestDeleteTagKeepsTasks (0.03s)
---- PASS: TestRenameOntoExistingIsConflict (0.04s)
---- PASS: TestTagNameValidation (0.04s)
---- PASS: TestScanCreatesTaskImmediately (0.03s)
---- PASS: TestWatchFolderOutsideRootsRejected (0.03s)
+$ go test -race -count=1 -v -run 'TestRenameTag|TestDeleteTag|TestRenameOnto|TestTagName|TestTagPathName|TestScanCreates|TestWatchFolderOutside|TestWatchFolderValidation|TestScanDeleted' ./internal/api/
+--- PASS: TestRenameTagKeepsTasks (0.47s)
+--- PASS: TestDeleteTagKeepsTasks (0.43s)
+--- PASS: TestRenameOntoExistingIsConflict (0.42s)
+--- PASS: TestTagNameValidation (0.45s)
+--- PASS: TestScanCreatesTaskImmediately (0.37s)
+--- PASS: TestWatchFolderOutsideRootsRejected (0.39s)
 --- PASS: TestTagPathNameDecodesOnce (0.00s)
---- PASS: TestWatchFolderValidation (0.03s)
---- PASS: TestScanDeletedDirectoryIsUnprocessable (0.05s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.368s
+--- PASS: TestWatchFolderValidation (0.37s)
+--- PASS: TestScanDeletedDirectoryIsUnprocessable (0.40s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.538s
 ```
 
 Scope check:
