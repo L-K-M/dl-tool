@@ -164,8 +164,8 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	167.985s
-ok  	github.com/L-K-M/dl-tool/internal/store	76.328s
+ok  	github.com/L-K-M/dl-tool/internal/api	166.193s
+ok  	github.com/L-K-M/dl-tool/internal/store	76.023s
 REACHABILITY_OK
 ```
 
@@ -173,16 +173,16 @@ Named tests (verbose run, all `--- PASS`, plus the review-added coverage):
 
 ```
 $ go test -race -count=1 -v -run 'TestRenameTag|TestDeleteTag|TestRenameOnto|TestTagName|TestTagPathName|TestScanCreates|TestWatchFolderOutside|TestWatchFolderValidation|TestScanDeleted' ./internal/api/
---- PASS: TestRenameTagKeepsTasks (0.47s)
+--- PASS: TestRenameTagKeepsTasks (0.51s)
 --- PASS: TestDeleteTagKeepsTasks (0.43s)
---- PASS: TestRenameOntoExistingIsConflict (0.42s)
---- PASS: TestTagNameValidation (0.45s)
---- PASS: TestScanCreatesTaskImmediately (0.37s)
+--- PASS: TestRenameOntoExistingIsConflict (0.40s)
+--- PASS: TestTagNameValidation (0.43s)
+--- PASS: TestScanCreatesTaskImmediately (0.41s)
 --- PASS: TestWatchFolderOutsideRootsRejected (0.39s)
 --- PASS: TestTagPathNameDecodesOnce (0.00s)
---- PASS: TestWatchFolderValidation (0.37s)
---- PASS: TestScanDeletedDirectoryIsUnprocessable (0.40s)
-ok  	github.com/L-K-M/dl-tool/internal/api	4.538s
+--- PASS: TestWatchFolderValidation (0.42s)
+--- PASS: TestScanDeletedDirectoryIsUnprocessable (0.38s)
+ok  	github.com/L-K-M/dl-tool/internal/api	4.619s
 ```
 
 Scope check:
