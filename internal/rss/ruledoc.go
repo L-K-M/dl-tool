@@ -191,7 +191,7 @@ func (d RuleDoc) Validate() []FieldError {
 		switch {
 		case err != nil:
 			add("episode.filter", "%v", err)
-		case filter.Season == 0 && len(filter.Tokens) == 0:
+		case filter.IsZero():
 			// "0x;" parses to the zero EpisodeFilter, which Match reads
 			// as match-everything — the rejection newRuleEval applies at
 			// evaluation, moved here so the save path answers 422
@@ -332,6 +332,14 @@ func parseIECSize(s string) (int64, error) {
 type EpisodeFilter struct {
 	Season int
 	Tokens []EpisodeToken
+}
+
+// IsZero reports the match-everything filter: a non-empty document value
+// such as "0x;" that parsed to no season and no tokens. Validate and
+// newRuleEval must reject it identically, so the predicate lives here —
+// the one place both layers share.
+func (f EpisodeFilter) IsZero() bool {
+	return f.Season == 0 && len(f.Tokens) == 0
 }
 
 // EpisodeToken is a single number, an inclusive range, or an open-ended

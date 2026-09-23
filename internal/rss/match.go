@@ -235,7 +235,7 @@ func newRuleEval(doc RuleDoc, rule store.Rule) (*ruleEval, error) {
 			if err != nil {
 				return nil, fmt.Errorf("episode.filter: %w", err)
 			}
-			if filter.Season == 0 && len(filter.Tokens) == 0 {
+			if filter.IsZero() {
 				// A "0x;"-shaped filter parses to the zero EpisodeFilter,
 				// which Match reads as match-everything — the worst
 				// failure mode for a grabbing tool. Reject it here so a
