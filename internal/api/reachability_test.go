@@ -307,15 +307,22 @@ func TestScanCreatesTaskImmediately(t *testing.T) {
 func TestWatchFolderOutsideRootsRejected(t *testing.T) {
 	env := newTasksTestEnv(t)
 
+	// A sibling of the data root is outside every configured root on any
+	// host — no dependence on a system path like /etc existing.
+	outside := filepath.Join(filepath.Dir(env.dataRoot), "outside-roots")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("make outside dir: %v", err)
+	}
+
 	response := env.createWatchFolder(t, map[string]any{
-		"path":        "/etc",
+		"path":        outside,
 		"destination": env.dataRoot,
 	})
 	assertProblem(t, response, http.StatusForbidden, SlugPathRejected)
 
 	response = env.createWatchFolder(t, map[string]any{
 		"path":        env.dataRoot,
-		"destination": "/etc",
+		"destination": outside,
 	})
 	assertProblem(t, response, http.StatusForbidden, SlugPathRejected)
 
