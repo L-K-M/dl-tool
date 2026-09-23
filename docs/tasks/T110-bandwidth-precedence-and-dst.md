@@ -262,6 +262,11 @@ Review dispositions on the GLM round covering `77dbd5d`:
   `TestScheduleReportsTimezone` into `internal/api`'s test package — that file is
   outside the Files table; `time.Local` restore — already in place via
   `t.Cleanup`; `_ "time/tzdata"` — the image installs `tzdata` (Dockerfile).
+- Second round (`560b2eb`, zero actionable): declined the pinning test for the
+  `effectiveLimits` panic — it would need a new `package engine` internal test
+  file, and the Files table is modify-only (0 new files). The guard is a
+  defense-in-depth for a path `ApplyMode` never reaches; the public-surface
+  proof is `TestNoDownloadPausesNotThrottles` asserting no rate is sent.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
