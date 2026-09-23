@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -345,6 +346,9 @@ func TestChannelCrudAllKinds(t *testing.T) {
 		if len(created.Config) != len(tc.config) {
 			t.Errorf("%s config = %v, want %v echoed", tc.kind, created.Config, tc.config)
 		}
+		if since := time.Since(created.CreatedAt); since < 0 || since > time.Minute {
+			t.Errorf("%s created_at = %v, want the stored timestamp — never epoch 0", tc.kind, created.CreatedAt)
+		}
 		ids[tc.kind] = created.ID
 	}
 
@@ -357,6 +361,10 @@ func TestChannelCrudAllKinds(t *testing.T) {
 			t.Fatalf("channels[%d].Name = %q, want %q — the list is name-sorted", i, channels[i].Name, want)
 		}
 	}
+
+	// An explicit empty name is 422, not a silent no-op.
+	response = env.patchChannel(t, ids["ntfy"], map[string]any{"name": ""})
+	assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 
 	// The patch merges: a rename, a disable and a mask change land while
 	// kind and config survive untouched.
@@ -640,6 +648,28 @@ func TestTestReturnsRawUpstreamReply(t *testing.T) {
 	if stub.count() != 1 {
 		t.Errorf("stub saw %d requests, want the single test send", stub.count())
 	}
+
+	// A disabled channel is still testable (doc 05 §14.1): the test send
+	// is a diagnostic, not a fan-out.
+	disabled := env.seedChannel(
+		t, "webhook", "off", 0,
+		map[string]any{"url": stub.srv.URL}, []string{"*"}, "",
+	)
+	response = env.testChannel(t, disabled, map[string]any{})
+	if response.Code != http.StatusOK {
+		t.Fatalf("disabled channel test status = %d, want %d; body %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	// No test send writes a task_events row (doc 05 §14.1).
+	var events int
+	if err := env.db.GetContext(
+		t.Context(), &events, `SELECT COUNT(*) FROM task_events`,
+	); err != nil {
+		t.Fatalf("count task_events: %v", err)
+	}
+	if events != 0 {
+		t.Errorf("task_events rows = %d, want 0 — a test send records no event", events)
+	}
 }
 
 // TestUnknownConfigKeyRejected pins doc 05 section 14: a config key
@@ -676,6 +706,33 @@ func TestConfigURLBlocked(t *testing.T) {
 			"config": map[string]any{"url": target},
 		})
 		assertProblem(t, response, http.StatusForbidden, SlugSSRFBlocked)
+	}
+
+	// Every URL reaches the preflight whatever the member's shape: the
+	// apprise urls dict and array forms are checked member by member.
+	response := env.createChannel(t, map[string]any{
+		"kind":   "apprise",
+		"name":   "dict-blocked",
+		"config": map[string]any{"base_url": "https://apprise.example.com", "config_key": "dl", "urls": map[string]any{"alerts": "http://169.254.169.254/x"}},
+	})
+	assertProblem(t, response, http.StatusForbidden, SlugSSRFBlocked)
+
+	response = env.createChannel(t, map[string]any{
+		"kind":   "apprise",
+		"name":   "array-blocked",
+		"config": map[string]any{"base_url": "https://apprise.example.com", "config_key": "dl", "urls": []any{"https://apprise.example.com/ok", "http://10.0.0.4/x"}},
+	})
+	assertProblem(t, response, http.StatusForbidden, SlugSSRFBlocked)
+
+	// A URL member in a shape none of the three forms take is 422, never
+	// a silent pass around the guard.
+	for _, urls := range []any{42, map[string]any{"k": 42}} {
+		response = env.createChannel(t, map[string]any{
+			"kind":   "apprise",
+			"name":   fmt.Sprintf("bad-shape-%v", urls),
+			"config": map[string]any{"base_url": "https://apprise.example.com", "config_key": "dl", "urls": urls},
+		})
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
 	}
 
 	if channels := decodeChannelList(t, env.getChannels(t)); len(channels) != 0 {

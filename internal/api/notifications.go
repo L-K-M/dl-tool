@@ -63,7 +63,7 @@ type ChannelView struct {
 // same nil. "__redacted__" is a rendered form and leaves the secret too.
 type ChannelWriteBody struct {
 	Kind      string          `json:"kind,omitempty"       enum:"webhook,ntfy,gotify,apprise" doc:"Immutable after creation"`
-	Name      string          `json:"name,omitempty"`
+	Name      *string         `json:"name,omitempty"`
 	Enabled   *bool           `json:"enabled,omitempty"`
 	Config    map[string]any  `json:"config,omitempty"     doc:"Non-secret configuration; the key set is fixed per kind"`
 	Secret    json.RawMessage `json:"secret,omitempty"     doc:"Write-only; __redacted__ leaves the stored secret, null clears it"`
@@ -267,7 +267,7 @@ func (h *NotificationHandlers) Create(ctx context.Context, in *CreateChannelInpu
 	if in.Body.Kind == "" {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, channelKindDetail)
 	}
-	if in.Body.Name == "" {
+	if in.Body.Name == nil || *in.Body.Name == "" {
 		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, channelNameDetail)
 	}
 	if err := h.validateConfig(ctx, in.Body.Kind, in.Body.Config); err != nil {
@@ -302,7 +302,7 @@ func (h *NotificationHandlers) Create(ctx context.Context, in *CreateChannelInpu
 	channel := store.NotificationChannel{
 		ID:         store.NewID(store.PrefixNotificationChannel),
 		Kind:       in.Body.Kind,
-		Name:       in.Body.Name,
+		Name:       *in.Body.Name,
 		Enabled:    enabled,
 		ConfigJSON: configJSON,
 		SecretEnc:  enc,
@@ -316,9 +316,13 @@ func (h *NotificationHandlers) Create(ctx context.Context, in *CreateChannelInpu
 		return nil, internalFailure(ctx, "create notification channel", err)
 	}
 
-	view, err := channelView(channel)
+	created, err := h.settings.GetNotificationChannel(ctx, channel.ID)
 	if err != nil {
-		return nil, internalFailure(ctx, "render notification channel "+channel.ID, err)
+		return nil, internalFailure(ctx, "read back notification channel", err)
+	}
+	view, err := channelView(created)
+	if err != nil {
+		return nil, internalFailure(ctx, "render notification channel "+created.ID, err)
 	}
 
 	return &ChannelOutput{Status: http.StatusCreated, Body: view}, nil
@@ -339,8 +343,11 @@ func (h *NotificationHandlers) Patch(ctx context.Context, in *PatchChannelInput)
 	}
 
 	patch := store.NotificationChannelPatch{}
-	if in.Body.Name != "" {
-		patch.Name = &in.Body.Name
+	if in.Body.Name != nil {
+		if *in.Body.Name == "" {
+			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, channelNameDetail)
+		}
+		patch.Name = in.Body.Name
 	}
 	if in.Body.Enabled != nil {
 		flag := 0
@@ -471,8 +478,25 @@ func (h *NotificationHandlers) validateConfig(ctx context.Context, kind string, 
 	}
 
 	for _, key := range channelURLKeys[kind] {
-		for _, raw := range channelURLValues(config[key]) {
-			if err := secure.PreflightURI(ctx, h.guard, h.resolver, raw); err != nil {
+		raw, present := config[key]
+		if !present {
+			continue
+		}
+		urls, ok := channelURLValues(raw)
+		if !ok {
+			return &huma.ErrorModel{
+				Type:   SlugValidationFailed,
+				Title:  http.StatusText(http.StatusUnprocessableEntity),
+				Status: http.StatusUnprocessableEntity,
+				Detail: "config." + key + " must be a string, a string array or an object of strings",
+				Errors: []*huma.ErrorDetail{{
+					Message:  "unsupported shape for a URL config key",
+					Location: "body.config." + key,
+				}},
+			}
+		}
+		for _, target := range urls {
+			if err := secure.PreflightURI(ctx, h.guard, h.resolver, target); err != nil {
 				return &huma.ErrorModel{
 					Type:   SlugSSRFBlocked,
 					Title:  http.StatusText(http.StatusForbidden),
@@ -491,27 +515,48 @@ func (h *NotificationHandlers) validateConfig(ctx context.Context, kind string, 
 }
 
 // channelURLValues flattens a URL-carrying config member to the strings
-// the preflight checks: a bare string or a string array — apprise urls
-// arrives in either shape.
-func channelURLValues(value any) []string {
+// the preflight checks: a bare string, a string array or — the dict form
+// apprise's urls member also takes — an object whose every value is a
+// string. The bool reports whether the shape was one of those three;
+// anything else is a 422 so no URL slips past the check.
+func channelURLValues(value any) ([]string, bool) {
 	switch typed := value.(type) {
+	case nil:
+		return nil, true
 	case string:
 		if typed == "" {
-			return nil
+			return nil, true
 		}
 
-		return []string{typed}
+		return []string{typed}, true
 	case []any:
 		out := make([]string, 0, len(typed))
 		for _, item := range typed {
-			if s, ok := item.(string); ok && s != "" {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			if s != "" {
 				out = append(out, s)
 			}
 		}
 
-		return out
+		return out, true
+	case map[string]any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+
+		return out, true
 	default:
-		return nil
+		return nil, false
 	}
 }
 
