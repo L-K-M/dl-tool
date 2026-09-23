@@ -325,6 +325,106 @@ func (s *SettingsStore) ListTags(ctx context.Context) ([]Tag, error) {
 	return tags, nil
 }
 
+// queryTagByName is queryListTags over one unique name.
+const queryTagByName = `SELECT t.name, COUNT(k.id) AS task_count
+FROM tags t
+LEFT JOIN task_tags tt ON tt.tag_id = t.id
+LEFT JOIN tasks k ON k.id = tt.task_id AND k.state <> 'removed'
+WHERE t.name = ?
+GROUP BY t.id`
+
+// TagByName resolves one row by its unique name, carrying the same
+// task_count the list does. ErrNotFound means no tag carries it.
+func (s *SettingsStore) TagByName(ctx context.Context, name string) (Tag, error) {
+	var tag Tag
+	err := s.db.GetContext(ctx, &tag, queryTagByName, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Tag{}, fmt.Errorf("store: tag %s: %w", name, ErrNotFound)
+	}
+	if err != nil {
+		return Tag{}, fmt.Errorf("store: tag %s: %w", name, err)
+	}
+
+	return tag, nil
+}
+
+const queryRenameTag = `UPDATE tags SET name = ?, updated_at = ? WHERE name = ?`
+
+// RenameTag renames the row in place, so every task carrying it carries
+// the new name at once; the tag id is unchanged and no task row is
+// touched. ErrNotFound means name addresses no row; ErrConflict means
+// newName belongs to another row — a rename is a conflict, never a
+// silent merge.
+func (s *SettingsStore) RenameTag(ctx context.Context, name, newName string) error {
+	result, err := s.db.ExecContext(ctx, queryRenameTag, newName, time.Now().UnixMilli(), name)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("store: rename tag %s: %w", name, ErrConflict)
+		}
+
+		return fmt.Errorf("store: rename tag %s: %w", name, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: rename tag %s: read rows affected: %w", name, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: rename tag %s: %w", name, ErrNotFound)
+	}
+
+	return nil
+}
+
+// queryDetachTag and queryDeleteTagRow run inside one transaction in
+// DeleteTag: the link rows go first, then the tag row itself.
+const (
+	queryDetachTag    = `DELETE FROM task_tags WHERE tag_id = (SELECT id FROM tags WHERE name = ?)`
+	queryDeleteTagRow = `DELETE FROM tags WHERE name = ?`
+)
+
+// DeleteTag detaches the tag from every task and deletes the row in one
+// transaction, so a task observed mid-write can never hold a link to a
+// tag that no longer exists. NO TASK IS EVER DELETED: only the task_tags
+// links and the tag row go — the ON DELETE CASCADE on task_tags.tag_id
+// is the backstop, not the mechanism. ErrNotFound means name addresses
+// no row.
+func (s *SettingsStore) DeleteTag(ctx context.Context, name string) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: delete tag %s: %w", name, err)
+	}
+	// Rolls back on any early return; after Commit this is sql.ErrTxDone,
+	// which is the expected outcome and not worth a warning.
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.WarnContext(ctx, "store: rollback of tag delete failed", "error", err)
+		}
+	}()
+
+	if _, err := tx.ExecContext(ctx, queryDetachTag, name); err != nil {
+		return fmt.Errorf("store: detach tag %s: %w", name, err)
+	}
+
+	result, err := tx.ExecContext(ctx, queryDeleteTagRow, name)
+	if err != nil {
+		return fmt.Errorf("store: delete tag %s: %w", name, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete tag %s: read rows affected: %w", name, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: delete tag %s: %w", name, ErrNotFound)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: delete tag %s: commit: %w", name, err)
+	}
+
+	return nil
+}
+
 // settingDefaultDestination is the settings key of
 // docs/11-config-reference.md section 5 the create path falls back to
 // when a submission carries neither a destination nor a category.
@@ -1288,6 +1388,123 @@ func (s *SettingsStore) MarkWatchFolderLoaded(ctx context.Context, folderID, inf
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: append settings key %s: commit: %w", key, err)
+	}
+
+	return nil
+}
+
+const queryListWatchFolders = `SELECT ` + watchFolderColumns + `
+FROM watch_folders w LEFT JOIN categories c ON c.id = w.category_id
+ORDER BY w.created_at, w.id`
+
+// ListWatchFolders returns every row of watch_folders — the enabled rows
+// the loader watches and the disabled rows the API still manages —
+// oldest first, the same order ListEnabledWatchFolders uses.
+func (s *SettingsStore) ListWatchFolders(ctx context.Context) ([]WatchFolder, error) {
+	var folders []WatchFolder
+	if err := s.db.SelectContext(ctx, &folders, queryListWatchFolders); err != nil {
+		return nil, fmt.Errorf("store: list watch folders: %w", err)
+	}
+
+	return folders, nil
+}
+
+const queryCreateWatchFolder = `INSERT INTO watch_folders
+(id, path, enabled, destination, category_id, delete_after_load, poll_interval_s, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+// CreateWatchFolder inserts one row; a path already watched is
+// ErrConflict. The caller owns f.ID (a wfd_ ULID), the already-resolved
+// Path and Destination, the resolved category id and the validated poll
+// interval.
+func (s *SettingsStore) CreateWatchFolder(ctx context.Context, f WatchFolder, categoryID *string) error {
+	now := time.Now().UnixMilli()
+	if _, err := s.db.ExecContext(
+		ctx, queryCreateWatchFolder,
+		f.ID, f.Path, f.Enabled, f.Destination, categoryID, f.DeleteAfterLoad, f.PollIntervalS, now, now,
+	); err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("store: create watch folder %s: %w", f.Path, ErrConflict)
+		}
+
+		return fmt.Errorf("store: create watch folder %s: %w", f.Path, err)
+	}
+
+	return nil
+}
+
+// WatchFolderPatch carries the fields a PATCH may write; a nil member
+// leaves its column untouched. CategorySet distinguishes "leave
+// category_id" from "write CategoryID" — a nil CategoryID with
+// CategorySet true clears the category, which COALESCE alone cannot
+// express.
+type WatchFolderPatch struct {
+	Path            *string
+	Enabled         *int
+	Destination     *string
+	CategorySet     bool
+	CategoryID      *string
+	DeleteAfterLoad *int
+	PollIntervalS   *int
+}
+
+// queryUpdateWatchFolder merges the patch inside the UPDATE: a NULL
+// argument leaves its column untouched, so two concurrent PATCHes cannot
+// lose each other's field. The category member is the exception:
+// CategorySet gates the write so a clear-to-NULL is expressible.
+const queryUpdateWatchFolder = `UPDATE watch_folders
+SET path = COALESCE(?, path), enabled = COALESCE(?, enabled),
+    destination = COALESCE(?, destination),
+    category_id = CASE WHEN ? THEN ? ELSE category_id END,
+    delete_after_load = COALESCE(?, delete_after_load),
+    poll_interval_s = COALESCE(?, poll_interval_s), updated_at = ?
+WHERE id = ?`
+
+// UpdateWatchFolder writes the addressed row's patch. ErrNotFound means
+// id addresses no row; ErrConflict means the new path belongs to another
+// row.
+func (s *SettingsStore) UpdateWatchFolder(ctx context.Context, id string, p WatchFolderPatch) error {
+	result, err := s.db.ExecContext(
+		ctx, queryUpdateWatchFolder,
+		p.Path, p.Enabled, p.Destination, p.CategorySet, p.CategoryID,
+		p.DeleteAfterLoad, p.PollIntervalS, time.Now().UnixMilli(), id,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("store: update watch folder %s: %w", id, ErrConflict)
+		}
+
+		return fmt.Errorf("store: update watch folder %s: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update watch folder %s: read rows affected: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: update watch folder %s: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+const queryDeleteWatchFolder = `DELETE FROM watch_folders WHERE id = ?`
+
+// DeleteWatchFolder removes the row. The directory and its contents are
+// never touched — the row is a pointer, not an owner. ErrNotFound means
+// id addresses no row.
+func (s *SettingsStore) DeleteWatchFolder(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, queryDeleteWatchFolder, id)
+	if err != nil {
+		return fmt.Errorf("store: delete watch folder %s: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete watch folder %s: read rows affected: %w", id, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: delete watch folder %s: %w", id, ErrNotFound)
 	}
 
 	return nil

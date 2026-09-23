@@ -136,6 +136,13 @@ type Server struct {
 	// the tag list of section 8.2.
 	categories *CategoryHandlers
 
+	// tags owns the rename and delete verbs of doc 05 section 8.2.
+	tags *TagHandlers
+
+	// watchFolders owns the /watch-folders operations of doc 05 section
+	// 15, including the on-demand scan.
+	watchFolders *WatchFolderHandlers
+
 	// fs owns the /fs browse operations of doc 05 section 7.
 	fs *FSHandlers
 
@@ -347,6 +354,14 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	// The watch-folder creator shares the same tasks instance: a dropped
 	// .torrent takes the identical create path an uploaded one does.
 	watchCreator := watchTaskCreator{tasks: tasks}
+	// The scan operation runs the T083 sweep synchronously through a
+	// Watcher over the same creator. The composition root builds the
+	// watcher whose Run loop watches the rows; this instance only ever
+	// serves POST /watch-folders/{id}/scan. The two share the loaded set
+	// through the store — MarkWatchFolderLoaded serializes it
+	// process-wide and task dedup is the backstop — so a poll sweep and
+	// an on-demand scan of one folder cannot load a file twice.
+	scanWatcher := jobs.NewWatcher(store.NewSettingsStore(db), watchCreator)
 
 	// The /notifications test send delivers through the same SSRF-guarded
 	// client the search and feed paths share; with no Deps — the openapi
@@ -358,20 +373,22 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	}
 
 	server := &Server{
-		Router:     root,
-		Base:       base,
-		V1:         v1,
-		API:        humachi.New(v1, humaConfig),
-		db:         db,
-		Health:     health,
-		auth:       auth,
-		Engines:    engines,
-		tasks:      tasks,
-		settings:   NewSettingsHandlers(db, engines),
-		prefs:      NewPrefsHandlers(db),
-		categories: NewCategoryHandlers(db, cfg.DataRoots),
-		fs:         NewFSHandlers(cfg.DataRoots),
-		search:     NewSearchHandlers(log, searchDeps),
+		Router:       root,
+		Base:         base,
+		V1:           v1,
+		API:          humachi.New(v1, humaConfig),
+		db:           db,
+		Health:       health,
+		auth:         auth,
+		Engines:      engines,
+		tasks:        tasks,
+		settings:     NewSettingsHandlers(db, engines),
+		prefs:        NewPrefsHandlers(db),
+		categories:   NewCategoryHandlers(db, cfg.DataRoots),
+		tags:         NewTagHandlers(db),
+		watchFolders: NewWatchFolderHandlers(db, cfg.DataRoots, scanWatcher),
+		fs:           NewFSHandlers(cfg.DataRoots),
+		search:       NewSearchHandlers(log, searchDeps),
 		// The feed poller shares the SSRF-guarded client with the search
 		// fan-out; its item parser is T067's parse.go and its grab
 		// creator the shared ruleTaskCreator, so a 200 that adds items
@@ -544,6 +561,8 @@ func (s *Server) registerOperations() {
 	s.settings.registerScheduleOperations(s.API)
 	s.prefs.Register(s.API)
 	s.categories.Register(s.API)
+	s.tags.Register(s.API)
+	s.watchFolders.Register(s.API)
 	s.fs.Register(s.API)
 	RegisterSearchRoutes(s.API, s.search)
 	s.feeds.Register(s.API)
