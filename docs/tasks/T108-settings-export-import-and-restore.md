@@ -108,6 +108,9 @@ package store
 //	                          an older schema is accepted and migrates forward at the next boot
 //	restore_integrity_failed — PRAGMA integrity_check on the backup, opened read-only, is not "ok"
 //
+//	Any failure to open or read the backup as a database at all instead refuses as
+//	restore_integrity_failed, whichever gate encounters it.
+//
 // Every gate completes before the command changes the live database. On success it copies src to a
 // unique dl-tool.db.restore-<ULID>.tmp beside dbPath with O_EXCL, mode 0600 and fsync, then
 // integrity-checks the staged copy; preserves the live database through VACUUM INTO to
