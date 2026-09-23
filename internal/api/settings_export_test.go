@@ -262,6 +262,11 @@ VALUES (?, 'aria2', 'http', ?, ?, 'queued', 0, 0, 0)`,
 	if err != nil {
 		t.Fatalf("encode export document: %v", err)
 	}
+	// The secret-bearing indexer itself must be present, otherwise the
+	// exclusion checks below pass vacuously.
+	if !strings.Contains(string(raw), "secret-bearing") {
+		t.Fatal("seeded indexer missing from export; the secret checks would pass vacuously")
+	}
 
 	for _, marker := range []string{
 		passwordHash, sessionID, apiToken, indexerKey, engineSecret, channelSecret,
@@ -406,7 +411,7 @@ func TestImportIsTransactional(t *testing.T) {
 		"document": doc,
 		"dry_run":  false,
 	}))
-	if report.Collections["watch_folders"].Rejected != 1 || report.Totals.Rejected != 1 {
+	if report.Collections["watch_folders"].Rejected != 1 || report.Totals.Rejected != 1 || len(report.Rejected) != 1 {
 		t.Fatalf("report %+v, want exactly one rejected watch_folders row", report)
 	}
 	row := report.Rejected[0]
@@ -520,7 +525,7 @@ func TestImportRejectsMalformedDocument(t *testing.T) {
 	env := newTasksTestEnv(t)
 
 	doc := map[string]any{
-		"document_version": 1,
+		"document_version": exportDocumentVersion,
 		"exported_at":      time.Now().UTC().Format(time.RFC3339),
 		"schema_version":   1,
 		"settings":         map[string]any{},
@@ -798,7 +803,9 @@ INSERT INTO goose_db_version (version_id, is_applied) VALUES (0, 1)`,
 	}
 
 	// The replaced live database survives as <name>.replaced-<UTC>.bak.
-	matches, err := filepath.Glob(filepath.Join(fixture.configDir, "dl-tool.db.replaced-*.bak"))
+	matches, err := filepath.Glob(
+		filepath.Join(fixture.configDir, filepath.Base(fixture.dbPath)+".replaced-*.bak"),
+	)
 	if err != nil || len(matches) == 0 {
 		t.Fatalf("no replaced-database backup: %v, matches %v", err, matches)
 	}
@@ -838,6 +845,9 @@ INSERT INTO goose_db_version (version_id, is_applied) VALUES (0, 1)`,
 	var taskRows int
 	if err := restored.GetContext(ctx, &taskRows, `SELECT COUNT(*) FROM tasks`); err != nil {
 		t.Fatalf("read tasks on migrated restore: %v", err)
+	}
+	if taskRows != 0 {
+		t.Errorf("migrated restore holds %d tasks, want 0 from the pre-tasks schema", taskRows)
 	}
 }
 
@@ -944,5 +954,223 @@ VALUES (?, 'aria2', 'http', ?, '/data', 'queued', 0, 0, 0)`,
 	}
 	if n != 2 {
 		t.Errorf("restored database holds %d tasks, want 2", n)
+	}
+}
+
+// TestImportRowRejections exercises the three row-level rejection paths
+// through the API: a settings value past int64's maximum, a category
+// name duplicated inside one document — conflict-matched by name, so
+// skipped under the default mode rather than written — and a watch
+// folder naming a category that exists nowhere.
+func TestImportRowRejections(t *testing.T) {
+	env := newTasksTestEnv(t)
+	root := env.dataRoot
+
+	doc := map[string]any{
+		"document_version": exportDocumentVersion,
+		"exported_at":      time.Now().UTC().Format(time.RFC3339),
+		"schema_version":   1,
+		"settings":         map[string]any{"max_active_total": float64(1 << 63)},
+		"categories": []any{
+			map[string]any{"name": "dup", "save_path": filepath.Join(root, "one")},
+			map[string]any{"name": "dup", "save_path": filepath.Join(root, "two")},
+		},
+		"indexers": []any{},
+		"feeds":    []any{},
+		"rules":    []any{},
+		"watch_folders": []any{
+			map[string]any{
+				"path": filepath.Join(root, "watch"), "enabled": true,
+				"destination": filepath.Join(root, "dest"), "category": "ghost",
+				"delete_after_load": false, "poll_interval_s": 10,
+			},
+		},
+		"schedule": map[string]any{"enabled": false, "cells": make([]int, 168)},
+	}
+
+	report := decodeImportReport(t, postImport(t, env, map[string]any{
+		"document": doc,
+		"dry_run":  false,
+	}))
+
+	if got := report.Collections["settings"].Rejected; got != 1 {
+		t.Errorf("settings rejected = %d, want 1 for the overflowing max_active_total", got)
+	}
+	if got := report.Collections["categories"].Skipped; got != 1 {
+		t.Errorf("categories skipped = %d, want 1 for the in-document duplicate", got)
+	}
+	if got := report.Collections["watch_folders"].Rejected; got != 1 {
+		t.Errorf("watch_folders rejected = %d, want 1 for the unknown category", got)
+	}
+	var overflow, unknownCategory bool
+	for _, row := range report.Rejected {
+		switch {
+		case row.Collection == "settings" && row.Key == "max_active_total" && row.Type == SlugValidationFailed:
+			overflow = true
+		case row.Collection == "watch_folders" && row.Type == SlugValidationFailed:
+			unknownCategory = true
+		}
+	}
+	if !overflow {
+		t.Errorf("no validation-failed rejection in %+v for the overflowing setting", report.Rejected)
+	}
+	if !unknownCategory {
+		t.Errorf("no validation-failed rejection in %+v for the unknown category", report.Rejected)
+	}
+
+	var n int
+	if err := env.db.GetContext(t.Context(), &n, `SELECT COUNT(*) FROM categories WHERE name = 'dup'`); err != nil {
+		t.Fatalf("count dup categories: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("categories named dup = %d, want exactly the accepted row", n)
+	}
+}
+
+// TestRejectRowErrorMapsSchemaConstraints drives rejectRowError with two
+// real SQLite failures produced inside a scratch transaction: a UNIQUE
+// violation maps to /problems/conflict, a CHECK violation to
+// /problems/validation-failed, and both roll back the tentative
+// created/updated count the importer already booked for the row.
+func TestRejectRowErrorMapsSchemaConstraints(t *testing.T) {
+	env := newTasksTestEnv(t)
+	ctx := t.Context()
+
+	report := &ImportReport{Collections: map[string]Counts{}}
+	tx, err := env.db.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin scratch transaction: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			t.Errorf("rollback scratch transaction: %v", err)
+		}
+	})
+
+	now := time.Now().UnixMilli()
+	if _, err := tx.ExecContext(
+		ctx, queryInsertCategory, store.NewID(store.PrefixCategory), "dup", "/data", now, now,
+	); err != nil {
+		t.Fatalf("insert first category: %v", err)
+	}
+	countRow(report, collectionCategories, false, conflictSkip)
+	_, uniqueErr := tx.ExecContext(
+		ctx, queryInsertCategory, store.NewID(store.PrefixCategory), "dup", "/data", now, now,
+	)
+	if uniqueErr == nil {
+		t.Fatal("duplicate category insert did not fail")
+	}
+	if !rejectRowError(report, collectionCategories, "dup", false, uniqueErr) {
+		t.Fatalf("rejectRowError declined a UNIQUE violation: %v", uniqueErr)
+	}
+
+	countRow(report, collectionWatchFolders, true, conflictOverwrite)
+	_, checkErr := tx.ExecContext(
+		ctx, queryInsertWatchFolder,
+		store.NewID(store.PrefixWatchFolder), "/watch", 5, "/dest", nil, 0, 10, now, now,
+	)
+	if checkErr == nil {
+		t.Fatal("watch_folders enabled=5 did not fail its CHECK")
+	}
+	if !rejectRowError(report, collectionWatchFolders, "/watch", true, checkErr) {
+		t.Fatalf("rejectRowError declined a CHECK violation: %v", checkErr)
+	}
+
+	categories := report.Collections[collectionCategories]
+	if categories.Created != 0 || categories.Rejected != 1 {
+		t.Errorf("categories counts = %+v, want created 0 rejected 1", categories)
+	}
+	folders := report.Collections[collectionWatchFolders]
+	if folders.Updated != 0 || folders.Rejected != 1 {
+		t.Errorf("watch_folders counts = %+v, want updated 0 rejected 1", folders)
+	}
+	if len(report.Rejected) != 2 {
+		t.Fatalf("rejected rows = %+v, want 2", report.Rejected)
+	}
+	if report.Rejected[0].Type != SlugConflict {
+		t.Errorf("UNIQUE rejection type = %q, want %q", report.Rejected[0].Type, SlugConflict)
+	}
+	if report.Rejected[1].Type != SlugValidationFailed {
+		t.Errorf("CHECK rejection type = %q, want %q", report.Rejected[1].Type, SlugValidationFailed)
+	}
+}
+
+// TestRestoreRefusesWhileServerLockHeld proves the two ends of the
+// process lock meet: a server-side holder — stage S3's
+// AcquireProcessLock — trips the restore's restore_server_running gate,
+// a second server acquire fails with database_locked, and releasing the
+// lock frees the restore.
+func TestRestoreRefusesWhileServerLockHeld(t *testing.T) {
+	fixture := newRestoreFixture(t)
+	fixture.seedMarker(t)
+	ctx := t.Context()
+
+	backup := filepath.Join(fixture.configDir, "backup.db")
+	makeBackup(t, fixture.db, backup)
+
+	serverLock, err := store.AcquireProcessLock(fixture.dbPath)
+	if err != nil {
+		t.Fatalf("acquire process lock: %v", err)
+	}
+
+	if _, err := store.AcquireProcessLock(fixture.dbPath); !errors.Is(err, store.ErrDatabaseLocked) {
+		t.Errorf("second server acquire: err = %v, want database_locked", err)
+	}
+	if _, err := store.RestoreFrom(ctx, fixture.dbPath, fixture.configDir, backup); !errors.Is(err, store.ErrRestoreServerRunning) {
+		t.Fatalf("restore under held lock: err = %v, want restore_server_running", err)
+	}
+
+	serverLock.Release()
+	if _, err := store.RestoreFrom(ctx, fixture.dbPath, fixture.configDir, backup); err != nil {
+		t.Fatalf("restore after lock release: %v", err)
+	}
+}
+
+// TestRestoreReplacesCorruptDatabase covers the disaster case: the live
+// database is unreadable, VACUUM INTO cannot preserve it, and the
+// restore still completes — the wreck is byte-copied into the
+// .replaced-*.bak and the staged backup installed.
+func TestRestoreReplacesCorruptDatabase(t *testing.T) {
+	fixture := newRestoreFixture(t)
+	fixture.seedMarker(t)
+	ctx := t.Context()
+
+	backup := filepath.Join(fixture.configDir, "backup.db")
+	makeBackup(t, fixture.db, backup)
+
+	// Truncate the live database to garbage; its handle is never used
+	// again, the file replacement is what matters.
+	if err := os.WriteFile(fixture.dbPath, []byte("corrupt beyond readability"), 0o600); err != nil {
+		t.Fatalf("corrupt live database: %v", err)
+	}
+
+	tasks, err := store.RestoreFrom(ctx, fixture.dbPath, fixture.configDir, backup)
+	if err != nil {
+		t.Fatalf("RestoreFrom over a corrupt database: %v", err)
+	}
+	if tasks != 0 {
+		t.Errorf("restored task count = %d, want 0", tasks)
+	}
+
+	matches, err := filepath.Glob(
+		filepath.Join(fixture.configDir, filepath.Base(fixture.dbPath)+".replaced-*.bak"),
+	)
+	if err != nil || len(matches) == 0 {
+		t.Fatalf("no replaced-database preserve: %v, matches %v", err, matches)
+	}
+
+	restored, err := sqlx.Open("sqlite", "file:"+fixture.dbPath+"?mode=ro")
+	if err != nil {
+		t.Fatalf("open restored database: %v", err)
+	}
+	var n int
+	if err := restored.GetContext(ctx, &n, `SELECT COUNT(*) FROM categories WHERE name = 'committed-marker'`); err != nil {
+		t.Fatalf("read marker from restored database: %v", err)
+	}
+	if err := restored.Close(); err != nil {
+		t.Fatalf("close restored database: %v", err)
+	}
+	if n != 1 {
+		t.Error("restored database lost the backup's marker row")
 	}
 }

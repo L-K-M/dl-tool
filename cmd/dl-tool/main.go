@@ -102,6 +102,16 @@ func main() {
 			logger := obs.NewLogger(os.Stdout, cfg.LogLevel, cfg.LogFormat)
 			slog.SetDefault(logger)
 
+			// Doc 17 section 1.3 stage S3: hold the stable process lock
+			// beside the database for the process lifetime, so a second
+			// server exits database_locked and `dl-tool restore` refuses
+			// with restore_server_running instead of swapping the file
+			// out from under a live instance.
+			if _, err := store.AcquireProcessLock(cfg.DBPath); err != nil {
+				logger.Error("database lock failed", "err_code", "database_locked", "err", err)
+				os.Exit(exitFailure)
+			}
+
 			db, err := store.Open(ctx, cfg.DBPath, filepath.Join(cfg.ConfigDir, backupsDirName))
 			if err != nil {
 				logger.Error("database open failed", "err", err)
@@ -450,7 +460,8 @@ func restoreCmd() *cobra.Command {
 				os.Exit(exitFailure)
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "restored %d tasks\n", tasks); err != nil {
-				return fmt.Errorf("write restore result: %w", err)
+				fmt.Fprintln(os.Stderr, "restore: write result:", err)
+				os.Exit(exitFailure)
 			}
 
 			return nil

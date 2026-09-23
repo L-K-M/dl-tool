@@ -300,11 +300,14 @@ func limitImportBody(ctx huma.Context, next func(huma.Context)) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxImportBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeProblem(w, Problem(
-			SlugPayloadTooLarge,
-			http.StatusRequestEntityTooLarge,
-			"the import document exceeds 65536 bytes",
-		))
+		detail := "the import document could not be read"
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			detail = fmt.Sprintf("the import document exceeds %d bytes", maxImportBodyBytes)
+		} else {
+			logFromContext(ctx.Context()).Warn("import body read failed", "err", err)
+		}
+		writeProblem(w, Problem(SlugPayloadTooLarge, http.StatusRequestEntityTooLarge, detail))
 
 		return
 	}
@@ -596,6 +599,34 @@ func countRow(report *ImportReport, collection string, exists bool, onConflict s
 	return !exists || onConflict == conflictOverwrite
 }
 
+// rejectRowError turns a row-level constraint failure — a conflict key
+// duplicated inside the document or against a stored row, or a CHECK
+// violation a hand-edited member produces — into a rejected report
+// entry, and reports whether the error was one. The tentative created or
+// updated count that countRow recorded for the row is moved to rejected.
+// Any other failure propagates so a genuinely broken write still aborts
+// the import.
+func rejectRowError(report *ImportReport, collection, key string, matched bool, err error) bool {
+	if !store.IsConstraintViolation(err) {
+		return false
+	}
+	counts := report.Collections[collection]
+	if matched {
+		counts.Updated--
+	} else {
+		counts.Created--
+	}
+	report.Collections[collection] = counts
+
+	slug := SlugValidationFailed
+	if store.IsUniqueViolation(err) {
+		slug = SlugConflict
+	}
+	reject(report, collection, key, slug, fmt.Sprintf("the row violates a schema constraint: %v", err))
+
+	return true
+}
+
 // importSettings applies the flat settings member key by key. Settings is
 // scalar state, not a conflicting row — the conflict keys of doc 05 section
 // 11.5 name only the five row collections, so every recognised key writes:
@@ -726,7 +757,9 @@ func canonicalMinFreeSpace(value any) (encoded, rejectType, detail string) {
 // out-of-range magnitudes.
 func importJSONInt(value any) (int64, bool) {
 	f, ok := value.(float64)
-	if !ok || f != math.Trunc(f) || f < math.MinInt64 || f > math.MaxInt64 {
+	// float64(math.MaxInt64) rounds to exactly 2^63, so the upper bound
+	// must reject equality too — 2^63 would overflow int64(f).
+	if !ok || f != math.Trunc(f) || f < math.MinInt64 || f >= float64(math.MaxInt64) {
 		return 0, false
 	}
 
@@ -766,11 +799,17 @@ func (h *SettingsExportHandlers) importCategories(
 		now := time.Now().UnixMilli()
 		if matched {
 			if _, err := tx.ExecContext(ctx, queryUpdateCategoryPath, savePath, now, id); err != nil {
+				if rejectRowError(report, collectionCategories, category.Name, matched, err) {
+					continue
+				}
 				return fmt.Errorf("update category %q: %w", category.Name, err)
 			}
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, queryInsertCategory, store.NewID(store.PrefixCategory), category.Name, savePath, now, now); err != nil {
+			if rejectRowError(report, collectionCategories, category.Name, matched, err) {
+				continue
+			}
 			return fmt.Errorf("insert category %q: %w", category.Name, err)
 		}
 	}
@@ -806,10 +845,17 @@ func (h *SettingsExportHandlers) importIndexers(
 				reject(report, collectionIndexers, key, SlugValidationFailed, "a dlsearch indexer needs definition_id")
 				continue
 			}
+		default:
+			reject(report, collectionIndexers, key, SlugValidationFailed, "kind is not torznab, newznab or dlsearch")
+			continue
 		}
 		settingsJSON, err := json.Marshal(indexer.Settings)
 		if err != nil {
 			return fmt.Errorf("encode indexer %q settings: %w", indexer.Name, err)
+		}
+		if strings.Contains(string(settingsJSON), redactedValue) {
+			reject(report, collectionIndexers, key, SlugValidationFailed, "settings carry a __redacted__ value")
+			continue
 		}
 
 		var id string
@@ -833,6 +879,9 @@ func (h *SettingsExportHandlers) importIndexers(
 				indexer.Name, indexer.Kind, indexer.Enabled, indexer.URL, indexer.DefinitionID,
 				indexer.Priority, string(settingsJSON), now, id,
 			); err != nil {
+				if rejectRowError(report, collectionIndexers, key, matched, err) {
+					continue
+				}
 				return fmt.Errorf("update indexer %q: %w", indexer.Name, err)
 			}
 			continue
@@ -842,6 +891,9 @@ func (h *SettingsExportHandlers) importIndexers(
 			store.NewID(store.PrefixIndexer), indexer.Name, indexer.Kind, indexer.Enabled,
 			indexer.URL, indexer.DefinitionID, indexer.Priority, string(settingsJSON), now, now,
 		); err != nil {
+			if rejectRowError(report, collectionIndexers, key, matched, err) {
+				continue
+			}
 			return fmt.Errorf("insert indexer %q: %w", indexer.Name, err)
 		}
 	}
@@ -888,6 +940,9 @@ func (h *SettingsExportHandlers) importFeeds(
 				ctx, queryUpdateFeed,
 				feed.Title, feed.Enabled, feed.RefreshIntervalS, feed.ItemCap, now, id,
 			); err != nil {
+				if rejectRowError(report, collectionFeeds, feed.URL, matched, err) {
+					continue
+				}
 				return fmt.Errorf("update feed %q: %w", feed.URL, err)
 			}
 			continue
@@ -897,6 +952,9 @@ func (h *SettingsExportHandlers) importFeeds(
 			store.NewID(store.PrefixFeed), feed.URL, feed.Title, feed.Enabled,
 			feed.RefreshIntervalS, feed.ItemCap, now, now, now,
 		); err != nil {
+			if rejectRowError(report, collectionFeeds, feed.URL, matched, err) {
+				continue
+			}
 			return fmt.Errorf("insert feed %q: %w", feed.URL, err)
 		}
 	}
@@ -961,6 +1019,9 @@ func (h *SettingsExportHandlers) importRules(
 			if _, err := tx.ExecContext(
 				ctx, queryUpdateRule, rule.Enabled, rule.Priority, string(definitionJSON), now, id,
 			); err != nil {
+				if rejectRowError(report, collectionRules, rule.Name, matched, err) {
+					continue
+				}
 				return fmt.Errorf("update rule %q: %w", rule.Name, err)
 			}
 			continue
@@ -969,6 +1030,9 @@ func (h *SettingsExportHandlers) importRules(
 			ctx, queryInsertRule,
 			store.NewID(store.PrefixRule), rule.Name, rule.Enabled, rule.Priority, string(definitionJSON), now, now,
 		); err != nil {
+			if rejectRowError(report, collectionRules, rule.Name, matched, err) {
+				continue
+			}
 			return fmt.Errorf("insert rule %q: %w", rule.Name, err)
 		}
 	}
@@ -1027,6 +1091,9 @@ func (h *SettingsExportHandlers) importWatchFolders(
 				ctx, queryUpdateWatchFolder,
 				folder.Enabled, destination, categoryID, folder.DeleteAfterLoad, folder.PollIntervalS, now, id,
 			); err != nil {
+				if rejectRowError(report, collectionWatchFolders, folder.Path, matched, err) {
+					continue
+				}
 				return fmt.Errorf("update watch folder %q: %w", folder.Path, err)
 			}
 			continue
@@ -1036,6 +1103,9 @@ func (h *SettingsExportHandlers) importWatchFolders(
 			store.NewID(store.PrefixWatchFolder), path, folder.Enabled, destination, categoryID,
 			folder.DeleteAfterLoad, folder.PollIntervalS, now, now,
 		); err != nil {
+			if rejectRowError(report, collectionWatchFolders, folder.Path, matched, err) {
+				continue
+			}
 			return fmt.Errorf("insert watch folder %q: %w", folder.Path, err)
 		}
 	}
@@ -1053,13 +1123,13 @@ func (h *SettingsExportHandlers) importSchedule(
 	schedule ExportSchedule,
 	report *ImportReport,
 ) error {
-	counts := report.Collections[collectionSchedule]
-	counts.Updated++
-	report.Collections[collectionSchedule] = counts
-
 	if len(schedule.Cells) != 168 {
 		return fmt.Errorf("import schedule: %d cells, want 168", len(schedule.Cells))
 	}
+
+	counts := report.Collections[collectionSchedule]
+	counts.Updated++
+	report.Collections[collectionSchedule] = counts
 
 	now := time.Now().UnixMilli()
 	enabledJSON, err := json.Marshal(schedule.Enabled)

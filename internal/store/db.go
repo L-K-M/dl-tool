@@ -22,7 +22,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/pressly/goose/v3"
 	"golang.org/x/sys/unix"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 const (
@@ -661,6 +661,9 @@ const (
 )
 
 var (
+	// ErrDatabaseLocked is the stage-S3 boot refusal: another process
+	// already holds the stable process lock beside DLTOOL_DB_PATH.
+	ErrDatabaseLocked = errors.New("store: database_locked")
 	// ErrRestoreServerRunning refuses a restore while the process lock is
 	// held — by the server or by a second restore.
 	ErrRestoreServerRunning = errors.New("store: restore_server_running")
@@ -702,7 +705,7 @@ var (
 // either the complete old file or the complete checked replacement.
 // RestoreFrom returns the restored task count.
 func RestoreFrom(ctx context.Context, dbPath, configDir, src string) (tasks int, err error) {
-	lock, err := acquireDatabaseLock(dbPath + databaseLockSuffix)
+	lock, err := acquireDatabaseLock(dbPath+databaseLockSuffix, ErrRestoreServerRunning)
 	if err != nil {
 		return 0, err
 	}
@@ -736,6 +739,16 @@ func RestoreFrom(ctx context.Context, dbPath, configDir, src string) (tasks int,
 	if err != nil {
 		return 0, err
 	}
+	// The schema gate ran against the source path; re-run it against the
+	// staged bytes so a source swapped between check and copy cannot slip
+	// a too-new schema through.
+	if err := checkStagedSchema(ctx, staged, embeddedVersion); err != nil {
+		if removeErr := os.Remove(staged); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("store: remove staged restore %q: %w", staged, removeErr))
+		}
+
+		return 0, err
+	}
 	// Every failure before the atomic rename removes only the staged copy;
 	// the live database is never left without a complete file.
 	renamed := false
@@ -759,8 +772,8 @@ func RestoreFrom(ctx context.Context, dbPath, configDir, src string) (tasks int,
 	// The -wal and -shm sidecars must be gone before the staged copy takes
 	// the name whether or not a live file existed: a killed shutdown can
 	// leave them behind, and SQLite would apply a stale WAL to the
-	// restored file. preserveLiveDatabase already removed them on the
-	// live-database path; os.ErrNotExist keeps the repeat cheap.
+	// restored file. The checkpoint above truncates but does not remove
+	// them, so this loop is the single removal point for every path.
 	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
 		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return 0, fmt.Errorf("store: remove stale sidecar %q: %w", sidecar, err)
@@ -788,10 +801,63 @@ func RestoreFrom(ctx context.Context, dbPath, configDir, src string) (tasks int,
 // the flock.
 type databaseLock struct{ file *os.File }
 
+// sqliteConstraintPrimary is the low byte of every SQLITE_CONSTRAINT_*
+// extended result code — UNIQUE, NOT NULL, CHECK and FOREIGN KEY all
+// share it, so the low byte detects a constraint violation without
+// enumerating each extended code.
+const sqliteConstraintPrimary = 19
+
+// IsUniqueViolation reports whether err is a SQLite UNIQUE constraint
+// failure; it exports the store's existing check for callers outside the
+// package, such as the settings importer.
+func IsUniqueViolation(err error) bool {
+	return isUniqueViolation(err)
+}
+
+// IsConstraintViolation reports whether err is a SQLite constraint
+// failure, keeping the driver knowledge inside the store so an importer
+// can turn a malformed row into a per-row rejection instead of aborting
+// the whole transaction.
+func IsConstraintViolation(err error) bool {
+	var sqliteErr *sqlite.Error
+
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqliteConstraintPrimary
+}
+
+// ProcessLock is the held stable process lock of
+// docs/17-operations-and-runbook.md section 1.3 stage S3. The server
+// keeps it for the process lifetime — the descriptor is never closed and
+// the file never unlinked, so a second server or a restore run against a
+// live instance fails fast instead of racing the database file.
+type ProcessLock struct {
+	lock *databaseLock
+}
+
+// AcquireProcessLock opens <dbPath>.lock mode 0600, takes
+// flock(LOCK_EX|LOCK_NB) and records this process's PID for the lifetime
+// of the returned handle. A held lock refuses with ErrDatabaseLocked
+// naming the recorded PID.
+func AcquireProcessLock(dbPath string) (*ProcessLock, error) {
+	lock, err := acquireDatabaseLock(dbPath+databaseLockSuffix, ErrDatabaseLocked)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ProcessLock{lock: lock}, nil
+}
+
+// Release drops the flock by closing the descriptor. The server path
+// never calls it — the lock is held for the process lifetime — but it
+// exists for tests and embedders.
+func (l *ProcessLock) Release() {
+	l.lock.release()
+}
+
 // acquireDatabaseLock opens the stable lock file mode 0600 and takes
-// flock(LOCK_EX|LOCK_NB). A held lock refuses with
-// ErrRestoreServerRunning, naming the PID the holder recorded.
-func acquireDatabaseLock(path string) (*databaseLock, error) {
+// flock(LOCK_EX|LOCK_NB). A held lock refuses with the busy error,
+// naming the PID the holder recorded — ErrDatabaseLocked on the server
+// path, ErrRestoreServerRunning on the restore path.
+func acquireDatabaseLock(path string, busy error) (*databaseLock, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, databaseFileMode)
 	if err != nil {
 		return nil, fmt.Errorf("store: open process lock %q: %w", path, err)
@@ -805,7 +871,7 @@ func acquireDatabaseLock(path string) (*databaseLock, error) {
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		return nil, errors.Join(
 			fmt.Errorf("%w: process %s holds the database lock %q",
-				ErrRestoreServerRunning, databaseLockHolder(path), path),
+				busy, databaseLockHolder(path), path),
 			file.Close(),
 		)
 	}
@@ -944,6 +1010,37 @@ func checkRestoreSource(ctx context.Context, source string, embeddedVersion int6
 	return nil
 }
 
+// checkStagedSchema re-reads the applied schema version of the staged
+// copy — the bytes that will actually be installed — so the
+// restore_schema_too_new gate survives a source swap between the gate
+// and the copy.
+func checkStagedSchema(ctx context.Context, staged string, embeddedVersion int64) error {
+	db, err := sqlx.Open(sqliteDriver, fmt.Sprintf(restoreReadOnlyDSNFormat, escapedDatabasePath(staged)))
+	if err != nil {
+		return fmt.Errorf("%w: open staged restore %q: %v", ErrRestoreIntegrity, staged, err)
+	}
+	db.SetMaxOpenConns(databaseConnectionLimit)
+	db.SetMaxIdleConns(databaseConnectionLimit)
+
+	state, stateErr := readSchemaState(ctx, db)
+	closeErr := db.Close()
+	if stateErr != nil {
+		return errors.Join(
+			fmt.Errorf("%w: staged restore %q: %v", ErrRestoreIntegrity, staged, stateErr),
+			closeErr,
+		)
+	}
+	if state.version > embeddedVersion {
+		return fmt.Errorf("%w: staged restore %q schema version %d exceeds embedded maximum %d",
+			ErrRestoreSchemaTooNew, staged, state.version, embeddedVersion)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("store: close staged restore %q: %w", staged, closeErr)
+	}
+
+	return nil
+}
+
 // stageRestoreSource copies the checked backup to a unique
 // "<name>.restore-<ULID>.tmp" beside the live database: O_EXCL so a
 // colliding name is an error rather than a silent overwrite, mode 0600,
@@ -1001,8 +1098,18 @@ func preserveLiveDatabase(ctx context.Context, dbPath, databaseDir string) error
 	db.SetMaxIdleConns(databaseConnectionLimit)
 
 	backupPath, err := backupReplacedDatabase(ctx, db, dbPath, databaseDir)
-	if err != nil {
-		return errors.Join(err, db.Close())
+	vacuumFailed := err != nil
+	if vacuumFailed {
+		// A corrupt live database is a common reason to restore and
+		// VACUUM INTO cannot read one — degrade to a byte copy of the
+		// file rather than aborting the restore outright.
+		var copyErr error
+		backupPath, copyErr = copyReplacedDatabase(dbPath, databaseDir)
+		if copyErr != nil {
+			return errors.Join(err, copyErr, db.Close())
+		}
+		slog.Warn("store: vacuum preserve failed; preserved live database by file copy",
+			"path", backupPath, "err", err)
 	}
 
 	var checkpoint struct {
@@ -1010,14 +1117,20 @@ func preserveLiveDatabase(ctx context.Context, dbPath, databaseDir string) error
 		Log          int `db:"log"`
 		Checkpointed int `db:"checkpointed"`
 	}
-	if err := db.GetContext(ctx, &checkpoint, queryCheckpoint); err != nil {
-		return errors.Join(fmt.Errorf("store: checkpoint live database %q: %w", dbPath, err), db.Close())
-	}
-	if checkpoint.Busy != 0 {
+	checkpointErr := db.GetContext(ctx, &checkpoint, queryCheckpoint)
+	switch {
+	case checkpointErr == nil && checkpoint.Busy != 0:
 		return errors.Join(
 			fmt.Errorf("store: checkpoint live database %q: another handle still holds it open", dbPath),
 			db.Close(),
 		)
+	case checkpointErr != nil && vacuumFailed:
+		// The database was already shown unreadable; the byte-copy
+		// preserve has secured what exists, so a failed checkpoint adds
+		// nothing and must not abort the restore.
+		slog.Warn("store: checkpoint of unreadable live database failed", "path", dbPath, "err", checkpointErr)
+	case checkpointErr != nil:
+		return errors.Join(fmt.Errorf("store: checkpoint live database %q: %w", dbPath, checkpointErr), db.Close())
 	}
 	if err := db.Close(); err != nil {
 		return fmt.Errorf("store: close live database %q: %w", dbPath, err)
@@ -1042,6 +1155,12 @@ func backupReplacedDatabase(ctx context.Context, db *sqlx.DB, dbPath, databaseDi
 	if err := temporaryFile.Close(); err != nil {
 		return "", removeTemporaryBackup(temporaryPath, fmt.Errorf("close temporary backup: %w", err))
 	}
+	// VACUUM INTO creates its output; CreateTemp only reserved a unique
+	// name, so free it — some SQLite builds refuse to write an existing
+	// file, even an empty one.
+	if err := os.Remove(temporaryPath); err != nil {
+		return "", fmt.Errorf("store: clear temporary backup name %q: %w", temporaryPath, err)
+	}
 
 	finalPath := filepath.Join(
 		databaseDir,
@@ -1060,6 +1179,51 @@ func backupReplacedDatabase(ctx context.Context, db *sqlx.DB, dbPath, databaseDi
 	if err := syncPath(temporaryPath); err != nil {
 		return "", removeTemporaryBackup(temporaryPath, err)
 	}
+	if err := renameNoReplace(temporaryPath, finalPath); err != nil {
+		return "", removeTemporaryBackup(temporaryPath, fmt.Errorf("store: rename replaced-database backup to %q: %w", finalPath, err))
+	}
+	if err := syncPath(databaseDir); err != nil {
+		return "", err
+	}
+
+	return finalPath, nil
+}
+
+// copyReplacedDatabase is the preserve fallback for a live database
+// VACUUM INTO cannot read — a corrupt file is the common reason to
+// restore at all. It byte-copies dbPath to the same
+// "<name>.replaced-<UTC>.bak" target under the same durability rules:
+// unique temporary name, mode 0600, fsync, atomic rename, directory
+// fsync. Whatever bytes exist are kept; nothing here can make a corrupt
+// file readable.
+func copyReplacedDatabase(dbPath, databaseDir string) (string, error) {
+	temporaryFile, err := os.CreateTemp(databaseDir, "."+filepath.Base(dbPath)+".replaced-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("store: create temporary replaced-database backup: %w", err)
+	}
+	temporaryPath := temporaryFile.Name()
+
+	in, err := os.Open(dbPath)
+	if err != nil {
+		return "", errors.Join(
+			fmt.Errorf("store: open live database %q for copy preserve: %w", dbPath, err),
+			temporaryFile.Close(),
+			removeTemporaryBackup(temporaryPath, nil),
+		)
+	}
+	_, copyErr := io.Copy(temporaryFile, in)
+	syncErr := temporaryFile.Sync()
+	if err := errors.Join(copyErr, syncErr, in.Close(), temporaryFile.Close()); err != nil {
+		return "", removeTemporaryBackup(temporaryPath, fmt.Errorf("store: copy preserve live database %q: %w", dbPath, err))
+	}
+	if err := os.Chmod(temporaryPath, databaseFileMode); err != nil {
+		return "", removeTemporaryBackup(temporaryPath, fmt.Errorf("store: secure replaced-database backup: %w", err))
+	}
+
+	finalPath := filepath.Join(
+		databaseDir,
+		fmt.Sprintf("%s.replaced-%s.bak", filepath.Base(dbPath), time.Now().UTC().Format(backupTimestampFormat)),
+	)
 	if err := renameNoReplace(temporaryPath, finalPath); err != nil {
 		return "", removeTemporaryBackup(temporaryPath, fmt.Errorf("store: rename replaced-database backup to %q: %w", finalPath, err))
 	}
