@@ -192,21 +192,30 @@ independently ran `make docker-build`). Observed output from the verify job's
 $ docker run --rm --entrypoint sh ghcr.io/l-k-m/dl-tool:t093 -c 'yt-dlp --version; ! command -v python3 && echo NO_PYTHON'
 2026.08.19
 NO_PYTHON
-# (the two docker image inspect asserts printed nothing — source and non-empty version held)
+```
 
-# binfmt registered linux/arm64, then the docker-container builder solved both platforms:
+The two `docker image inspect` asserts printed nothing — `source` and non-empty
+`version` held. binfmt then registered `linux/arm64` and the docker-container
+builder solved both platforms — `/yt-dlp: OK` on each:
+
+```
 #24 [linux/amd64->arm64 ytdlp 3/3] RUN set -eu; case "arm64" in arm64) file=yt-dlp_musllinux_aarch64; ... esac; ...
 #24 1.617 /yt-dlp: OK
 #25 [linux/amd64 ytdlp 3/3]      RUN set -eu; case "amd64" in amd64) file=yt-dlp_musllinux; ... esac; ...
 #25 1.454 /yt-dlp: OK
 #39 [linux/amd64->arm64 build 7/7] CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath ...
 #31 [linux/arm64 stage-4 2/6] RUN apk add --no-cache su-exec ca-certificates tzdata nodejs   (the only emulated layer)
+```
 
-# one-character hash corruption, built --target ytdlp:
+The corrupted-hash step mutated `YTDLP_SHA256_AMD64` (`f3dec9cf…` → `03dec9cf…`,
+visible in the logged RUN line) and rebuilt `--target ytdlp`, which failed at
+`sha256sum -c -`; `git checkout` then restored `Dockerfile` and
+`grep -q 'did NOT match'` on the captured log passed:
+
+```
 #8 0.888 /yt-dlp: FAILED
 #8 0.888 sha256sum: WARNING: 1 of 1 computed checksums did NOT match
 #8 ERROR: process "... sha256sum -c -; chmod 0755 /yt-dlp" did not complete successfully: exit code: 1
-# git checkout restored Dockerfile; grep 'did NOT match' on the log passed
 ```
 
 The same job then ran `make ci` end-to-end green. The multi-arch log also shows the
