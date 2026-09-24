@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -736,6 +737,33 @@ func TestPatchUnknownKeyIs422(t *testing.T) {
 			`SELECT COUNT(*) FROM settings WHERE key = ?`, key))
 		require.Zero(t, stored, "the rejected key %q must not be stored", key)
 	}
+}
+
+// TestSettingsRejectsHookKey pins the FR-105 boundary: a hook-named key
+// gets the same 422 /problems/validation-failed as any other unknown key
+// — a distinct rejection would reveal the key is special — and GET
+// /settings never returns the hook path, even with the hook installed.
+func TestSettingsRejectsHookKey(t *testing.T) {
+	env := newSettingsTestEnv(t)
+
+	hookPath := filepath.Join(filepath.Dir(env.dbPath), "hooks", "on-complete")
+	require.NoError(t, os.MkdirAll(filepath.Dir(hookPath), 0o755))
+	require.NoError(t, os.WriteFile(hookPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	for _, key := range []string{"completion_hook", "on_complete_hook", "hook_command"} {
+		response := env.patchSettings(t, map[string]any{key: hookPath})
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+		var stored int
+		require.NoError(t, env.db.GetContext(t.Context(), &stored,
+			`SELECT COUNT(*) FROM settings WHERE key = ?`, key))
+		require.Zero(t, stored, "the rejected key %q must not be stored", key)
+	}
+
+	recorder := env.getSettings(t)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.NotContains(t, recorder.Body.String(), hookPath)
+	require.NotContains(t, recorder.Body.String(), "on-complete")
 }
 
 // TestPatchOutOfRangeIs422 pins the per-key domain checks of the task:

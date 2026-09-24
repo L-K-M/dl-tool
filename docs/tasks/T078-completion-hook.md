@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T078 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T074, T092 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/api/settings_test.go`, `internal/jobs/postprocess.go` |
@@ -157,7 +157,59 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```bash
+$ make lint && make test PKG="./internal/jobs/... ./internal/api/..." && echo HOOK_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/jobs/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	40.683s
+ok  	github.com/L-K-M/dl-tool/internal/api	200.642s
+HOOK_OK
+```
+
+Named tests (run with `-v`):
+
+```text
+--- PASS: TestHookOffByDefault (0.42s)
+--- PASS: TestArgvNotShellString (1.46s)
+--- PASS: TestFixedEnvironment (1.42s)
+--- PASS: TestHookTimeoutKillsGroup (0.55s)
+--- PASS: TestHookTimeoutDaemonEscapeReturns (5.53s)
+--- PASS: TestNonZeroExitKeepsCompleted (0.42s)
+--- PASS: TestChainPassesTaskToHook (1.46s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	12.352s
+--- PASS: TestSettingsRejectsHookKey (0.40s)
+ok  	github.com/L-K-M/dl-tool/internal/api	1.473s
+```
+
+Scope check on the final tree. The working tree carries only the review
+fix (`cmd/dl-tool/main.go`, `internal/jobs/hook.go` — the exported
+`HookChainBudget` the reviewer asked for); the cumulative PR diff
+against `origin/main` is exactly the Files table:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+internal/jobs/hook.go
+$ git diff --name-only origin/main...HEAD -- . ':(exclude)docs' | sort
+cmd/dl-tool/main.go
+internal/api/settings_test.go
+internal/jobs/hook.go
+internal/jobs/hook_test.go
+internal/jobs/postprocess.go
+```
+
+Exactly the Files table, nothing else.
 
 ## Blocked — resolved
 
