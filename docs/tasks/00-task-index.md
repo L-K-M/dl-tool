@@ -202,7 +202,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T108](T108-settings-export-import-and-restore.md) | Export and import portable settings, and restore from the CLI | T080, T106, T107 | done |
 | [T110](T110-bandwidth-precedence-and-dst.md) | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | done |
 | [T111](T111-delete-data-and-hardlink-safety.md) | Delete downloaded data safely and prove hardlink survival | T023, T076 | done |
-| [T117](T117-rss-settings-section.md) | Build the RSS settings section | T053, T065, T066, T068, T092 | todo |
+| [T117](T117-rss-settings-section.md) | Build the RSS settings section | T053, T065, T066, T068, T092 | done |
 | [T118](T118-bandwidth-settings-and-schedule-grid.md) | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | todo |
 | [T119](T119-downloads-and-bittorrent-settings.md) | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | todo |
 | [T120](T120-account-and-notifications-settings.md) | Build the Account and Notifications settings sections | T053, T084, T106 | deferred |
@@ -410,7 +410,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T108 | Export and import portable settings, and restore from the CLI | T080, T106, T107 | no | done | [T108](T108-settings-export-import-and-restore.md) |
 | T110 | Resolve the bandwidth precedence chain and the schedule time zone | T079, T080, T081, T082 | no | done | [T110](T110-bandwidth-precedence-and-dst.md) |
 | T111 | Delete downloaded data safely and prove hardlink survival | T023, T076 | no | done | [T111](T111-delete-data-and-hardlink-safety.md) |
-| T117 | Build the RSS settings section | T053, T065, T066, T068, T092 | no | todo | [T117](T117-rss-settings-section.md) |
+| T117 | Build the RSS settings section | T053, T065, T066, T068, T092 | no | done | [T117](T117-rss-settings-section.md) |
 | T118 | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | no | todo | [T118](T118-bandwidth-settings-and-schedule-grid.md) |
 | T119 | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | no | todo | [T119](T119-downloads-and-bittorrent-settings.md) |
 | T120 | Build the Account and Notifications settings sections | T053, T084, T106 | no | deferred | [T120](T120-account-and-notifications-settings.md) |

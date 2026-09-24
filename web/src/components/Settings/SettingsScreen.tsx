@@ -8,6 +8,7 @@ import { Button } from "../ui/button";
 import { ConnectionSection } from "./ConnectionSection";
 import { GeneralSection } from "./GeneralSection";
 import { IndexersSection } from "./IndexersSection";
+import { RssSection } from "./RssSection";
 
 initI18n().addResourceBundle("en", "settings", settingsStrings);
 
@@ -31,6 +32,7 @@ export type Section = (typeof SECTIONS)[number];
 const SECTION_FORMS = {
   general: GeneralSection,
   connection: ConnectionSection,
+  rss: RssSection,
   indexers: IndexersSection,
 } satisfies Partial<Record<Section, () => JSX.Element>>;
 
@@ -51,7 +53,6 @@ export const ARRIVAL: Record<
   bandwidth: "M6",
   bittorrent: "M6",
   downloads: "M6",
-  rss: "M6",
   account: "M6",
   notifications: "M6",
   advanced: "M7",
