@@ -248,8 +248,10 @@ fallback is the running precedent.
 - No row depends on T078 (`Blocks: —`), so the deferral stalls nothing
   downstream.
 - Reactivation trigger: flip both index rows and the `**Status**` cell
-  back to `todo` in the same change that adds `cmd/dl-tool/main.go` to
-  `## Files`, so the deferral cannot outlive its cause.
+  back to `todo`, close this `## Blocked` record as resolved by the
+  repairing change (mirroring the T092 record below), and add
+  `cmd/dl-tool/main.go` to `## Files` — all in the same change, so the
+  deferral cannot outlive its cause.
 
 ## Blocked — resolved
 
