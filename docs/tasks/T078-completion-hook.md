@@ -35,7 +35,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/jobs/hook.go` | create | `Hook`, its discovery, the argv, the fixed environment and the timeout. |
 | `internal/jobs/hook_test.go` | create | Off-by-default, argv, environment, timeout and non-zero-exit cases. |
 | `internal/jobs/postprocess.go` | modify | Run the hook as the chain's last step. |
-| `internal/api/settings_test.go` | modify | `TestSettingsRejectsHookKey`: a hook-named key gets the same `422` as any other unknown key. No handler change — a distinct rejection would reveal the key is special. |
+| `internal/api/settings_test.go` | modify | `TestSettingsRejectsHookKey`: a hook-named key gets the same `422` as any other unknown key, and `GET /settings` never returns the hook path. No handler change — a distinct rejection would reveal the key is special. |
 | `cmd/dl-tool/main.go` | edit | Hand `cfg.ConfigDir` to the post-processing chain — `NewChain` gains the directory parameter (or a `SetConfigDir` beside `SetNotifier`; the shape is the implementer's). |
 
 No other file may be modified.
