@@ -195,16 +195,96 @@ go test -race -count=1 ./internal/engine/ytdlp/...
 ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.104s
 ```
 
-`go test -race -count=1 -v ./internal/engine/ytdlp/...` on the same tree lists the parse tests
-PASS — `TestProgressTotalFallbackChain`, `TestProgressSkipsWarningLine`,
-`TestProgressSkipsUnknownStatus`, `TestClassifyExitTable` (all nine subtests including
-`stopped_early_on_purpose`, `restart_for_update`, `signalled_by_Cancel` and both
-private-video phrasings), `TestInfoDocumentFillsContentPath`, plus
-`TestParseProgressLineDecodesEveryField`, `TestProgressApplyMapsStatusAndFields`,
-`TestPercentFallbackRejectsDegenerateCounters`, `TestScanProgressEmitsEventsAndSkipsNoise`,
-`TestScanProgressAcceptsLongLine`, `TestScanProgressReportsScannerError`,
-`TestParseInfoDocument`, `TestInfoDocumentSizeFallback` and
-`TestClassifyExitProducesOnlyDocumentedErrorCodes` — and all fifteen runner tests. No `FAIL`.
+`go test -race -count=1 -v ./internal/engine/ytdlp/...` on the same tree:
+
+```
+=== RUN   TestParseProgressLineDecodesEveryField
+--- PASS: TestParseProgressLineDecodesEveryField (0.00s)
+=== RUN   TestProgressTotalFallbackChain
+=== RUN   TestProgressTotalFallbackChain/exact_total_wins_over_estimate
+=== RUN   TestProgressTotalFallbackChain/null_total_falls_back_to_estimate
+=== RUN   TestProgressTotalFallbackChain/both_null_leaves_TotalBytes_nil_and_yields_the_fragment_ratio
+=== RUN   TestProgressTotalFallbackChain/no_size_and_no_fragments_yields_nil_and_-1
+--- PASS: TestProgressTotalFallbackChain (0.00s)
+    --- PASS: TestProgressTotalFallbackChain/exact_total_wins_over_estimate (0.00s)
+    --- PASS: TestProgressTotalFallbackChain/null_total_falls_back_to_estimate (0.00s)
+    --- PASS: TestProgressTotalFallbackChain/both_null_leaves_TotalBytes_nil_and_yields_the_fragment_ratio (0.00s)
+    --- PASS: TestProgressTotalFallbackChain/no_size_and_no_fragments_yields_nil_and_-1 (0.00s)
+=== RUN   TestPercentFallbackRejectsDegenerateCounters
+--- PASS: TestPercentFallbackRejectsDegenerateCounters (0.00s)
+=== RUN   TestProgressApplyMapsStatusAndFields
+--- PASS: TestProgressApplyMapsStatusAndFields (0.00s)
+=== RUN   TestProgressSkipsWarningLine
+--- PASS: TestProgressSkipsWarningLine (0.00s)
+=== RUN   TestProgressSkipsUnknownStatus
+--- PASS: TestProgressSkipsUnknownStatus (0.00s)
+=== RUN   TestScanProgressEmitsEventsAndSkipsNoise
+--- PASS: TestScanProgressEmitsEventsAndSkipsNoise (0.00s)
+=== RUN   TestScanProgressAcceptsLongLine
+--- PASS: TestScanProgressAcceptsLongLine (0.07s)
+=== RUN   TestScanProgressReportsScannerError
+--- PASS: TestScanProgressReportsScannerError (0.03s)
+=== RUN   TestParseInfoDocument
+--- PASS: TestParseInfoDocument (0.00s)
+=== RUN   TestInfoDocumentFillsContentPath
+--- PASS: TestInfoDocumentFillsContentPath (0.00s)
+=== RUN   TestInfoDocumentSizeFallback
+--- PASS: TestInfoDocumentSizeFallback (0.00s)
+=== RUN   TestClassifyExitTable
+=== RUN   TestClassifyExitTable/success
+=== RUN   TestClassifyExitTable/stopped_early_on_purpose
+=== RUN   TestClassifyExitTable/option_error
+=== RUN   TestClassifyExitTable/restart_for_update
+=== RUN   TestClassifyExitTable/private_video
+=== RUN   TestClassifyExitTable/private_video,_other_extractor_phrasing
+=== RUN   TestClassifyExitTable/generic_error
+=== RUN   TestClassifyExitTable/signalled_by_Cancel
+=== RUN   TestClassifyExitTable/undocumented_code
+--- PASS: TestClassifyExitTable (0.00s)
+    --- PASS: TestClassifyExitTable/success (0.00s)
+    --- PASS: TestClassifyExitTable/stopped_early_on_purpose (0.00s)
+    --- PASS: TestClassifyExitTable/option_error (0.00s)
+    --- PASS: TestClassifyExitTable/restart_for_update (0.00s)
+    --- PASS: TestClassifyExitTable/private_video (0.00s)
+    --- PASS: TestClassifyExitTable/private_video,_other_extractor_phrasing (0.00s)
+    --- PASS: TestClassifyExitTable/generic_error (0.00s)
+    --- PASS: TestClassifyExitTable/signalled_by_Cancel (0.00s)
+    --- PASS: TestClassifyExitTable/undocumented_code (0.00s)
+=== RUN   TestClassifyExitProducesOnlyDocumentedErrorCodes
+--- PASS: TestClassifyExitProducesOnlyDocumentedErrorCodes (0.00s)
+=== RUN   TestArgvGoldenPlainRequest
+--- PASS: TestArgvGoldenPlainRequest (0.00s)
+=== RUN   TestArgvUsesFilenameAsOutput
+--- PASS: TestArgvUsesFilenameAsOutput (0.00s)
+=== RUN   TestArgvPutsURILast
+--- PASS: TestArgvPutsURILast (0.00s)
+=== RUN   TestArgvGuardsDashPrefixedURI
+--- PASS: TestArgvGuardsDashPrefixedURI (0.00s)
+=== RUN   TestArgvRejectsShellComposition
+--- PASS: TestArgvRejectsShellComposition (0.00s)
+=== RUN   TestSpawnAndCancel
+--- PASS: TestSpawnAndCancel (0.00s)
+=== RUN   TestCancelUnknownIDIsNotFound
+--- PASS: TestCancelUnknownIDIsNotFound (0.00s)
+=== RUN   TestWaitUnknownIDIsNotFound
+--- PASS: TestWaitUnknownIDIsNotFound (0.00s)
+=== RUN   TestWaitPropagatesExitCode
+--- PASS: TestWaitPropagatesExitCode (0.00s)
+=== RUN   TestStdoutReadsToEOFAcrossProcessExit
+--- PASS: TestStdoutReadsToEOFAcrossProcessExit (0.00s)
+=== RUN   TestSpawnWithoutURIErrors
+--- PASS: TestSpawnWithoutURIErrors (0.00s)
+=== RUN   TestArchivePathStripsEnginePrefix
+--- PASS: TestArchivePathStripsEnginePrefix (0.00s)
+=== RUN   TestArchivePathStaysInsideArchiveDir
+--- PASS: TestArchivePathStaysInsideArchiveDir (0.00s)
+=== RUN   TestBoundedBufferKeepsTail
+--- PASS: TestBoundedBufferKeepsTail (0.00s)
+=== RUN   TestSpawnRejectsEscapingFilename
+--- PASS: TestSpawnRejectsEscapingFilename (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.160s
+```
 
 Acceptance-criterion traceability:
 
