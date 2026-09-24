@@ -128,5 +128,26 @@
       "importFailed": "Import failed: {{detail}}",
       "importNeedsInput": "Choose a definition file or enter the instance URL and API key."
     }
+  },
+  "rss": {
+    "enable": "Enable RSS fetching",
+    "enableHint": "Off pauses polling; feeds and rules are untouched.",
+    "interval": "Update interval",
+    "intervalHint": "Minutes between feed polls; the minimum is 5.",
+    "intervalTooSmall": "Enter a number of minutes of at least {{min}}.",
+    "itemCap": "Maximum articles kept per feed",
+    "itemCapHint": "The cap is stored on each feed; saving applies the typed value to every feed.",
+    "capMixed": "Mixed",
+    "autoDownloader": "Auto-downloader",
+    "rulesEnabled": "{{enabled}} of {{total}} rules enabled",
+    "rulesLink": "RSS rules",
+    "rulesNote": "Rules are switched on and off individually there.",
+    "smartFilter": "Smart episode filter",
+    "smartWarning": "Turning the smart filter on rejects every title that is not TV-shaped.",
+    "ruleEditorLink": "The rule editor",
+    "smartNoteTail": "sets episode.smart per rule.",
+    "loadError": "Could not load the RSS settings.",
+    "saveFailed": "Could not save the RSS settings: {{detail}}",
+    "capSaveFailed": "Could not update the article cap for {{feeds}}: {{detail}}"
   }
 }

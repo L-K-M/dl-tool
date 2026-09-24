@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T117 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T053, T065, T066, T068, T092 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `web/src/components/Settings/SettingsScreen.tsx` and `web/src/locales/en/settings.json` |
@@ -122,12 +122,12 @@ Control-to-carrier map — every row of doc 09 §9's RSS cell, and nothing else:
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestIntervalRendersMinutesAndSavesSeconds` passes and asserts the body carries only changed keys.
-- [ ] `TestMixedItemCapFansOutToEveryFeed` passes and asserts one call per feed.
-- [ ] `TestSettingsValidationErrorSkipsFeedWrites` passes.
-- [ ] `TestSmartFilterPatternsAreReadOnly` asserts the four patterns render and no editable control exists.
-- [ ] The section renders exactly the five controls of doc 09 §9's RSS row, in that order.
-- [ ] No control on this screen writes a settings key outside `rss_enabled` and `rss_interval_s`.
+- [x] `TestIntervalRendersMinutesAndSavesSeconds` passes and asserts the body carries only changed keys.
+- [x] `TestMixedItemCapFansOutToEveryFeed` passes and asserts one call per feed.
+- [x] `TestSettingsValidationErrorSkipsFeedWrites` passes.
+- [x] `TestSmartFilterPatternsAreReadOnly` asserts the four patterns render and no editable control exists.
+- [x] The section renders exactly the five controls of doc 09 §9's RSS row, in that order.
+- [x] No control on this screen writes a settings key outside `rss_enabled` and `rss_interval_s`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -163,7 +163,57 @@ files this task creates are untracked, and `git diff --name-only` never lists an
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test-web && echo RSS_SETTINGS_OK` on the task branch (the MSW
+`onUnhandledRequest`, React `flushSync` and stubbed-status stderr lines are pre-existing test noise;
+only the per-file results and the summary are reproduced):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ ✓ src/store/useTasks.test.ts (17 tests)
+ ✓ src/api/events.test.ts (16 tests)
+ ✓ src/store/useUiPrefs.test.ts (17 tests)
+ ✓ src/components/Settings/IndexersSection.test.tsx (6 tests)
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests)
+ ✓ src/components/Search/SearchScreen.test.tsx (10 tests)
+ ✓ src/App.test.tsx (55 tests)
+ ✓ src/components/Settings/RssSection.test.tsx (5 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests)
+
+ Test Files  23 passed (23)
+      Tests  284 passed (284)
+
+RSS_SETTINGS_OK
+```
+
+`RssSection.test.tsx` contains `TestIntervalRendersMinutesAndSavesSeconds`,
+`TestMixedItemCapFansOutToEveryFeed`, `TestSettingsValidationErrorSkipsFeedWrites`,
+`TestSmartFilterPatternsAreReadOnly` and `TestRevertRestoresSeededStateWithoutRequests`, all passing.
+
+Scope check on the working tree before the task commit:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+web/src/components/Settings/RssSection.test.tsx
+web/src/components/Settings/RssSection.tsx
+web/src/components/Settings/SettingsScreen.tsx
+web/src/locales/en/settings.json
+```
+
+Exactly the `## Files` table and nothing else.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
