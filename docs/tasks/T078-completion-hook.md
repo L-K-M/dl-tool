@@ -172,22 +172,24 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/jobs/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	34.877s
-ok  	github.com/L-K-M/dl-tool/internal/api	208.571s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	40.725s
+ok  	github.com/L-K-M/dl-tool/internal/api	215.326s
 HOOK_OK
 ```
 
 Named tests (run with `-v`):
 
 ```text
---- PASS: TestHookOffByDefault (0.06s)
---- PASS: TestArgvNotShellString (0.04s)
---- PASS: TestFixedEnvironment (0.06s)
---- PASS: TestHookTimeoutKillsGroup (0.19s)
---- PASS: TestNonZeroExitKeepsCompleted (0.03s)
-ok  	github.com/L-K-M/dl-tool/internal/jobs	0.397s
---- PASS: TestSettingsRejectsHookKey (0.08s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.098s
+--- PASS: TestHookOffByDefault (0.10s)
+--- PASS: TestArgvNotShellString (0.08s)
+--- PASS: TestFixedEnvironment (0.19s)
+--- PASS: TestHookTimeoutKillsGroup (0.26s)
+--- PASS: TestHookTimeoutDaemonEscapeReturns (5.21s)
+--- PASS: TestNonZeroExitKeepsCompleted (0.05s)
+--- PASS: TestChainPassesTaskToHook (0.06s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	5.973s
+--- PASS: TestSettingsRejectsHookKey (0.09s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.113s
 ```
 
 Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'`):
