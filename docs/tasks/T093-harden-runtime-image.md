@@ -114,12 +114,12 @@ in the repository.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `docker buildx build --platform linux/amd64,linux/arm64 .` succeeds and the Go and npm stages run on the build platform, not under QEMU.
-- [ ] The `ytdlp` stage prints `/yt-dlp: OK` on both platforms, and a one-character change to either hash fails the build at `sha256sum -c -`.
-- [ ] `docker image inspect` reports `org.opencontainers.image.source` as `https://github.com/L-K-M/dl-tool` and a non-empty `org.opencontainers.image.version`.
-- [ ] `docker run --rm --entrypoint sh <image> -c 'yt-dlp --version'` prints the pinned version, and the image still contains no `python3`.
-- [ ] The three `ARG YTDLP_` lines each occupy exactly one line starting with `ARG `, and appear nowhere else in the repository.
-- [ ] The entrypoint, `HEALTHCHECK`, `ENV` block and `apk add` line are unchanged from T124.
+- [x] `docker buildx build --platform linux/amd64,linux/arm64 .` succeeds and the Go and npm stages run on the build platform, not under QEMU.
+- [x] The `ytdlp` stage prints `/yt-dlp: OK` on both platforms, and a one-character change to either hash fails the build at `sha256sum -c -`.
+- [x] `docker image inspect` reports `org.opencontainers.image.source` as `https://github.com/L-K-M/dl-tool` and a non-empty `org.opencontainers.image.version`.
+- [x] `docker run --rm --entrypoint sh <image> -c 'yt-dlp --version'` prints the pinned version, and the image still contains no `python3`.
+- [x] The three `ARG YTDLP_` lines each occupy exactly one line starting with `ARG `, and appear nowhere else in the repository.
+- [x] The entrypoint, `HEALTHCHECK`, `ENV` block and `apk add` line are unchanged from T124.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -179,25 +179,40 @@ $ unshare -U -r true
 unshare: unshare failed: Operation not permitted
 ```
 
-The verbatim Verification block **did run on this PR's `verify` job**
+The verbatim Verification block **ran and passed on this PR's `verify` job**
 (`.github/workflows/task-verification.yml` extracts this file's `## Verification`
 bash and executes it on a Docker-capable runner; the `compose` job in `ci.yml`
 independently ran `make docker-build`). Observed output from the verify job's
-"Run task Verification" step (run 36035617728):
+"Run task Verification" step at the final tree (run 36039822023, job 107768912736):
 
 ```
-#17 [ytdlp 3/3] RUN set -eu; case "amd64" in amd64) file=yt-dlp_musllinux; ... esac; ...
-#17 0.956 /yt-dlp: OK
+#20 [ytdlp 3/3] RUN set -eu; case "amd64" in amd64) file=yt-dlp_musllinux; ... esac; ...
+#20 1.228 /yt-dlp: OK
 #35 naming to ghcr.io/l-k-m/dl-tool:t093 done
 $ docker run --rm --entrypoint sh ghcr.io/l-k-m/dl-tool:t093 -c 'yt-dlp --version; ! command -v python3 && echo NO_PYTHON'
 2026.08.19
 NO_PYTHON
+# (the two docker image inspect asserts printed nothing — source and non-empty version held)
+
+# binfmt registered linux/arm64, then the docker-container builder solved both platforms:
+#24 [linux/amd64->arm64 ytdlp 3/3] RUN set -eu; case "arm64" in arm64) file=yt-dlp_musllinux_aarch64; ... esac; ...
+#24 1.617 /yt-dlp: OK
+#25 [linux/amd64 ytdlp 3/3]      RUN set -eu; case "amd64" in amd64) file=yt-dlp_musllinux; ... esac; ...
+#25 1.454 /yt-dlp: OK
+#39 [linux/amd64->arm64 build 7/7] CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath ...
+#31 [linux/arm64 stage-4 2/6] RUN apk add --no-cache su-exec ca-certificates tzdata nodejs   (the only emulated layer)
+
+# one-character hash corruption, built --target ytdlp:
+#8 0.888 /yt-dlp: FAILED
+#8 0.888 sha256sum: WARNING: 1 of 1 computed checksums did NOT match
+#8 ERROR: process "... sha256sum -c -; chmod 0755 /yt-dlp" did not complete successfully: exit code: 1
+# git checkout restored Dockerfile; grep 'did NOT match' on the log passed
 ```
 
-What still has not run anywhere: `docker buildx build --platform
-linux/amd64,linux/arm64` (CI builds amd64 only), the corrupted-hash rebuild (replicated
-locally below), and `docker image inspect` (the LABEL block is verbatim from doc 10
-§5; `version` resolves to `dev` under `make docker-build` via the global ARG).
+The same job then ran `make ci` end-to-end green. The multi-arch log also shows the
+criterion's intent: `web`, `build`, `ytdlp` and `sevenzip` all ran as `linux/amd64`
+steps for both solves — Go and npm work natively, no QEMU — while only the runtime
+`apk add` ran under `linux/arm64`.
 
 **Pin resolution** — `GET https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest`
 returned tag `2026.08.19` (newest stable). Both musllinux assets were downloaded from
