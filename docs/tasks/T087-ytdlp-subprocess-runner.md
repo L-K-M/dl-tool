@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T087 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T005, T016 |
 | **Blocks** | T088, T089 |
 | **Parallel-safe** | yes — creates `internal/engine/ytdlp/` and touches nothing else |
@@ -146,12 +146,12 @@ func (r *Runner) ArchivePath(id string) string
    sleeps, then `Cancel`, asserting `Wait` returns within 10 s and `Live()` is empty.
 
 ## Acceptance criteria
-- [ ] `Argv` places the submitted URI last and leaves it byte-identical to the input.
-- [ ] No source line in the package contains `sh -c`, `bash -c`, `exec.Command(` with a composed string, or `os/exec.LookPath` on a user value.
-- [ ] `Spawn` returns before the process exits and registers the id in `Live()`.
-- [ ] `Cancel` on a running id terminates it and is a no-op the second time.
-- [ ] `Cancel` and `Wait` on an unknown id return `engine.ErrNotFound`.
-- [ ] No source line invokes `-U` or `--update-to`.
+- [x] `Argv` places the submitted URI last and leaves it byte-identical to the input.
+- [x] No source line in the package contains `sh -c`, `bash -c`, `exec.Command(` with a composed string, or `os/exec.LookPath` on a user value.
+- [x] `Spawn` returns before the process exits and registers the id in `Live()`.
+- [x] `Cancel` on a running id terminates it and is a no-op the second time.
+- [x] `Cancel` and `Wait` on an unknown id return `engine.ErrNotFound`.
+- [x] No source line invokes `-U` or `--update-to`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -183,7 +183,44 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/engine/ytdlp/...` on the final tree:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG=./internal/engine/ytdlp/...
+go test -race -count=1 ./internal/engine/ytdlp/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.050s
+```
+
+`go test -race -count=1 -v ./internal/engine/ytdlp/...` lists all ten tests PASS, including
+`TestArgvPutsURILast`, `TestArgvRejectsShellComposition`, `TestSpawnAndCancel` and
+`TestCancelUnknownIDIsNotFound`. No `FAIL`.
+
+`grep -rn "sh -c\|bash -c\|exec.Command(\"" internal/engine/ytdlp/` prints nothing (exit 1);
+no line invokes `-U` or `--update-to` (the package comment names the rule, per step 1).
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/engine/ytdlp/runner.go
+internal/engine/ytdlp/runner_test.go
+```
+
+Exactly the Files table, in that order.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
