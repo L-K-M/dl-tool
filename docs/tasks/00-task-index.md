@@ -216,7 +216,7 @@ The yt-dlp engine, the release hardening of the image and the compose stack, the
 | [T087](T087-ytdlp-subprocess-runner.md) | Run yt-dlp as a supervised subprocess | T005, T016 | done |
 | [T088](T088-ytdlp-extractor-cache.md) | Cache the yt-dlp extractor patterns for the router | T016, T087 | deferred |
 | [T089](T089-ytdlp-progress-and-exit-codes.md) | Parse yt-dlp progress lines and exit codes | T087 | done |
-| [T090](T090-ytdlp-engine-registration.md) | Register the yt-dlp engine and run the contract suite | T028, T089 | todo |
+| [T090](T090-ytdlp-engine-registration.md) | Register the yt-dlp engine and run the contract suite | T028, T089 | done |
 | [T093](T093-harden-runtime-image.md) | Harden the runtime image for a multi-arch release | T124 | todo |
 | [T094](T094-harden-compose-and-release-verification.md) | Harden the compose stack and document release verification | T093, T125 | todo |
 | [T095](T095-proxy-hardening-and-headers.md) | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | todo |
@@ -422,7 +422,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T087 | Run yt-dlp as a supervised subprocess | T005, T016 | yes | done | [T087](T087-ytdlp-subprocess-runner.md) |
 | T088 | Cache the yt-dlp extractor patterns for the router | T016, T087 | no | deferred | [T088](T088-ytdlp-extractor-cache.md) |
 | T089 | Parse yt-dlp progress lines and exit codes | T087 | yes | done | [T089](T089-ytdlp-progress-and-exit-codes.md) |
-| T090 | Register the yt-dlp engine and run the contract suite | T028, T089 | no | todo | [T090](T090-ytdlp-engine-registration.md) |
+| T090 | Register the yt-dlp engine and run the contract suite | T028, T089 | no | done | [T090](T090-ytdlp-engine-registration.md) |
 | T093 | Harden the runtime image for a multi-arch release | T124 | yes | todo | [T093](T093-harden-runtime-image.md) |
 | T094 | Harden the compose stack and document release verification | T093, T125 | no | todo | [T094](T094-harden-compose-and-release-verification.md) |
 | T095 | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | no | todo | [T095](T095-proxy-hardening-and-headers.md) |
