@@ -48,6 +48,7 @@ func TestYtdlpContract(t *testing.T) {
 // whose throttle lands in argv (T113 adds the confirmed flag).
 type contractEngine struct {
 	*Engine
+	t *testing.T
 }
 
 var _ enginetest.DownloadLimitReadback = contractEngine{}
@@ -65,13 +66,20 @@ func newContractEngine(t *testing.T, binary string) contractEngine {
 	}, testLogger())
 	require.NoError(t, e.Connect(context.Background()))
 	t.Cleanup(func() { require.NoError(t, e.Close()) })
-	return contractEngine{Engine: e}
+	return contractEngine{Engine: e, t: t}
 }
 
 // Add rewrites the fixture URL's container-facing host to loopback: the
 // fixture listener binds 0.0.0.0, so the same port answers on
-// 127.0.0.1 for a process running on the host.
+// 127.0.0.1 for a process running on the host. An empty SaveDir is
+// redirected to a fresh tempdir — otherwise the subprocess would write
+// the media file and the info document into the package directory, and
+// a per-task dir also keeps the shared .dl-tool-info.json filename from
+// colliding across suite tasks.
 func (c contractEngine) Add(ctx context.Context, req engine.AddRequest) (string, error) {
+	if req.SaveDir == "" {
+		req.SaveDir = c.t.TempDir()
+	}
 	for i, raw := range req.URIs {
 		u, err := url.Parse(raw)
 		if err != nil {
