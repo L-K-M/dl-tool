@@ -4,13 +4,13 @@
 |---|---|
 | **ID** | T120 |
 | **Milestone** | M6 |
-| **Status** | deferred — see the open `## Blocked — 2026-09-24` record |
+| **Status** | todo |
 | **Depends on** | T053, T084, T106 |
 | **Blocks** | — |
-| **Parallel-safe** | no — it edits `SettingsScreen.tsx` and `settings.json`, shared with T116–T119 and T121 |
+| **Parallel-safe** | no — it edits `SettingsScreen.tsx`, `settings.json` and `internal/api/server.go`, shared with T116–T119 and T121 |
 | **Implements** | — (renders [FR-104](../02-requirements.md#fr-104-send-notifications-and-offer-a-per-channel-test) covered by T077, [FR-107](../02-requirements.md#fr-107-manage-notification-channels) covered by T106, and [FR-117](../02-requirements.md#fr-117-issue-and-revoke-api-tokens) covered by T084) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |
-| **Est. size** | 3 new files, ~400 LOC |
+| **Est. size** | 6 new files, ~900 LOC |
 
 ## Goal
 `/settings/account` changes the operator's password and issues API tokens whose secret is shown exactly
@@ -43,10 +43,43 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/Settings/AccountSection.test.tsx` | create | Both sections: reveal-once, password change, matrix round-trip and raw reply. |
 | `web/src/components/Settings/SettingsScreen.tsx` | edit | Add `account` and `notifications` to `IMPLEMENTED` and render them. |
 | `web/src/locales/en/settings.json` | edit | Labels, column headers, the reveal warning and the event names. |
+| `internal/store/users.go` | edit | `UpdateUserProfile`, `UpdatePasswordHash` and `DeleteOtherSessions` for `PATCH /account`. |
+| `internal/api/account.go` | create | The `get-account` and `patch-account` handlers. |
+| `internal/api/account_test.go` | create | The endpoint cases `## Verification` names. |
+| `internal/api/server.go` | edit | Register `get-account` and `patch-account`. |
 
-No other file may be modified.
+`api/openapi.json` and `web/src/api/schema.d.ts` are `make gen` output of the two new registrations and
+ride along per doc 13 §7.1. No other file may be modified.
 
 ## Interface contract
+
+```go
+package store
+
+// UpdateUserProfile applies the PATCH /account profile fields.
+func UpdateUserProfile(ctx context.Context, db *sqlx.DB, id, username, locale string) error
+
+// UpdatePasswordHash replaces the account's password_hash with an already-hashed value.
+func UpdatePasswordHash(ctx context.Context, db *sqlx.DB, id, passwordHash string) error
+
+// DeleteOtherSessions revokes every session the user holds except exceptSessionID; the
+// password-change rule revokes the attacker's stolen sessions while keeping the caller logged in.
+func DeleteOtherSessions(ctx context.Context, db *sqlx.DB, userID, exceptSessionID string) (int64, error)
+```
+
+```go
+package api
+
+// GetAccount returns the account object of doc 05 §12 — the same shape GET /auth/me reports as
+// its user member; no password material in either direction.
+func (h *AccountHandlers) GetAccount(ctx context.Context, in *struct{}) (*GetAccountOutput, error)
+
+// PatchAccount verifies current_password before any write (403 /problems/forbidden on mismatch),
+// enforces the 12-character password floor (422 /problems/validation-failed), applies username,
+// locale and password_hash, and on a password change revokes every session except the caller's —
+// API tokens are unaffected.
+func (h *AccountHandlers) PatchAccount(ctx context.Context, in *PatchAccountInput) (*PatchAccountOutput, error)
+```
 
 ```tsx
 // web/src/components/Settings/AccountSection.tsx
@@ -162,31 +195,50 @@ export function NotificationsSection(): JSX.Element;
   clears it, and the UI never sends `"__redacted__"`.
 
 ## Steps
-1. Edit `web/src/locales/en/settings.json`: add an `account` subtree (the field labels, the password rule,
+1. Edit `internal/store/users.go`: add `UpdateUserProfile`, `UpdatePasswordHash` and
+   `DeleteOtherSessions`, matching the file's existing free-function style over `*sqlx.DB`.
+2. Create `internal/api/account.go` with `AccountHandlers`: `GetAccount` returning the account object
+   of doc 05 §12, and `PatchAccount` verifying `current_password` before any write
+   (`403 /problems/forbidden`), enforcing the 12-character floor (`422 /problems/validation-failed`),
+   applying the profile/password writes and — on a password change — calling `DeleteOtherSessions`
+   for every session except the caller's. API tokens are unaffected.
+3. Edit `internal/api/server.go` to register `get-account` on `GET /account` and `patch-account` on
+   `PATCH /account`, then run `make gen` so `api/openapi.json` and `web/src/api/schema.d.ts` carry the
+   operations the web section calls.
+4. Create `internal/api/account_test.go` covering the endpoint cases `## Verification` names.
+5. Edit `web/src/locales/en/settings.json`: add an `account` subtree (the field labels, the password rule,
    the session-lifetime sentence, the token column headers and the reveal warning) and a `notifications`
    subtree with one label per `NOTIFIABLE_EVENTS` entry plus the four channel kinds.
-2. Create `AccountSection.tsx` reading `GET /account` through the T014 `api` client, with a Change-password
+6. Create `AccountSection.tsx` reading `GET /account` through the T014 `api` client, with a Change-password
    form that sends `password` and `current_password` to `PATCH /account`.
-3. State beside the token panel that a token's secret is shown once, is not recoverable, and can only be
+7. State beside the token panel that a token's secret is shown once, is not recoverable, and can only be
    replaced by revoking it and issuing a new one.
-4. Render the session-lifetime row as static text with the `DLTOOL_SESSION_TTL` sentence and no input.
-5. Build the API-token panel: `GET /api-tokens` listing name, prefix, last used, expires; `POST /api-tokens`
+8. Render the session-lifetime row as static text with the `DLTOOL_SESSION_TTL` sentence and no input.
+9. Build the API-token panel: `GET /api-tokens` listing name, prefix, last used, expires; `POST /api-tokens`
    opening `TokenRevealDialog` with the `token` from the `201` body; `DELETE /api-tokens/{id}` revoking.
-6. Make the reveal one-shot: hold the value in component state only, clear it on close, offer `Copy` and a
-   warning that it cannot be shown again, and never place it in a query cache, prefs or the URL.
-7. Create `NotificationsSection.tsx` with the channel list (add, edit, delete, enable) and the write-only
-   secret field, refusing to change `kind` on an existing channel because `PATCH` answers `422`.
-8. Build the matrix: `NOTIFIABLE_EVENTS` as rows, channels as columns, the `All events` row for `["*"]`, and
-   an extra read-only row for any stored code outside the list; save each column with
-   `PATCH /notifications/{id}` carrying only `event_mask`.
-9. Add `Send test` per channel, rendering the raw reply exactly as specified, with no error toast on
-   `ok:false` and a distinct rendering when `response` is `null`.
-10. Edit `SettingsScreen.tsx` to add `'account'` and `'notifications'` to `IMPLEMENTED` and render the two
+10. Make the reveal one-shot: hold the value in component state only, clear it on close, offer `Copy` and a
+    warning that it cannot be shown again, and never place it in a query cache, prefs or the URL.
+11. Create `NotificationsSection.tsx` with the channel list (add, edit, delete, enable) and the write-only
+    secret field, refusing to change `kind` on an existing channel because `PATCH` answers `422`.
+12. Build the matrix: `NOTIFIABLE_EVENTS` as rows, channels as columns, the `All events` row for `["*"]`, and
+    an extra read-only row for any stored code outside the list; save each column with
+    `PATCH /notifications/{id}` carrying only `event_mask`.
+13. Add `Send test` per channel, rendering the raw reply exactly as specified, with no error toast on
+    `ok:false` and a distinct rendering when `response` is `null`.
+14. Edit `SettingsScreen.tsx` to add `'account'` and `'notifications'` to `IMPLEMENTED` and render the two
     components; change nothing else in that file.
-11. Create `AccountSection.test.tsx` covering the acceptance criteria below against stubbed endpoints.
-12. Run the verification command and paste its output under `## Evidence`.
+15. Create `AccountSection.test.tsx` covering the acceptance criteria below against stubbed endpoints.
+16. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
+- [ ] `TestGetAccountReturnsShape` asserts `GET /account` returns the account object and carries no
+      password material.
+- [ ] `TestPatchAccountWrongCurrentIs403` asserts a mismatched `current_password` answers
+      `403 /problems/forbidden` and writes nothing.
+- [ ] `TestPatchAccountShortPasswordIs422` asserts a password under 12 characters answers
+      `422 /problems/validation-failed`.
+- [ ] `TestPatchAccountRevokesOtherSessions` asserts a password change revokes every session except
+      the caller's and leaves API tokens valid.
 - [ ] `TestTokenRevealedOnceOnly` asserts the token text is rendered after `201`, is gone after close, and
       appears in no later render, in no `GET /api-tokens` row and in no storage write.
 - [ ] `TestWrongCurrentPasswordRendersInline` asserts a `403 /problems/forbidden` renders on the
@@ -202,18 +254,22 @@ export function NotificationsSection(): JSX.Element;
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-make lint && make typecheck && make test-web && echo ACCOUNT_NOTIFY_OK
+make lint && make typecheck && make test PKG="./internal/api/... ./internal/store/..." && make test-web && echo ACCOUNT_NOTIFY_OK
 ```
-Expected: Vitest lists `src/components/Settings/AccountSection.test.tsx` among the passed files, each of the
-six tests named above appears with a `✓`, no file reports a failure, and the final line of stdout is exactly
-`ACCOUNT_NOTIFY_OK`.
+Expected: `ok  github.com/L-K-M/dl-tool/internal/api` and `ok  github.com/L-K-M/dl-tool/internal/store`
+with `TestGetAccountReturnsShape`, `TestPatchAccountWrongCurrentIs403`,
+`TestPatchAccountShortPasswordIs422` and `TestPatchAccountRevokesOtherSessions` each reported as
+`--- PASS`; Vitest lists `src/components/Settings/AccountSection.test.tsx` among the passed files,
+each of the web tests named above appears with a `✓`, no file reports a failure, and the final line
+of stdout is exactly `ACCOUNT_NOTIFY_OK`.
 
 Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the five paths in the Files table and nothing else. Use `git status`, not `git diff`: three
-of these files are new and `git diff --name-only` never lists an untracked file.
+Expected: exactly the paths in the Files table plus the two `make gen` outputs, and nothing else.
+Use `git status`, not `git diff`: several of these files are new and `git diff --name-only` never
+lists an untracked file.
 
 ## Out of scope — do NOT
 - Do NOT store, cache, log or re-display an API token after its reveal dialog closes. `GET /api-tokens`
@@ -237,7 +293,23 @@ of these files are new and `git diff --name-only` never lists an untracked file.
 ## Evidence
 <Agent pastes command output here before marking done.>
 
-## Blocked — 2026-09-24: no task owns the `GET`/`PATCH /account` operations the section is built on
+## Blocked — resolved 2026-09-24: no task owns the `GET`/`PATCH /account` operations the section is built on
+
+**Remedy 1 was applied: this task is now full-stack.** The Files table gains
+`internal/store/users.go` (`UpdateUserProfile`, `UpdatePasswordHash`, `DeleteOtherSessions`),
+`internal/api/account.go` (the `get-account`/`patch-account` handlers), `internal/api/account_test.go`
+and `internal/api/server.go` (registration); `api/openapi.json` and `web/src/api/schema.d.ts` ride
+along as `make gen` output per doc 13 §7.1. The contract names the store functions and handler
+semantics doc 05 §12 already adjudicates — `current_password` verified before any write (`403`),
+the 12-character floor (`422`), and revocation of every session except the caller's on a password
+change while API tokens stay valid. Steps gain the backend work ahead of the web steps, four
+endpoint acceptance criteria join the six web criteria, and `## Verification` runs the api/store
+packages alongside Vitest. No ADR needed: doc 05 §12 owns every behavior. The original record is
+preserved below.
+
+---
+
+### The gap (original 2026-09-24 record)
 
 The Account half of this task cannot be implemented inside `## Files` because the endpoints it
 calls do not exist, and the generated client makes the gap a compile error rather than a stub

@@ -188,7 +188,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T075](T075-extraction-password-list.md) | Try the per-task and shared extraction passwords | T074 | done |
 | [T076](T076-exdev-aware-move.md) | Move completed data across filesystems with progress | T074, T099 | done |
 | [T077](T077-notification-delivery.md) | Deliver task events to notification channels | T054, T074 | done |
-| [T078](T078-completion-hook.md) | Run the completion hook as an argument vector | T074 | deferred |
+| [T078](T078-completion-hook.md) | Run the completion hook as an argument vector | T074, T092 | todo |
 | [T079](T079-global-bandwidth-governor.md) | Fan global rate limits out to every engine | T016, T019, T027, T037 | done |
 | [T080](T080-schedule-grid-endpoints.md) | Store and serve the 24×7 schedule grid | T027, T079 | done |
 | [T081](T081-schedule-evaluation-and-alternative-speed.md) | Apply the active schedule cell every minute | T066, T079, T080 | done |
@@ -205,7 +205,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T117](T117-rss-settings-section.md) | Build the RSS settings section | T053, T065, T066, T068, T092 | done |
 | [T118](T118-bandwidth-settings-and-schedule-grid.md) | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | done |
 | [T119](T119-downloads-and-bittorrent-settings.md) | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | done |
-| [T120](T120-account-and-notifications-settings.md) | Build the Account and Notifications settings sections | T053, T084, T106 | deferred |
+| [T120](T120-account-and-notifications-settings.md) | Build the Account and Notifications settings sections | T053, T084, T106 | todo |
 
 ## M7 — yt-dlp, packaging and release
 
@@ -396,7 +396,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T075 | Try the per-task and shared extraction passwords | T074 | no | done | [T075](T075-extraction-password-list.md) |
 | T076 | Move completed data across filesystems with progress | T074, T099 | yes | done | [T076](T076-exdev-aware-move.md) |
 | T077 | Deliver task events to notification channels | T054, T074 | yes | done | [T077](T077-notification-delivery.md) |
-| T078 | Run the completion hook as an argument vector | T074 | no | deferred | [T078](T078-completion-hook.md) |
+| T078 | Run the completion hook as an argument vector | T074, T092 | no | todo | [T078](T078-completion-hook.md) |
 | T079 | Fan global rate limits out to every engine | T016, T019, T027, T037 | yes | done | [T079](T079-global-bandwidth-governor.md) |
 | T080 | Store and serve the 24×7 schedule grid | T027, T079 | yes | done | [T080](T080-schedule-grid-endpoints.md) |
 | T081 | Apply the active schedule cell every minute | T066, T079, T080 | no | done | [T081](T081-schedule-evaluation-and-alternative-speed.md) |
@@ -413,7 +413,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T117 | Build the RSS settings section | T053, T065, T066, T068, T092 | no | done | [T117](T117-rss-settings-section.md) |
 | T118 | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | no | done | [T118](T118-bandwidth-settings-and-schedule-grid.md) |
 | T119 | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | no | done | [T119](T119-downloads-and-bittorrent-settings.md) |
-| T120 | Build the Account and Notifications settings sections | T053, T084, T106 | no | deferred | [T120](T120-account-and-notifications-settings.md) |
+| T120 | Build the Account and Notifications settings sections | T053, T084, T106 | no | todo | [T120](T120-account-and-notifications-settings.md) |
 
 ### M7
 
