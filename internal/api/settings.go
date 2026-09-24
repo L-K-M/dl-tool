@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,8 +18,14 @@ import (
 )
 
 const (
-	operationListEngines = "list-engines"
-	operationTestEngine  = "test-engine"
+	operationListEngines   = "list-engines"
+	operationTestEngine    = "test-engine"
+	operationGetSettings   = "get-settings"
+	operationPatchSettings = "patch-settings"
+
+	// RedactedPlaceholder is the only form a secret takes on the wire
+	// (docs/11-config-reference.md section 6).
+	RedactedPlaceholder = "__redacted__"
 
 	// engineProbeDeadline bounds the Health call of POST /engines/{id}/test
 	// so a black-holed engine cannot hold the request open. The engine's
@@ -72,21 +79,45 @@ type TestEngineOutput struct {
 	}
 }
 
+// GetSettingsOutput is the flat settings object of doc 05 section 11.1.
+// A map, not a struct: the body is exactly the fifteen keys of doc 11
+// section 5, rendered member by member so extract_passwords can carry
+// the "__redacted__" placeholder instead of a value.
+type GetSettingsOutput struct{ Body map[string]any }
+
+// PatchSettingsInput carries the subset of keys PATCH /settings writes.
+// RawMessage keeps each member's JSON intact, so the store can enforce the
+// bare-integer grammar (`4`, never `"4"` or `4.0`) a decoded float64 would
+// erase.
+type PatchSettingsInput struct {
+	Body map[string]json.RawMessage
+}
+
 // SettingsHandlers owns the settings-adjacent operations of doc 05 section
-// 11: the engines list and probe here; GET/PATCH /settings arrive with
-// T092 on this same struct.
+// 11: the engines list and probe here, the settings document, and the
+// schedule grid in settings_schedule.go.
 type SettingsHandlers struct {
 	settings   *store.SettingsStore
 	engines    *engine.Registry
 	loadPolicy func(context.Context) (engine.Policy, error)
+	// roots are the configured data roots; the first one renders the
+	// documented default of default_destination while the row is unset
+	// (docs/11-config-reference.md section 5).
+	roots []string
 }
 
 // NewSettingsHandlers builds the settings handlers. db is the store the
 // engines rows live in; engines is the routing-time registry the probe
 // resolves each row's engine through — the same instance NewServer hands
-// the task handlers, so a test registering a stand-in reaches both.
-func NewSettingsHandlers(db *sqlx.DB, engines *engine.Registry) *SettingsHandlers {
-	return &SettingsHandlers{settings: store.NewSettingsStore(db), engines: engines, loadPolicy: admissionPolicyLoader(db, nil)}
+// the task handlers, so a test registering a stand-in reaches both. roots
+// is optional so the conformance suite's two-argument call keeps working;
+// NewServer passes cfg.DataRoots.
+func NewSettingsHandlers(db *sqlx.DB, engines *engine.Registry, roots ...[]string) *SettingsHandlers {
+	h := &SettingsHandlers{settings: store.NewSettingsStore(db), engines: engines, loadPolicy: admissionPolicyLoader(db, nil)}
+	if len(roots) > 0 {
+		h.roots = roots[0]
+	}
+	return h
 }
 
 // registerOperations mounts list-engines and test-engine on the Huma API;
@@ -111,6 +142,26 @@ func (h *SettingsHandlers) registerOperations(hapi huma.API) {
 		Tags:        []string{"engines"},
 		Security:    credentialRequired,
 	}, h.TestEngine)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: operationGetSettings,
+		Method:      http.MethodGet,
+		Path:        "/settings",
+		Summary:     "Read the settings",
+		Description: "Every user-changeable setting as one flat object — exactly the fifteen keys of the config reference, with extract_passwords rendered as \"__redacted__\" and min_free_space as the stored sparse map ({} while unset).",
+		Tags:        []string{"settings"},
+		Security:    credentialRequired,
+	}, h.GetSettings)
+
+	huma.Register(hapi, huma.Operation{
+		OperationID: operationPatchSettings,
+		Method:      http.MethodPatch,
+		Path:        "/settings",
+		Summary:     "Update settings",
+		Description: "Accepts any subset of the settings keys; each supplied member replaces its stored value wholesale, so a min_free_space patch replaces the whole map. An extract_passwords member equal to \"__redacted__\" is a no-op; the placeholder is invalid for every other key. 422 /problems/validation-failed for an unknown key, a malformed shape or an out-of-range value.",
+		Tags:        []string{"settings"},
+		Security:    credentialRequired,
+	}, h.PatchSettings)
 }
 
 // ListEngines serves GET /engines: one entry per engines row, with the
@@ -157,14 +208,90 @@ func (h *SettingsHandlers) renderEngine(row store.Engine) EngineDTO {
 			capabilities = append(capabilities, string(capability))
 		}
 		dto.Capabilities = capabilities
-		// A successful health probe may still report competing automation.
-		dto.Connected = row.LastSeenAt != nil && (row.LastError == nil || strings.HasPrefix(*row.LastError, conformancePrefix))
 	}
+	dto.Connected = engineConnected(row, registered)
 	if dto.Capabilities == nil {
 		dto.Capabilities = []string{}
 	}
 
 	return dto
+}
+
+// engineConnected is the shared connectivity rule of GET /engines and
+// GET /system/info: a row reports connected when its engine is registered
+// in this process and the last recorded probe succeeded. A successful
+// health probe may still carry competing-automation conformance warnings
+// in last_error — those preserve health.
+func engineConnected(row store.Engine, registered bool) bool {
+	return registered && row.LastSeenAt != nil &&
+		(row.LastError == nil || strings.HasPrefix(*row.LastError, conformancePrefix))
+}
+
+// GetSettings serves GET /settings: the flat settings document of doc 05
+// section 11.1 with extract_passwords rendered as "__redacted__".
+func (h *SettingsHandlers) GetSettings(ctx context.Context, _ *struct{}) (*GetSettingsOutput, error) {
+	settings, err := h.settings.GetSettings(ctx)
+	if err != nil {
+		return nil, internalFailure(ctx, "read settings", err)
+	}
+
+	return &GetSettingsOutput{Body: h.renderSettings(settings)}, nil
+}
+
+// PatchSettings serves PATCH /settings: each supplied member replaces its
+// stored value wholesale in one transaction and the answer re-reads the
+// stored document rather than echoing the request. The store's two
+// sentinel errors are the 422 of doc 05 section 11.1.
+func (h *SettingsHandlers) PatchSettings(ctx context.Context, in *PatchSettingsInput) (*GetSettingsOutput, error) {
+	settings, err := h.settings.PutSettings(ctx, in.Body)
+	switch {
+	case errors.Is(err, store.ErrUnknownSettingKey):
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "the patch names a key that is not a setting")
+	case errors.Is(err, store.ErrSettingOutOfRange):
+		return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "the patch carries a value outside its key's domain")
+	case err != nil:
+		return nil, internalFailure(ctx, "update settings", err)
+	}
+
+	return &GetSettingsOutput{Body: h.renderSettings(settings)}, nil
+}
+
+// renderSettings renders the typed store.Settings into the flat wire
+// object — exactly the fifteen keys of doc 11 section 5. The secret
+// member is the literal "__redacted__", never the stored list, never an
+// array and never the empty string.
+func (h *SettingsHandlers) renderSettings(s store.Settings) map[string]any {
+	destination := s.DefaultDestination
+	if destination == "" && len(h.roots) > 0 {
+		// The documented default is the first DLTOOL_DATA_ROOTS entry;
+		// the store cannot know the roots, so the row stays unset and the
+		// render substitutes the fallback here.
+		destination = h.roots[0]
+	}
+	minFree := s.MinFreeSpace
+	if minFree == nil {
+		// A nil map would marshal as null; the wire shape is always an
+		// object, {} while nothing is stored.
+		minFree = map[string]int64{}
+	}
+
+	return map[string]any{
+		"download_rate_limit":     s.DownloadRateLimit,
+		"upload_rate_limit":       s.UploadRateLimit,
+		"alt_download_rate_limit": s.AltDownloadRate,
+		"alt_upload_rate_limit":   s.AltUploadRate,
+		"schedule_enabled":        s.ScheduleEnabled,
+		"default_destination":     destination,
+		"min_free_space":          minFree,
+		"max_active_total":        s.MaxActiveTotal,
+		"max_active_per_engine":   s.MaxActivePerEngine,
+		"process_order":           s.ProcessOrder,
+		"rss_enabled":             s.RSSEnabled,
+		"rss_interval_s":          s.RSSIntervalS,
+		"auto_extract":            s.AutoExtract,
+		"extract_passwords":       RedactedPlaceholder,
+		"confirm_on_delete":       s.ConfirmOnDelete,
+	}
 }
 
 // TestEngine serves POST /engines/{id}/test: one bounded probe of the

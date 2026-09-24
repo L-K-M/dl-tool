@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T092 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T005, T027, T091 |
 | **Blocks** | T096, T117, T118, T119, T121 |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
@@ -150,20 +150,20 @@ without copying a second contract here.
    whose serialised body contains neither configured engine-secret value.
 
 ## Acceptance criteria
-- [ ] `GET /settings` emits exactly the fifteen keys of doc 11 §5, including `min_free_space` and both
+- [x] `GET /settings` emits exactly the fifteen keys of doc 11 §5, including `min_free_space` and both
       `max_active_*` keys.
-- [ ] `GET /settings` emits `extract_passwords` as exactly `"__redacted__"`.
-- [ ] `PATCH` with `"__redacted__"` leaves the stored secret byte-identical.
-- [ ] An unknown key, `rss_interval_s=120`, `"rss_interval_s":"300"`, a negative rate limit, a negative
+- [x] `GET /settings` emits `extract_passwords` as exactly `"__redacted__"`.
+- [x] `PATCH` with `"__redacted__"` leaves the stored secret byte-identical.
+- [x] An unknown key, `rss_interval_s=120`, `"rss_interval_s":"300"`, a negative rate limit, a negative
       `max_active_*` value, a negative `min_free_space` value, a relative or non-canonical `min_free_space`
       key, `"min_free_space":"__redacted__"`, `"default_destination":"__redacted__"`,
       `"min_free_space":null` and `"download_rate_limit":null` each return `422`.
-- [ ] A `min_free_space` patch replaces the stored map wholesale; roots omitted from that map are absent
+- [x] A `min_free_space` patch replaces the stored map wholesale; roots omitted from that map are absent
       afterward, while a later top-level patch omitting `min_free_space` leaves the map byte-identical.
-- [ ] `GET /settings` returns the stored `min_free_space` map verbatim (`{}` after T006's initial
+- [x] `GET /settings` returns the stored `min_free_space` map verbatim (`{}` after T006's initial
       migration); the per-root default is resolved only when T099 builds reservations.
-- [ ] `GET /system/info` returns all eleven top-level fields of doc 05 §13.
-- [ ] No response body from either endpoint contains a configured engine secret in any form.
+- [x] `GET /system/info` returns all eleven top-level fields of doc 05 §13.
+- [x] No response body from either endpoint contains a configured engine secret in any form.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -195,7 +195,101 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG=./internal/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	200.402s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.142s
+ok  	github.com/L-K-M/dl-tool/internal/engine	35.918s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.242s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.822s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.892s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	29.496s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.241s
+ok  	github.com/L-K-M/dl-tool/internal/rss	19.804s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.217s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.448s
+ok  	github.com/L-K-M/dl-tool/internal/store	83.855s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.400s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.081s
+```
+
+The named tests, individually (`go test -race -count=1 -v -run
+'TestSettingsRedactsExtractPasswords|TestPatchRedactedIsNoOp|TestPatchUnknownKeyIs422|TestPatchOutOfRangeIs422|TestPatchMinFreeSpaceReplacesWholesale|TestSystemInfoCarriesNoSecret'
+./internal/api/`):
+
+```
+--- PASS: TestSettingsRedactsExtractPasswords (0.41s)
+--- PASS: TestPatchRedactedIsNoOp (0.37s)
+--- PASS: TestPatchUnknownKeyIs422 (0.48s)
+--- PASS: TestPatchOutOfRangeIs422 (0.50s)
+    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_as_a_string (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_total (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_per_engine (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_key (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_placeholder (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_empty (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/min_free_space_null (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/download_rate_limit_null (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_below_the_300s_floor (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/relative_min_free_space_key (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_traversal (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/process_order_other_enum (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/extract_passwords_null (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_rate_limit (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/min_free_space_placeholder (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/extract_passwords_non-array (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_min_free_space_value (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/schedule_enabled_as_a_string (0.00s)
+--- PASS: TestPatchMinFreeSpaceReplacesWholesale (0.41s)
+--- PASS: TestSystemInfoCarriesNoSecret (0.44s)
+ok  	github.com/L-K-M/dl-tool/internal/api	3.839s
+```
+
+Criterion-to-test map: criteria 1, 2 and the verbatim-map criterion 6 →
+`TestSettingsRedactsExtractPasswords` (asserts exactly the fifteen keys,
+`extract_passwords == "__redacted__"`, `min_free_space == {}` after the initial
+migration, the `default_destination` fallback to the first data root, and that
+neither the extract-password sentinel nor the aria2 secret appears in the raw
+body); criterion 3 → `TestPatchRedactedIsNoOp` (the stored
+`extract_passwords` list is compared before and after); criterion 4 →
+`TestPatchUnknownKeyIs422` (which also asserts a hook-named key is an unknown
+key like any other, and that nothing is written) and `TestPatchOutOfRangeIs422`
+(every listed 422 shape as a subtest); criterion 5 →
+`TestPatchMinFreeSpaceReplacesWholesale` (compares the stored `value_json`
+string itself, so "byte-identical" is literal); criterion 7 →
+`TestSystemInfoCarriesNoSecret` (asserts all twelve top-level members — the doc
+05 §13 enumeration `version` through `jobs` — plus the nested shapes);
+criterion 8 → both that test and `TestSettingsRedactsExtractPasswords`, each of
+which greps the raw serialised body for the configured engine secrets.
+
+Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+api/openapi.json
+internal/api/server.go
+internal/api/settings.go
+internal/api/settings_test.go
+internal/api/system.go
+internal/store/settings.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are the generated pair the
+docs/13 §7.1 exception assigns to any task registering a Huma operation; both
+were regenerated by `make gen`, not hand-edited.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

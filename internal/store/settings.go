@@ -13,7 +13,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -512,6 +515,380 @@ func (s *SettingsStore) SetInt64(ctx context.Context, key string, v int64) error
 	}
 
 	return nil
+}
+
+// Settings is the flat, typed view of the settings table. Every field maps
+// to one key in docs/11-config-reference.md section 5. ExtractPasswords is
+// the only secret: it never marshals (the API emits "__redacted__"), so a
+// Settings value cannot leak it into a response.
+type Settings struct {
+	DownloadRateLimit  int64            `json:"download_rate_limit"`
+	UploadRateLimit    int64            `json:"upload_rate_limit"`
+	AltDownloadRate    int64            `json:"alt_download_rate_limit"`
+	AltUploadRate      int64            `json:"alt_upload_rate_limit"`
+	ScheduleEnabled    bool             `json:"schedule_enabled"`
+	DefaultDestination string           `json:"default_destination"`
+	MinFreeSpace       map[string]int64 `json:"min_free_space"`
+	MaxActiveTotal     int              `json:"max_active_total"`
+	MaxActivePerEngine int              `json:"max_active_per_engine"`
+	ProcessOrder       string           `json:"process_order"` // by_date_created
+	RSSEnabled         bool             `json:"rss_enabled"`
+	RSSIntervalS       int              `json:"rss_interval_s"`
+	AutoExtract        bool             `json:"auto_extract"`
+	ExtractPasswords   []secure.Secret  `json:"-"` // never marshalled; the API emits "__redacted__"
+	ConfirmOnDelete    bool             `json:"confirm_on_delete"`
+}
+
+// The two write-path sentinels PATCH /settings maps to 422
+// /problems/validation-failed (docs/05-api-contract.md section 11.1).
+var (
+	ErrUnknownSettingKey = errors.New("store: unknown setting key")
+	ErrSettingOutOfRange = errors.New("store: setting value out of range")
+)
+
+// The settings keys whose constants do not already exist above
+// (settingDefaultDestination, settingExtractPasswords,
+// settingScheduleEnabled). The whole fifteen-key set of doc 11 section 5
+// lives in settingsKeys below.
+const (
+	settingDownloadRateLimit  = "download_rate_limit"
+	settingUploadRateLimit    = "upload_rate_limit"
+	settingAltDownloadRate    = "alt_download_rate_limit"
+	settingAltUploadRate      = "alt_upload_rate_limit"
+	settingMinFreeSpace       = "min_free_space"
+	settingMaxActiveTotal     = "max_active_total"
+	settingMaxActivePerEngine = "max_active_per_engine"
+	settingProcessOrder       = "process_order"
+	settingRSSEnabled         = "rss_enabled"
+	settingRSSIntervalS       = "rss_interval_s"
+	settingAutoExtract        = "auto_extract"
+	settingConfirmOnDelete    = "confirm_on_delete"
+)
+
+const (
+	defaultAltDownloadRate    = 5_242_880
+	defaultAltUploadRate      = 1_048_576
+	defaultMaxActiveTotal     = 5
+	defaultMaxActivePerEngine = 3
+	defaultRSSIntervalS       = 1800
+	processOrderByDateCreated = "by_date_created"
+
+	// rssIntervalSFloor is the 5-minute minimum doc 11 section 5 puts on
+	// the global RSS poll interval.
+	rssIntervalSFloor = 300
+)
+
+// settingsKeys is the closed key set of doc 11 section 5 — the only keys
+// GET /settings renders and PATCH /settings accepts. Internal keys such as
+// watch_folder_loaded_* are outside it, so they can never be read or
+// written through the settings endpoints.
+var settingsKeys = []string{
+	settingDownloadRateLimit, settingUploadRateLimit,
+	settingAltDownloadRate, settingAltUploadRate,
+	settingScheduleEnabled, settingDefaultDestination, settingMinFreeSpace,
+	settingMaxActiveTotal, settingMaxActivePerEngine,
+	settingProcessOrder, settingRSSEnabled, settingRSSIntervalS,
+	settingAutoExtract, settingExtractPasswords, settingConfirmOnDelete,
+}
+
+// queryAllSettings reads only the documented keys; the whitelist, not a
+// blacklist, so an internal key can never leak into GET /settings.
+var queryAllSettings = `SELECT key, value_json FROM settings WHERE key IN ('` +
+	strings.Join(settingsKeys, `','`) + `')`
+
+// GetSettings reads every documented settings row, applies the documented
+// default for a missing key and returns the typed struct. It never returns
+// a partially populated value: a stored value that does not decode into its
+// key's documented type is an error, never a guess.
+func (s *SettingsStore) GetSettings(ctx context.Context) (Settings, error) {
+	var rows []struct {
+		Key       string `db:"key"`
+		ValueJSON string `db:"value_json"`
+	}
+	if err := s.db.SelectContext(ctx, &rows, queryAllSettings); err != nil {
+		return Settings{}, fmt.Errorf("store: read settings: %w", err)
+	}
+
+	// The defaults of doc 11 section 5; default_destination's documented
+	// default (first DLTOOL_DATA_ROOTS entry) is not knowable to the store,
+	// so "" reports unset and the API substitutes the root.
+	out := Settings{
+		AltDownloadRate:    defaultAltDownloadRate,
+		AltUploadRate:      defaultAltUploadRate,
+		MinFreeSpace:       map[string]int64{},
+		MaxActiveTotal:     defaultMaxActiveTotal,
+		MaxActivePerEngine: defaultMaxActivePerEngine,
+		ProcessOrder:       processOrderByDateCreated,
+		RSSEnabled:         true,
+		RSSIntervalS:       defaultRSSIntervalS,
+		ExtractPasswords:   []secure.Secret{},
+		ConfirmOnDelete:    true,
+	}
+	for _, row := range rows {
+		var err error
+		switch row.Key {
+		case settingDownloadRateLimit:
+			out.DownloadRateLimit, err = settingInt(row.Key, row.ValueJSON)
+		case settingUploadRateLimit:
+			out.UploadRateLimit, err = settingInt(row.Key, row.ValueJSON)
+		case settingAltDownloadRate:
+			out.AltDownloadRate, err = settingInt(row.Key, row.ValueJSON)
+		case settingAltUploadRate:
+			out.AltUploadRate, err = settingInt(row.Key, row.ValueJSON)
+		case settingScheduleEnabled:
+			out.ScheduleEnabled, err = settingBool(row.Key, row.ValueJSON)
+		case settingDefaultDestination:
+			out.DefaultDestination, err = settingString(row.Key, row.ValueJSON)
+		case settingMinFreeSpace:
+			out.MinFreeSpace, err = settingIntMap(row.Key, row.ValueJSON)
+		case settingMaxActiveTotal:
+			var n int64
+			n, err = settingInt(row.Key, row.ValueJSON)
+			out.MaxActiveTotal = int(n)
+		case settingMaxActivePerEngine:
+			var n int64
+			n, err = settingInt(row.Key, row.ValueJSON)
+			out.MaxActivePerEngine = int(n)
+		case settingProcessOrder:
+			out.ProcessOrder, err = settingString(row.Key, row.ValueJSON)
+		case settingRSSEnabled:
+			out.RSSEnabled, err = settingBool(row.Key, row.ValueJSON)
+		case settingRSSIntervalS:
+			var n int64
+			n, err = settingInt(row.Key, row.ValueJSON)
+			out.RSSIntervalS = int(n)
+		case settingAutoExtract:
+			out.AutoExtract, err = settingBool(row.Key, row.ValueJSON)
+		case settingExtractPasswords:
+			var list []string
+			list, err = settingStringSlice(row.Key, row.ValueJSON)
+			out.ExtractPasswords = make([]secure.Secret, len(list))
+			for i, pw := range list {
+				out.ExtractPasswords[i] = secure.Secret(pw)
+			}
+		case settingConfirmOnDelete:
+			out.ConfirmOnDelete, err = settingBool(row.Key, row.ValueJSON)
+		}
+		if err != nil {
+			return Settings{}, err
+		}
+	}
+
+	return out, nil
+}
+
+// PutSettings replaces each documented key present in patch, in one
+// transaction, then returns the stored settings. The extract_passwords
+// key is skipped when its value is exactly "__redacted__", so a client
+// that round-trips GET /settings into PATCH /settings cannot erase it;
+// the placeholder is invalid for every other key. ErrUnknownSettingKey
+// means the patch names a key outside doc 11 section 5;
+// ErrSettingOutOfRange means a value does not decode into its key's
+// documented type, is a JSON null, or is outside its documented domain.
+func (s *SettingsStore) PutSettings(ctx context.Context, patch map[string]json.RawMessage) (Settings, error) {
+	writes := make(map[string]string, len(patch))
+	for key, raw := range patch {
+		encoded, skip, err := canonicalSetting(key, raw)
+		if err != nil {
+			return Settings{}, err
+		}
+		if !skip {
+			writes[key] = encoded
+		}
+	}
+
+	if len(writes) > 0 {
+		tx, err := s.db.BeginTxx(ctx, nil)
+		if err != nil {
+			return Settings{}, fmt.Errorf("store: replace settings: %w", err)
+		}
+		// Rolls back on any early return; after Commit this is
+		// sql.ErrTxDone, which is the expected outcome and not worth a
+		// warning.
+		defer func() {
+			if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+				slog.WarnContext(ctx, "store: rollback of settings replace failed", "error", err)
+			}
+		}()
+
+		now := time.Now().UnixMilli()
+		for key, encoded := range writes {
+			if _, err := tx.ExecContext(
+				ctx, queryUpsertSetting,
+				NewID(PrefixSetting), key, encoded, now, now,
+			); err != nil {
+				return Settings{}, fmt.Errorf("store: write settings key %s: %w", key, err)
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			return Settings{}, fmt.Errorf("store: replace settings: commit: %w", err)
+		}
+	}
+
+	return s.GetSettings(ctx)
+}
+
+// canonicalSetting validates one PATCH member against its key's documented
+// type and domain and re-encodes it as the stored JSON. skip reports the
+// extract_passwords no-op: the member holding exactly "__redacted__".
+func canonicalSetting(key string, raw json.RawMessage) (encoded string, skip bool, err error) {
+	outOfRange := func(detail string) error {
+		return fmt.Errorf("store: settings key %s: %s: %w", key, detail, ErrSettingOutOfRange)
+	}
+
+	switch key {
+	case settingDownloadRateLimit, settingUploadRateLimit,
+		settingAltDownloadRate, settingAltUploadRate,
+		settingMaxActiveTotal, settingMaxActivePerEngine:
+		n, decErr := settingInt(key, string(raw))
+		if decErr != nil {
+			return "", false, outOfRange("want a non-negative integer")
+		}
+		if n < 0 {
+			return "", false, outOfRange("want a non-negative integer")
+		}
+		return strconv.FormatInt(n, 10), false, nil
+	case settingRSSIntervalS:
+		n, decErr := settingInt(key, string(raw))
+		if decErr != nil || n < rssIntervalSFloor {
+			return "", false, outOfRange(fmt.Sprintf("want an integer of at least %d seconds", rssIntervalSFloor))
+		}
+		return strconv.FormatInt(n, 10), false, nil
+	case settingScheduleEnabled, settingRSSEnabled, settingAutoExtract, settingConfirmOnDelete:
+		b, decErr := settingBool(key, string(raw))
+		if decErr != nil {
+			return "", false, outOfRange("want a boolean")
+		}
+		return strconv.FormatBool(b), false, nil
+	case settingProcessOrder:
+		v, decErr := settingString(key, string(raw))
+		if decErr != nil || v != processOrderByDateCreated {
+			return "", false, outOfRange(`want the enum value "by_date_created"`)
+		}
+		return `"` + processOrderByDateCreated + `"`, false, nil
+	case settingDefaultDestination:
+		v, decErr := settingString(key, string(raw))
+		if decErr != nil || v == "" {
+			return "", false, outOfRange("want a non-empty path string")
+		}
+		if v == "__redacted__" {
+			return "", false, outOfRange("__redacted__ is a rendered form, not a path")
+		}
+		encoded, encErr := json.Marshal(v)
+		if encErr != nil {
+			return "", false, fmt.Errorf("store: encode settings key %s: %w", key, encErr)
+		}
+		return string(encoded), false, nil
+	case settingMinFreeSpace:
+		m, decErr := settingIntMap(key, string(raw))
+		if decErr != nil {
+			return "", false, outOfRange("want an object of absolute root path to bytes")
+		}
+		for root, floor := range m {
+			if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+				return "", false, outOfRange(fmt.Sprintf("key %q is not an absolute canonical path", root))
+			}
+			if floor < 0 {
+				return "", false, outOfRange(fmt.Sprintf("value for %q is not a non-negative integer", root))
+			}
+		}
+		encoded, encErr := json.Marshal(m)
+		if encErr != nil {
+			return "", false, fmt.Errorf("store: encode settings key %s: %w", key, encErr)
+		}
+		return string(encoded), false, nil
+	case settingExtractPasswords:
+		// The "__redacted__" write-back rule of doc 11 section 6: the
+		// rendered form is a no-op on the stored list, so a GET/PATCH
+		// round trip cannot erase it.
+		if string(raw) == `"__redacted__"` {
+			return "", true, nil
+		}
+		list, decErr := settingStringSlice(key, string(raw))
+		if decErr != nil {
+			return "", false, outOfRange("want an array of strings")
+		}
+		encoded, encErr := json.Marshal(list)
+		if encErr != nil {
+			return "", false, fmt.Errorf("store: encode settings key %s: %w", key, encErr)
+		}
+		return string(encoded), false, nil
+	default:
+		return "", false, fmt.Errorf("store: settings key %s: %w", key, ErrUnknownSettingKey)
+	}
+}
+
+// settingInt decodes one stored settings value as a bare JSON integer —
+// `4`, never `"4"`, `4.0` or `null`: a JSON null leaves the pointer nil,
+// so it is an error rather than a silent zero an operator never wrote.
+func settingInt(key, valueJSON string) (int64, error) {
+	var value *int64
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return 0, fmt.Errorf("store: decode settings key %s: want an integer, got %q: %w", key, valueJSON, err)
+	}
+	if value == nil {
+		return 0, fmt.Errorf("store: decode settings key %s: want an integer, got %q", key, valueJSON)
+	}
+
+	return *value, nil
+}
+
+// settingBool decodes one stored settings value as a bare JSON boolean;
+// null is an error for the same reason settingInt rejects it.
+func settingBool(key, valueJSON string) (bool, error) {
+	var value *bool
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return false, fmt.Errorf("store: decode settings key %s: want a boolean, got %q: %w", key, valueJSON, err)
+	}
+	if value == nil {
+		return false, fmt.Errorf("store: decode settings key %s: want a boolean, got %q", key, valueJSON)
+	}
+
+	return *value, nil
+}
+
+// settingString decodes one stored settings value as a JSON string; null
+// is an error for the same reason settingInt rejects it.
+func settingString(key, valueJSON string) (string, error) {
+	var value *string
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return "", fmt.Errorf("store: decode settings key %s: want a string, got %q: %w", key, valueJSON, err)
+	}
+	if value == nil {
+		return "", fmt.Errorf("store: decode settings key %s: want a string, got %q", key, valueJSON)
+	}
+
+	return *value, nil
+}
+
+// settingStringSlice decodes one stored settings value as a JSON array of
+// strings; null is an error for the same reason settingInt rejects it.
+func settingStringSlice(key, valueJSON string) ([]string, error) {
+	var value *[]string
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return nil, fmt.Errorf("store: decode settings key %s: want an array of strings, got %q: %w", key, valueJSON, err)
+	}
+	if value == nil {
+		return nil, fmt.Errorf("store: decode settings key %s: want an array of strings, got %q", key, valueJSON)
+	}
+
+	return *value, nil
+}
+
+// settingIntMap decodes one stored settings value as a JSON object of
+// string to integer; null is an error for the same reason settingInt
+// rejects it. `4.0` and `"4"` members fail the integer grammar.
+func settingIntMap(key, valueJSON string) (map[string]int64, error) {
+	var value *map[string]int64
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return nil, fmt.Errorf("store: decode settings key %s: want an object of root path to bytes, got %q: %w", key, valueJSON, err)
+	}
+	if value == nil {
+		return nil, fmt.Errorf("store: decode settings key %s: want an object of root path to bytes, got %q", key, valueJSON)
+	}
+
+	return *value, nil
 }
 
 // Settings returns the sibling store over the same database, for a

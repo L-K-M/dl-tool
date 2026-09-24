@@ -182,10 +182,12 @@ const (
 // with the auth gate satisfied by a seeded bearer token. Engines are
 // registered per test, so each case controls the registry's contents.
 type settingsTestEnv struct {
-	api    humatest.TestAPI
-	db     *sqlx.DB
-	server *Server
-	bearer string
+	api      humatest.TestAPI
+	db       *sqlx.DB
+	server   *Server
+	bearer   string
+	dataRoot string
+	dbPath   string
 }
 
 func newSettingsTestEnv(t *testing.T) *settingsTestEnv {
@@ -193,9 +195,11 @@ func newSettingsTestEnv(t *testing.T) *settingsTestEnv {
 
 	root := t.TempDir()
 	configDir := filepath.Join(root, "config")
+	dataRoot := filepath.Join(root, "data")
+	dbPath := filepath.Join(configDir, "dl-tool.db")
 	db, err := store.Open(
 		t.Context(),
-		filepath.Join(configDir, "dl-tool.db"),
+		dbPath,
 		filepath.Join(root, "backups"),
 	)
 	if err != nil {
@@ -210,8 +214,9 @@ func newSettingsTestEnv(t *testing.T) *settingsTestEnv {
 	server, err := NewServer(
 		&config.Config{
 			ConfigDir:  configDir,
+			DBPath:     dbPath,
 			SessionTTL: time.Hour,
-			DataRoots:  []string{filepath.Join(root, "data")},
+			DataRoots:  []string{dataRoot},
 		},
 		db,
 		slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -225,10 +230,12 @@ func newSettingsTestEnv(t *testing.T) *settingsTestEnv {
 
 	user := seedUser(t, db)
 	env := &settingsTestEnv{
-		api:    humatest.Wrap(t, server.API),
-		db:     db,
-		server: server,
-		bearer: seedLiveAPIToken(t, db, user.ID),
+		api:      humatest.Wrap(t, server.API),
+		db:       db,
+		server:   server,
+		bearer:   seedLiveAPIToken(t, db, user.ID),
+		dataRoot: dataRoot,
+		dbPath:   dbPath,
 	}
 
 	return env
@@ -246,6 +253,39 @@ func (e *settingsTestEnv) testEngine(t *testing.T, id string) *httptest.Response
 	t.Helper()
 
 	return e.api.Post("/engines/"+id+"/test", http.NoBody, "Authorization: Bearer "+e.bearer)
+}
+
+// getSettings calls GET /settings with the test bearer credential.
+func (e *settingsTestEnv) getSettings(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Get("/settings", "Authorization: Bearer "+e.bearer)
+}
+
+// patchSettings calls PATCH /settings with the test bearer credential.
+func (e *settingsTestEnv) patchSettings(t *testing.T, body any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Patch("/settings", body, "Authorization: Bearer "+e.bearer)
+}
+
+// getSystemInfo calls GET /system/info with the test bearer credential.
+func (e *settingsTestEnv) getSystemInfo(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+
+	return e.api.Get("/system/info", "Authorization: Bearer "+e.bearer)
+}
+
+// decodeSettingsBody decodes the flat settings object.
+func decodeSettingsBody(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode settings body %q: %v", recorder.Body.String(), err)
+	}
+
+	return body
 }
 
 // probeEngine is a stand-in whose Health answers a fixed version and whose
@@ -605,4 +645,241 @@ func TestNewServerWiresConfiguredAria2(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), rpcSecret) {
 		t.Fatalf("engines body leaked the configured DLTOOL_ARIA2_SECRET: %s", recorder.Body.String())
 	}
+}
+
+// extractPasswordSentinel is a configured extract_passwords value no
+// response body may carry — GET /settings renders only "__redacted__".
+const extractPasswordSentinel = "extract-password-sentinel-value"
+
+// settingsKeysOnWire is the whole fifteen-key set of
+// docs/11-config-reference.md section 5 — the exact member list GET
+// /settings must emit.
+var settingsKeysOnWire = []string{
+	"download_rate_limit", "upload_rate_limit",
+	"alt_download_rate_limit", "alt_upload_rate_limit",
+	"schedule_enabled", "default_destination", "min_free_space",
+	"max_active_total", "max_active_per_engine",
+	"process_order", "rss_enabled", "rss_interval_s",
+	"auto_extract", "extract_passwords", "confirm_on_delete",
+}
+
+func TestSettingsRedactsExtractPasswords(t *testing.T) {
+	env := newSettingsTestEnv(t)
+	settings := store.NewSettingsStore(env.db)
+
+	// Before any row exists the member is still the literal placeholder —
+	// never an array, never the empty string.
+	recorder := env.getSettings(t)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	body := decodeSettingsBody(t, recorder)
+	require.Equal(t, RedactedPlaceholder, body["extract_passwords"])
+
+	require.NoError(t, settings.AppendExtractPassword(t.Context(), extractPasswordSentinel))
+	seedEngineRow(t, env.db, store.EngineIDAria2, engine.NameAria2, engine.NameAria2, aria2RPCURL, aria2SecretSentinel)
+
+	recorder = env.getSettings(t)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	body = decodeSettingsBody(t, recorder)
+
+	// Exactly the fifteen documented keys, no more.
+	require.Len(t, body, len(settingsKeysOnWire))
+	for _, key := range settingsKeysOnWire {
+		require.Contains(t, body, key)
+	}
+	require.Equal(t, RedactedPlaceholder, body["extract_passwords"])
+	require.Equal(t, map[string]any{}, body["min_free_space"],
+		"the stored map renders verbatim — {} after the initial migration")
+	require.Equal(t, env.dataRoot, body["default_destination"],
+		"an unset default_destination renders the first data root")
+
+	raw := recorder.Body.String()
+	for _, secret := range []string{extractPasswordSentinel, aria2SecretSentinel} {
+		require.NotContains(t, raw, secret, "GET /settings leaked a configured secret")
+	}
+}
+
+// TestPatchRedactedIsNoOp pins the doc 11 section 6 write-back rule: a
+// PATCH carrying "extract_passwords":"__redacted__" — the body shape a
+// GET/PATCH round trip produces — leaves the stored secret byte-identical.
+func TestPatchRedactedIsNoOp(t *testing.T) {
+	env := newSettingsTestEnv(t)
+	settings := store.NewSettingsStore(env.db)
+
+	require.NoError(t, settings.AppendExtractPassword(t.Context(), extractPasswordSentinel))
+	before, err := settings.ExtractPasswords(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{extractPasswordSentinel}, before)
+
+	response := env.patchSettings(t, map[string]any{"extract_passwords": RedactedPlaceholder})
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t, RedactedPlaceholder, decodeSettingsBody(t, response)["extract_passwords"])
+	require.NotContains(t, response.Body.String(), extractPasswordSentinel)
+
+	after, err := settings.ExtractPasswords(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, before, after, "the redacted placeholder must not overwrite the stored list")
+}
+
+// TestPatchUnknownKeyIs422 pins the closed key set: a key outside doc 11
+// section 5 — including a hook-named key, which must not be distinguished
+// from any other unknown key (FR-105) — is 422 /problems/validation-failed
+// and writes nothing.
+func TestPatchUnknownKeyIs422(t *testing.T) {
+	env := newSettingsTestEnv(t)
+
+	for _, key := range []string{"no_such_key", "completion_hook"} {
+		response := env.patchSettings(t, map[string]any{key: 1})
+		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+
+		var stored int
+		require.NoError(t, env.db.GetContext(t.Context(), &stored,
+			`SELECT COUNT(*) FROM settings WHERE key = ?`, key))
+		require.Zero(t, stored, "the rejected key %q must not be stored", key)
+	}
+}
+
+// TestPatchOutOfRangeIs422 pins the per-key domain checks of the task:
+// every malformed or out-of-domain member is 422 /problems/validation-failed
+// and writes nothing.
+func TestPatchOutOfRangeIs422(t *testing.T) {
+	env := newSettingsTestEnv(t)
+
+	cases := map[string]map[string]any{
+		"rss_interval_s below the 300s floor":    {"rss_interval_s": 120},
+		"rss_interval_s as a string":             {"rss_interval_s": "300"},
+		"negative rate limit":                    {"download_rate_limit": -1},
+		"negative max_active_total":              {"max_active_total": -1},
+		"negative max_active_per_engine":         {"max_active_per_engine": -1},
+		"negative min_free_space value":          {"min_free_space": map[string]any{"/data": -1}},
+		"relative min_free_space key":            {"min_free_space": map[string]any{"data": 1}},
+		"non-canonical min_free_space key":       {"min_free_space": map[string]any{"/data/": 1}},
+		"non-canonical min_free_space traversal": {"min_free_space": map[string]any{"/data/../data": 1}},
+		"min_free_space placeholder":             {"min_free_space": RedactedPlaceholder},
+		"default_destination placeholder":        {"default_destination": RedactedPlaceholder},
+		"default_destination empty":              {"default_destination": ""},
+		"min_free_space null":                    {"min_free_space": nil},
+		"download_rate_limit null":               {"download_rate_limit": nil},
+		"process_order other enum":               {"process_order": "newest_first"},
+		"schedule_enabled as a string":           {"schedule_enabled": "true"},
+		"extract_passwords null":                 {"extract_passwords": nil},
+		"extract_passwords non-array":            {"extract_passwords": 4},
+	}
+
+	for name, patch := range cases {
+		t.Run(name, func(t *testing.T) {
+			response := env.patchSettings(t, patch)
+			assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
+		})
+	}
+}
+
+// TestPatchMinFreeSpaceReplacesWholesale pins the sparse-map semantics of
+// doc 05 section 11.1: a member present in a patch replaces the whole
+// stored map — omitted roots are gone afterward — while a patch without
+// the member leaves the stored JSON byte-identical.
+func TestPatchMinFreeSpaceReplacesWholesale(t *testing.T) {
+	env := newSettingsTestEnv(t)
+
+	response := env.patchSettings(t, map[string]any{
+		"min_free_space": map[string]any{"/data": 1024, "/mnt": 2048},
+	})
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t,
+		map[string]any{"/data": float64(1024), "/mnt": float64(2048)},
+		decodeSettingsBody(t, response)["min_free_space"])
+
+	storedJSON := func() string {
+		var raw string
+		require.NoError(t, env.db.GetContext(t.Context(), &raw,
+			`SELECT value_json FROM settings WHERE key = 'min_free_space'`))
+		return raw
+	}
+
+	// A patch naming the key again replaces the whole map: /data is gone.
+	response = env.patchSettings(t, map[string]any{
+		"min_free_space": map[string]any{"/mnt": 4096},
+	})
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t,
+		map[string]any{"/mnt": float64(4096)},
+		decodeSettingsBody(t, response)["min_free_space"])
+
+	// A patch omitting the key leaves the stored value byte-identical.
+	before := storedJSON()
+	response = env.patchSettings(t, map[string]any{"rss_enabled": false})
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t, before, storedJSON(),
+		"a patch without min_free_space must leave the stored map untouched")
+	require.Equal(t,
+		map[string]any{"/mnt": float64(4096)},
+		decodeSettingsBody(t, env.getSettings(t))["min_free_space"])
+}
+
+// TestSystemInfoCarriesNoSecret asserts the doc 05 section 13 shape —
+// all eleven top-level members — and that no configured engine secret
+// appears anywhere in the serialised body.
+func TestSystemInfoCarriesNoSecret(t *testing.T) {
+	env := newSettingsTestEnv(t)
+	seedEngineRow(t, env.db, store.EngineIDAria2, engine.NameAria2, engine.NameAria2, aria2RPCURL, aria2SecretSentinel)
+	seedEngineRow(t, env.db, store.EngineIDQBittorrent, engine.NameQBittorrent, "qBittorrent", qbtBaseURL, qbtSecretSentinel)
+
+	recorder := env.getSystemInfo(t)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	raw := recorder.Body.String()
+	for _, secret := range []string{aria2SecretSentinel, qbtSecretSentinel} {
+		require.NotContains(t, raw, secret, "GET /system/info leaked an engine secret")
+	}
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	for _, member := range []string{
+		"version", "commit", "built_at", "go_version", "started_at", "uptime_s",
+		"database", "engines", "tasks", "schedule", "limits", "jobs",
+	} {
+		require.Contains(t, body, member)
+	}
+	require.Len(t, body, 12)
+
+	database, ok := body["database"].(map[string]any)
+	require.True(t, ok, "database = %v", body["database"])
+	require.Equal(t, env.dbPath, database["path"])
+	require.Greater(t, database["size_bytes"], float64(0))
+	require.Equal(t, float64(3), database["schema_version"])
+
+	engines, ok := body["engines"].([]any)
+	require.True(t, ok, "engines = %v", body["engines"])
+	require.Len(t, engines, 2)
+	for _, entry := range engines {
+		brief, ok := entry.(map[string]any)
+		require.True(t, ok)
+		require.Contains(t, brief, "kind")
+		require.Contains(t, brief, "connected")
+		require.Contains(t, brief, "version")
+		require.False(t, brief["connected"].(bool), "no engine is registered in this process")
+	}
+
+	tasks, ok := body["tasks"].(map[string]any)
+	require.True(t, ok, "tasks = %v", body["tasks"])
+	require.Contains(t, tasks, "total")
+	require.Contains(t, tasks, "by_state")
+
+	schedule, ok := body["schedule"].(map[string]any)
+	require.True(t, ok, "schedule = %v", body["schedule"])
+	require.Equal(t, false, schedule["enabled"])
+	// The seeded grid is uniformly "default", so that is the cell in force.
+	require.Equal(t, "default", schedule["active_mode"])
+	require.IsType(t, "", schedule["timezone"])
+	require.NotEmpty(t, schedule["timezone"])
+
+	limits, ok := body["limits"].(map[string]any)
+	require.True(t, ok, "limits = %v", body["limits"])
+	require.Equal(t, float64(defaultMaxActiveTotal), limits["max_active_total"])
+	require.Equal(t, float64(defaultMaxActivePerEngine), limits["max_active_per_engine"])
+
+	jobs, ok := body["jobs"].(map[string]any)
+	require.True(t, ok, "jobs = %v", body["jobs"])
+	require.Equal(t, float64(0), jobs["pending"])
+	require.Equal(t, float64(0), jobs["running"])
+	require.Equal(t, float64(0), jobs["failed"])
 }
