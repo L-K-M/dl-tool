@@ -80,13 +80,13 @@ type (
 	}
 )
 
-// SystemInfoOutput is the GET /system/info body: the eleven members of
+// SystemInfoOutput is the GET /system/info body: the twelve members of
 // doc 05 section 13, no others.
 type SystemInfoOutput struct {
 	Body struct {
 		Version   string        `json:"version"    doc:"Build version stamped at link time"`
 		Commit    string        `json:"commit"     doc:"VCS revision from the binary's build info"`
-		BuiltAt   string        `json:"built_at"   doc:"VCS commit time from the binary's build info"`
+		BuiltAt   string        `json:"built_at"   format:"date-time" doc:"VCS commit time from the binary's build info"`
 		GoVersion string        `json:"go_version"`
 		StartedAt string        `json:"started_at" format:"date-time"`
 		UptimeS   int64         `json:"uptime_s"`
@@ -199,6 +199,17 @@ func (h *SystemHandlers) GetSystemInfo(ctx context.Context, _ *struct{}) (*Syste
 	output.Body.Database.Path = h.dbPath
 	output.Body.Engines = []EngineBrief{}
 	output.Body.Tasks.ByState = map[string]int{}
+	// The nil-db path below (router-only builds, openapi generation)
+	// still emits in-contract values: an enum member, not ""; the
+	// documented defaults, not zeros that would read as "unlimited".
+	output.Body.Schedule = ScheduleBrief{
+		ActiveMode: "default",
+		Timezone:   localZoneName(),
+	}
+	output.Body.Limits = LimitsBrief{
+		MaxActiveTotal:     defaultMaxActiveTotal,
+		MaxActivePerEngine: defaultMaxActivePerEngine,
+	}
 
 	if h.db == nil {
 		return output, nil
@@ -244,11 +255,8 @@ func (h *SystemHandlers) GetSystemInfo(ctx context.Context, _ *struct{}) (*Syste
 	if err != nil {
 		return nil, internalFailure(ctx, "read schedule", err)
 	}
-	output.Body.Schedule = ScheduleBrief{
-		Enabled:    scheduleEnabled,
-		ActiveMode: string(cells[activeScheduleIndex(time.Now())]),
-		Timezone:   localZoneName(),
-	}
+	output.Body.Schedule.Enabled = scheduleEnabled
+	output.Body.Schedule.ActiveMode = string(cells[activeScheduleIndex(time.Now())])
 
 	maxTotal, err := h.settings.GetInt64(ctx, settingMaxActiveTotal, defaultMaxActiveTotal)
 	if err != nil {

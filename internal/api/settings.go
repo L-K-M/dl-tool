@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -79,18 +80,73 @@ type TestEngineOutput struct {
 	}
 }
 
-// GetSettingsOutput is the flat settings object of doc 05 section 11.1.
-// A map, not a struct: the body is exactly the fifteen keys of doc 11
-// section 5, rendered member by member so extract_passwords can carry
-// the "__redacted__" placeholder instead of a value.
-type GetSettingsOutput struct{ Body map[string]any }
+// SettingsBody is the flat settings document of doc 05 section 11.1 —
+// exactly the fifteen keys of doc 11 section 5. ExtractPasswords is typed
+// string because the wire value is always the literal "__redacted__",
+// never the stored list.
+type SettingsBody struct {
+	DownloadRateLimit  int64            `json:"download_rate_limit"     doc:"Bytes/s cap, 0 = unlimited"`
+	UploadRateLimit    int64            `json:"upload_rate_limit"       doc:"Bytes/s cap, 0 = unlimited"`
+	AltDownloadRate    int64            `json:"alt_download_rate_limit" doc:"Bytes/s cap while the alternative cell is in force"`
+	AltUploadRate      int64            `json:"alt_upload_rate_limit"   doc:"Bytes/s cap while the alternative cell is in force"`
+	ScheduleEnabled    bool             `json:"schedule_enabled"`
+	DefaultDestination string           `json:"default_destination"     doc:"Absolute path inside a data root"`
+	MinFreeSpace       map[string]int64 `json:"min_free_space"          doc:"Sparse map of absolute root path to bytes; roots absent fall back to the documented default"`
+	MaxActiveTotal     int              `json:"max_active_total"        doc:"0 = unlimited"`
+	MaxActivePerEngine int              `json:"max_active_per_engine"   doc:"0 = unlimited"`
+	ProcessOrder       string           `json:"process_order"           enum:"by_date_created"`
+	RSSEnabled         bool             `json:"rss_enabled"`
+	RSSIntervalS       int              `json:"rss_interval_s"          doc:"Seconds, minimum 300"`
+	AutoExtract        bool             `json:"auto_extract"`
+	ExtractPasswords   string           `json:"extract_passwords"       enum:"__redacted__" doc:"Always the redaction placeholder; PATCHing it back is a no-op"`
+	ConfirmOnDelete    bool             `json:"confirm_on_delete"`
+}
+
+// GetSettingsOutput carries the flat settings object of doc 05 section
+// 11.1.
+type GetSettingsOutput struct{ Body SettingsBody }
+
+// SettingsPatch is the PATCH /settings body: a subset of the documented
+// keys, each member's raw JSON kept intact so the store can enforce the
+// bare-integer grammar (`4`, never `"4"` or `4.0`) and distinguish an
+// absent member from an explicit null — both shapes a decoded map would
+// erase. Schema declares the fifteen members so generated clients get a
+// typed contract while the wire handling keeps the raw bytes.
+type SettingsPatch map[string]json.RawMessage
+
+// Schema implements huma.SchemaProvider: the declared object names the
+// fifteen documented properties, but every member stays opaque so the raw
+// bytes reach the store's per-key grammar checks. AdditionalProperties is
+// left open on purpose: an unknown key must reach PutSettings and come
+// back as 422 /problems/validation-failed, not huma's own validation
+// error shape.
+func (SettingsPatch) Schema(r huma.Registry) *huma.Schema {
+	any := &huma.Schema{}
+	props := make(map[string]*huma.Schema, len(settingsPatchKeys))
+	for _, key := range settingsPatchKeys {
+		props[key] = any
+	}
+	return &huma.Schema{
+		Type:       huma.TypeObject,
+		Properties: props,
+	}
+}
+
+// settingsPatchKeys mirrors store.settingsKeys; the API package cannot
+// reach the store's unexported list, so the schema spells the same closed
+// set out by name.
+var settingsPatchKeys = []string{
+	"download_rate_limit", "upload_rate_limit",
+	"alt_download_rate_limit", "alt_upload_rate_limit",
+	"schedule_enabled", "default_destination", "min_free_space",
+	"max_active_total", "max_active_per_engine",
+	"process_order", "rss_enabled", "rss_interval_s",
+	"auto_extract", "extract_passwords", "confirm_on_delete",
+}
 
 // PatchSettingsInput carries the subset of keys PATCH /settings writes.
-// RawMessage keeps each member's JSON intact, so the store can enforce the
-// bare-integer grammar (`4`, never `"4"` or `4.0`) a decoded float64 would
-// erase.
 type PatchSettingsInput struct {
-	Body map[string]json.RawMessage
+	Body SettingsPatch
 }
 
 // SettingsHandlers owns the settings-adjacent operations of doc 05 section
@@ -102,7 +158,8 @@ type SettingsHandlers struct {
 	loadPolicy func(context.Context) (engine.Policy, error)
 	// roots are the configured data roots; the first one renders the
 	// documented default of default_destination while the row is unset
-	// (docs/11-config-reference.md section 5).
+	// (docs/11-config-reference.md section 5) and the whole list bounds
+	// what PATCH accepts for that key.
 	roots []string
 }
 
@@ -110,8 +167,9 @@ type SettingsHandlers struct {
 // engines rows live in; engines is the routing-time registry the probe
 // resolves each row's engine through — the same instance NewServer hands
 // the task handlers, so a test registering a stand-in reaches both. roots
-// is optional so the conformance suite's two-argument call keeps working;
-// NewServer passes cfg.DataRoots.
+// is variadic only so the conformance suite's two-argument call keeps
+// working — the first slice is used and the rest ignored; NewServer
+// passes cfg.DataRoots.
 func NewSettingsHandlers(db *sqlx.DB, engines *engine.Registry, roots ...[]string) *SettingsHandlers {
 	h := &SettingsHandlers{settings: store.NewSettingsStore(db), engines: engines, loadPolicy: admissionPolicyLoader(db, nil)}
 	if len(roots) > 0 {
@@ -243,6 +301,12 @@ func (h *SettingsHandlers) GetSettings(ctx context.Context, _ *struct{}) (*GetSe
 // stored document rather than echoing the request. The store's two
 // sentinel errors are the 422 of doc 05 section 11.1.
 func (h *SettingsHandlers) PatchSettings(ctx context.Context, in *PatchSettingsInput) (*GetSettingsOutput, error) {
+	if raw, ok := in.Body["default_destination"]; ok && len(h.roots) > 0 {
+		var destination string
+		if err := json.Unmarshal(raw, &destination); err == nil && !destinationInRoots(destination, h.roots) {
+			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "default_destination must be inside a configured data root")
+		}
+	}
 	settings, err := h.settings.PutSettings(ctx, in.Body)
 	switch {
 	case errors.Is(err, store.ErrUnknownSettingKey):
@@ -256,11 +320,24 @@ func (h *SettingsHandlers) PatchSettings(ctx context.Context, in *PatchSettingsI
 	return &GetSettingsOutput{Body: h.renderSettings(settings)}, nil
 }
 
+// destinationInRoots reports whether destination is one of the configured
+// data roots or a path inside one — the domain doc 11 section 5 gives
+// default_destination. A non-string member (the unmarshal failed above)
+// falls through to the store's own out-of-range error.
+func destinationInRoots(destination string, roots []string) bool {
+	for _, root := range roots {
+		if destination == root || strings.HasPrefix(destination, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 // renderSettings renders the typed store.Settings into the flat wire
 // object — exactly the fifteen keys of doc 11 section 5. The secret
 // member is the literal "__redacted__", never the stored list, never an
 // array and never the empty string.
-func (h *SettingsHandlers) renderSettings(s store.Settings) map[string]any {
+func (h *SettingsHandlers) renderSettings(s store.Settings) SettingsBody {
 	destination := s.DefaultDestination
 	if destination == "" && len(h.roots) > 0 {
 		// The documented default is the first DLTOOL_DATA_ROOTS entry;
@@ -275,22 +352,22 @@ func (h *SettingsHandlers) renderSettings(s store.Settings) map[string]any {
 		minFree = map[string]int64{}
 	}
 
-	return map[string]any{
-		"download_rate_limit":     s.DownloadRateLimit,
-		"upload_rate_limit":       s.UploadRateLimit,
-		"alt_download_rate_limit": s.AltDownloadRate,
-		"alt_upload_rate_limit":   s.AltUploadRate,
-		"schedule_enabled":        s.ScheduleEnabled,
-		"default_destination":     destination,
-		"min_free_space":          minFree,
-		"max_active_total":        s.MaxActiveTotal,
-		"max_active_per_engine":   s.MaxActivePerEngine,
-		"process_order":           s.ProcessOrder,
-		"rss_enabled":             s.RSSEnabled,
-		"rss_interval_s":          s.RSSIntervalS,
-		"auto_extract":            s.AutoExtract,
-		"extract_passwords":       RedactedPlaceholder,
-		"confirm_on_delete":       s.ConfirmOnDelete,
+	return SettingsBody{
+		DownloadRateLimit:  s.DownloadRateLimit,
+		UploadRateLimit:    s.UploadRateLimit,
+		AltDownloadRate:    s.AltDownloadRate,
+		AltUploadRate:      s.AltUploadRate,
+		ScheduleEnabled:    s.ScheduleEnabled,
+		DefaultDestination: destination,
+		MinFreeSpace:       minFree,
+		MaxActiveTotal:     s.MaxActiveTotal,
+		MaxActivePerEngine: s.MaxActivePerEngine,
+		ProcessOrder:       s.ProcessOrder,
+		RSSEnabled:         s.RSSEnabled,
+		RSSIntervalS:       s.RSSIntervalS,
+		AutoExtract:        s.AutoExtract,
+		ExtractPasswords:   RedactedPlaceholder,
+		ConfirmOnDelete:    s.ConfirmOnDelete,
 	}
 }
 

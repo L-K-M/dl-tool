@@ -162,7 +162,7 @@ without copying a second contract here.
       afterward, while a later top-level patch omitting `min_free_space` leaves the map byte-identical.
 - [x] `GET /settings` returns the stored `min_free_space` map verbatim (`{}` after T006's initial
       migration); the per-root default is resolved only when T099 builds reservations.
-- [x] `GET /system/info` returns all eleven top-level fields of doc 05 §13.
+- [x] `GET /system/info` returns all twelve top-level fields of doc 05 §13 (`version` through `jobs`).
 - [x] No response body from either endpoint contains a configured engine secret in any form.
 
 ## Verification
@@ -210,20 +210,20 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/...
-ok  	github.com/L-K-M/dl-tool/internal/api	200.402s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.142s
-ok  	github.com/L-K-M/dl-tool/internal/engine	35.918s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.242s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.822s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	2.892s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	29.496s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.241s
-ok  	github.com/L-K-M/dl-tool/internal/rss	19.804s
-ok  	github.com/L-K-M/dl-tool/internal/search	7.217s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.448s
-ok  	github.com/L-K-M/dl-tool/internal/store	83.855s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.400s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.081s
+ok  	github.com/L-K-M/dl-tool/internal/api	195.758s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.317s
+ok  	github.com/L-K-M/dl-tool/internal/engine	35.976s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.258s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.838s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	3.104s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	31.229s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.260s
+ok  	github.com/L-K-M/dl-tool/internal/rss	21.858s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.870s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.381s
+ok  	github.com/L-K-M/dl-tool/internal/store	84.558s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.430s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.069s
 ```
 
 The named tests, individually (`go test -race -count=1 -v -run
@@ -231,31 +231,36 @@ The named tests, individually (`go test -race -count=1 -v -run
 ./internal/api/`):
 
 ```
---- PASS: TestSettingsRedactsExtractPasswords (0.41s)
+--- PASS: TestSettingsRedactsExtractPasswords (0.45s)
 --- PASS: TestPatchRedactedIsNoOp (0.37s)
---- PASS: TestPatchUnknownKeyIs422 (0.48s)
---- PASS: TestPatchOutOfRangeIs422 (0.50s)
-    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_as_a_string (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_total (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_per_engine (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_key (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/default_destination_placeholder (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/default_destination_empty (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/min_free_space_null (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/download_rate_limit_null (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_below_the_300s_floor (0.00s)
+--- PASS: TestPatchUnknownKeyIs422 (0.46s)
+--- PASS: TestPatchOutOfRangeIs422 (0.46s)
     --- PASS: TestPatchOutOfRangeIs422/relative_min_free_space_key (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_traversal (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_key (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/max_active_per_engine_overflows_int (0.00s)
     --- PASS: TestPatchOutOfRangeIs422/process_order_other_enum (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/extract_passwords_null (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/negative_rate_limit (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/min_free_space_placeholder (0.00s)
     --- PASS: TestPatchOutOfRangeIs422/extract_passwords_non-array (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_as_a_string (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_rate_limit (0.00s)
     --- PASS: TestPatchOutOfRangeIs422/negative_min_free_space_value (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_traversal (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_traversal (0.00s)
     --- PASS: TestPatchOutOfRangeIs422/schedule_enabled_as_a_string (0.00s)
---- PASS: TestPatchMinFreeSpaceReplacesWholesale (0.41s)
---- PASS: TestSystemInfoCarriesNoSecret (0.44s)
-ok  	github.com/L-K-M/dl-tool/internal/api	3.839s
+    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_below_the_300s_floor (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_per_engine (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/min_free_space_placeholder (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_empty (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_relative (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/max_active_total_overflows_int (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/download_rate_limit_null (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_total (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_placeholder (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_outside_roots (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/min_free_space_null (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/extract_passwords_null (0.00s)
+--- PASS: TestPatchMinFreeSpaceReplacesWholesale (0.44s)
+--- PASS: TestSystemInfoCarriesNoSecret (0.46s)
+ok  	github.com/L-K-M/dl-tool/internal/api	3.903s
 ```
 
 Criterion-to-test map: criteria 1, 2 and the verbatim-map criterion 6 →

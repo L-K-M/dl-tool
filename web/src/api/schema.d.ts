@@ -2296,6 +2296,60 @@ export interface components {
       /** Format: int64 */
       year: number | null;
     };
+    SettingsBody: {
+      /**
+       * Format: int64
+       * @description Bytes/s cap while the alternative cell is in force
+       */
+      alt_download_rate_limit: number;
+      /**
+       * Format: int64
+       * @description Bytes/s cap while the alternative cell is in force
+       */
+      alt_upload_rate_limit: number;
+      auto_extract: boolean;
+      confirm_on_delete: boolean;
+      /** @description Absolute path inside a data root */
+      default_destination: string;
+      /**
+       * Format: int64
+       * @description Bytes/s cap, 0 = unlimited
+       */
+      download_rate_limit: number;
+      /**
+       * @description Always the redaction placeholder; PATCHing it back is a no-op
+       * @enum {string}
+       */
+      extract_passwords: "__redacted__";
+      /**
+       * Format: int64
+       * @description 0 = unlimited
+       */
+      max_active_per_engine: number;
+      /**
+       * Format: int64
+       * @description 0 = unlimited
+       */
+      max_active_total: number;
+      /** @description Sparse map of absolute root path to bytes; roots absent fall back to the documented default */
+      min_free_space: {
+        [key: string]: number;
+      };
+      /** @enum {string} */
+      process_order: "by_date_created";
+      rss_enabled: boolean;
+      /**
+       * Format: int64
+       * @description Seconds, minimum 300
+       */
+      rss_interval_s: number;
+      schedule_enabled: boolean;
+      /**
+       * Format: int64
+       * @description Bytes/s cap, 0 = unlimited
+       */
+      upload_rate_limit: number;
+    };
     SetupInputBody: {
       /**
        * @description Preferred UI locale
@@ -2335,7 +2389,10 @@ export interface components {
       speed_up: number;
     };
     SystemInfoOutputBody: {
-      /** @description VCS commit time from the binary's build info */
+      /**
+       * Format: date-time
+       * @description VCS commit time from the binary's build info
+       */
       built_at: string;
       /** @description VCS revision from the binary's build info */
       commit: string;
@@ -4255,9 +4312,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": {
-            [key: string]: unknown;
-          };
+          "application/json": components["schemas"]["SettingsBody"];
         };
       };
       /** @description Error */
@@ -4281,7 +4336,21 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": {
-          [key: string]: unknown;
+          alt_download_rate_limit?: unknown;
+          alt_upload_rate_limit?: unknown;
+          auto_extract?: unknown;
+          confirm_on_delete?: unknown;
+          default_destination?: unknown;
+          download_rate_limit?: unknown;
+          extract_passwords?: unknown;
+          max_active_per_engine?: unknown;
+          max_active_total?: unknown;
+          min_free_space?: unknown;
+          process_order?: unknown;
+          rss_enabled?: unknown;
+          rss_interval_s?: unknown;
+          schedule_enabled?: unknown;
+          upload_rate_limit?: unknown;
         };
       };
     };
@@ -4292,9 +4361,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": {
-            [key: string]: unknown;
-          };
+          "application/json": components["schemas"]["SettingsBody"];
         };
       };
       /** @description Error */

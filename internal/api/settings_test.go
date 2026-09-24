@@ -757,6 +757,11 @@ func TestPatchOutOfRangeIs422(t *testing.T) {
 		"min_free_space placeholder":             {"min_free_space": RedactedPlaceholder},
 		"default_destination placeholder":        {"default_destination": RedactedPlaceholder},
 		"default_destination empty":              {"default_destination": ""},
+		"default_destination relative":           {"default_destination": "downloads"},
+		"default_destination traversal":          {"default_destination": "/data/../etc"},
+		"default_destination outside roots":      {"default_destination": "/not-a-data-root"},
+		"max_active_total overflows int":         {"max_active_total": 1 << 33},
+		"max_active_per_engine overflows int":    {"max_active_per_engine": 1 << 33},
 		"min_free_space null":                    {"min_free_space": nil},
 		"download_rate_limit null":               {"download_rate_limit": nil},
 		"process_order other enum":               {"process_order": "newest_first"},
@@ -816,7 +821,7 @@ func TestPatchMinFreeSpaceReplacesWholesale(t *testing.T) {
 }
 
 // TestSystemInfoCarriesNoSecret asserts the doc 05 section 13 shape —
-// all eleven top-level members — and that no configured engine secret
+// all twelve top-level members — and that no configured engine secret
 // appears anywhere in the serialised body.
 func TestSystemInfoCarriesNoSecret(t *testing.T) {
 	env := newSettingsTestEnv(t)
@@ -845,7 +850,9 @@ func TestSystemInfoCarriesNoSecret(t *testing.T) {
 	require.True(t, ok, "database = %v", body["database"])
 	require.Equal(t, env.dbPath, database["path"])
 	require.Greater(t, database["size_bytes"], float64(0))
-	require.Equal(t, float64(3), database["schema_version"])
+	liveVersion, err := store.SchemaVersion(t.Context(), env.db)
+	require.NoError(t, err)
+	require.Equal(t, float64(liveVersion), database["schema_version"])
 
 	engines, ok := body["engines"].([]any)
 	require.True(t, ok, "engines = %v", body["engines"])

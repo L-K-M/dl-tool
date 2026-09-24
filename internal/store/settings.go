@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -593,6 +594,8 @@ var settingsKeys = []string{
 
 // queryAllSettings reads only the documented keys; the whitelist, not a
 // blacklist, so an internal key can never leak into GET /settings.
+// settingsKeys must remain compile-time constants: they are interpolated
+// into the SQL below, never bound as parameters.
 var queryAllSettings = `SELECT key, value_json FROM settings WHERE key IN ('` +
 	strings.Join(settingsKeys, `','`) + `')`
 
@@ -668,6 +671,11 @@ func (s *SettingsStore) GetSettings(ctx context.Context) (Settings, error) {
 			}
 		case settingConfirmOnDelete:
 			out.ConfirmOnDelete, err = settingBool(row.Key, row.ValueJSON)
+		default:
+			// Unreachable while settingsKeys and this switch stay in
+			// lockstep; an unmapped key must error rather than silently
+			// report the default for a stored override.
+			return Settings{}, fmt.Errorf("store: read settings: unmapped key %q", row.Key)
 		}
 		if err != nil {
 			return Settings{}, err
@@ -739,13 +747,17 @@ func canonicalSetting(key string, raw json.RawMessage) (encoded string, skip boo
 
 	switch key {
 	case settingDownloadRateLimit, settingUploadRateLimit,
-		settingAltDownloadRate, settingAltUploadRate,
-		settingMaxActiveTotal, settingMaxActivePerEngine:
+		settingAltDownloadRate, settingAltUploadRate:
 		n, decErr := settingInt(key, string(raw))
-		if decErr != nil {
+		if decErr != nil || n < 0 {
 			return "", false, outOfRange("want a non-negative integer")
 		}
-		if n < 0 {
+		return strconv.FormatInt(n, 10), false, nil
+	case settingMaxActiveTotal, settingMaxActivePerEngine:
+		n, decErr := settingInt(key, string(raw))
+		// The typed Settings narrows these to int; bounding at MaxInt32
+		// keeps that conversion exact on every platform.
+		if decErr != nil || n < 0 || n > math.MaxInt32 {
 			return "", false, outOfRange("want a non-negative integer")
 		}
 		return strconv.FormatInt(n, 10), false, nil
@@ -774,6 +786,12 @@ func canonicalSetting(key string, raw json.RawMessage) (encoded string, skip boo
 		}
 		if v == "__redacted__" {
 			return "", false, outOfRange("__redacted__ is a rendered form, not a path")
+		}
+		// Doc 11 section 5 types the key as an absolute path inside a
+		// data root; the root-membership half lives in the API layer,
+		// which knows the configured roots.
+		if !filepath.IsAbs(v) || filepath.Clean(v) != v {
+			return "", false, outOfRange("want an absolute canonical path")
 		}
 		encoded, encErr := json.Marshal(v)
 		if encErr != nil {
