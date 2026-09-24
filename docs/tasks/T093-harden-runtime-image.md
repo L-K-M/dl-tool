@@ -151,7 +151,99 @@ Expected: exactly one line, `Dockerfile`, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+**Sandbox limitation (same as T124; stated, not worked around):** this session runs as
+uid 1000 in a container with no Docker daemon, no buildx plugin, no `sudo`, and seccomp
+blocking `unshare`, so the verbatim Verification block cannot execute here:
+
+```
+$ make docker-build VERSION=t093
+docker build -t ghcr.io/l-k-m/dl-tool:t093 .
+Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+make: *** [Makefile:57: docker-build] Error 1
+$ docker buildx build --platform linux/amd64,linux/arm64 .
+unknown flag: --platform                       # no buildx plugin; no daemon either way
+$ unshare -U -r true
+unshare: unshare failed: Operation not permitted
+```
+
+The multi-arch build, the `/yt-dlp: OK` build-log check, `docker image inspect` and the
+`docker run` criterion therefore still need one run on a Docker-capable machine.
+Everything that does not need a daemon was run for real; output below is observed.
+
+**Pin resolution** — `GET https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest`
+returned tag `2026.08.19` (newest stable). Both musllinux assets were downloaded from
+that release and hashed locally; these values are written into the `ARG YTDLP_`
+defaults:
+
+```
+$ sha256sum yt-dlp-amd64 yt-dlp-arm64
+f3dec9cfeaf304cec98290fe41c6ad465d4b747d302473559643e7af24929722  yt-dlp-amd64
+17b164c4d258be92bb1ad146cb7c336b783aedb380814aabbcb7d52937f77e57  yt-dlp-arm64
+```
+
+**Stage logic replicated locally** — the `ytdlp` stage's `case` + `sha256sum -c` block
+run against the real downloaded binaries:
+
+```
+TARGETARCH=amd64  -> /yt-dlp: OK        (file=yt-dlp_musllinux)
+TARGETARCH=arm64  -> /yt-dlp: OK        (file=yt-dlp_musllinux_aarch64)
+TARGETARCH=bogus  -> unsupported TARGETARCH=bogus; exit 1
+one-char corrupted hash -> /yt-dlp: FAILED, "1 computed checksum did NOT match", exit 1
+```
+
+**`yt-dlp --version` runs the pinned binary** — `yt-dlp_musllinux` is dynamically
+linked against musl (`libc.musl-x86_64.so.1`, interp `/lib/ld-musl-x86_64.so.1`), so it
+cannot run on this glibc host directly, but it executed under Alpine 3.22's own loader:
+`musl-1.2.5-r12` and `zlib-1.3.2-r0` extracted from `dl-cdn.alpinelinux.org/alpine/v3.22`
+(the same repo the runtime stage's `apk add` uses), then
+`ld-musl-x86_64.so.1 --library-path ... ./yt-dlp --version` printed `2026.08.19`. No
+Python is involved — the binary is musl-linked and the unchanged `apk add` line carries
+no Python package.
+
+**`make ci` on the final tree** — run twice after `npm ci --prefix web`, green both
+times it completed: `gofmt` clean, `golangci-lint` 0 issues, ESLint clean, Prettier
+clean, `tsc --noEmit` clean, all Go packages `ok` with `-race`, 301/301 Vitest, both
+`docker compose config -q` clean, `doclint` 0 errors. One intermediate re-run hit
+`TestChainFanoutDeliversEvent` in `internal/jobs` (`handlers_notify_test.go:498`), a
+pre-existing flake on `origin/main` — it passes and fails across identical trees
+(F, F, ok on isolated reruns); `internal/jobs` is untouched by this diff and outside
+this task's `## Files` table.
+
+**Scope** — `git status --porcelain=v1 -uall -- . ':(exclude)docs'` prints exactly one
+line: `Dockerfile`.
+
+**Deliberate deviations from this file's quoted contract, each toward the newer
+canonical text in doc 10 §5 (the "post-T093 end state" per T124's contract):**
+
+- `org.opencontainers.image.licenses` uses §5's
+  `Unlicense AND MIT AND MPL-2.0 AND LGPL-2.1-or-later AND LicenseRef-unRAR`. The
+  contract block's `"Unlicense"` quote predates commit `9d4b3cc`, which added the
+  unRAR term when the `7zzs` stage landed; shipping `Unlicense`-only would mislabel an
+  image that contains the unRAR codec.
+- A global `ARG VERSION=dev REVISION=unknown` was added before the first `FROM`, so
+  the contract's stage lines stay byte-identical (`ARG TARGETOS TARGETARCH VERSION
+  REVISION`, `ARG VERSION REVISION CREATED`) while bare `ARG` re-declaration inherits
+  the global defaults. This preserves the non-empty-fallback fix T124's review added
+  in `8a3234c` and keeps `org.opencontainers.image.version` non-empty under
+  `make docker-build`, which forwards no `--build-arg`; the release workflow still
+  overrides both via `--build-arg` (doc 10 §10). `CREATED` has no default — no
+  meaningful static value exists and the release pipeline supplies it through
+  metadata labels.
+- The T124 `# NOTE: yt-dlp is NOT installed in this image yet ...` comment was removed:
+  it described the pre-T093 gap this task closes and would now be false.
+- The `ytdlp` stage sits directly above the runtime stage per step 5; §5 shows it
+  before `sevenzip` — stage order is functionally irrelevant.
+- `COPY --from=ytdlp /yt-dlp     /usr/local/bin/yt-dlp` is placed between the dl-tool
+  and 7zz copies, matching §5's order; `DLTOOL_YTDLP_PATH` already pointed there.
+- `COPY --chmod=755 deploy/entrypoint.sh` is kept from T124 (the contract does not
+  name that line and step 7 forbids touching unnamed lines).
+
+Note on the uniqueness criterion: `2026.08.19` also occurs in pre-existing prose in
+`docs/06-download-engines.md`, `PLAN-REVIEW*.md` and task files T088/T090 as "the
+version the plan's research measured against" — not a second copy of the pin. The three
+`ARG YTDLP_` lines themselves exist only in `Dockerfile`; the hashes appear nowhere
+else in the repository.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
