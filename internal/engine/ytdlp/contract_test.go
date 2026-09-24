@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -64,7 +65,9 @@ func newContractEngine(t *testing.T, binary string) contractEngine {
 		JSRuntimePath: jsRuntime,
 		ArchiveDir:    filepath.Join(t.TempDir(), "archives"),
 	}, testLogger())
-	require.NoError(t, e.Connect(context.Background()))
+	connectCtx, cancelConnect := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelConnect()
+	require.NoError(t, e.Connect(connectCtx))
 	t.Cleanup(func() { require.NoError(t, e.Close()) })
 	return contractEngine{Engine: e, t: t}
 }
