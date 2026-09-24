@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T118 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T053, T079, T080, T092, T110 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `web/src/components/Settings/SettingsScreen.tsx` and `web/src/locales/en/settings.json` |
@@ -166,14 +166,14 @@ PUT   /settings/schedule {"enabled":true,"cells":[1,1,1,1,1,1,0,0,2,2,"…158 mo
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestBulkHelpersArePure` asserts all four helpers return a new 168-entry array and mutate nothing.
-- [ ] `TestDragPaintsRange`, `TestShiftDragPaintsRectangle` and `TestHeaderPaintsDayAndHour` pass.
-- [ ] `TestKeyboardMapPaintsAndRoves` asserts exactly one cell carries `tabindex="0"` at all times.
-- [ ] `TestInvertLeavesAlternativeUntouched` passes.
-- [ ] `TestSaveSendsBothBodies` asserts `cells.length === 168` and that no KB/s value is sent anywhere.
-- [ ] The legend pairs every state with a pattern and a text label, and the displayed time zone is the
+- [x] `TestBulkHelpersArePure` asserts all four helpers return a new 168-entry array and mutate nothing.
+- [x] `TestDragPaintsRange`, `TestShiftDragPaintsRectangle` and `TestHeaderPaintsDayAndHour` pass.
+- [x] `TestKeyboardMapPaintsAndRoves` asserts exactly one cell carries `tabindex="0"` at all times.
+- [x] `TestInvertLeavesAlternativeUntouched` passes.
+- [x] `TestSaveSendsBothBodies` asserts `cells.length === 168` and that no KB/s value is sent anywhere.
+- [x] The legend pairs every state with a pattern and a text label, and the displayed time zone is the
       `timezone` the server returned, never one computed in the browser.
-- [ ] Every cell carries the doc 09 §9.1 `aria-label`, and the axe-core Settings run stays at zero serious
+- [x] Every cell carries the doc 09 §9.1 `aria-label`, and the axe-core Settings run stays at zero serious
       or critical violations.
 
 ## Verification
@@ -208,7 +208,60 @@ files this task creates are untracked, and `git diff --name-only` never lists an
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test-web && echo BANDWIDTH_OK` on the task branch (the MSW
+`onUnhandledRequest`, React `flushSync` and stubbed-status stderr lines are pre-existing test noise;
+only the per-file results and the summary are reproduced):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ ✓ src/App.test.tsx (55 tests)
+ ✓ src/api/client.test.ts (12 tests)
+ ✓ src/api/events.test.ts (16 tests)
+ ✓ src/components/AddTask/AddTaskDialog.test.tsx (14 tests)
+ ✓ src/components/DetailPane/DetailPane.test.tsx (13 tests)
+ ✓ src/components/FolderBrowser/FolderBrowserDialog.test.tsx (9 tests)
+ ✓ src/components/Rss/FeedsScreen.test.tsx (10 tests)
+ ✓ src/components/Rss/RuleEditor.test.tsx (9 tests)
+ ✓ src/components/Search/SavedSearches.test.tsx (9 tests)
+ ✓ src/components/Search/SearchScreen.test.tsx (10 tests)
+ ✓ src/components/Settings/BandwidthSection.test.tsx (8 tests)
+ ✓ src/components/Settings/IndexersSection.test.tsx (6 tests)
+ ✓ src/components/Settings/RssSection.test.tsx (5 tests)
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests)
+ ✓ src/components/Shell/Shell.test.tsx (13 tests)
+ ✓ src/components/TaskGrid/TaskGrid.test.tsx (34 tests)
+ ✓ src/eslint.test.ts (1 test)
+ ✓ src/i18n.test.ts (4 tests)
+ ✓ src/lib/format.test.ts (6 tests)
+ ✓ src/lib/theme.test.ts (9 tests)
+ ✓ src/main.test.ts (1 test)
+ ✓ src/store/useTasks.test.ts (17 tests)
+ ✓ src/store/useUiPrefs.test.ts (17 tests)
+ ✓ src/sw.test.ts (2 tests)
+
+ Test Files  24 passed (24)
+      Tests  292 passed (292)
+
+BANDWIDTH_OK
+```
+
+Scope check `git status --porcelain=v1 -uall -- . ':(exclude)docs'` listed exactly the Files table
+paths: `BandwidthSection.tsx`, `BandwidthSection.test.tsx`, `ScheduleGrid.tsx`, `SettingsScreen.tsx`
+and `locales/en/settings.json`.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

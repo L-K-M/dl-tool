@@ -5,6 +5,7 @@ import { create } from "zustand";
 import { initI18n } from "../../i18n";
 import settingsStrings from "../../locales/en/settings.json";
 import { Button } from "../ui/button";
+import { BandwidthSection } from "./BandwidthSection";
 import { ConnectionSection } from "./ConnectionSection";
 import { GeneralSection } from "./GeneralSection";
 import { IndexersSection } from "./IndexersSection";
@@ -32,6 +33,7 @@ export type Section = (typeof SECTIONS)[number];
 const SECTION_FORMS = {
   general: GeneralSection,
   connection: ConnectionSection,
+  bandwidth: BandwidthSection,
   rss: RssSection,
   indexers: IndexersSection,
 } satisfies Partial<Record<Section, () => JSX.Element>>;
@@ -50,7 +52,6 @@ export const ARRIVAL: Record<
   Exclude<Section, keyof typeof SECTION_FORMS>,
   string
 > = {
-  bandwidth: "M6",
   bittorrent: "M6",
   downloads: "M6",
   account: "M6",
