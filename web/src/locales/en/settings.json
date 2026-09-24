@@ -134,6 +134,7 @@
     "enableHint": "Off pauses polling; feeds and rules are untouched.",
     "interval": "Update interval",
     "intervalHint": "Minutes between feed polls; the minimum is 5.",
+    "intervalTooSmall": "Enter a number of minutes of at least 5.",
     "itemCap": "Maximum articles kept per feed",
     "itemCapHint": "The cap is stored on each feed; saving applies the typed value to every feed.",
     "capMixed": "Mixed",
@@ -147,6 +148,6 @@
     "smartNoteTail": "sets episode.smart per rule.",
     "loadError": "Could not load the RSS settings.",
     "saveFailed": "Could not save the RSS settings: {{detail}}",
-    "capSaveFailed": "Could not update a feed's article cap: {{detail}}"
+    "capSaveFailed": "Could not update the article cap for {{feeds}}: {{detail}}"
   }
 }

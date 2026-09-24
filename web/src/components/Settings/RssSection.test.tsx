@@ -96,15 +96,17 @@ beforeEach(() => {
     http.get("*/api/v1/feeds", () => HttpResponse.json({ feeds: feedRows })),
     http.get("*/api/v1/rules", () => HttpResponse.json({ rules: ruleRows })),
     http.patch("*/api/v1/settings", async ({ request }) => {
-      settingsPatches.push((await request.json()) as Record<string, unknown>);
+      const patch = (await request.json()) as Record<string, unknown>;
+      settingsPatches.push(patch);
+      settingsBody = { ...settingsBody, ...patch };
       return HttpResponse.json(settingsBody);
     }),
     http.patch("*/api/v1/feeds/:id", async ({ request, params }) => {
-      feedPatches.push({
-        id: params.id as string,
-        body: (await request.json()) as Record<string, unknown>,
-      });
-      return HttpResponse.json({});
+      const body = (await request.json()) as Record<string, unknown>;
+      const id = params.id as string;
+      feedPatches.push({ id, body });
+      feedRows = feedRows.map((f) => (f.id === id ? { ...f, ...body } : f));
+      return HttpResponse.json(feedRows.find((f) => f.id === id) ?? {});
     }),
   );
 });
@@ -139,10 +141,14 @@ test("TestIntervalRendersMinutesAndSavesSeconds", async () => {
   await waitFor(() =>
     expect(settingsPatches).toEqual([{ rss_interval_s: 1800 }]),
   );
-  expect(feedPatches).toEqual([]);
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull(),
   );
+  // Asserted after the save flow settles so a late fan-out cannot slip past.
+  expect(feedPatches).toEqual([]);
+  expect(
+    (screen.getByLabelText("Update interval") as HTMLInputElement).value,
+  ).toBe("30");
 });
 
 test("TestMixedItemCapFansOutToEveryFeed", async () => {
@@ -163,6 +169,18 @@ test("TestMixedItemCapFansOutToEveryFeed", async () => {
     { id: "fed_b", body: { item_cap: 40 } },
   ]);
   expect(settingsPatches).toEqual([]);
+
+  // The enable toggle saves its own key alone — "no control writes a settings
+  // key outside rss_enabled and rss_interval_s" holds for every control.
+  fireEvent.click(screen.getByLabelText("Enable RSS fetching"));
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(settingsPatches).toEqual([{ rss_enabled: false }]),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull(),
+  );
+  expect(feedPatches).toHaveLength(2);
 });
 
 test("TestSettingsValidationErrorSkipsFeedWrites", async () => {
@@ -188,20 +206,30 @@ test("TestSettingsValidationErrorSkipsFeedWrites", async () => {
     ),
   );
   mount();
-  fireEvent.change(await screen.findByLabelText("Update interval"), {
-    target: { value: "3" },
-  });
+  const interval = (await screen.findByLabelText(
+    "Update interval",
+  )) as HTMLInputElement;
+  fireEvent.change(interval, { target: { value: "3" } });
   fireEvent.change(
     await screen.findByLabelText("Maximum articles kept per feed"),
     { target: { value: "40" } },
   );
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
 
-  // The 422 lands on the interval input; the feed fan-out is never sent.
+  // A sub-minimum interval is a guaranteed 422; the client fails it on the
+  // field without sending anything.
+  await screen.findByText("Enter a number of minutes of at least 5.");
+  expect(settingsPatches).toEqual([]);
+  expect(feedPatches).toEqual([]);
+
+  // An in-range value that the server still rejects lands on the same input
+  // via errors[].location; the feed fan-out stays unsent either way.
+  fireEvent.change(interval, { target: { value: "10" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
   await screen.findByText("must be at least 300");
   const input = screen.getByLabelText("Update interval") as HTMLInputElement;
   expect(input.getAttribute("aria-invalid")).toBe("true");
-  expect(input.value).toBe("3");
+  expect(input.value).toBe("10");
   expect(feedPatches).toEqual([]);
   // The form stays dirty: the bar and its count are still up.
   expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();

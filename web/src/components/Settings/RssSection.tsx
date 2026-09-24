@@ -207,8 +207,17 @@ export function RssSection(): JSX.Element {
         const body: { rss_enabled?: boolean; rss_interval_s?: number } = {};
         if (current.enabled !== base.enabled)
           body.rss_enabled = current.enabled;
-        if (current.intervalMin !== base.intervalMin)
-          body.rss_interval_s = minutesToSeconds(Number(current.intervalMin));
+        if (current.intervalMin !== base.intervalMin) {
+          // The 300-second floor is known (doc 11 §5); an emptied or
+          // sub-minimum input would be a guaranteed 422, so fail it on the
+          // field now instead of shipping a doomed PATCH.
+          const seconds = minutesToSeconds(Number(current.intervalMin));
+          if (!Number.isFinite(seconds) || seconds < MIN_INTERVAL_S) {
+            setIntervalError(t("rss.intervalTooSmall"));
+            return;
+          }
+          body.rss_interval_s = seconds;
+        }
         if (Object.keys(body).length > 0) {
           const { error } = await api.PATCH("/settings", { body });
           if (error !== undefined) {
@@ -226,12 +235,15 @@ export function RssSection(): JSX.Element {
               );
             return;
           }
+          await queryClient.invalidateQueries({ queryKey: SETTINGS_KEY });
         }
 
         const cap = Number(current.cap);
         const applies = capApplies(current.cap, base.cap, feedRows.length);
         let capLanded = true;
         if (applies) {
+          const failedFeeds: string[] = [];
+          let lastDetail = "";
           for (const feed of feedRows) {
             if (feed.item_cap === cap) continue;
             const { error } = await api.PATCH("/feeds/{id}", {
@@ -239,13 +251,20 @@ export function RssSection(): JSX.Element {
               body: { item_cap: cap },
             });
             if (error !== undefined) {
-              capLanded = false;
-              toast.error(
-                t("rss.capSaveFailed", {
-                  detail: problemDetail(error) ?? ct("shell.networkError"),
-                }),
-              );
+              failedFeeds.push(feed.title ?? feed.url);
+              lastDetail = problemDetail(error) ?? ct("shell.networkError");
             }
+          }
+          // One toast for the whole fan-out — N identical toasts obscure the
+          // single root cause.
+          if (failedFeeds.length > 0) {
+            capLanded = false;
+            toast.error(
+              t("rss.capSaveFailed", {
+                feeds: failedFeeds.join(", "),
+                detail: lastDetail,
+              }),
+            );
           }
           await queryClient.invalidateQueries({ queryKey: FEEDS_KEY });
         }
