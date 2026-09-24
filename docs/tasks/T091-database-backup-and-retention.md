@@ -148,7 +148,8 @@ Worked response, `201`:
    `PruneBackups(backupDir, 7)`, a `0 4 * * *` entry running the two retention prunes
    (`PruneTaskEvents`, `PruneDoneJobs`) — staggered an hour after the backup entry because
    robfig/cron dispatches each entry on its own goroutine and same-tick entries would race
-   `VACUUM INTO` — and `@hourly` running `PruneSearchJobs`. The call site is
+   `VACUUM INTO` — and `30 * * * *` running `PruneSearchJobs`, offset off the top of the hour so it
+   never shares a tick with the 03:00 or 04:00 entries. The call site is
    `cmd/dl-tool/main.go`'s scheduler chain —
    `NewScheduler(db, logger).WithGovernor(governor).WithWatcher(watcher).WithMaintenance(server.Maintenance, filepath.Join(cfg.ConfigDir, store.BackupsDirName))`
    — with `store.BackupsDirName` superseding the file-local `backupsDirName` const, the `store.Open`
