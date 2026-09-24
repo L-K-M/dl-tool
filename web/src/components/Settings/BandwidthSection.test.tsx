@@ -186,7 +186,6 @@ test("TestShiftDragPaintsRectangle", () => {
   fireEvent.pointerDown(cell("Monday", "00"));
   // Shift held: the move paints the rectangle from the anchor, not a line.
   fireEvent.pointerOver(cell("Wednesday", "02"), { shiftKey: true });
-  fireEvent.pointerUp(window);
   const last = changes.at(-1)!;
   // Days Mon..Wed × hours 00..02 = 9 cells.
   expect(last.filter((value) => value === 0)).toHaveLength(9);
@@ -194,6 +193,16 @@ test("TestShiftDragPaintsRectangle", () => {
   expect(last[idx(2, 2)]).toBe(0);
   expect(last[idx(3, 0)]).toBe(1);
   expect(last[idx(0, 3)]).toBe(1);
+
+  // Dragging back repaints the rectangle from the anchor: the cells outside
+  // the shrunken rectangle revert rather than keeping stale paint.
+  fireEvent.pointerOver(cell("Monday", "01", "No download"), {
+    shiftKey: true,
+  });
+  const shrunk = changes.at(-1)!;
+  expect(shrunk.filter((value) => value === 0)).toHaveLength(2);
+  expect(shrunk[idx(2, 2)]).toBe(1);
+  fireEvent.pointerUp(window);
 });
 
 test("TestHeaderPaintsDayAndHour", () => {

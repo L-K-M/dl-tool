@@ -133,10 +133,14 @@ export function ScheduleGrid(props: {
   const tableRef = useRef<HTMLTableElement | null>(null);
   // The gesture state lives in refs: a drag can outrun React's render cycle,
   // so each move paints on top of the array the previous move emitted rather
-  // than the props, which may still be one paint behind.
+  // than the props, which may still be one paint behind. rectBase is the
+  // array a Shift rectangle is always repainted from — computing it from the
+  // accumulated cells would leave stale paint behind when the rectangle
+  // shrinks back toward the anchor.
   const dragging = useRef(false);
   const anchor = useRef(0);
   const painted = useRef<Cells | null>(null);
+  const rectBase = useRef<Cells | null>(null);
 
   const emit = (next: Cells) => {
     painted.current = next;
@@ -149,6 +153,7 @@ export function ScheduleGrid(props: {
     const end = () => {
       dragging.current = false;
       painted.current = null;
+      rectBase.current = null;
     };
     window.addEventListener("pointerup", end);
     window.addEventListener("pointercancel", end);
@@ -173,6 +178,7 @@ export function ScheduleGrid(props: {
     anchor.current = cell;
     dragging.current = true;
     painted.current = cells;
+    rectBase.current = cells;
     emit(paintRect(cells, cell, cell, brush));
     setFocusCell(cell);
     event.currentTarget.focus();
@@ -186,7 +192,7 @@ export function ScheduleGrid(props: {
     const base = painted.current ?? cells;
     emit(
       event.shiftKey
-        ? paintRect(base, anchor.current, cell, brush)
+        ? paintRect(rectBase.current ?? cells, anchor.current, cell, brush)
         : paintRect(base, cell, cell, brush),
     );
   };
@@ -223,8 +229,12 @@ export function ScheduleGrid(props: {
     }
     event.preventDefault();
     if (next === null) return;
-    if (event.shiftKey) emit(paintRect(cells, anchor.current, next, brush));
-    else anchor.current = next;
+    if (event.shiftKey) {
+      emit(paintRect(rectBase.current ?? cells, anchor.current, next, brush));
+    } else {
+      anchor.current = next;
+      rectBase.current = cells;
+    }
     moveFocus(next);
   };
 
