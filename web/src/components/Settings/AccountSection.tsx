@@ -192,9 +192,14 @@ export function AccountSection(): JSX.Element {
   const savingRef = useRef(false);
 
   const formRef = useRef(form);
-  formRef.current = form;
   const baselineRef = useRef(baseline);
-  baselineRef.current = baseline;
+  // Refs mirror state for the dirty-bar callbacks; writing them in an
+  // effect instead of during render keeps an abandoned concurrent render
+  // from leaving the mirror inconsistent with committed state.
+  useEffect(() => {
+    formRef.current = form;
+    baselineRef.current = baseline;
+  }, [form, baseline]);
 
   // The seed runs once, on the first render with the account; a later
   // refetch refreshes the query, not the in-progress form.
@@ -242,7 +247,10 @@ export function AccountSection(): JSX.Element {
           username: data?.username ?? current.username,
           locale: data?.locale ?? current.locale,
         };
-        setForm(next);
+        // The baseline always advances to the server state, but the form
+        // is only replaced when nothing was typed while the PATCH was in
+        // flight — a new object identity means an edit happened.
+        if (formRef.current === current) setForm(next);
         setBaseline({ ...next });
         await queryClient.invalidateQueries({ queryKey: ACCOUNT_KEY });
       } catch (error) {
@@ -366,6 +374,9 @@ export function AccountSection(): JSX.Element {
   const revokeToken = async () => {
     const target = revokeTarget;
     if (target === null) return;
+    // Close the dialog before the request so a double-click cannot fire a
+    // second DELETE whose 404 would toast a failure after a success.
+    setRevokeTarget(null);
     try {
       const { error } = await api.DELETE("/api-tokens/{id}", {
         params: { path: { id: target.id } },
@@ -386,7 +397,6 @@ export function AccountSection(): JSX.Element {
       );
       return;
     }
-    setRevokeTarget(null);
     await tokens.refetch();
   };
 
@@ -405,7 +415,10 @@ export function AccountSection(): JSX.Element {
         </Button>
       </p>
     );
-  if (form === null) return <></>;
+  if (form === null)
+    return (
+      <p className="text-sm text-muted-foreground">{t("account.loading")}</p>
+    );
 
   const tokenRows = tokens.data ?? [];
 

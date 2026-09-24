@@ -245,4 +245,32 @@ func TestPatchAccountRevokesOtherSessions(t *testing.T) {
 	if get := api.Get("/account", bearer); get.Code != http.StatusOK {
 		t.Errorf("bearer token = %d after the password change, want %d", get.Code, http.StatusOK)
 	}
+
+	// The stored hash itself pins the rotation: it verifies the latest
+	// password and rejects every earlier one.
+	var storedHash string
+	if err := db.GetContext(t.Context(), &storedHash,
+		`SELECT password_hash FROM users WHERE id = ?`, user.ID,
+	); err != nil {
+		t.Fatalf("read password hash: %v", err)
+	}
+	for _, password := range []string{
+		accountTestPassword,
+		"the first replacement password",
+	} {
+		matches, _, err := secure.VerifyPassword(storedHash, password)
+		if err != nil {
+			t.Fatalf("verify stored hash: %v", err)
+		}
+		if matches {
+			t.Errorf("stored hash still verifies a superseded password")
+		}
+	}
+	matches, _, err := secure.VerifyPassword(storedHash, "the second replacement password")
+	if err != nil {
+		t.Fatalf("verify stored hash: %v", err)
+	}
+	if !matches {
+		t.Error("stored hash does not verify the latest password")
+	}
 }

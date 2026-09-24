@@ -305,7 +305,9 @@ function ChannelDialog({
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) onClose(false);
+        // Escape and overlay clicks must not dismiss mid-save: a late
+        // onClose(true) would then fire against a reopened dialog.
+        if (!open && !busy) onClose(false);
       }}
     >
       <DialogContent className="sm:max-w-lg" aria-label={title}>
@@ -368,7 +370,9 @@ function ChannelDialog({
             const hint =
               hintKey === undefined
                 ? ""
-                : t(`notifications.dialog.fields.${hintKey}`);
+                : t(`notifications.dialog.fields.${hintKey}`, {
+                    defaultValue: "",
+                  });
             const value = fields[spec.key] ?? "";
             const wide = spec.kind === "text" || spec.kind === "int";
             return (
@@ -640,7 +644,13 @@ export function NotificationsSection(): JSX.Element {
       delete next[target.id];
       return next;
     });
-    void channels.refetch();
+    // Drop the row from the cache now — a failed refetch would otherwise
+    // leave the deleted channel rendered behind the error banner.
+    delete rememberedMask.current[target.id];
+    queryClient.setQueryData<ChannelRow[]>(CHANNELS_KEY, (old) =>
+      old?.filter((row) => row.id !== target.id),
+    );
+    void queryClient.invalidateQueries({ queryKey: CHANNELS_KEY });
   };
 
   const loadError = (

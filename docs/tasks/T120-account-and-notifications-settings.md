@@ -312,23 +312,21 @@ Checking formatting...
 All matched files use Prettier code style!
 cd web && npx tsc --noEmit -p tsconfig.json
 go test -race -count=1 ./internal/api/... ./internal/store/...
-ok  	github.com/L-K-M/dl-tool/internal/api	213.795s
-ok  	github.com/L-K-M/dl-tool/internal/store	87.709s
+ok  	github.com/L-K-M/dl-tool/internal/api	232.435s
+ok  	github.com/L-K-M/dl-tool/internal/store	102.887s
 cd web && npx vitest run
- ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3203ms
- ✓ src/components/Settings/AccountSection.test.tsx (6 tests) 1316ms
-   ✓ TestTokenRevealedOnceOnly 358ms
-   ✓ TestSendTestRendersRawReply 303ms
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3267ms
+ ✓ src/components/Settings/AccountSection.test.tsx (10 tests) 1950ms
  Test Files  26 passed (26)
-      Tests  307 passed (307)
+      Tests  311 passed (311)
 ACCOUNT_NOTIFY_OK
 ```
 
 `internal/api` covers `TestGetAccountReturnsShape`, `TestPatchAccountWrongCurrentIs403`,
 `TestPatchAccountShortPasswordIs422` and `TestPatchAccountRevokesOtherSessions`; `AccountSection.test.tsx`
-carries the six web criteria and `SettingsScreen.test.tsx` the repaired alias test (Vitest's default
-reporter prints only the slowest test names per file — the file-level `✓ (6 tests)` /
-`(12 tests)` lines prove the rest).
+carries the six web criteria plus review-added coverage and `SettingsScreen.test.tsx` the repaired
+alias test (Vitest's default reporter prints only the slowest test names per file — the file-level
+`✓ (10 tests)` / `(12 tests)` lines prove the rest).
 
 Scope: `git status --porcelain` is empty on the committed tree; the equivalent check,
 `git diff --name-only origin/main...HEAD -- . ':(exclude)docs' | sort`, lists exactly the Files

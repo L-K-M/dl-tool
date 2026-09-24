@@ -330,6 +330,7 @@
     "passwordMismatch": "The current password does not match.",
     "passwordTooShort": "Enter at least 12 characters.",
     "passwordChangeFailed": "Could not change the password: {{detail}}",
+    "loading": "Loading the account…",
     "loadError": "Could not load the account.",
     "saveFailed": "Could not save the account: {{detail}}",
     "tokensHeading": "API tokens",

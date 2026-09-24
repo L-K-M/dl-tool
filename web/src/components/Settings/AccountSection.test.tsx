@@ -113,7 +113,12 @@ beforeEach(() => {
     http.patch("*/api/v1/notifications/:id", async ({ params, request }) => {
       const body = (await request.json()) as Record<string, unknown>;
       channelPatches.push({ id: String(params.id), body });
-      const base = channels.find((row) => row.id === params.id) ?? channels[0];
+      const base = channels.find((row) => row.id === params.id);
+      if (base === undefined)
+        return HttpResponse.json(
+          { title: "Not Found", status: 404 },
+          { status: 404 },
+        );
       const updated = { ...base, ...body };
       // The later refetch must serve the patch the way the real store
       // would, or the matrix reverts between onMutate and onSettled.
@@ -313,6 +318,115 @@ test("TestAllEventsRowSendsStar", async () => {
   });
 });
 
+// TestStarWithUnknownCode pins which rule wins when both apply: checking
+// the star replaces the whole mask with ["*"] (extras included), and
+// unchecking restores the remembered mask — unknown code and all.
+test("TestStarWithUnknownCode", async () => {
+  channels = [
+    channel({
+      id: "ntf_mixed",
+      name: "Mixed",
+      event_mask: ["task.completed", "legacy.custom_code"],
+    }),
+  ];
+  mount(<NotificationsSection />);
+  await screen.findByText("Mixed", { selector: "span.font-medium" });
+
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: "All events for Mixed" }),
+  );
+  await waitFor(() => expect(channelPatches.length).toBe(1));
+  expect(channelPatches[0].body).toEqual({ event_mask: ["*"] });
+
+  // The box is disabled while the first PATCH is in flight; wait it out
+  // rather than racing a click the component would drop.
+  const star = screen.getByRole("checkbox", { name: "All events for Mixed" });
+  await waitFor(() => expect(star).toHaveProperty("disabled", false));
+  fireEvent.click(star);
+  await waitFor(() => expect(channelPatches.length).toBe(2));
+  expect(channelPatches[1].body).toEqual({
+    event_mask: ["task.completed", "legacy.custom_code"],
+  });
+});
+
+// TestWeakNewPasswordMapsToPasswordField is the 422 sibling of the 403
+// pin: a validation problem lands on the new-password input as a
+// field-level alert, not a toast.
+test("TestWeakNewPasswordMapsToPasswordField", async () => {
+  const toastError = vi.spyOn(toast, "error");
+  accountStatus = 422;
+  accountProblem = {
+    type: "/problems/validation-failed",
+    title: "Validation failed",
+    detail: "password is shorter than 12 characters",
+    status: 422,
+  };
+  mount(<AccountSection />);
+  await screen.findByLabelText("Username");
+
+  // Twelve or more characters so the client-side floor lets the PATCH
+  // through and the server's 422 is what answers.
+  const next = screen.getByLabelText("New password") as HTMLInputElement;
+  fireEvent.change(screen.getByLabelText("Current password"), {
+    target: { value: "the old password" },
+  });
+  fireEvent.change(next, { target: { value: "a brand new passphrase" } });
+  fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toBe("password is shorter than 12 characters");
+  expect(next.getAttribute("aria-invalid")).toBe("true");
+  expect(next.getAttribute("aria-describedby")).toBe(alert.id);
+  expect(toastError).not.toHaveBeenCalled();
+});
+
+// TestTokenRevokeRemovesRow pins the revoke flow: the confirm dialog's
+// DELETE fires once and the refetched list drops the row — revoked rows
+// are the server's audit trail and never list.
+test("TestTokenRevokeRemovesRow", async () => {
+  const deleted: string[] = [];
+  server.use(
+    http.delete("*/api/v1/api-tokens/:id", ({ params }) => {
+      deleted.push(String(params.id));
+      tokens = tokens.filter((row) => row.id !== params.id);
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+  mount(<AccountSection />);
+  const cell = await screen.findByText("cli", { selector: "td.font-medium" });
+  fireEvent.click(
+    within(cell.closest("tr") as HTMLElement).getByRole("button", {
+      name: "Revoke",
+    }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
+  await waitFor(() => expect(deleted).toEqual(["tok_1"]));
+  await waitFor(() =>
+    expect(
+      screen.queryByText("cli", { selector: "td.font-medium" }),
+    ).toBeNull(),
+  );
+});
+
+// TestChannelSecretFieldIsWriteOnly pins doc 05 §14's secret rule: a
+// channel with secret_set renders the marker and an empty input, never a
+// stored value or a redaction stand-in.
+test("TestChannelSecretFieldIsWriteOnly", async () => {
+  channels = [channel({ id: "ntf_secret", name: "Ops", secret_set: true })];
+  mount(<NotificationsSection />);
+  await screen.findByText("Ops", { selector: "span.font-medium" });
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const dialog = await screen.findByRole("dialog");
+  const secretInput = within(dialog).getByLabelText(
+    /^Secret/,
+  ) as HTMLInputElement;
+  expect(secretInput.value).toBe("");
+  expect(within(dialog).getByText("Stored")).toBeTruthy();
+  expect(dialog.textContent ?? "").not.toContain("__redacted__");
+});
+
 // TestSendTestRendersRawReply pins doc 05 §14.1: status_line and body
 // render verbatim, and a 200 ok:false reply is data, not a toast.
 test("TestSendTestRendersRawReply", async () => {
@@ -363,5 +477,8 @@ test("TestSendTestRendersRawReply", async () => {
     screen.getByRole("button", { name: "Send a test event to Alerts" }),
   );
   await screen.findByText("dial tcp: connection refused");
+  // The second reply replaces the first: nothing of it stays on screen.
+  expect(screen.queryByText("HTTP/1.1 403 Forbidden")).toBeNull();
+  expect(screen.queryByText(BODY)).toBeNull();
   expect(toastError).not.toHaveBeenCalled();
 });

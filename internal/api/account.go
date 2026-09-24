@@ -20,6 +20,7 @@ const (
 	// minLength, so a short value is a 422 before the handler runs.
 	accountWrongCurrentDetail  = "the current password does not match"
 	accountEmptyUsernameDetail = "username must not be empty"
+	accountEmptyLocaleDetail   = "locale must not be empty"
 	accountNeedsCurrentDetail  = "changing the password requires current_password in the same body"
 )
 
@@ -143,7 +144,10 @@ func (h *AccountHandlers) PatchAccount(ctx context.Context, in *PatchAccountInpu
 		}
 		locale := identity.User.Locale
 		if in.Body.Locale != nil {
-			locale = *in.Body.Locale
+			locale = strings.TrimSpace(*in.Body.Locale)
+			if locale == "" {
+				return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, accountEmptyLocaleDetail)
+			}
 		}
 		if err := store.UpdateUserProfile(ctx, h.db, identity.User.ID, username, locale); err != nil {
 			return nil, FromStore(err)
@@ -155,14 +159,19 @@ func (h *AccountHandlers) PatchAccount(ctx context.Context, in *PatchAccountInpu
 		if err != nil {
 			return nil, internalFailure(ctx, "hash password", err)
 		}
-		if err := store.UpdatePasswordHash(ctx, h.db, identity.User.ID, hash); err != nil {
-			return nil, FromStore(err)
-		}
-		// Revoke the sessions an attacker might hold; the caller's own
-		// session survives. Token-authenticated callers carry no session
-		// id, so every session is revoked; API tokens are unaffected.
+		// Revoke before rotating: the store functions each commit their own
+		// statement, so this order keeps the dangerous partial state
+		// unreachable — a failed hash write leaves the password unchanged
+		// with other sessions revoked, while the reverse could store the new
+		// hash with an attacker's sessions still valid and turn the retry
+		// into a 403. The caller's own session survives either way;
+		// token-authenticated callers carry no session id, so every session
+		// is revoked. API tokens are unaffected.
 		if _, err := store.DeleteOtherSessions(ctx, h.db, identity.User.ID, identity.SessionID); err != nil {
 			return nil, internalFailure(ctx, "revoke other sessions", err)
+		}
+		if err := store.UpdatePasswordHash(ctx, h.db, identity.User.ID, hash); err != nil {
+			return nil, FromStore(err)
 		}
 	}
 
