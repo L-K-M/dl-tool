@@ -63,6 +63,14 @@ const hookPathEnv = "PATH=/usr/local/bin:/usr/bin:/bin"
 // would hang past the deadline instead of yielding ErrHookTimeout.
 const hookWaitDelay = 5 * time.Second
 
+// HookChainBudget is the wall clock a caller must grant the completion
+// chain so a full-duration hook run — HookTimeout plus the pipe-drain
+// wait plus the chain's enqueues and event writes — still gets its
+// verdict recorded before the caller's deadline fires. It lives beside
+// the timings it derives from, so raising HookTimeout or the drain
+// bound carries the budget along automatically.
+const HookChainBudget = HookTimeout + hookWaitDelay + 30*time.Second
+
 // discoverHook is the per-finished-task evaluation of the three-state
 // switch. present reports that something sits at HookPath at all — the
 // warn case — and runnable that it is a regular file the dropped

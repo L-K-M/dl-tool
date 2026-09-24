@@ -172,29 +172,36 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/jobs/... ./internal/api/...
-ok  	github.com/L-K-M/dl-tool/internal/jobs	40.725s
-ok  	github.com/L-K-M/dl-tool/internal/api	215.326s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	40.683s
+ok  	github.com/L-K-M/dl-tool/internal/api	200.642s
 HOOK_OK
 ```
 
 Named tests (run with `-v`):
 
 ```text
---- PASS: TestHookOffByDefault (0.10s)
---- PASS: TestArgvNotShellString (0.08s)
---- PASS: TestFixedEnvironment (0.19s)
---- PASS: TestHookTimeoutKillsGroup (0.26s)
---- PASS: TestHookTimeoutDaemonEscapeReturns (5.21s)
---- PASS: TestNonZeroExitKeepsCompleted (0.05s)
---- PASS: TestChainPassesTaskToHook (0.06s)
-ok  	github.com/L-K-M/dl-tool/internal/jobs	5.973s
---- PASS: TestSettingsRejectsHookKey (0.09s)
-ok  	github.com/L-K-M/dl-tool/internal/api	0.113s
+--- PASS: TestHookOffByDefault (0.42s)
+--- PASS: TestArgvNotShellString (1.46s)
+--- PASS: TestFixedEnvironment (1.42s)
+--- PASS: TestHookTimeoutKillsGroup (0.55s)
+--- PASS: TestHookTimeoutDaemonEscapeReturns (5.53s)
+--- PASS: TestNonZeroExitKeepsCompleted (0.42s)
+--- PASS: TestChainPassesTaskToHook (1.46s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	12.352s
+--- PASS: TestSettingsRejectsHookKey (0.40s)
+ok  	github.com/L-K-M/dl-tool/internal/api	1.473s
 ```
 
-Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'`):
+Scope check on the final tree. The working tree carries only the review
+fix (`cmd/dl-tool/main.go`, `internal/jobs/hook.go` — the exported
+`HookChainBudget` the reviewer asked for); the cumulative PR diff
+against `origin/main` is exactly the Files table:
 
 ```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+cmd/dl-tool/main.go
+internal/jobs/hook.go
+$ git diff --name-only origin/main...HEAD -- . ':(exclude)docs' | sort
 cmd/dl-tool/main.go
 internal/api/settings_test.go
 internal/jobs/hook.go

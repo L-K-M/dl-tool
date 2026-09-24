@@ -200,8 +200,10 @@ func main() {
 				// The store detaches cancellation already; the timeout
 				// bounds the whole chain — the job enqueues plus a
 				// full-duration T078 hook run — so a wedged chain cannot
-				// stall the transitioning caller indefinitely.
-				hookCtx, cancel := context.WithTimeout(ctx, jobs.HookTimeout+30*time.Second)
+				// stall the transitioning caller indefinitely. The budget
+				// is the jobs package's single source of truth, not a
+				// re-derivation of its timings here.
+				hookCtx, cancel := context.WithTimeout(ctx, jobs.HookChainBudget)
 				defer cancel()
 				if err := postprocess.OnCompleted(hookCtx, taskID); err != nil {
 					logger.ErrorContext(ctx, "postprocess chain failed", "task_id", taskID, "err", err)
