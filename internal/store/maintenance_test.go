@@ -99,6 +99,7 @@ func TestBackupNamesNeverCollide(t *testing.T) {
 		if err == nil {
 			break
 		}
+		t.Logf("backup attempt %d failed (expected timestamp collision): %v", attempt+1, err)
 	}
 	require.NoError(t, err)
 	require.NotEqual(t, first.Path, second.Path)
@@ -184,7 +185,8 @@ func TestPruneBackupsKeepsSeven(t *testing.T) {
 
 	deleted, err := m.PruneBackups(t.Context(), dir, BackupKeepCount)
 	require.NoError(t, err)
-	require.Equal(t, 1, deleted, "only the eighth nightly file is pruned")
+	require.Equal(t, 1, deleted,
+		"only the eighth nightly file is pruned; the stale *.tmp sweep is not counted")
 
 	want := []string{
 		"dl-tool.db.pre-migration-1-to-2.20260901T120000.000000000Z.bak",
@@ -199,7 +201,8 @@ func TestPruneBackupsKeepsSeven(t *testing.T) {
 }
 
 // TestPruneTaskEventsRespectsWindow: the 90-day window of doc 04 section 7 —
-// a row older than 90 days goes, one exactly 89 days old stays.
+// a row older than 90 days goes, one exactly 89 days old stays, and one
+// exactly at the cutoff stays too: the comparison is strict ("older than").
 func TestPruneTaskEventsRespectsWindow(t *testing.T) {
 	db, _, _ := openTestStore(t)
 	ctx := t.Context()
@@ -217,6 +220,7 @@ VALUES (?, 'tsk_events', ?, 'info', 'test.event', 'm', 0, 0)`,
 		require.NoError(t, err)
 	}
 	insertEvent("evt_old", 91*24*time.Hour)
+	insertEvent("evt_cutoff", 90*24*time.Hour)
 	insertEvent("evt_edge", 89*24*time.Hour)
 
 	deleted, err := m.PruneTaskEvents(ctx, now)
@@ -225,7 +229,8 @@ VALUES (?, 'tsk_events', ?, 'info', 'test.event', 'm', 0, 0)`,
 
 	var ids []string
 	require.NoError(t, db.SelectContext(ctx, &ids, `SELECT id FROM task_events ORDER BY id`))
-	require.Equal(t, []string{"evt_edge"}, ids)
+	require.Equal(t, []string{"evt_cutoff", "evt_edge"}, ids,
+		"a row exactly at the 90-day cutoff survives a strict older-than")
 }
 
 // TestRetentionPrunesRespectWindows covers the two remaining windows of doc
@@ -247,6 +252,7 @@ VALUES (?, 'test', '{}', ?, 0, 0, ?)`,
 		require.NoError(t, err)
 	}
 	insertJob("job_done_old", "done", 8*24*time.Hour)
+	insertJob("job_done_edge", "done", 7*24*time.Hour)
 	insertJob("job_done_new", "done", 6*24*time.Hour)
 	insertJob("job_failed_old", "failed", 30*24*time.Hour)
 	insertJob("job_running_old", "running", 30*24*time.Hour)
@@ -257,8 +263,8 @@ VALUES (?, 'test', '{}', ?, 0, 0, ?)`,
 
 	var jobIDs []string
 	require.NoError(t, db.SelectContext(ctx, &jobIDs, `SELECT id FROM jobs ORDER BY id`))
-	require.Equal(t, []string{"job_done_new", "job_failed_old", "job_running_old"}, jobIDs,
-		"failed and running rows are never pruned")
+	require.Equal(t, []string{"job_done_edge", "job_done_new", "job_failed_old", "job_running_old"}, jobIDs,
+		"failed, running and exactly-at-cutoff rows are never pruned")
 
 	// A search job and its result; deleting the job must cascade.
 	_, err = db.ExecContext(ctx, `INSERT INTO indexers
@@ -274,10 +280,12 @@ VALUES (?, 'q', '[]', 1, 0, ?, 0)`,
 		require.NoError(t, err)
 	}
 	insertSearch("sch_old", 25*time.Hour)
+	insertSearch("sch_edge", 24*time.Hour)
 	insertSearch("sch_new", time.Hour)
 	_, err = db.ExecContext(ctx, `INSERT INTO search_results
 (id, search_job_id, indexer_id, title, created_at, updated_at)
 VALUES ('res_old', 'sch_old', 'idx_main', 'r', 0, 0),
+       ('res_edge', 'sch_edge', 'idx_main', 'r', 0, 0),
        ('res_new', 'sch_new', 'idx_main', 'r', 0, 0)`)
 	require.NoError(t, err)
 
@@ -286,9 +294,9 @@ VALUES ('res_old', 'sch_old', 'idx_main', 'r', 0, 0),
 	require.Equal(t, int64(1), deleted)
 
 	var results []string
-	require.NoError(t, db.SelectContext(ctx, &results, `SELECT id FROM search_results`))
-	require.Equal(t, []string{"res_new"}, results,
-		"the pruned job's results must follow the ON DELETE CASCADE")
+	require.NoError(t, db.SelectContext(ctx, &results, `SELECT id FROM search_results ORDER BY id`))
+	require.Equal(t, []string{"res_edge", "res_new"}, results,
+		"the pruned job's results must follow the ON DELETE CASCADE; the exactly-24h job survives")
 }
 
 // TestPruneBackupsRejectsNegativeKeep is the guard rail: a negative keep

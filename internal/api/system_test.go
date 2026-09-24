@@ -118,6 +118,17 @@ func TestFailedBackupLeavesNoFile(t *testing.T) {
 	dir := t.TempDir()
 	handlers := NewSystemHandlers(store.NewMaintenanceStore(env.db), dir)
 
+	// Pad the database so the cancel below lands mid-statement — on the
+	// effectively empty env database VACUUM INTO can finish before the
+	// goroutine even starts, and a completed backup is not a failed one.
+	pad := strings.Repeat("x", 256*1024)
+	for i := 0; i < 200; i++ {
+		_, err := env.db.ExecContext(t.Context(), `INSERT INTO jobs
+(id, kind, payload_json, run_after, created_at, updated_at)
+VALUES (?, 'pad', ?, 0, 0, 0)`, fmt.Sprintf("job_pad%04d", i), pad)
+		require.NoError(t, err)
+	}
+
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {

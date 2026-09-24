@@ -228,7 +228,13 @@ func (s *Scheduler) enqueueOnce(ctx context.Context, kind string) {
 func (s *Scheduler) backupOnce(ctx context.Context) {
 	result, err := s.maintenance.BackupInto(ctx, s.backupDir)
 	if err != nil {
-		if ctx.Err() == nil {
+		switch {
+		case errors.Is(err, store.ErrBackupRunning):
+			// A manual POST /system/backup holds the shared lock: the
+			// tick is skipped, not failed — the in-flight backup is the
+			// night's snapshot.
+			s.log.InfoContext(ctx, "nightly backup skipped: another backup is running")
+		case ctx.Err() == nil:
 			s.log.ErrorContext(ctx, "nightly backup failed", "err", err)
 		}
 

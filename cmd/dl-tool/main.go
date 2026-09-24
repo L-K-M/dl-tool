@@ -122,7 +122,12 @@ func main() {
 			}
 			defer processLock.Release()
 
-			db, err := store.Open(ctx, cfg.DBPath, filepath.Join(cfg.ConfigDir, store.BackupsDirName))
+			// One derivation of the backup directory for the whole
+			// composition root: store.Open's pre-migration backups and the
+			// scheduler's WithMaintenance attach must agree with the
+			// ConfigDir/backups join NewServer hands NewSystemHandlers.
+			backupsDir := filepath.Join(cfg.ConfigDir, store.BackupsDirName)
+			db, err := store.Open(ctx, cfg.DBPath, backupsDir)
 			if err != nil {
 				logger.Error("database open failed", "err", err)
 				os.Exit(exitFailure)
@@ -312,7 +317,7 @@ func main() {
 			scheduler := jobs.NewScheduler(db, logger).
 				WithGovernor(governor).
 				WithWatcher(watcher).
-				WithMaintenance(server.Maintenance, filepath.Join(cfg.ConfigDir, store.BackupsDirName))
+				WithMaintenance(server.Maintenance, backupsDir)
 			runDone.Add(1)
 			go func() {
 				defer runDone.Done()
