@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -266,11 +267,9 @@ func TestHookTimeoutKillsGroup(t *testing.T) {
 	contentPath := filepath.Join(dest, "payload.bin")
 	task := newHookTask(t, db, "sleeper", dest, &contentPath, nil)
 
-	hook := &Hook{
-		path:    HookPath(configDir),
-		db:      db,
-		timeout: 150 * time.Millisecond,
-	}
+	hook, ok := NewHook(configDir, db)
+	require.True(t, ok)
+	hook.timeout = 150 * time.Millisecond
 
 	start := time.Now()
 	err := hook.Run(t.Context(), task)
@@ -287,6 +286,37 @@ func TestHookTimeoutKillsGroup(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(hookDetail(t, db, task.ID, eventHookFailed)), &detail))
 	assert.True(t, detail.Timeout)
+}
+
+// TestHookTimeoutDaemonEscapeReturns pins the WaitDelay bound: a hook
+// that leaves a setsid'd grandchild behind escapes the process-group
+// kill while still holding the output pipes, and Wait must abandon the
+// pipes rather than block for the grandchild's lifetime.
+func TestHookTimeoutDaemonEscapeReturns(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("no setsid binary available")
+	}
+
+	db := newTestDB(t)
+	configDir := t.TempDir()
+	installHook(t, configDir, "#!/bin/sh\nsetsid sleep 60 &\nsleep 60\n", 0o755)
+
+	dest := t.TempDir()
+	contentPath := filepath.Join(dest, "payload.bin")
+	task := newHookTask(t, db, "daemonizer", dest, &contentPath, nil)
+
+	hook, ok := NewHook(configDir, db)
+	require.True(t, ok)
+	hook.timeout = 150 * time.Millisecond
+
+	start := time.Now()
+	err := hook.Run(t.Context(), task)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrHookTimeout), "want ErrHookTimeout, got %v", err)
+	assert.Less(t, elapsed, 30*time.Second,
+		"Wait must abandon pipes held by the escaped grandchild, not block for its lifetime")
 }
 
 // TestNonZeroExitKeepsCompleted pins the verdict isolation: a hook that
@@ -316,4 +346,31 @@ func TestNonZeroExitKeepsCompleted(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(hookDetail(t, db, task.ID, eventHookFailed)), &detail))
 	assert.Equal(t, 3, detail.ExitCode)
 	assert.Contains(t, detail.Stderr, "hook complained")
+}
+
+// TestChainPassesTaskToHook pins the chain-integrated path: OnCompleted
+// must hand the hook the same six argv entries hook.Run receives when
+// called directly, so the task fields survive the earlier chain legs.
+func TestChainPassesTaskToHook(t *testing.T) {
+	db := newTestDB(t)
+	configDir := t.TempDir()
+	path := installProbeHook(t, configDir)
+
+	dest := t.TempDir()
+	contentPath := filepath.Join(dest, "payload.bin")
+	total := int64(4096)
+	task := newHookTask(t, db, "chain passthrough", dest, &contentPath, &total)
+
+	chain := NewChain(db, store.NewTaskStore(db))
+	chain.SetConfigDir(configDir)
+	require.NoError(t, chain.OnCompleted(t.Context(), task.ID))
+
+	var detail struct {
+		Stdout string `json:"stdout"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(hookDetail(t, db, task.ID, eventHookCompleted)), &detail))
+
+	argv, env := probeReport(t, detail.Stdout)
+	assert.Equal(t, []string{path, task.ID, "completed", "chain passthrough", dest, contentPath}, argv)
+	assert.Equal(t, contentPath, env["DLTOOL_TASK_CONTENT_PATH"])
 }

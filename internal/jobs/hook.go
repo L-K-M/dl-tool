@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"golang.org/x/sys/unix"
 
 	"github.com/L-K-M/dl-tool/internal/store"
 )
@@ -55,10 +56,18 @@ const hookOutputCap = 8 << 10
 // launched. The parent environment is never inherited.
 const hookPathEnv = "PATH=/usr/local/bin:/usr/bin:/bin"
 
+// hookWaitDelay bounds how long Wait may spend draining the output pipes
+// after the process is done or the deadline fired: a hook that
+// daemonizes — setsid or double-fork — escapes the group kill while
+// still holding the inherited write ends, and without the bound Wait
+// would hang past the deadline instead of yielding ErrHookTimeout.
+const hookWaitDelay = 5 * time.Second
+
 // discoverHook is the per-finished-task evaluation of the three-state
 // switch. present reports that something sits at HookPath at all — the
-// warn case — and runnable that it is a regular file executable by the
-// dropped PUID/PGID. The file is never created and its mode never
+// warn case — and runnable that it is a regular file the dropped
+// PUID/PGID may actually execute, checked against the real uid/gid, not
+// just any execute bit. The file is never created and its mode never
 // changed; the operator owns it entirely.
 func discoverHook(configDir string) (present, runnable bool) {
 	info, err := os.Stat(HookPath(configDir))
@@ -69,7 +78,7 @@ func discoverHook(configDir string) (present, runnable bool) {
 		return true, false
 	}
 
-	return true, info.Mode().Perm()&0o111 != 0
+	return true, unix.Access(HookPath(configDir), unix.X_OK) == nil
 }
 
 // Hook runs the completion hook for one task.
@@ -131,6 +140,7 @@ func (h *Hook) Run(ctx context.Context, t store.Task) error {
 	cmd.Cancel = func() error {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
+	cmd.WaitDelay = hookWaitDelay
 	cmd.Env = hookEnv(t)
 	var stdout, stderr hookBuffer
 	cmd.Stdout = &stdout
