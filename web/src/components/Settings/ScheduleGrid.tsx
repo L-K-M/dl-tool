@@ -322,7 +322,7 @@ export function ScheduleGrid(props: {
                     state: t(CELL_STATE_NAME[state]),
                   })}
                   style={{ width: 28, height: 28, ...CELL_FILL[state] }}
-                  className="touch-none border border-border p-0 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--focus-ring)]"
+                  className={`border border-border p-0 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--focus-ring)]${disabled ? "" : " touch-none"}`}
                   onPointerDown={(event) => onCellPointerDown(cell, event)}
                   onPointerEnter={(event) => onCellPointerEnter(cell, event)}
                   onKeyDown={(event) => onCellKeyDown(cell, event)}
