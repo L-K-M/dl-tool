@@ -125,9 +125,21 @@ in the repository.
 Run exactly this. Paste the output under "Evidence".
 ```bash
 make docker-build VERSION=t093 && docker run --rm --entrypoint sh ghcr.io/l-k-m/dl-tool:t093 -c 'yt-dlp --version; ! command -v python3 && echo NO_PYTHON'
+test "$(docker image inspect ghcr.io/l-k-m/dl-tool:t093 --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/L-K-M/dl-tool"
+test -n "$(docker image inspect ghcr.io/l-k-m/dl-tool:t093 --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+docker buildx create --name t093 --driver docker-container --use --bootstrap
+docker buildx build --platform linux/amd64,linux/arm64 --progress=plain .
+sed -i 's/YTDLP_SHA256_AMD64="f/YTDLP_SHA256_AMD64="0/' Dockerfile
+docker build --target ytdlp --progress=plain . 2>&1 | tee /tmp/t093-corrupt.log && { echo 'corrupted hash did not fail the build' >&2; exit 1; }
+git checkout -- Dockerfile
+grep -q 'did NOT match' /tmp/t093-corrupt.log
 ```
-Expected: the `ytdlp` stage prints `/yt-dlp: OK`, the build ends with `naming to ghcr.io/l-k-m/dl-tool:t093`,
-then exactly two lines — the pinned yt-dlp version and `NO_PYTHON`.
+Expected: `make docker-build` prints `/yt-dlp: OK` in the `ytdlp` stage, ends with `naming to
+ghcr.io/l-k-m/dl-tool:t093`, and `docker run` prints exactly two lines — the pinned yt-dlp version and
+`NO_PYTHON`. The two `test` lines print nothing. `docker buildx build` prints `/yt-dlp: OK` once per
+platform — amd64 natively, arm64 under QEMU — and exits 0. The corrupted-hash build fails inside the
+`ytdlp` stage at `sha256sum -c -` (`did NOT match`), and `git checkout` restores `Dockerfile`.
 
 Also confirm scope:
 ```bash
