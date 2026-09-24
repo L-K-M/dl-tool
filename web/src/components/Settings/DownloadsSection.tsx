@@ -13,6 +13,7 @@ import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -679,15 +680,20 @@ export function DownloadsSection(): JSX.Element {
                         [root]: event.target.value,
                       },
                     });
-                    setSpaceErrors((prev) => ({ ...prev, [root]: "" }));
+                    // Editing clears the error outright — the key is
+                    // deleted, so aria-invalid and the message agree.
+                    setSpaceErrors((prev) => {
+                      const next = { ...prev };
+                      delete next[root];
+                      return next;
+                    });
                   }}
                 />
-                {spaceErrors[root] !== undefined &&
-                  spaceErrors[root] !== "" && (
-                    <p role="alert" className="text-xs text-destructive">
-                      {spaceErrors[root]}
-                    </p>
-                  )}
+                {spaceErrors[root] !== undefined && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {spaceErrors[root]}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -1098,6 +1104,11 @@ function WatchFolderDialog({
         if (enabled !== editing?.enabled) body.enabled = enabled;
         if (interval !== editing?.poll_interval_s)
           body.poll_interval_s = interval;
+        // An unchanged form would send an empty PATCH; just close.
+        if (Object.keys(body).length === 0) {
+          onClose(false);
+          return;
+        }
         const { error } = await api.PATCH("/watch-folders/{id}", {
           params: { path: { id: state.folder.id } },
           body,
@@ -1122,8 +1133,13 @@ function WatchFolderDialog({
   const report = (error: Problem | undefined) => {
     const detail = problemDetail(error) ?? ct("shell.networkError");
     if (isPathRejected(error)) {
+      // The detail is matched against the destination only when the
+      // destination was actually edited — an unchanged value that happens
+      // to appear in the message must not steal the error from the path.
+      const destinationChanged =
+        state.mode === "add" || destination !== editing?.destination;
       const field =
-        destination !== "" && detail.includes(destination)
+        destinationChanged && destination !== "" && detail.includes(destination)
           ? "destination"
           : "path";
       setFieldErrors((prev) => ({ ...prev, [field]: detail }));
@@ -1287,10 +1303,14 @@ function CategoryDialog({
       : t("downloads.catDialog.editTitle");
 
   const submit = async () => {
+    const trimmed = name.trim();
     setBusy(true);
     try {
       if (state.mode === "add") {
-        const body: CreateCategoryBody = { name, save_path: savePath };
+        const body: CreateCategoryBody = {
+          name: trimmed,
+          save_path: savePath,
+        };
         const { error } = await api.POST("/categories", { body });
         if (error !== undefined) {
           report(error);
@@ -1298,8 +1318,13 @@ function CategoryDialog({
         }
       } else {
         const body: PatchCategoryBody = {};
-        if (name !== editing?.name) body.new_name = name;
+        if (trimmed !== editing?.name) body.new_name = trimmed;
         if (savePath !== editing?.save_path) body.save_path = savePath;
+        // An unchanged form would send an empty PATCH; just close.
+        if (Object.keys(body).length === 0) {
+          onClose(false);
+          return;
+        }
         const { error } = await api.PATCH("/categories/{name}", {
           params: { path: { name: state.category.name } },
           body,
@@ -1401,6 +1426,12 @@ function ConfirmDeleteDialog({
   onConfirm: () => void;
 }): JSX.Element {
   const { t } = useTranslation("settings");
+  // target clears as the dialog starts closing, but Radix keeps the content
+  // mounted through the exit animation — render the body from the last
+  // non-null target so the copy does not degrade mid-fade.
+  const lastTargetRef = useRef<DeleteTarget | null>(null);
+  if (target !== null) lastTargetRef.current = target;
+  const shown = target ?? lastTargetRef.current;
   return (
     <Dialog
       open={target !== null}
@@ -1408,20 +1439,17 @@ function ConfirmDeleteDialog({
         if (!open) onCancel();
       }}
     >
-      <DialogContent
-        className="sm:max-w-md"
-        aria-label={t("downloads.deleteTitle")}
-      >
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t("downloads.deleteTitle")}</DialogTitle>
+          <DialogDescription className="text-sm">
+            {shown?.kind === "watch"
+              ? t("downloads.deleteWatchBody", { path: shown.row.path })
+              : t("downloads.deleteCategoryBody", {
+                  name: shown?.row.name ?? "",
+                })}
+          </DialogDescription>
         </DialogHeader>
-        <p className="text-sm">
-          {target?.kind === "watch"
-            ? t("downloads.deleteWatchBody", { path: target.row.path })
-            : t("downloads.deleteCategoryBody", {
-                name: target?.row.name ?? "",
-              })}
-        </p>
         <DialogFooter>
           <Button variant="outline" onClick={onCancel}>
             {t("downloads.deleteCancel")}

@@ -57,25 +57,13 @@ export function BitTorrentSection(): JSX.Element {
     retry: false,
   });
 
-  // A failed background refetch keeps the previous data; only an error with
-  // nothing cached replaces the whole section.
-  if (engines.isError && engines.data === undefined)
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {t("bittorrent.loadError")}{" "}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void engines.refetch()}
-        >
-          {ct("actions.retry")}
-        </Button>
-      </p>
-    );
-
   const qbt = (engines.data ?? []).find(
     (engine) => engine.kind === "qbittorrent",
   );
+  // A failed background refetch keeps the previous data; an initial-load
+  // failure replaces only the engine group — the table above is static
+  // documentation and stays on screen either way.
+  const enginesFailed = engines.isError && engines.data === undefined;
 
   return (
     <div className="flex flex-col gap-4">
@@ -112,7 +100,18 @@ export function BitTorrentSection(): JSX.Element {
         className="flex flex-col gap-1"
       >
         <h2 className="text-sm font-medium">{t("bittorrent.engineHeading")}</h2>
-        {engines.isLoading ? null : qbt === undefined ? (
+        {enginesFailed ? (
+          <p role="alert" className="text-sm text-destructive">
+            {t("bittorrent.loadError")}{" "}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void engines.refetch()}
+            >
+              {ct("actions.retry")}
+            </Button>
+          </p>
+        ) : engines.isLoading ? null : qbt === undefined ? (
           <p className="text-sm text-muted-foreground">
             {t("bittorrent.engineMissing")}
           </p>
@@ -135,7 +134,7 @@ export function BitTorrentSection(): JSX.Element {
             </span>
           </div>
         )}
-        {qbt !== undefined && qbt.last_error !== null && (
+        {qbt !== undefined && qbt.last_error && (
           <p className="text-sm" style={{ color: "var(--warn)" }}>
             {qbt.last_error}
           </p>

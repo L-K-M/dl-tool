@@ -155,13 +155,26 @@ beforeEach(() => {
     http.patch("*/api/v1/settings", async ({ request }) => {
       const patch = (await request.json()) as Record<string, unknown>;
       settingsPatches.push(patch);
-      settingsBody = { ...settingsBody, ...patch };
+      settingsBody = {
+        ...settingsBody,
+        ...patch,
+        // The real API redacts secrets on every read, including the refetch
+        // that follows this save — the plaintext list never comes back.
+        ...("extract_passwords" in patch
+          ? { extract_passwords: "__redacted__" }
+          : {}),
+      };
       return HttpResponse.json(settingsBody);
     }),
     http.post("*/api/v1/watch-folders", async ({ request }) => {
       const body = (await request.json()) as Record<string, unknown>;
       watchPosts.push(body);
-      const row = { id: "wfd_new", ...body };
+      const row = {
+        id: "wfd_new",
+        last_scan_at: null,
+        last_error: null,
+        ...body,
+      };
       watchRows = [...watchRows, row];
       return HttpResponse.json(row, { status: 201 });
     }),
@@ -259,6 +272,10 @@ test("TestPasswordListNeverEchoesRedaction", async () => {
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull(),
   );
+  // The post-save refetch still renders only the fixed sentence — the
+  // submitted plaintext is never echoed back.
+  expect(screen.queryByText(/__redacted__/)).toBeNull();
+  expect(screen.queryByText(/hunter2/)).toBeNull();
 
   // Clearing sends an empty array; leaving the control alone sends nothing.
   fireEvent.click(await screen.findByRole("button", { name: "Clear list" }));
@@ -380,6 +397,75 @@ test("TestCategoryTableCrud", async () => {
   await waitFor(() => expect(categoryDeletes).toEqual(["linux-iso"]));
 });
 
+test("TestWatchFolderCrud", async () => {
+  watchRows = [watchFolder("wfd_01")];
+  categoryRows = [{ name: "linux", save_path: "/data/iso", task_count: 12 }];
+  mount("downloads");
+  await screen.findByText("/data/watch-wfd_01");
+
+  // Create: both paths come only from the folder browser.
+  fireEvent.click(screen.getByRole("button", { name: "Add watch folder" }));
+  const addDialog = await screen.findByRole("dialog", {
+    name: "Add watch folder",
+  });
+  expect(
+    (within(addDialog).getByLabelText("Path") as HTMLInputElement).readOnly,
+  ).toBe(true);
+  await pickPath("Choose the watched folder", "watch");
+  await pickPath("Choose the watch folder destination", "iso");
+  fireEvent.change(within(addDialog).getByLabelText("Category"), {
+    target: { value: "linux" },
+  });
+  fireEvent.click(
+    within(addDialog).getByLabelText("Delete loaded .torrent files"),
+  );
+  fireEvent.click(within(addDialog).getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(watchPosts).toEqual([
+      {
+        path: "/data/watch",
+        destination: "/data/iso",
+        enabled: true,
+        delete_after_load: true,
+        poll_interval_s: 10,
+        category: "linux",
+      },
+    ]),
+  );
+
+  // Edit: only the changed member goes out.
+  const row = (await screen.findByText("/data/watch-wfd_01")).closest("tr")!;
+  fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+  const editDialog = await screen.findByRole("dialog", {
+    name: "Edit watch folder",
+  });
+  fireEvent.change(
+    within(editDialog).getByLabelText("Poll interval (seconds)"),
+    {
+      target: { value: "30" },
+    },
+  );
+  fireEvent.click(within(editDialog).getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(watchPatches).toEqual([
+      { id: "wfd_01", body: { poll_interval_s: 30 } },
+    ]),
+  );
+
+  // Delete goes through the confirm step; the note says the directory is
+  // never touched.
+  const afterEdit = (await screen.findByText("/data/watch-wfd_01")).closest(
+    "tr",
+  )!;
+  fireEvent.click(within(afterEdit).getByRole("button", { name: "Delete" }));
+  const confirm = await screen.findByRole("dialog", {
+    name: "Confirm deletion",
+  });
+  expect(confirm.textContent).toContain("/data/watch-wfd_01");
+  fireEvent.click(within(confirm).getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(watchDeletes).toEqual(["wfd_01"]));
+});
+
 test("TestBitTorrentSectionIsReadOnly", async () => {
   engineRows = [
     {
@@ -428,4 +514,41 @@ test("TestBitTorrentSectionIsReadOnly", async () => {
   await screen.findByText("qBittorrent engine");
   expect(screen.getByText("Not connected")).toBeTruthy();
   expect(screen.getByText(/5\.0\.0/)).toBeTruthy();
+});
+
+test("TestBitTorrentLoadErrorKeepsTable", async () => {
+  server.use(
+    http.get("*/api/v1/engines", () =>
+      HttpResponse.json({ detail: "daemon down" }, { status: 500 }),
+    ),
+  );
+  mount("bittorrent");
+  // The alert lands in the engine group; the static nine-row table survives.
+  await screen.findByRole("alert");
+  const table = screen.getByRole("table");
+  const bodyRows = within(table)
+    .getAllByRole("row")
+    .filter((row) => row.closest("tbody") !== null);
+  expect(bodyRows).toHaveLength(9);
+});
+
+test("TestBitTorrentOmitsMissingLastError", async () => {
+  engineRows = [
+    {
+      id: "eng_qbittorrent",
+      kind: "qbittorrent",
+      name: "qBittorrent",
+      enabled: true,
+      url: "http://qbittorrent:8080",
+      connected: true,
+      version: "5.0.0",
+      capabilities: ["bittorrent"],
+      last_seen_at: "2026-09-24T09:40:00Z",
+      // last_error deliberately absent — no empty warning may render.
+    },
+  ];
+  mount("bittorrent");
+  await screen.findByText(/5\.0\.0/);
+  const group = screen.getByRole("group", { name: "qBittorrent engine" });
+  expect(group.querySelector('[style*="--warn"]')).toBeNull();
 });
