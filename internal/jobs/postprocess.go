@@ -74,9 +74,10 @@ func gzipWrapped(name string) bool {
 // first call dispatches the extract job, and the extract handler's return
 // leg to completed re-enters OnCompleted to run the steps after it.
 type Chain struct {
-	db     *sqlx.DB
-	tasks  *store.TaskStore
-	notify *Notifier
+	db        *sqlx.DB
+	tasks     *store.TaskStore
+	notify    *Notifier
+	configDir string
 }
 
 // NewChain returns the post-processing chain over the shared database.
@@ -88,6 +89,13 @@ func NewChain(db *sqlx.DB, tasks *store.TaskStore) *Chain {
 // nil leaves the step a no-op — the tests that build a chain without one
 // exercise the earlier legs alone.
 func (c *Chain) SetNotifier(n *Notifier) { c.notify = n }
+
+// SetConfigDir hands the chain the directory the T078 completion hook is
+// discovered in. The chain keeps the directory, never a one-time verdict:
+// the three-state switch is re-evaluated per finished task, so installing
+// or fixing the hook mid-run takes effect on the next completion. An
+// empty directory leaves the step off.
+func (c *Chain) SetConfigDir(dir string) { c.configDir = dir }
 
 // OnCompleted runs the post-processing chain for one task. Auto-extract is
 // skipped when the settings key auto_extract is false, which is its
@@ -167,6 +175,14 @@ func (c *Chain) OnCompleted(ctx context.Context, taskID string) error {
 		}); err != nil {
 			return fmt.Errorf("jobs: postprocess task %q: notify fanout: %w", taskID, err)
 		}
+	}
+
+	// The completion hook (T078) is the chain's last observing step: it
+	// runs after notify, and its events must land before the auto-remove
+	// tail deletes the row they attach to. Its verdict never changes the
+	// task's state.
+	if err := c.runHook(ctx, task); err != nil {
+		return err
 	}
 
 	return c.maybeAutoRemove(ctx, taskID)

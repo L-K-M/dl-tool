@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T078 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T074, T092 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/api/settings_test.go`, `internal/jobs/postprocess.go` |
@@ -157,7 +157,50 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```bash
+$ make lint && make test PKG="./internal/jobs/... ./internal/api/..." && echo HOOK_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/jobs/... ./internal/api/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	34.877s
+ok  	github.com/L-K-M/dl-tool/internal/api	208.571s
+HOOK_OK
+```
+
+Named tests (run with `-v`):
+
+```text
+--- PASS: TestHookOffByDefault (0.06s)
+--- PASS: TestArgvNotShellString (0.04s)
+--- PASS: TestFixedEnvironment (0.06s)
+--- PASS: TestHookTimeoutKillsGroup (0.19s)
+--- PASS: TestNonZeroExitKeepsCompleted (0.03s)
+ok  	github.com/L-K-M/dl-tool/internal/jobs	0.397s
+--- PASS: TestSettingsRejectsHookKey (0.08s)
+ok  	github.com/L-K-M/dl-tool/internal/api	0.098s
+```
+
+Scope check (`git status --porcelain=v1 -uall -- . ':(exclude)docs'`):
+
+```text
+cmd/dl-tool/main.go
+internal/api/settings_test.go
+internal/jobs/hook.go
+internal/jobs/hook_test.go
+internal/jobs/postprocess.go
+```
+
+Exactly the Files table, nothing else.
 
 ## Blocked — resolved
 
