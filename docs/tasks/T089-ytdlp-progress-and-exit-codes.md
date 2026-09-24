@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T089 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T087 |
 | **Blocks** | T090 |
 | **Parallel-safe** | yes — adds `internal/engine/ytdlp/parse.go` only |
@@ -136,13 +136,13 @@ var _ = time.Second
    containing a private-video message mapping to `private_video`.
 
 ## Acceptance criteria
-- [ ] A line whose `total` is null and whose `est` is set yields `TotalBytes` equal to `est`.
-- [ ] A line with both null leaves `TotalBytes` nil and `PercentFallback` returns the fragment ratio.
-- [ ] A non-JSON warning line on stdout is skipped and does not stop the scan.
-- [ ] Exit code `101` classifies as `completed`, not as an error.
-- [ ] Exit code `100` classifies as `error` with `engine_unavailable` and `Retryable == false`.
-- [ ] Exit code `-1` classifies as `paused`.
-- [ ] Every `ErrorCode` the mapper can produce appears in doc 04 §4.2.
+- [x] A line whose `total` is null and whose `est` is set yields `TotalBytes` equal to `est`.
+- [x] A line with both null leaves `TotalBytes` nil and `PercentFallback` returns the fragment ratio.
+- [x] A non-JSON warning line on stdout is skipped and does not stop the scan.
+- [x] Exit code `101` classifies as `completed`, not as an error.
+- [x] Exit code `100` classifies as `error` with `engine_unavailable` and `Retryable == false`.
+- [x] Exit code `-1` classifies as `paused`.
+- [x] Every `ErrorCode` the mapper can produce appears in doc 04 §4.2.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -173,7 +173,58 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/engine/ytdlp/...` on the final tree:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG=./internal/engine/ytdlp/...
+go test -race -count=1 ./internal/engine/ytdlp/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.086s
+```
+
+`go test -race -count=1 -v ./internal/engine/ytdlp/...` on the same tree lists the parse tests
+PASS — `TestProgressTotalFallbackChain`, `TestProgressSkipsWarningLine`,
+`TestProgressSkipsUnknownStatus`, `TestClassifyExitTable` (all eight subtests including
+`stopped_early_on_purpose`, `restart_for_update` and `signalled_by_Cancel`),
+`TestInfoDocumentFillsContentPath`, plus `TestParseProgressLineDecodesEveryField`,
+`TestProgressApplyMapsStatusAndFields`, `TestPercentFallbackRejectsDegenerateCounters`,
+`TestScanProgressEmitsEventsAndSkipsNoise`, `TestScanProgressAcceptsLongLine`,
+`TestParseInfoDocument`, `TestInfoDocumentSizeFallback` and
+`TestClassifyExitProducesOnlyDocumentedErrorCodes` — and all fifteen runner tests. No `FAIL`,
+ending `ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.071s`.
+
+Acceptance-criterion traceability:
+
+- `total:null` + `est` → `TotalBytes == est`: `TestProgressTotalFallbackChain/null_total_falls_back_to_estimate`.
+- both null → `TotalBytes` nil + fragment ratio: `TestProgressTotalFallbackChain/both_null_leaves_TotalBytes_nil_and_yields_the_fragment_ratio`.
+- warning line skipped without stopping the scan: `TestProgressSkipsWarningLine` and `TestScanProgressEmitsEventsAndSkipsNoise` (warning, blank and unknown-status lines interleaved in the stream).
+- exit 101 → `completed`: `TestClassifyExitTable/stopped_early_on_purpose`.
+- exit 100 → `engine_unavailable`, `Retryable == false`: `TestClassifyExitTable/restart_for_update`.
+- exit -1 → `paused`: `TestClassifyExitTable/signalled_by_Cancel`.
+- produced `ErrorCode` ⊆ doc 04 §4.2: `TestClassifyExitProducesOnlyDocumentedErrorCodes` sweeps exit codes -128..255 over three stderr tails and proves the produced set is exactly `{unknown, engine_unavailable, private_video}`, all in the enum.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/engine/ytdlp/parse.go
+internal/engine/ytdlp/parse_test.go
+```
+
+Exactly the Files table, in that order.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
