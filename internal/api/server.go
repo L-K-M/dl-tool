@@ -41,7 +41,7 @@ const (
 	apiTitle         = "dl-tool"
 	apiV1Path        = "/api/v1"
 	problemMediaType = "application/problem+json"
-	redactedValue    = "__redacted__"
+	redactedValue    = RedactedPlaceholder
 
 	// reconcilerPollInterval is the reconciliation sweep cadence of
 	// docs/17-operations-and-runbook.md section 1.6: once at boot, then 1 Hz.
@@ -393,6 +393,8 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	// once, here, as ConfigDir/backups — the join store.Open and the
 	// scheduler chain spell the same way through store.BackupsDirName.
 	maintenance := store.NewMaintenanceStore(db)
+	systemHandlers := NewSystemHandlers(maintenance, store.BackupsDirFor(cfg.ConfigDir))
+	systemHandlers.attachInfo(db, cfg.DBPath, engines)
 
 	server := &Server{
 		Router:         root,
@@ -404,7 +406,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		auth:           auth,
 		Engines:        engines,
 		tasks:          tasks,
-		settings:       NewSettingsHandlers(db, engines),
+		settings:       NewSettingsHandlers(db, engines, cfg.DataRoots),
 		prefs:          NewPrefsHandlers(db),
 		settingsExport: NewSettingsExportHandlers(db, cfg.DataRoots),
 		categories:     NewCategoryHandlers(db, cfg.DataRoots),
@@ -422,7 +424,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 			db, cfg.SecretKey, notifyHTTP, taskGuard, net.DefaultResolver,
 		),
 		tokens:       NewTokenHandlers(db),
-		system:       NewSystemHandlers(maintenance, store.BackupsDirFor(cfg.ConfigDir)),
+		system:       systemHandlers,
 		RuleCreator:  creator,
 		WatchCreator: watchCreator,
 		SSE:          sseHandlers,
@@ -725,27 +727,6 @@ func (s *Server) registerOperations() {
 		Middlewares: huma.Middlewares{acceptSubmissionForm},
 	}, s.tasks.InspectTasks)
 
-	huma.Register(s.API, huma.Operation{
-		OperationID: "get-system-info",
-		Method:      http.MethodGet,
-		Path:        "/system/info",
-		Summary:     "Read system information",
-		// Behind the same middleware as every /api/v1 route.
-		Security: credentialRequired,
-	}, func(_ context.Context, _ *systemInfoInput) (*systemInfoOutput, error) {
-		output := &systemInfoOutput{}
-		output.Body.Version = Version
-
-		return output, nil
-	})
-}
-
-type systemInfoInput struct{}
-
-type systemInfoOutput struct {
-	Body struct {
-		Version string `json:"version" doc:"Build version of the dl-tool process"`
-	}
 }
 
 // settingMinFreeSpace is the third settings row of the admission policy:

@@ -188,7 +188,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T075](T075-extraction-password-list.md) | Try the per-task and shared extraction passwords | T074 | done |
 | [T076](T076-exdev-aware-move.md) | Move completed data across filesystems with progress | T074, T099 | done |
 | [T077](T077-notification-delivery.md) | Deliver task events to notification channels | T054, T074 | done |
-| [T078](T078-completion-hook.md) | Run the completion hook as an argument vector | T074 | deferred |
+| [T078](T078-completion-hook.md) | Run the completion hook as an argument vector | T074 | todo |
 | [T079](T079-global-bandwidth-governor.md) | Fan global rate limits out to every engine | T016, T019, T027, T037 | done |
 | [T080](T080-schedule-grid-endpoints.md) | Store and serve the 24×7 schedule grid | T027, T079 | done |
 | [T081](T081-schedule-evaluation-and-alternative-speed.md) | Apply the active schedule cell every minute | T066, T079, T080 | done |
@@ -196,7 +196,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T083](T083-watch-folder-loader.md) | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | done |
 | [T084](T084-api-tokens.md) | Issue, list and revoke API tokens | T008, T009 | done |
 | [T091](T091-database-backup-and-retention.md) | Back up the database on demand and prune on a schedule | T006, T012, T066 | done |
-| [T092](T092-settings-and-system-info.md) | Serve settings and system info without leaking secrets | T005, T027, T091 | todo |
+| [T092](T092-settings-and-system-info.md) | Serve settings and system info without leaking secrets | T005, T027, T091 | done |
 | [T106](T106-notification-channel-endpoints.md) | Manage notification channels and test one | T077, T084 | done |
 | [T107](T107-tag-and-watch-folder-endpoints.md) | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | done |
 | [T108](T108-settings-export-import-and-restore.md) | Export and import portable settings, and restore from the CLI | T080, T106, T107 | done |
@@ -396,7 +396,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T075 | Try the per-task and shared extraction passwords | T074 | no | done | [T075](T075-extraction-password-list.md) |
 | T076 | Move completed data across filesystems with progress | T074, T099 | yes | done | [T076](T076-exdev-aware-move.md) |
 | T077 | Deliver task events to notification channels | T054, T074 | yes | done | [T077](T077-notification-delivery.md) |
-| T078 | Run the completion hook as an argument vector | T074 | no | deferred | [T078](T078-completion-hook.md) |
+| T078 | Run the completion hook as an argument vector | T074 | no | todo | [T078](T078-completion-hook.md) |
 | T079 | Fan global rate limits out to every engine | T016, T019, T027, T037 | yes | done | [T079](T079-global-bandwidth-governor.md) |
 | T080 | Store and serve the 24×7 schedule grid | T027, T079 | yes | done | [T080](T080-schedule-grid-endpoints.md) |
 | T081 | Apply the active schedule cell every minute | T066, T079, T080 | no | done | [T081](T081-schedule-evaluation-and-alternative-speed.md) |
@@ -404,7 +404,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T083 | Load .torrent files dropped into a watch folder | T020, T031, T066, T081 | no | done | [T083](T083-watch-folder-loader.md) |
 | T084 | Issue, list and revoke API tokens | T008, T009 | yes | done | [T084](T084-api-tokens.md) |
 | T091 | Back up the database on demand and prune on a schedule | T006, T012, T066 | no | done | [T091](T091-database-backup-and-retention.md) |
-| T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | todo | [T092](T092-settings-and-system-info.md) |
+| T092 | Serve settings and system info without leaking secrets | T005, T027, T091 | no | done | [T092](T092-settings-and-system-info.md) |
 | T106 | Manage notification channels and test one | T077, T084 | no | done | [T106](T106-notification-channel-endpoints.md) |
 | T107 | Reach the tag and watch-folder tables over HTTP | T050, T083, T084 | yes | done | [T107](T107-tag-and-watch-folder-endpoints.md) |
 | T108 | Export and import portable settings, and restore from the CLI | T080, T106, T107 | no | done | [T108](T108-settings-export-import-and-restore.md) |

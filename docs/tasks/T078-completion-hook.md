@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T078 |
 | **Milestone** | M6 |
-| **Status** | deferred — see `## Blocked` |
+| **Status** | todo |
 | **Depends on** | T074 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/settings.go`, `internal/jobs/postprocess.go` |
@@ -151,7 +151,13 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Evidence
 <Agent pastes command output here before marking done.>
 
-## Blocked
+## Blocked — resolved
+
+Resolved by T092 (merged): `PATCH /settings` exists and rejects a hook-named
+key with `422` `/problems/validation-failed`, so step 8's surface is in place.
+The original record is preserved below.
+
+---
 
 Step 8 and its acceptance criterion require `PATCH /settings` to answer `422`
 `/problems/validation-failed` for a hook-named key, but no `/settings` route exists. The endpoint —

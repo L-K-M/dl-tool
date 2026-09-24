@@ -760,6 +760,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/settings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Read the settings
+     * @description Every user-changeable setting as one flat object — exactly the fifteen keys of the config reference, with extract_passwords rendered as "__redacted__" and min_free_space as the stored sparse map ({} while unset).
+     */
+    get: operations["get-settings"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update settings
+     * @description Accepts any subset of the settings keys; each supplied member replaces its stored value wholesale, so a min_free_space patch replaces the whole map. An extract_passwords member equal to "__redacted__" is a no-op; the placeholder is invalid for every other key. 422 /problems/validation-failed for an unknown key, a malformed shape or an out-of-range value.
+     */
+    patch: operations["patch-settings"];
+    trace?: never;
+  };
   "/settings/export": {
     parameters: {
       query?: never;
@@ -871,7 +895,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Read system information */
+    /**
+     * Read system information
+     * @description The running build, the database path, size and schema version, the configured engines' last probe state, task and job counts, the schedule flag and cell in force, and the admission limits. No field ever carries a secret.
+     */
     get: operations["get-system-info"];
     put?: never;
     post?: never;
@@ -1447,6 +1474,13 @@ export interface components {
        */
       poll_interval_s?: number;
     };
+    DatabaseInfo: {
+      path: string;
+      /** Format: int64 */
+      schema_version: number;
+      /** Format: int64 */
+      size_bytes: number;
+    };
     DeleteTaskOutputBody: {
       /**
        * Format: int64
@@ -1508,6 +1542,12 @@ export interface components {
       /** Format: int64 */
       matched: number;
       results: components["schemas"]["DryRunItem"][] | null;
+    };
+    EngineBrief: {
+      connected: boolean;
+      /** @enum {string} */
+      kind: "aria2" | "qbittorrent" | "ytdlp";
+      version: string | null;
     };
     EngineDTO: {
       /** @description The declared set of the engine's adapter, never a guess */
@@ -1809,6 +1849,20 @@ export interface components {
     InspectTasksOutputBody: {
       manifests: components["schemas"]["ManifestDTO"][] | null;
       rejected: components["schemas"]["RejectedURI"][] | null;
+    };
+    JobCounts: {
+      /** Format: int64 */
+      failed: number;
+      /** Format: int64 */
+      pending: number;
+      /** Format: int64 */
+      running: number;
+    };
+    LimitsBrief: {
+      /** Format: int64 */
+      max_active_per_engine: number;
+      /** Format: int64 */
+      max_active_total: number;
     };
     ListCategoriesOutputBody: {
       categories: components["schemas"]["CategoryDTO"][] | null;
@@ -2172,6 +2226,12 @@ export interface components {
       /** @description IANA name of the zone the cells are evaluated in */
       readonly timezone?: string;
     };
+    ScheduleBrief: {
+      /** @enum {string} */
+      active_mode: "no_download" | "default" | "alternative";
+      enabled: boolean;
+      timezone: string;
+    };
     ScoreFormat: {
       name: string;
       pattern: string;
@@ -2236,6 +2296,60 @@ export interface components {
       /** Format: int64 */
       year: number | null;
     };
+    SettingsBody: {
+      /**
+       * Format: int64
+       * @description Bytes/s cap while the alternative cell is in force
+       */
+      alt_download_rate_limit: number;
+      /**
+       * Format: int64
+       * @description Bytes/s cap while the alternative cell is in force
+       */
+      alt_upload_rate_limit: number;
+      auto_extract: boolean;
+      confirm_on_delete: boolean;
+      /** @description Absolute path inside a data root */
+      default_destination: string;
+      /**
+       * Format: int64
+       * @description Bytes/s cap, 0 = unlimited
+       */
+      download_rate_limit: number;
+      /**
+       * @description Always the redaction placeholder; PATCHing it back is a no-op
+       * @enum {string}
+       */
+      extract_passwords: "__redacted__";
+      /**
+       * Format: int64
+       * @description 0 = unlimited
+       */
+      max_active_per_engine: number;
+      /**
+       * Format: int64
+       * @description 0 = unlimited
+       */
+      max_active_total: number;
+      /** @description Sparse map of absolute root path to bytes; roots absent fall back to the documented default */
+      min_free_space: {
+        [key: string]: number;
+      };
+      /** @enum {string} */
+      process_order: "by_date_created";
+      rss_enabled: boolean;
+      /**
+       * Format: int64
+       * @description Seconds, minimum 300
+       */
+      rss_interval_s: number;
+      schedule_enabled: boolean;
+      /**
+       * Format: int64
+       * @description Bytes/s cap, 0 = unlimited
+       */
+      upload_rate_limit: number;
+    };
     SetupInputBody: {
       /**
        * @description Preferred UI locale
@@ -2275,13 +2389,39 @@ export interface components {
       speed_up: number;
     };
     SystemInfoOutputBody: {
-      /** @description Build version of the dl-tool process */
+      /**
+       * Format: date-time
+       * @description VCS commit time from the binary's build info
+       */
+      built_at: string;
+      /** @description VCS revision from the binary's build info */
+      commit: string;
+      database: components["schemas"]["DatabaseInfo"];
+      engines: components["schemas"]["EngineBrief"][] | null;
+      go_version: string;
+      jobs: components["schemas"]["JobCounts"];
+      limits: components["schemas"]["LimitsBrief"];
+      schedule: components["schemas"]["ScheduleBrief"];
+      /** Format: date-time */
+      started_at: string;
+      tasks: components["schemas"]["TaskCounts"];
+      /** Format: int64 */
+      uptime_s: number;
+      /** @description Build version stamped at link time */
       version: string;
     };
     TagDTO: {
       name: string;
       /** Format: int64 */
       task_count: number;
+    };
+    TaskCounts: {
+      /** @description state to count, only states present in the table */
+      by_state: {
+        [key: string]: number;
+      };
+      /** Format: int64 */
+      total: number;
     };
     TaskDTO: {
       /** Format: date-time */
@@ -4145,6 +4285,87 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-settings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SettingsBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-settings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": {
+          alt_download_rate_limit?: number;
+          alt_upload_rate_limit?: number;
+          auto_extract?: boolean;
+          confirm_on_delete?: boolean;
+          default_destination?: string;
+          download_rate_limit?: number;
+          extract_passwords?: "__redacted__" | string[];
+          max_active_per_engine?: number;
+          max_active_total?: number;
+          min_free_space?: {
+            [key: string]: number;
+          };
+          /** @enum {string} */
+          process_order?: "by_date_created";
+          rss_enabled?: boolean;
+          rss_interval_s?: number;
+          schedule_enabled?: boolean;
+          upload_rate_limit?: number;
+        };
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SettingsBody"];
+        };
       };
       /** @description Error */
       default: {
