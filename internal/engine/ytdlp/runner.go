@@ -261,7 +261,7 @@ func rejectEscapingOutputTemplate(output string) error {
 	if output == "" {
 		return nil
 	}
-	if filepath.IsAbs(output) || strings.HasPrefix(output, "~") {
+	if filepath.IsAbs(output) || filepath.VolumeName(output) != "" || strings.HasPrefix(output, "~") {
 		return fmt.Errorf("output template escapes save dir: %q", output)
 	}
 	for _, seg := range strings.FieldsFunc(output, func(r rune) bool { return r == '/' || r == '\\' }) {

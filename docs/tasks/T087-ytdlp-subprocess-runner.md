@@ -202,7 +202,7 @@ All matched files use Prettier code style!
 
 $ make test PKG=./internal/engine/ytdlp/...
 go test -race -count=1 ./internal/engine/ytdlp/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.057s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.060s
 ```
 
 `go test -race -count=1 -v ./internal/engine/ytdlp/...` lists all fifteen tests PASS, including
