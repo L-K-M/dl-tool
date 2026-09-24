@@ -4,10 +4,10 @@
 |---|---|
 | **ID** | T078 |
 | **Milestone** | M6 |
-| **Status** | deferred — see `## Blocked` |
-| **Depends on** | T074 |
+| **Status** | todo |
+| **Depends on** | T074, T092 |
 | **Blocks** | — |
-| **Parallel-safe** | no — it also edits the shared files `internal/api/settings.go`, `internal/jobs/postprocess.go` |
+| **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/api/settings_test.go`, `internal/jobs/postprocess.go` |
 | **Implements** | [FR-105](../02-requirements.md#fr-105-run-a-completion-hook-installed-by-the-operator), [NFR-015](../02-requirements.md#nfr-015-never-interpolate-configuration-into-a-shell) |
 | **Decisions** | [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md) |
 | **Est. size** | 2 new files, ~220 LOC |
@@ -33,9 +33,10 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | Path | Action | Purpose |
 |---|---|---|
 | `internal/jobs/hook.go` | create | `Hook`, its discovery, the argv, the fixed environment and the timeout. |
-| `internal/jobs/hook_test.go` | create | Off-by-default, argv, environment, timeout and API-refusal cases. |
+| `internal/jobs/hook_test.go` | create | Off-by-default, argv, environment, timeout and non-zero-exit cases. |
 | `internal/jobs/postprocess.go` | modify | Run the hook as the chain's last step. |
-| `internal/api/settings.go` | modify | Reject any settings key naming a hook command with `422`. |
+| `internal/api/settings_test.go` | modify | `TestSettingsRejectsHookKey`: a hook-named key gets the same `422` as any other unknown key, and `GET /settings` never returns the hook path. No handler change — a distinct rejection would reveal the key is special. |
+| `cmd/dl-tool/main.go` | edit | Hand `cfg.ConfigDir` to the post-processing chain — `NewChain` gains the directory parameter (or a `SetConfigDir` beside `SetNotifier`; the shape is the implementer's). |
 
 No other file may be modified.
 
@@ -58,10 +59,10 @@ func HookPath(configDir string) string
 const HookTimeout = 60 * time.Second
 
 // Hook runs the completion hook for one task.
-type Hook struct{ /* path string; store *store.Store */ }
+type Hook struct{ /* path string; db *sqlx.DB */ }
 
 // NewHook returns a Hook, or ok false when no executable hook is installed.
-func NewHook(configDir string, st *store.Store) (h *Hook, ok bool)
+func NewHook(configDir string, db *sqlx.DB) (h *Hook, ok bool)
 
 // Run executes the hook exactly once for the task, as an argument vector, never through a shell:
 //
@@ -97,15 +98,22 @@ code `postprocess.hook.failed` and level `warn`, and the chain continues. A succ
    expiry, returning `ErrHookTimeout`.
 6. Capture stdout and stderr into 8 KiB caps and record them in the `task_events` row's `detail_json`.
 7. Edit `internal/jobs/postprocess.go` to call `Run` as the chain's last step, after extract, move and
-   notify, and to ignore a non-zero exit for the purposes of task state.
-8. Edit `internal/api/settings.go` so a `PATCH /settings` body carrying any key whose name contains `hook`
-   is rejected with `422` `/problems/validation-failed` and the hook path is never returned by
-   `GET /settings`.
+   notify, and to ignore a non-zero exit for the purposes of task state. The chain needs
+   `cfg.ConfigDir` for discovery — wire it at the composition root's only construction site,
+   `cmd/dl-tool/main.go`'s `jobs.NewChain(db, store.NewTaskStore(db))` call, by giving `NewChain`
+   the directory parameter or a `SetConfigDir` attach beside `SetNotifier`. Never precompute the
+   discovery result at the root: the switch is re-evaluated per finished task, so installing a hook
+   mid-run takes effect on the next completion.
+8. Edit `internal/api/settings_test.go` to add `TestSettingsRejectsHookKey`, beside T092's
+   `TestPatchUnknownKeyIs422`: assert a `PATCH /settings` body carrying any key whose name contains
+   `hook` is rejected with `422` `/problems/validation-failed` — indistinguishably from any other
+   unknown key, since a distinct error would reveal the key is special — and that `GET /settings`
+   never returns the hook path. The test lives in `internal/api`, not `internal/jobs`: `internal/api`
+   already imports `internal/jobs`, so an in-package assertion would be an import cycle.
 9. Create `internal/jobs/hook_test.go`: assert `NewHook` reports `ok:false` on an empty config directory;
    assert the child receives its arguments as separate argv entries and not as one shell string; assert the
    environment is exactly the fixed list; assert a sleeping hook is killed after `HookTimeout` and yields
-   `ErrHookTimeout`; assert a non-zero exit leaves the task `completed`; assert `PATCH /settings` with a
-   hook key returns `422`.
+   `ErrHookTimeout`; assert a non-zero exit leaves the task `completed`.
 10. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
@@ -151,7 +159,22 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Evidence
 <Agent pastes command output here before marking done.>
 
-## Blocked
+## Blocked — resolved
+
+**Remedy applied verbatim.** `cmd/dl-tool/main.go` joins `## Files` so the composition root hands
+`cfg.ConfigDir` to the post-processing chain — `NewChain` gains the directory parameter (or a
+`SetConfigDir` beside `SetNotifier`; the shape is the implementer's) — and step 7 names the call
+site while forbidding a one-time precomputed discovery (the switch re-evaluates per finished task).
+The contract's `st *store.Store` now names the merged `*sqlx.DB` reality (`NewNotifier(db, …)`). On
+the api side the record's `package jobs_test` alternative is not used: `newSettingsTestEnv` and the
+humatest fixture live inside `internal/api` test files and are not importable from `internal/jobs`,
+so `TestSettingsRejectsHookKey` lands in `internal/api/settings_test.go` beside
+`TestPatchUnknownKeyIs422` — and `internal/api/settings_test.go` replaces `settings.go` in
+`## Files`, since the closed key set already rejects hook-named keys indistinguishably and a
+hook-specific rejection would reveal the key is special. T092 joins `Depends on`: the task now
+edits its test file. The original record is preserved below.
+
+---
 
 ### 2026-09-24 — `cfg.ConfigDir` cannot reach the chain inside the Files table
 
