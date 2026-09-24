@@ -152,6 +152,18 @@ func TestProgressApplyMapsStatusAndFields(t *testing.T) {
 	if info.DownloadRate != 0 {
 		t.Fatalf("DownloadRate = %d after a finished line with null speed, want 0", info.DownloadRate)
 	}
+
+	// A null speed while still downloading keeps the last known rate; only a
+	// non-downloading status zeroes it.
+	(Progress{Status: "downloading", Downloaded: int64ptr(1024), Total: int64ptr(2048), Speed: int64ptr(4096)}).Apply(&info)
+	(Progress{Status: "downloading", Downloaded: int64ptr(1536), Total: int64ptr(2048)}).Apply(&info)
+	if info.DownloadRate != 4096 {
+		t.Fatalf("DownloadRate = %d after a mid-download null speed, want the retained 4096", info.DownloadRate)
+	}
+	(Progress{Status: "finished", Downloaded: int64ptr(2048), Total: int64ptr(2048)}).Apply(&info)
+	if info.DownloadRate != 0 {
+		t.Fatalf("DownloadRate = %d after a finished line with null speed, want 0", info.DownloadRate)
+	}
 }
 
 // yt-dlp prints warnings to stdout even on success; they must be skipped,

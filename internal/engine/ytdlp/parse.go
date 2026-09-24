@@ -184,6 +184,11 @@ type Outcome struct {
 // Retryable is false for failures a retry cannot change — engine_unavailable,
 // private_video and the deterministic option error of exit 2 — and true for
 // a generic or undocumented failure, which is usually transient.
+//
+// A paused Outcome carries no progress deltas: yt-dlp emits no terminal line
+// on a signal, so the consumer must zero DownloadRate and clear ETASeconds
+// when it applies StatePaused, or the task shows the last downloading values
+// while paused.
 func ClassifyExit(exitCode int, stderrTail string) Outcome {
 	tail := strings.TrimSpace(stderrTail)
 	switch exitCode {
