@@ -236,26 +236,30 @@ All matched files use Prettier code style!
 cd web && npx tsc --noEmit -p tsconfig.json
 cd web && npx vitest run
 
- ✓ src/components/Settings/DownloadsSection.test.tsx (6 tests) 1588ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx (9 tests) 2670ms
 
  Test Files  25 passed (25)
-      Tests  298 passed (298)
+      Tests  301 passed (301)
 
 DOWNLOADS_OK
 ```
 
-The six acceptance-named tests, run verbosely on the same tree:
+The acceptance-named tests plus the three review-added tests, run verbosely on
+the same tree:
 
 ```text
 $ npx vitest run src/components/Settings/DownloadsSection.test.tsx --reporter=verbose
- ✓ src/components/Settings/DownloadsSection.test.tsx > TestSavesOnlyChangedSettingKeys 312ms
- ✓ src/components/Settings/DownloadsSection.test.tsx > TestPasswordListNeverEchoesRedaction 131ms
- ✓ src/components/Settings/DownloadsSection.test.tsx > TestMinFreeSpacePerRoot 67ms
- ✓ src/components/Settings/DownloadsSection.test.tsx > TestWatchFolderScanRendersReport 67ms
- ✓ src/components/Settings/DownloadsSection.test.tsx > TestCategoryTableCrud 233ms
- ✓ src/components/Settings/DownloadsSection.test.tsx > TestBitTorrentSectionIsReadOnly 27ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestSavesOnlyChangedSettingKeys 287ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestPasswordListNeverEchoesRedaction 138ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestMinFreeSpacePerRoot 65ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestWatchFolderScanRendersReport 68ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestCategoryTableCrud 222ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestWatchFolderCrud 268ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestBitTorrentSectionIsReadOnly 26ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestBitTorrentLoadErrorKeepsTable 29ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestBitTorrentOmitsMissingLastError 20ms
  Test Files  1 passed (1)
-      Tests  6 passed (6)
+      Tests  9 passed (9)
 ```
 
 Scope check on the working tree before the task commit — exactly the `## Files`
