@@ -38,6 +38,7 @@ const progressLineMax = 1 << 20
 // Progress is one decoded --progress-template line. Every numeric field is a
 // pointer because yt-dlp emits None for an unknown value, rendered as JSON
 // null by the `|null` template defaults; see docs/06-download-engines.md §7.3.
+// The JSON keys must match the runner's progressTemplate one-for-one.
 type Progress struct {
 	Status        string `json:"status"` // "downloading" | "finished" | "error"; ignore anything else
 	Downloaded    *int64 `json:"downloaded"`
@@ -90,9 +91,9 @@ func (p Progress) Apply(info *engine.TaskInfo) {
 	if p.Speed != nil {
 		info.DownloadRate = *p.Speed
 	}
-	if p.ETA != nil {
-		info.ETASeconds = p.ETA
-	}
+	// A null eta means "unknown", including on the terminal finished/error
+	// lines, so it clears a previously known value rather than going stale.
+	info.ETASeconds = p.ETA
 	if p.Filename != "" {
 		info.ContentPath = p.Filename
 	}
@@ -183,13 +184,19 @@ func ClassifyExit(exitCode int, stderrTail string) Outcome {
 	case 0, 101:
 		return Outcome{State: engine.StateCompleted}
 	case -1:
+		// ExitCode() reports -1 for any signal, not only the kill sent by
+		// Runner.Cancel: a foreign SIGKILL (e.g. an OOM kill) lands here too
+		// and presents as paused. Cancel is the only intended signaler in
+		// this deployment.
 		return Outcome{State: engine.StatePaused}
 	case 100:
 		return Outcome{State: engine.StateError, ErrorCode: "engine_unavailable", ErrorMessage: tail}
 	case 2:
 		return Outcome{State: engine.StateError, ErrorCode: "unknown", ErrorMessage: tail}
 	case 1:
-		if strings.Contains(strings.ToLower(tail), "private video") {
+		// Extractor phrasings differ: YouTube reports "Private video. Sign in
+		// ..." while others report "This video is private".
+		if low := strings.ToLower(tail); strings.Contains(low, "private video") || strings.Contains(low, "video is private") {
 			return Outcome{State: engine.StateError, ErrorCode: "private_video", ErrorMessage: tail}
 		}
 	}
@@ -199,7 +206,11 @@ func ClassifyExit(exitCode int, stderrTail string) Outcome {
 // ScanProgress consumes a reader of newline-delimited --progress-template
 // output and emits one TaskEvent per accepted line: EventProgress for
 // "downloading", EventCompleted for "finished" and EventError for "error".
-// It closes the returned channel when the reader is exhausted.
+// A scanner failure (a line over the 1 MiB cap or a pipe read error) is
+// surfaced as a final EventError carrying error_code "unknown" so it cannot
+// masquerade as a clean end of stream. It closes the returned channel when
+// the reader is exhausted; the caller must drain the channel until it closes,
+// because abandoning it blocks the goroutine on send.
 func ScanProgress(taskID string, r io.Reader) <-chan engine.TaskEvent {
 	ch := make(chan engine.TaskEvent)
 	go func() {
@@ -214,6 +225,16 @@ func ScanProgress(taskID string, r io.Reader) <-chan engine.TaskEvent {
 			info := &engine.TaskInfo{ID: taskID, Engine: engine.NameYtDlp}
 			p.Apply(info)
 			ch <- engine.TaskEvent{TaskID: taskID, Kind: progressEventKind(p.Status), Info: info}
+		}
+		if err := sc.Err(); err != nil {
+			info := &engine.TaskInfo{
+				ID:           taskID,
+				Engine:       engine.NameYtDlp,
+				State:        engine.StateError,
+				ErrorCode:    "unknown",
+				ErrorMessage: "progress stream: " + err.Error(),
+			}
+			ch <- engine.TaskEvent{TaskID: taskID, Kind: engine.EventError, Info: info}
 		}
 	}()
 	return ch

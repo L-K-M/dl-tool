@@ -141,6 +141,13 @@ func TestProgressApplyMapsStatusAndFields(t *testing.T) {
 	if info.ContentPath != "video.mp4" {
 		t.Fatalf("ContentPath = %q, want %q", info.ContentPath, "video.mp4")
 	}
+
+	// A terminal line reports eta:null — "unknown" — so it clears the ETA a
+	// downloading line left behind instead of letting it go stale.
+	(Progress{Status: "finished", Downloaded: int64ptr(2048), Total: int64ptr(2048), Filename: "video.mp4"}).Apply(&info)
+	if info.ETASeconds != nil {
+		t.Fatalf("ETASeconds = %v after a finished line with null eta, want nil", *info.ETASeconds)
+	}
 }
 
 // yt-dlp prints warnings to stdout even on success; they must be skipped,
@@ -201,6 +208,9 @@ func TestScanProgressEmitsEventsAndSkipsNoise(t *testing.T) {
 	if events[0].Info.State != engine.StateDownloading || events[0].Info.CompletedBytes != 100 {
 		t.Fatalf("progress event info = %+v, want downloading at 100 bytes", events[0].Info)
 	}
+	if events[1].Info.State != engine.StateError {
+		t.Fatalf("error event info = %+v, want error state", events[1].Info)
+	}
 	if events[2].Info.State != engine.StateCompleted || events[2].Info.TotalBytes == nil || *events[2].Info.TotalBytes != 400 {
 		t.Fatalf("finished event info = %+v, want completed with 400 total bytes", events[2].Info)
 	}
@@ -209,7 +219,7 @@ func TestScanProgressEmitsEventsAndSkipsNoise(t *testing.T) {
 // A template line can exceed bufio's 64 KiB default token size when the
 // filename is long; the 1 MiB buffer must let it through.
 func TestScanProgressAcceptsLongLine(t *testing.T) {
-	long := strings.Repeat("x", 100*1024)
+	long := strings.Repeat("x", 512*1024)
 	line := `{"status":"downloading","downloaded":1,"total":2,"est":null,"speed":null,"eta":null,"frag":null,"frags":null,"file":"` + long + `"}`
 	var n int
 	for range ScanProgress("ytdlp:01J", strings.NewReader(line+"\n")) {
@@ -217,6 +227,25 @@ func TestScanProgressAcceptsLongLine(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("events = %d, want 1 for a >64 KiB line", n)
+	}
+}
+
+// A line over the 1 MiB cap is a scanner failure, not a clean EOF: the scan
+// must surface one EventError instead of silently truncating the rest of the
+// stream.
+func TestScanProgressReportsScannerError(t *testing.T) {
+	oversized := strings.Repeat("x", progressLineMax)
+	valid := `{"status":"finished","downloaded":2,"total":2,"est":null,"speed":null,"eta":null,"frag":null,"frags":null,"file":"a.mp4"}`
+	stream := oversized + "\n" + valid + "\n"
+	var events []engine.TaskEvent
+	for ev := range ScanProgress("ytdlp:01J", strings.NewReader(stream)) {
+		events = append(events, ev)
+	}
+	if len(events) != 1 || events[0].Kind != engine.EventError {
+		t.Fatalf("events = %+v, want a single EventError", events)
+	}
+	if events[0].Info == nil || events[0].Info.State != engine.StateError || events[0].Info.ErrorCode != "unknown" {
+		t.Fatalf("scanner-error info = %+v, want error state with code unknown", events[0].Info)
 	}
 }
 
@@ -241,6 +270,17 @@ func TestParseInfoDocument(t *testing.T) {
 	}
 	if _, err := ParseInfoDocument([]byte("not json")); err == nil {
 		t.Fatal("ParseInfoDocument of invalid JSON returned nil error")
+	}
+
+	// A guess-only document must decode filesize_approx through the JSON tag,
+	// not just through a hand-built struct.
+	rawGuess := `{"id":"abc123","title":"Some Video","filename":"/data/media/g.mp4","filesize":null,"filesize_approx":999,"duration":61,"extractor":"youtube","webpage_url":"https://example.org/watch?v=abc123","timestamp":1758000000}`
+	guess, err := ParseInfoDocument([]byte(rawGuess))
+	if err != nil {
+		t.Fatalf("ParseInfoDocument guess: %v", err)
+	}
+	if guess.FileSizeApx == nil || *guess.FileSizeApx != 999 {
+		t.Fatalf("FileSizeApx = %v, want 999 decoded from filesize_approx", guess.FileSizeApx)
 	}
 }
 
@@ -298,6 +338,7 @@ func TestClassifyExitTable(t *testing.T) {
 		{"option error", 2, "usage: yt-dlp [OPTIONS] URL [URL...]", engine.StateError, "unknown", false},
 		{"restart for update", 100, "", engine.StateError, "engine_unavailable", false},
 		{"private video", 1, privateTail, engine.StateError, "private_video", false},
+		{"private video, other extractor phrasing", 1, "ERROR: This video is private.", engine.StateError, "private_video", false},
 		{"generic error", 1, "ERROR: unable to download video data: HTTP Error 403: Forbidden", engine.StateError, "unknown", true},
 		{"signalled by Cancel", -1, "", engine.StatePaused, "", false},
 		{"undocumented code", 42, "", engine.StateError, "unknown", true},

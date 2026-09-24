@@ -192,19 +192,19 @@ All matched files use Prettier code style!
 
 $ make test PKG=./internal/engine/ytdlp/...
 go test -race -count=1 ./internal/engine/ytdlp/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.086s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.104s
 ```
 
 `go test -race -count=1 -v ./internal/engine/ytdlp/...` on the same tree lists the parse tests
 PASS — `TestProgressTotalFallbackChain`, `TestProgressSkipsWarningLine`,
-`TestProgressSkipsUnknownStatus`, `TestClassifyExitTable` (all eight subtests including
-`stopped_early_on_purpose`, `restart_for_update` and `signalled_by_Cancel`),
-`TestInfoDocumentFillsContentPath`, plus `TestParseProgressLineDecodesEveryField`,
-`TestProgressApplyMapsStatusAndFields`, `TestPercentFallbackRejectsDegenerateCounters`,
-`TestScanProgressEmitsEventsAndSkipsNoise`, `TestScanProgressAcceptsLongLine`,
+`TestProgressSkipsUnknownStatus`, `TestClassifyExitTable` (all nine subtests including
+`stopped_early_on_purpose`, `restart_for_update`, `signalled_by_Cancel` and both
+private-video phrasings), `TestInfoDocumentFillsContentPath`, plus
+`TestParseProgressLineDecodesEveryField`, `TestProgressApplyMapsStatusAndFields`,
+`TestPercentFallbackRejectsDegenerateCounters`, `TestScanProgressEmitsEventsAndSkipsNoise`,
+`TestScanProgressAcceptsLongLine`, `TestScanProgressReportsScannerError`,
 `TestParseInfoDocument`, `TestInfoDocumentSizeFallback` and
-`TestClassifyExitProducesOnlyDocumentedErrorCodes` — and all fifteen runner tests. No `FAIL`,
-ending `ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.071s`.
+`TestClassifyExitProducesOnlyDocumentedErrorCodes` — and all fifteen runner tests. No `FAIL`.
 
 Acceptance-criterion traceability:
 
