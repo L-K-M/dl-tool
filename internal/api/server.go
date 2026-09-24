@@ -166,6 +166,17 @@ type Server struct {
 	// tokens owns the /api-tokens operations of doc 05 section 12.
 	tokens *TokenHandlers
 
+	// system owns the /system operations of doc 05 section 13.
+	system *SystemHandlers
+
+	// Maintenance is the one store.MaintenanceStore the composition root
+	// built in NewServer: the system handlers hold it for POST
+	// /system/backup and cmd/dl-tool hands it to the scheduler's
+	// WithMaintenance attach, so the ErrBackupRunning lock spans the
+	// nightly entry and the endpoint — the RuleCreator/WatchCreator
+	// sharing rule of docs/14-conventions.md section 8.3.
+	Maintenance *store.MaintenanceStore
+
 	// SSE owns the live-update endpoints: GET /events and GET /sync, and
 	// the hub they read from. It is exported for the composition root in
 	// cmd/dl-tool, which owns the *obs.Metrics instance whose
@@ -376,6 +387,13 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		notifyHTTP = secure.NewClient(taskGuard)
 	}
 
+	// The one MaintenanceStore the composition root shares: NewSystemHandlers
+	// keeps it for the backup endpoint and Server.Maintenance exports it for
+	// the scheduler attach in cmd/dl-tool. The backup directory is resolved
+	// once, here, as ConfigDir/backups — the join store.Open and the
+	// scheduler chain spell the same way through store.BackupsDirName.
+	maintenance := store.NewMaintenanceStore(db)
+
 	server := &Server{
 		Router:         root,
 		Base:           base,
@@ -404,9 +422,11 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 			db, cfg.SecretKey, notifyHTTP, taskGuard, net.DefaultResolver,
 		),
 		tokens:       NewTokenHandlers(db),
+		system:       NewSystemHandlers(maintenance, store.BackupsDirFor(cfg.ConfigDir)),
 		RuleCreator:  creator,
 		WatchCreator: watchCreator,
 		SSE:          sseHandlers,
+		Maintenance:  maintenance,
 		bgCancel:     bgCancel,
 	}
 	// Any construction failure after the first goroutine started still
@@ -575,6 +595,7 @@ func (s *Server) registerOperations() {
 	s.rules.Register(s.API)
 	s.notifications.Register(s.API)
 	s.tokens.Register(s.API)
+	s.system.Register(s.API)
 	s.SSE.RegisterOperations(s.API)
 
 	// The bulk-action and patch operations of docs/05-api-contract.md

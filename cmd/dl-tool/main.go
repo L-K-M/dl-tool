@@ -35,7 +35,6 @@ const (
 	bootstrapLogFormat = "json"
 	fallbackErrorCode  = "config_malformed"
 	exitFailure        = 1
-	backupsDirName     = "backups"
 	workerPoolSize     = 2
 
 	// readHeaderTimeout bounds slow-header exposure on the main listener;
@@ -123,7 +122,13 @@ func main() {
 			}
 			defer processLock.Release()
 
-			db, err := store.Open(ctx, cfg.DBPath, filepath.Join(cfg.ConfigDir, backupsDirName))
+			// One derivation of the backup directory for the whole
+			// composition root: store.Open's pre-migration backups and the
+			// scheduler's WithMaintenance attach must agree with the
+			// join NewServer hands NewSystemHandlers — so all three go
+			// through store.BackupsDirFor.
+			backupsDir := store.BackupsDirFor(cfg.ConfigDir)
+			db, err := store.Open(ctx, cfg.DBPath, backupsDir)
 			if err != nil {
 				logger.Error("database open failed", "err", err)
 				os.Exit(exitFailure)
@@ -209,7 +214,7 @@ func main() {
 			// runDone.Wait blocks until every in-flight handler has finished.
 			// The search fan-out (T061) reuses the same Deps collaborators
 			// the API holds — one runner, one registry, one guarded client
-			// per process. T066/T091 register their kinds here later.
+			// per process.
 			worker := jobs.NewWorker(db, logger, workerPoolSize)
 			worker.Register(jobs.JobKindSearch, jobs.NewSearchHandler(
 				db, logger, defs, runner, indexers, searchHTTP, userAgent,
@@ -298,15 +303,22 @@ func main() {
 				}
 			}
 
-			// The cron scheduler enqueues the periodic jobs (rss_poll now,
-			// T091 extends it later) and, with the governor attached,
-			// applies the active schedule cell once a minute (T081); the
-			// watch-folder loader runs beside the entries on the same
-			// context (T083). The attaches land before Start arms the
-			// entries, so the first tick already sees the live instances.
-			// Start blocks until runCtx is cancelled in OnStop, then drains
-			// the in-flight entry and the loader.
-			scheduler := jobs.NewScheduler(db, logger).WithGovernor(governor).WithWatcher(watcher)
+			// The cron scheduler enqueues the periodic jobs (rss_poll),
+			// applies the active schedule cell once a minute with the
+			// governor attached (T081), runs the nightly backup and the
+			// retention prunes with the maintenance store attached (T091)
+			// and drives the watch-folder loader beside the entries on
+			// the same context (T083). The attaches land before Start arms
+			// the entries, so the first tick already sees the live
+			// instances. server.Maintenance is the same store
+			// POST /system/backup uses, so the backup lock spans the cron
+			// entry and the endpoint. Start blocks until runCtx is
+			// cancelled in OnStop, then drains the in-flight entry and
+			// the loader.
+			scheduler := jobs.NewScheduler(db, logger).
+				WithGovernor(governor).
+				WithWatcher(watcher).
+				WithMaintenance(server.Maintenance, backupsDir)
 			runDone.Add(1)
 			go func() {
 				defer runDone.Done()
