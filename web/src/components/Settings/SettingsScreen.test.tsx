@@ -167,6 +167,9 @@ test("TestUsersAliasRendersAccountNote", async () => {
   );
   mount("/settings/users");
   await screen.findByLabelText("Username");
+  // The label alone would pass on an unfetched form; the bound value
+  // proves GET /account ran and its payload reached the inputs.
+  await screen.findByDisplayValue("operator");
   expect(screen.getByTestId("path-probe").textContent).toBe("/settings/users");
 });
 

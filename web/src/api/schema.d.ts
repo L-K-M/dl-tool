@@ -23,7 +23,7 @@ export interface paths {
     head?: never;
     /**
      * Update the operator account
-     * @description Partial update of username, locale and password; omitted fields are untouched. A password change requires current_password in the same body — verified before any write, 403 /problems/forbidden on mismatch — and revokes every session except the caller's; API tokens are unaffected. A password under 12 characters or a username that normalises to the empty string is 422 /problems/validation-failed.
+     * @description Partial update of username, locale and password; omitted fields are untouched. A password change requires current_password in the same body — verified before any write, 403 /problems/forbidden on mismatch — and revokes every session except the caller's; API tokens are unaffected. A password under 12 characters, a username that normalises to the empty string or a locale that trims to the empty string is 422 /problems/validation-failed.
      */
     patch: operations["patch-account"];
     trace?: never;
