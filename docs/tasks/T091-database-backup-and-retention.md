@@ -145,8 +145,10 @@ Worked response, `201`:
 8. Edit `internal/jobs/cron.go` to add `Scheduler.WithMaintenance(m *store.MaintenanceStore, backupDir
    string)` — the `WithGovernor`/`WithWatcher` attach pattern — and, while a store is attached, three
    entries on T066's `Scheduler`: `0 3 * * *` running `BackupInto(backupDir)` then
-   `PruneBackups(backupDir, 7)`, a second `0 3 * * *` entry running the two retention prunes
-   (`PruneTaskEvents`, `PruneDoneJobs`), and `@hourly` running `PruneSearchJobs`. The call site is
+   `PruneBackups(backupDir, 7)`, a `0 4 * * *` entry running the two retention prunes
+   (`PruneTaskEvents`, `PruneDoneJobs`) — staggered an hour after the backup entry because
+   robfig/cron dispatches each entry on its own goroutine and same-tick entries would race
+   `VACUUM INTO` — and `@hourly` running `PruneSearchJobs`. The call site is
    `cmd/dl-tool/main.go`'s scheduler chain —
    `NewScheduler(db, logger).WithGovernor(governor).WithWatcher(watcher).WithMaintenance(server.Maintenance, filepath.Join(cfg.ConfigDir, store.BackupsDirName))`
    — with `store.BackupsDirName` superseding the file-local `backupsDirName` const, the `store.Open`
