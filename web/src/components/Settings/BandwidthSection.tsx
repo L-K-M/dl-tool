@@ -31,8 +31,8 @@ export interface BandwidthSettings {
   alt_upload_rate_limit: number;
 }
 
-/** GET /settings/schedule, doc 05 §11.2. timezone and active_mode are read-only: they are rendered
- *  and echoed back unchanged, and the server ignores whatever a client sends. */
+/** GET /settings/schedule, doc 05 §11.2. timezone and active_mode are read-only:
+ *  the screen renders timezone and neither is sent back on the PUT. */
 export interface ScheduleBody {
   enabled: boolean;
   cells: number[];
@@ -86,10 +86,9 @@ interface FormState {
   cells: Cells;
 }
 
-/** The two read-only members of the schedule body, kept to render and echo back. */
+/** The read-only member of the schedule body the screen renders. */
 interface ScheduleMeta {
   timezone: string;
-  active_mode: ScheduleBody["active_mode"];
 }
 
 function seedForm(
@@ -174,11 +173,10 @@ export function BandwidthSection(): JSX.Element {
       schedule.data as ScheduleBody,
     );
     setForm(seeded);
-    setBaseline(seeded);
-    setMeta({
-      timezone: (schedule.data as ScheduleBody).timezone,
-      active_mode: (schedule.data as ScheduleBody).active_mode,
-    });
+    // The baseline is a copy: sharing seeded.cells would couple dirty
+    // detection to every helper staying pure.
+    setBaseline({ ...seeded, cells: seeded.cells.slice() });
+    setMeta({ timezone: (schedule.data as ScheduleBody).timezone });
   }, [ready, form, settings.data, schedule.data]);
 
   const dirtyCount =
@@ -210,6 +208,9 @@ export function BandwidthSection(): JSX.Element {
       return;
     savingRef.current = true;
     void (async () => {
+      // The limits that landed before a later failure become the baseline so
+      // the dirty report stops carrying keys the server already stored.
+      let landed = base;
       try {
         const patch: Partial<BandwidthSettings> = {};
         const fieldErrors: Partial<Record<LimitField, string>> = {};
@@ -234,7 +235,6 @@ export function BandwidthSection(): JSX.Element {
         }
         setLimitErrors({});
 
-        let landed = base;
         if (Object.keys(patch).length > 0) {
           const { error } = await api.PATCH("/settings", { body: patch });
           if (error !== undefined) {
@@ -250,12 +250,7 @@ export function BandwidthSection(): JSX.Element {
         }
 
         const { error } = await api.PUT("/settings/schedule", {
-          body: {
-            enabled: current.enabled,
-            cells: current.cells,
-            timezone: scheduleMeta.timezone,
-            active_mode: scheduleMeta.active_mode,
-          },
+          body: { enabled: current.enabled, cells: current.cells },
         });
         if (error !== undefined) {
           setSaveError(
@@ -266,9 +261,19 @@ export function BandwidthSection(): JSX.Element {
           setBaseline(landed);
           return;
         }
-        setBaseline(current);
+        setBaseline({ ...current, cells: current.cells.slice() });
         setSaveError(null);
         await queryClient.invalidateQueries({ queryKey: SCHEDULE_KEY });
+      } catch (error) {
+        // openapi-fetch throws rather than returning `error` on a
+        // network-level failure; surface it like a rejected response.
+        if (landed !== base) setBaseline(landed);
+        setSaveError(
+          t("bandwidth.saveFailed", {
+            detail:
+              error instanceof Error ? error.message : ct("shell.networkError"),
+          }),
+        );
       } finally {
         savingRef.current = false;
       }
@@ -276,7 +281,8 @@ export function BandwidthSection(): JSX.Element {
   }, [queryClient, t, ct]);
 
   const revert = useCallback(() => {
-    setForm(baselineRef.current);
+    const base = baselineRef.current;
+    setForm(base === null ? null : { ...base, cells: base.cells.slice() });
     setLimitErrors({});
     setSaveError(null);
   }, []);

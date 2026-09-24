@@ -179,6 +179,11 @@ test("TestDragPaintsRange", () => {
   // Only the four dragged cells carry the brush.
   expect(last!.slice(0, 4)).toEqual([2, 2, 2, 2]);
   expect(last!.filter((value) => value === 2)).toHaveLength(4);
+
+  // A right- or middle-click is not a paint gesture.
+  const emitted = changes.length;
+  fireEvent.pointerDown(cell("Monday", "05"), { button: 2 });
+  expect(changes).toHaveLength(emitted);
 });
 
 test("TestShiftDragPaintsRectangle", () => {
@@ -234,16 +239,23 @@ test("TestKeyboardMapPaintsAndRoves", () => {
   expect(roved()).toHaveLength(1);
   expect(cells()[1]!.tabIndex).toBe(0);
 
+  // Enter activates the focused cell the same way Space does.
+  fireEvent.keyDown(cells()[1]!, { key: "Enter" });
+  expect(changes.at(-1)![1]).toBe(2);
+
   fireEvent.keyDown(cells()[1]!, { key: " " });
   expect(changes.at(-1)![1]).toBe(2);
   expect(changes.at(-1)!.filter((value) => value === 2)).toHaveLength(1);
 
-  // Space dropped the anchor on the focused cell; Shift+ArrowDown extends a
-  // Monday-01 → Tuesday-01 rectangle.
+  // A header click changes cells outside any emit cycle; the Shift+arrow
+  // rectangle that follows must paint on top of it, not resurrect the
+  // pre-click array the anchor was captured from.
+  fireEvent.click(screen.getByRole("button", { name: "05" }));
   fireEvent.keyDown(cells()[1]!, { key: "ArrowDown", shiftKey: true });
   const last = changes.at(-1)!;
   expect(last[idx(0, 1)]).toBe(2);
   expect(last[idx(1, 1)]).toBe(2);
+  expect(last[idx(3, 5)]).toBe(2);
   expect(document.activeElement).toBe(cells()[idx(1, 1)]);
   expect(roved()).toHaveLength(1);
 });
@@ -281,8 +293,9 @@ test("TestSaveSendsBothBodies", async () => {
   const put = schedulePuts[0]!;
   expect((put.cells as number[]).length).toBe(168);
   expect(put.enabled).toBe(true);
-  expect(put.timezone).toBe("Europe/Zurich");
-  expect(put.active_mode).toBe("default");
+  // The PUT body is the documented write shape: the read-only timezone and
+  // active_mode the GET returned are not echoed back.
+  expect(Object.keys(put).sort()).toEqual(["cells", "enabled"]);
   // Bytes per second on the wire, verbatim — no KB/s value is sent anywhere.
   for (const patch of settingsPatches)
     for (const value of Object.values(patch)) {
@@ -292,6 +305,16 @@ test("TestSaveSendsBothBodies", async () => {
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull(),
   );
+
+  // A network-level throw — not a rejected response — must surface the same
+  // save error and leave the form dirty instead of dying unhandled.
+  server.use(http.patch("*/api/v1/settings", () => HttpResponse.error()));
+  fireEvent.change(download, { target: { value: "2097152" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "Could not save the bandwidth settings",
+  );
+  expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
 });
 
 test("TestImmediatelyDisablesGridAndSendsEnabledFalse", async () => {

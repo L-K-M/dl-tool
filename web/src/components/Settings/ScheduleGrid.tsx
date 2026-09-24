@@ -99,11 +99,11 @@ export function paintHour(cells: Cells, hour: number, brush: Brush): Cells {
  *  copyMondayToWeekdays → Tue..Fri become a copy of Mon; Sat and Sun are untouched.
  *  invert               → 0 becomes 1 and 1 becomes 0; 2 is left alone, so an alternative-speed
  *                         block survives an invert. */
-export function fillAll(cells: Cells, brush: Brush): Cells {
+export function fillAll(_cells: Cells, brush: Brush): Cells {
   return new Array<Brush>(CELL_COUNT).fill(brush);
 }
-export function clearAll(cells: Cells): Cells {
-  return fillAll(cells, 1);
+export function clearAll(_cells: Cells): Cells {
+  return fillAll(_cells, 1);
 }
 export function copyMondayToWeekdays(cells: Cells): Cells {
   const next = cells.slice();
@@ -163,6 +163,17 @@ export function ScheduleGrid(props: {
     };
   }, []);
 
+  // A cells array that is not the one our last emit produced came from a
+  // day/hour header, a bulk button or a reload; any gesture base captured
+  // before it would silently revert that edit on the next Shift+rectangle.
+  useEffect(() => {
+    if (cells !== painted.current) {
+      dragging.current = false;
+      painted.current = null;
+      rectBase.current = null;
+    }
+  }, [cells]);
+
   const moveFocus = (next: number) => {
     setFocusCell(next);
     tableRef.current
@@ -174,7 +185,7 @@ export function ScheduleGrid(props: {
     cell: number,
     event: ReactPointerEvent<HTMLElement>,
   ) => {
-    if (disabled) return;
+    if (disabled || event.button !== 0) return;
     anchor.current = cell;
     dragging.current = true;
     painted.current = cells;
@@ -182,6 +193,11 @@ export function ScheduleGrid(props: {
     emit(paintRect(cells, cell, cell, brush));
     setFocusCell(cell);
     event.currentTarget.focus();
+    // Touch and pen pointers are implicitly captured by the pointerdown
+    // target, which stops pointerenter firing on the cells dragged over;
+    // releasing it is a no-op for a mouse, which is never implicitly
+    // captured.
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
   };
 
   const onCellPointerEnter = (
@@ -219,7 +235,8 @@ export function ScheduleGrid(props: {
         if (day < DAYS.length - 1) next = cell + HOURS_IN_DAY;
         break;
       case " ":
-        // Space paints the focused cell and drops the keyboard anchor on it.
+      case "Enter":
+        // Space and Enter paint the focused cell and drop the anchor on it.
         event.preventDefault();
         anchor.current = cell;
         emit(paintRect(cells, cell, cell, brush));
@@ -246,7 +263,7 @@ export function ScheduleGrid(props: {
       aria-disabled={disabled || undefined}
       aria-rowcount={DAYS.length + 1}
       aria-colcount={HOURS_IN_DAY + 1}
-      className={`border-collapse${disabled ? " opacity-50" : ""}`}
+      className={`select-none border-collapse${disabled ? " opacity-50" : ""}`}
     >
       <thead>
         <tr role="row">
@@ -305,7 +322,7 @@ export function ScheduleGrid(props: {
                     state: t(CELL_STATE_NAME[state]),
                   })}
                   style={{ width: 28, height: 28, ...CELL_FILL[state] }}
-                  className="border border-border p-0 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--focus-ring)]"
+                  className="touch-none border border-border p-0 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--focus-ring)]"
                   onPointerDown={(event) => onCellPointerDown(cell, event)}
                   onPointerEnter={(event) => onCellPointerEnter(cell, event)}
                   onKeyDown={(event) => onCellKeyDown(cell, event)}
