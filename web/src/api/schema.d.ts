@@ -844,6 +844,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/system/backup": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Back up the database
+     * @description Writes a consistent snapshot with VACUUM INTO and returns its path and size, retaining the newest seven files. 409 /problems/conflict while another backup is running; 500 /problems/internal on any other failure.
+     */
+    post: operations["create-backup"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/system/info": {
     parameters: {
       query?: never;
@@ -1273,6 +1293,12 @@ export interface components {
       skipped: number;
       /** Format: int64 */
       updated: number;
+    };
+    CreateBackupOutputBody: {
+      created_at: string;
+      path: string;
+      /** Format: int64 */
+      size_bytes: number;
     };
     CreateCategoryInputBody: {
       /** @description Unique category name; never carries a / */
@@ -4274,6 +4300,35 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Delta"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-backup": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreateBackupOutputBody"];
         };
       };
       /** @description Error */

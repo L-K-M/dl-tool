@@ -30,6 +30,19 @@ const rssPollSchedule = "@every 1m"
 // boundary the minute tick misses.
 const scheduleEvalSpec = "* * * * *"
 
+const (
+	// backupSpec is the nightly database snapshot of doc 17 section 3.2.
+	backupSpec = "0 3 * * *"
+	// retentionSpec runs the nightly table prunes of doc 04 section 7 an
+	// hour after the backup entry: robfig/cron dispatches each entry on
+	// its own goroutine, so same-tick entries would race VACUUM INTO.
+	retentionSpec = "0 4 * * *"
+	// searchPruneSpec runs the hourly search_jobs prune at minute 30, off
+	// the top of the hour so it never shares a tick with the nightly
+	// entries.
+	searchPruneSpec = "30 * * * *"
+)
+
 // queryPendingOfKind counts the pending rows of one jobs.kind; the cron
 // entry enqueues only when this is zero. The check collapses bursts of
 // ticks but is not an atomic guard: a kind stays unenqueued only while a
@@ -52,6 +65,11 @@ type Scheduler struct {
 	// watcher is set by WithWatcher: the watch-folder loader Start runs
 	// beside the cron entries (T083).
 	watcher *Watcher
+	// maintenance and backupDir are set by WithMaintenance: the nightly
+	// backup, the retention prunes and the hourly search prune run only
+	// while a store is attached (T091).
+	maintenance *store.MaintenanceStore
+	backupDir   string
 }
 
 func NewScheduler(db *sqlx.DB, log *slog.Logger) *Scheduler {
@@ -89,6 +107,22 @@ func (s *Scheduler) WithWatcher(w *Watcher) *Scheduler {
 	return s
 }
 
+// WithMaintenance attaches the backup and retention store; Start arms the
+// three maintenance entries — the 03:00 backup and prune, the 04:00
+// retention prunes and the hourly search_jobs prune — while one is set.
+// The composition root hands over the same instance POST /system/backup
+// uses, so the ErrBackupRunning lock spans both. The field is set before
+// the cron goroutine can observe it — the same attach rule WithGovernor
+// follows.
+func (s *Scheduler) WithMaintenance(m *store.MaintenanceStore, backupDir string) *Scheduler {
+	if m == nil {
+		return s
+	}
+	s.maintenance = m
+	s.backupDir = backupDir
+	return s
+}
+
 // Start runs the cron until ctx ends, then stops it and waits for any
 // in-flight entry to finish so OnStop drains like the worker pool.
 func (s *Scheduler) Start(ctx context.Context) {
@@ -105,6 +139,24 @@ func (s *Scheduler) Start(ctx context.Context) {
 		if _, err := c.AddFunc(scheduleEvalSpec, func() { s.evaluateOnce(ctx) }); err != nil {
 			s.log.ErrorContext(ctx, "register cron entry failed", "schedule", scheduleEvalSpec, "err", err)
 			return
+		}
+	}
+	if s.maintenance != nil {
+		entries := []struct {
+			spec string
+			run  func()
+		}{
+			{backupSpec, func() { s.backupOnce(ctx) }},
+			{retentionSpec, func() { s.retentionOnce(ctx) }},
+			{searchPruneSpec, func() { s.searchPruneOnce(ctx) }},
+		}
+		for _, entry := range entries {
+			if _, err := c.AddFunc(entry.spec, entry.run); err != nil {
+				// A static schedule string cannot fail to parse; if it
+				// ever does, say so rather than run silently without it.
+				s.log.ErrorContext(ctx, "register cron entry failed", "schedule", entry.spec, "err", err)
+				return
+			}
 		}
 	}
 
@@ -167,6 +219,47 @@ func (s *Scheduler) enqueueOnce(ctx context.Context, kind string) {
 		if ctx.Err() == nil {
 			s.log.ErrorContext(ctx, "cron enqueue failed", "kind", kind, "err", err)
 		}
+	}
+}
+
+// backupOnce runs the nightly snapshot and prune of doc 17 section 3.2.
+// Errors are logged, never returned — a missed night is recovered by the
+// next tick, and the cron entry has no retry channel of its own.
+func (s *Scheduler) backupOnce(ctx context.Context) {
+	result, err := s.maintenance.BackupInto(ctx, s.backupDir)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.log.ErrorContext(ctx, "nightly backup failed", "err", err)
+		}
+
+		return
+	}
+	s.log.InfoContext(ctx, "nightly backup written",
+		"path", result.Path, "size_bytes", result.SizeBytes)
+
+	if _, err := s.maintenance.PruneBackups(ctx, s.backupDir, store.BackupKeepCount); err != nil && ctx.Err() == nil {
+		s.log.ErrorContext(ctx, "backup retention prune failed", "err", err)
+	}
+}
+
+// retentionOnce runs the two nightly prunes of doc 04 section 7 —
+// task_events past 90 days and done jobs past 7 days — on the 04:00
+// entry, an hour after the backup so they never share a VACUUM INTO tick.
+func (s *Scheduler) retentionOnce(ctx context.Context) {
+	now := s.now()
+	if _, err := s.maintenance.PruneTaskEvents(ctx, now); err != nil && ctx.Err() == nil {
+		s.log.ErrorContext(ctx, "task event retention prune failed", "err", err)
+	}
+	if _, err := s.maintenance.PruneDoneJobs(ctx, now); err != nil && ctx.Err() == nil {
+		s.log.ErrorContext(ctx, "done job retention prune failed", "err", err)
+	}
+}
+
+// searchPruneOnce runs the hourly search_jobs prune of doc 04 section 7;
+// the search_results rows follow through ON DELETE CASCADE.
+func (s *Scheduler) searchPruneOnce(ctx context.Context) {
+	if _, err := s.maintenance.PruneSearchJobs(ctx, s.now()); err != nil && ctx.Err() == nil {
+		s.log.ErrorContext(ctx, "search job retention prune failed", "err", err)
 	}
 }
 

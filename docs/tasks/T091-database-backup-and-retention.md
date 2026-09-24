@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T091 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T006, T012, T066 |
 | **Blocks** | T092, T121 |
 | **Parallel-safe** | no — it edits `internal/jobs/cron.go`, `internal/api/server.go` and `cmd/dl-tool/main.go` |
@@ -164,14 +164,14 @@ Worked response, `201`:
     failure mid-statement leaves no file matching `dl-tool.db.*.bak`.
 
 ## Acceptance criteria
-- [ ] The snapshot opens independently and `PRAGMA integrity_check` returns `ok`.
-- [ ] Two backups started in the same second produce two different file names.
-- [ ] A concurrent second call returns `409` `/problems/conflict` and writes no file.
-- [ ] A failed statement leaves no file matching `dl-tool.db.*.bak` in the backup directory.
-- [ ] Eight nightly runs leave exactly seven files, and `dl-tool.db.pre-migration-*.bak` and
+- [x] The snapshot opens independently and `PRAGMA integrity_check` returns `ok`.
+- [x] Two backups started in the same second produce two different file names.
+- [x] A concurrent second call returns `409` `/problems/conflict` and writes no file.
+- [x] A failed statement leaves no file matching `dl-tool.db.*.bak` in the backup directory.
+- [x] Eight nightly runs leave exactly seven files, and `dl-tool.db.pre-migration-*.bak` and
   `dl-tool.db.replaced-*.bak` files in the same directory are never counted or pruned.
-- [ ] `PruneTaskEvents` deletes rows older than 90 days and leaves a row exactly 89 days old.
-- [ ] A produced backup is `0600`, and its temporary target was created with `O_CREATE|O_EXCL`.
+- [x] `PruneTaskEvents` deletes rows older than 90 days and leaves a row exactly 89 days old.
+- [x] A produced backup is `0600`, and its temporary target was created with `O_CREATE|O_EXCL`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -203,7 +203,81 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+`make lint && make test PKG=./internal/...`:
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	189.371s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.120s
+ok  	github.com/L-K-M/dl-tool/internal/engine	33.771s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.226s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.816s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.879s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	29.414s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.218s
+ok  	github.com/L-K-M/dl-tool/internal/rss	20.531s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.591s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.347s
+ok  	github.com/L-K-M/dl-tool/internal/store	81.885s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.388s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.087s
+```
+
+The six named tests, individually (`go test -race -count=1 -v -run
+'TestBackupIntoIsConsistent|TestBackupNamesNeverCollide|TestConcurrentBackupIs409|TestFailedBackupLeavesNoFile|TestPruneBackupsKeepsSeven|TestPruneTaskEventsRespectsWindow'
+./internal/store/ ./internal/api/ ./internal/jobs/`):
+
+```
+--- PASS: TestBackupIntoIsConsistent (0.63s)
+--- PASS: TestBackupNamesNeverCollide (0.78s)
+--- PASS: TestPruneBackupsKeepsSeven (0.45s)
+--- PASS: TestPruneTaskEventsRespectsWindow (0.40s)
+ok  	github.com/L-K-M/dl-tool/internal/store	3.305s
+--- PASS: TestConcurrentBackupIs409 (3.71s)
+--- PASS: TestFailedBackupLeavesNoFile (0.38s)
+ok  	github.com/L-K-M/dl-tool/internal/api	5.300s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	1.068s [no tests to run]
+```
+
+Criterion-to-test map: criterion 1 → `TestBackupIntoIsConsistent` (store) and
+`TestCreateBackupServesConsistentSnapshot` (api); 2 → `TestBackupNamesNeverCollide`;
+3 → `TestConcurrentBackupIs409` (api) plus `TestBackupIntoRejectsConcurrentRun` (store),
+whose `assertNoBackupArtifacts` pins "writes no file"; 4 →
+`TestFailedBackupLeavesNoFile` (api) and `TestBackupIntoCancelledLeavesNoArtifacts` (store);
+5 → `TestPruneBackupsKeepsSeven`; 6 → `TestPruneTaskEventsRespectsWindow`; 7 → mode
+asserted in `TestBackupIntoIsConsistent`/`TestCreateBackupServesConsistentSnapshot`, and
+the `O_CREATE|O_EXCL` staging is `os.CreateTemp`, which is exactly that flag set by
+construction. `PruneDoneJobs` and `PruneSearchJobs` (including the search_results
+cascade) are covered by `TestRetentionPrunesRespectWindows`.
+
+Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+api/openapi.json
+cmd/dl-tool/main.go
+internal/api/server.go
+internal/api/system.go
+internal/api/system_test.go
+internal/jobs/cron.go
+internal/store/maintenance.go
+internal/store/maintenance_test.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are the generated pair the
+docs/13 §7.1 exception assigns to any task registering a Huma operation; both
+were regenerated by `make gen`, not hand-edited.
 
 ## Blocked — resolved
 
