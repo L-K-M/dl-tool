@@ -167,9 +167,25 @@ $ unshare -U -r true
 unshare: unshare failed: Operation not permitted
 ```
 
-The multi-arch build, the `/yt-dlp: OK` build-log check, `docker image inspect` and the
-`docker run` criterion therefore still need one run on a Docker-capable machine.
-Everything that does not need a daemon was run for real; output below is observed.
+The verbatim Verification block **did run on this PR's `verify` job**
+(`.github/workflows/task-verification.yml` extracts this file's `## Verification`
+bash and executes it on a Docker-capable runner; the `compose` job in `ci.yml`
+independently ran `make docker-build`). Observed output from the verify job's
+"Run task Verification" step (run 36035617728):
+
+```
+#17 [ytdlp 3/3] RUN set -eu; case "amd64" in amd64) file=yt-dlp_musllinux; ... esac; ...
+#17 0.956 /yt-dlp: OK
+#35 naming to ghcr.io/l-k-m/dl-tool:t093 done
+$ docker run --rm --entrypoint sh ghcr.io/l-k-m/dl-tool:t093 -c 'yt-dlp --version; ! command -v python3 && echo NO_PYTHON'
+2026.08.19
+NO_PYTHON
+```
+
+What still has not run anywhere: `docker buildx build --platform
+linux/amd64,linux/arm64` (CI builds amd64 only), the corrupted-hash rebuild (replicated
+locally below), and `docker image inspect` (the LABEL block is verbatim from doc 10
+§5; `version` resolves to `dev` under `make docker-build` via the global ARG).
 
 **Pin resolution** — `GET https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest`
 returned tag `2026.08.19` (newest stable). Both musllinux assets were downloaded from
@@ -221,15 +237,16 @@ canonical text in doc 10 §5 (the "post-T093 end state" per T124's contract):**
   contract block's `"Unlicense"` quote predates commit `9d4b3cc`, which added the
   unRAR term when the `7zzs` stage landed; shipping `Unlicense`-only would mislabel an
   image that contains the unRAR codec.
-- A global `ARG VERSION=dev REVISION=unknown` was added before the first `FROM`, so
-  the contract's stage lines stay byte-identical (`ARG TARGETOS TARGETARCH VERSION
-  REVISION`, `ARG VERSION REVISION CREATED`) while bare `ARG` re-declaration inherits
-  the global defaults. This preserves the non-empty-fallback fix T124's review added
-  in `8a3234c` and keeps `org.opencontainers.image.version` non-empty under
-  `make docker-build`, which forwards no `--build-arg`; the release workflow still
-  overrides both via `--build-arg` (doc 10 §10). `CREATED` has no default — no
-  meaningful static value exists and the release pipeline supplies it through
-  metadata labels.
+- A global `ARG VERSION=dev REVISION=unknown CREATED=1970-01-01T00:00:00Z` was added
+  before the first `FROM`, so the contract's stage lines stay byte-identical (`ARG
+  TARGETOS TARGETARCH VERSION REVISION`, `ARG VERSION REVISION CREATED`) while bare
+  `ARG` re-declaration inherits the global defaults. This preserves the
+  non-empty-fallback fix T124's review added in `8a3234c`, keeps
+  `org.opencontainers.image.version` non-empty under `make docker-build` (which
+  forwards no `--build-arg`), and gives `org.opencontainers.image.created` a valid
+  RFC 3339 value — the epoch is the reproducible-builds convention for "unset" — since
+  an empty `created` would violate the OCI annotation spec. The release workflow still
+  overrides all three via `--build-arg` / metadata labels (doc 10 §10).
 - The T124 `# NOTE: yt-dlp is NOT installed in this image yet ...` comment was removed:
   it described the pre-T093 gap this task closes and would now be false.
 - The `ytdlp` stage sits directly above the runtime stage per step 5; §5 shows it

@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # Global defaults keep a bare `docker build` (make docker-build) from stamping
-# empty versions; the release workflow overrides both via --build-arg (doc 10
-# section 10). Stages re-declare the names bare to inherit these values.
-ARG VERSION=dev REVISION=unknown
+# empty versions or a spec-invalid empty created date; the release workflow
+# overrides them via --build-arg (doc 10 section 10). Stages re-declare the
+# names bare to inherit these values. Epoch is the reproducible-builds "unset".
+ARG VERSION=dev REVISION=unknown CREATED=1970-01-01T00:00:00Z
 
 FROM --platform=$BUILDPLATFORM node:24-alpine AS web
 WORKDIR /web
