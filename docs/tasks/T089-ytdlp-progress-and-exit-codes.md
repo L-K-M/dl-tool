@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T089 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T087 |
 | **Blocks** | T090 |
 | **Parallel-safe** | yes — adds `internal/engine/ytdlp/parse.go` only |
@@ -136,13 +136,13 @@ var _ = time.Second
    containing a private-video message mapping to `private_video`.
 
 ## Acceptance criteria
-- [ ] A line whose `total` is null and whose `est` is set yields `TotalBytes` equal to `est`.
-- [ ] A line with both null leaves `TotalBytes` nil and `PercentFallback` returns the fragment ratio.
-- [ ] A non-JSON warning line on stdout is skipped and does not stop the scan.
-- [ ] Exit code `101` classifies as `completed`, not as an error.
-- [ ] Exit code `100` classifies as `error` with `engine_unavailable` and `Retryable == false`.
-- [ ] Exit code `-1` classifies as `paused`.
-- [ ] Every `ErrorCode` the mapper can produce appears in doc 04 §4.2.
+- [x] A line whose `total` is null and whose `est` is set yields `TotalBytes` equal to `est`.
+- [x] A line with both null leaves `TotalBytes` nil and `PercentFallback` returns the fragment ratio.
+- [x] A non-JSON warning line on stdout is skipped and does not stop the scan.
+- [x] Exit code `101` classifies as `completed`, not as an error.
+- [x] Exit code `100` classifies as `error` with `engine_unavailable` and `Retryable == false`.
+- [x] Exit code `-1` classifies as `paused`.
+- [x] Every `ErrorCode` the mapper can produce appears in doc 04 §4.2.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -173,7 +173,138 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/engine/ytdlp/...` on the final tree:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ make test PKG=./internal/engine/ytdlp/...
+go test -race -count=1 ./internal/engine/ytdlp/...
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.104s
+```
+
+`go test -race -count=1 -v ./internal/engine/ytdlp/...` on the same tree:
+
+```
+=== RUN   TestParseProgressLineDecodesEveryField
+--- PASS: TestParseProgressLineDecodesEveryField (0.00s)
+=== RUN   TestProgressTotalFallbackChain
+=== RUN   TestProgressTotalFallbackChain/exact_total_wins_over_estimate
+=== RUN   TestProgressTotalFallbackChain/null_total_falls_back_to_estimate
+=== RUN   TestProgressTotalFallbackChain/both_null_leaves_TotalBytes_nil_and_yields_the_fragment_ratio
+=== RUN   TestProgressTotalFallbackChain/no_size_and_no_fragments_yields_nil_and_-1
+--- PASS: TestProgressTotalFallbackChain (0.00s)
+    --- PASS: TestProgressTotalFallbackChain/exact_total_wins_over_estimate (0.00s)
+    --- PASS: TestProgressTotalFallbackChain/null_total_falls_back_to_estimate (0.00s)
+    --- PASS: TestProgressTotalFallbackChain/both_null_leaves_TotalBytes_nil_and_yields_the_fragment_ratio (0.00s)
+    --- PASS: TestProgressTotalFallbackChain/no_size_and_no_fragments_yields_nil_and_-1 (0.00s)
+=== RUN   TestPercentFallbackRejectsDegenerateCounters
+--- PASS: TestPercentFallbackRejectsDegenerateCounters (0.00s)
+=== RUN   TestProgressApplyMapsStatusAndFields
+--- PASS: TestProgressApplyMapsStatusAndFields (0.00s)
+=== RUN   TestProgressSkipsWarningLine
+--- PASS: TestProgressSkipsWarningLine (0.00s)
+=== RUN   TestProgressSkipsUnknownStatus
+--- PASS: TestProgressSkipsUnknownStatus (0.00s)
+=== RUN   TestScanProgressEmitsEventsAndSkipsNoise
+--- PASS: TestScanProgressEmitsEventsAndSkipsNoise (0.00s)
+=== RUN   TestScanProgressAcceptsLongLine
+--- PASS: TestScanProgressAcceptsLongLine (0.07s)
+=== RUN   TestScanProgressReportsScannerError
+--- PASS: TestScanProgressReportsScannerError (0.03s)
+=== RUN   TestParseInfoDocument
+--- PASS: TestParseInfoDocument (0.00s)
+=== RUN   TestInfoDocumentFillsContentPath
+--- PASS: TestInfoDocumentFillsContentPath (0.00s)
+=== RUN   TestInfoDocumentSizeFallback
+--- PASS: TestInfoDocumentSizeFallback (0.00s)
+=== RUN   TestClassifyExitTable
+=== RUN   TestClassifyExitTable/success
+=== RUN   TestClassifyExitTable/stopped_early_on_purpose
+=== RUN   TestClassifyExitTable/option_error
+=== RUN   TestClassifyExitTable/restart_for_update
+=== RUN   TestClassifyExitTable/private_video
+=== RUN   TestClassifyExitTable/private_video,_other_extractor_phrasing
+=== RUN   TestClassifyExitTable/generic_error
+=== RUN   TestClassifyExitTable/signalled_by_Cancel
+=== RUN   TestClassifyExitTable/undocumented_code
+--- PASS: TestClassifyExitTable (0.00s)
+    --- PASS: TestClassifyExitTable/success (0.00s)
+    --- PASS: TestClassifyExitTable/stopped_early_on_purpose (0.00s)
+    --- PASS: TestClassifyExitTable/option_error (0.00s)
+    --- PASS: TestClassifyExitTable/restart_for_update (0.00s)
+    --- PASS: TestClassifyExitTable/private_video (0.00s)
+    --- PASS: TestClassifyExitTable/private_video,_other_extractor_phrasing (0.00s)
+    --- PASS: TestClassifyExitTable/generic_error (0.00s)
+    --- PASS: TestClassifyExitTable/signalled_by_Cancel (0.00s)
+    --- PASS: TestClassifyExitTable/undocumented_code (0.00s)
+=== RUN   TestClassifyExitProducesOnlyDocumentedErrorCodes
+--- PASS: TestClassifyExitProducesOnlyDocumentedErrorCodes (0.00s)
+=== RUN   TestArgvGoldenPlainRequest
+--- PASS: TestArgvGoldenPlainRequest (0.00s)
+=== RUN   TestArgvUsesFilenameAsOutput
+--- PASS: TestArgvUsesFilenameAsOutput (0.00s)
+=== RUN   TestArgvPutsURILast
+--- PASS: TestArgvPutsURILast (0.00s)
+=== RUN   TestArgvGuardsDashPrefixedURI
+--- PASS: TestArgvGuardsDashPrefixedURI (0.00s)
+=== RUN   TestArgvRejectsShellComposition
+--- PASS: TestArgvRejectsShellComposition (0.00s)
+=== RUN   TestSpawnAndCancel
+--- PASS: TestSpawnAndCancel (0.00s)
+=== RUN   TestCancelUnknownIDIsNotFound
+--- PASS: TestCancelUnknownIDIsNotFound (0.00s)
+=== RUN   TestWaitUnknownIDIsNotFound
+--- PASS: TestWaitUnknownIDIsNotFound (0.00s)
+=== RUN   TestWaitPropagatesExitCode
+--- PASS: TestWaitPropagatesExitCode (0.00s)
+=== RUN   TestStdoutReadsToEOFAcrossProcessExit
+--- PASS: TestStdoutReadsToEOFAcrossProcessExit (0.00s)
+=== RUN   TestSpawnWithoutURIErrors
+--- PASS: TestSpawnWithoutURIErrors (0.00s)
+=== RUN   TestArchivePathStripsEnginePrefix
+--- PASS: TestArchivePathStripsEnginePrefix (0.00s)
+=== RUN   TestArchivePathStaysInsideArchiveDir
+--- PASS: TestArchivePathStaysInsideArchiveDir (0.00s)
+=== RUN   TestBoundedBufferKeepsTail
+--- PASS: TestBoundedBufferKeepsTail (0.00s)
+=== RUN   TestSpawnRejectsEscapingFilename
+--- PASS: TestSpawnRejectsEscapingFilename (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.160s
+```
+
+Acceptance-criterion traceability:
+
+- `total:null` + `est` → `TotalBytes == est`: `TestProgressTotalFallbackChain/null_total_falls_back_to_estimate`.
+- both null → `TotalBytes` nil + fragment ratio: `TestProgressTotalFallbackChain/both_null_leaves_TotalBytes_nil_and_yields_the_fragment_ratio`.
+- warning line skipped without stopping the scan: `TestProgressSkipsWarningLine` and `TestScanProgressEmitsEventsAndSkipsNoise` (warning, blank and unknown-status lines interleaved in the stream).
+- exit 101 → `completed`: `TestClassifyExitTable/stopped_early_on_purpose`.
+- exit 100 → `engine_unavailable`, `Retryable == false`: `TestClassifyExitTable/restart_for_update`.
+- exit -1 → `paused`: `TestClassifyExitTable/signalled_by_Cancel`.
+- produced `ErrorCode` ⊆ doc 04 §4.2: `TestClassifyExitProducesOnlyDocumentedErrorCodes` sweeps exit codes -128..255 over three stderr tails and proves the produced set is exactly `{unknown, engine_unavailable, private_video}`, all in the enum.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+internal/engine/ytdlp/parse.go
+internal/engine/ytdlp/parse_test.go
+```
+
+Exactly the Files table, in that order.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
