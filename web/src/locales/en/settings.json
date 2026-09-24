@@ -134,7 +134,7 @@
     "enableHint": "Off pauses polling; feeds and rules are untouched.",
     "interval": "Update interval",
     "intervalHint": "Minutes between feed polls; the minimum is 5.",
-    "intervalTooSmall": "Enter a number of minutes of at least 5.",
+    "intervalTooSmall": "Enter a number of minutes of at least {{min}}.",
     "itemCap": "Maximum articles kept per feed",
     "itemCapHint": "The cap is stored on each feed; saving applies the typed value to every feed.",
     "capMixed": "Mixed",

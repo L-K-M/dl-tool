@@ -213,7 +213,9 @@ export function RssSection(): JSX.Element {
           // field now instead of shipping a doomed PATCH.
           const seconds = minutesToSeconds(Number(current.intervalMin));
           if (!Number.isFinite(seconds) || seconds < MIN_INTERVAL_S) {
-            setIntervalError(t("rss.intervalTooSmall"));
+            setIntervalError(
+              t("rss.intervalTooSmall", { min: MIN_INTERVAL_S / 60 }),
+            );
             return;
           }
           body.rss_interval_s = seconds;
@@ -261,7 +263,10 @@ export function RssSection(): JSX.Element {
             capLanded = false;
             toast.error(
               t("rss.capSaveFailed", {
-                feeds: failedFeeds.join(", "),
+                feeds:
+                  failedFeeds.length > 5
+                    ? `${failedFeeds.slice(0, 5).join(", ")}, +${failedFeeds.length - 5} more`
+                    : failedFeeds.join(", "),
                 detail: lastDetail,
               }),
             );
