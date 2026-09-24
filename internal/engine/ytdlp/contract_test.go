@@ -29,7 +29,10 @@ func TestYtdlpContract(t *testing.T) {
 		t.Skip("DLTOOL_YTDLP_PATH is not set; no yt-dlp binary to exercise")
 	}
 	if _, err := exec.LookPath(binary); err != nil {
-		t.Skipf("DLTOOL_YTDLP_PATH %q is not executable: %v", binary, err)
+		// Set-but-broken is a CI misconfiguration, not an absent binary:
+		// skipping here would turn a moved executable into a silent
+		// no-coverage green.
+		t.Fatalf("DLTOOL_YTDLP_PATH %q is set but not executable: %v", binary, err)
 	}
 	enginetest.RunContract(t, func(t *testing.T) engine.Engine {
 		return newContractEngine(t, binary)
@@ -51,9 +54,13 @@ var _ enginetest.DownloadLimitReadback = contractEngine{}
 
 func newContractEngine(t *testing.T, binary string) contractEngine {
 	t.Helper()
+	jsRuntime := os.Getenv("DLTOOL_JS_RUNTIME_PATH")
+	if jsRuntime == "" {
+		jsRuntime = "node"
+	}
 	e := NewEngine(Config{
 		BinaryPath:    binary,
-		JSRuntimePath: "node",
+		JSRuntimePath: jsRuntime,
 		ArchiveDir:    filepath.Join(t.TempDir(), "archives"),
 	}, testLogger())
 	require.NoError(t, e.Connect(context.Background()))
@@ -70,7 +77,7 @@ func (c contractEngine) Add(ctx context.Context, req engine.AddRequest) (string,
 		if err != nil {
 			continue
 		}
-		if u.Hostname() == testcontainers.HostInternal {
+		if u.Hostname() == testcontainers.HostInternal && u.Port() != "" {
 			u.Host = net.JoinHostPort("127.0.0.1", u.Port())
 			req.URIs[i] = u.String()
 		}

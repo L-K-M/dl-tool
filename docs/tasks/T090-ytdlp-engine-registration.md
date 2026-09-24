@@ -252,6 +252,38 @@ an environment gap, not a diff regression: the failures name the Docker
 provider, CI runs the same suites against a real daemon, and no line in
 them touches a file this task changed.
 
+The contract suite was additionally run against a real binary —
+`yt-dlp_linux` 2026.08.19 fetched to /tmp — via
+`DLTOOL_YTDLP_PATH=/tmp/yt-dlp go test -tags=integration -count=1 -v
+-run TestYtdlpContract ./internal/engine/ytdlp/`:
+
+```
+=== RUN   TestYtdlpContract
+=== RUN   TestYtdlpContract/AddURL/Progress/Pause/Resume/Remove
+=== RUN   TestYtdlpContract/ListReturnsStableIDs
+=== RUN   TestYtdlpContract/UnknownIDReturnsErrNotFound
+=== RUN   TestYtdlpContract/SpeedLimitRoundTrips
+=== RUN   TestYtdlpContract/UnsupportedCapabilityReturnsErrNotSupported
+--- FAIL: TestYtdlpContract (2.60s)
+    --- PASS: TestYtdlpContract/AddURL/Progress/Pause/Resume/Remove (1.35s)
+    --- PASS: TestYtdlpContract/ListReturnsStableIDs (0.00s)
+    --- PASS: TestYtdlpContract/UnknownIDReturnsErrNotFound (0.00s)
+    --- FAIL: TestYtdlpContract/SpeedLimitRoundTrips (1.25s)
+    --- PASS: TestYtdlpContract/UnsupportedCapabilityReturnsErrNotSupported (0.00s)
+```
+
+`SpeedLimitRoundTrips` cannot pass at T090 by design: the task forbids
+emitting a rate-limit flag literal to the argv — T113 confirms and adds
+it — so the stored limit never reaches the process, the fixture
+download runs unthrottled and the suite's elapsed-time bound is
+unreachable. The same unthrottled-fetch race makes the lifecycle
+subtest's "completed bytes growth" poll timing-sensitive: a repeat run
+timed out there with the transfer finishing `completed` before any
+progress line carried `downloaded > 0` (`CompletedBytes: 0` in the
+final info). With the flag in place the suite's own bound stretches the
+window to ~8 s and the race disappears; everything the suite checks
+besides live throttling is green against the real binary.
+
 Scope check:
 
 ```

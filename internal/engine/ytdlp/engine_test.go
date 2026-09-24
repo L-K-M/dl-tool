@@ -149,7 +149,16 @@ func TestLifecycleSpawnPauseResumeRemove(t *testing.T) {
 		return err == nil && info.State == engine.StateDownloading && info.CompletedBytes == 1024
 	}, 5*time.Second, 20*time.Millisecond)
 
+	e.mu.Lock()
+	proc := e.tasks[id].proc
+	e.mu.Unlock()
+	require.NotNil(t, proc)
 	require.NoError(t, e.Pause(context.Background(), id))
+	// Pause is a kill, not a state rewrite: the stub process is dead
+	// before Cancel returns, or Pause would have errored on the grace
+	// timeout. ExitCode -1 is a signal death, not a natural exit.
+	require.NotNil(t, proc.Cmd.ProcessState)
+	assert.Equal(t, -1, proc.Cmd.ProcessState.ExitCode(), "pause must kill the process")
 	info, err := e.Get(context.Background(), id)
 	require.NoError(t, err)
 	assert.Equal(t, engine.StatePaused, info.State)
@@ -162,22 +171,26 @@ func TestLifecycleSpawnPauseResumeRemove(t *testing.T) {
 		return err == nil && info.State == engine.StateDownloading && info.CompletedBytes >= 1024
 	}, 5*time.Second, 20*time.Millisecond)
 
+	e.mu.Lock()
+	proc = e.tasks[id].proc
+	e.mu.Unlock()
+	require.NotNil(t, proc)
 	require.NoError(t, e.Remove(context.Background(), id))
+	require.NotNil(t, proc.Cmd.ProcessState)
+	assert.Equal(t, -1, proc.Cmd.ProcessState.ExitCode(), "remove must kill the process")
 	_, err = e.Get(context.Background(), id)
 	assert.ErrorIs(t, err, engine.ErrNotFound)
 
 	saw := map[engine.EventKind]bool{}
-	for i := 0; i < 20; i++ {
+	deadline := time.Now().Add(5 * time.Second)
+	for !saw[engine.EventAdded] || !saw[engine.EventProgress] || !saw[engine.EventPaused] || !saw[engine.EventRemoved] {
+		require.False(t, time.Now().After(deadline), "timed out waiting for events, saw %v", saw)
 		select {
 		case ev := <-events:
 			saw[ev.Kind] = true
-		default:
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	assert.True(t, saw[engine.EventAdded])
-	assert.True(t, saw[engine.EventProgress])
-	assert.True(t, saw[engine.EventPaused])
-	assert.True(t, saw[engine.EventRemoved])
 }
 
 // A zero exit settles the task completed and folds the --print-to-file
@@ -262,6 +275,22 @@ func TestSetRateLimitsStoresForNextSpawn(t *testing.T) {
 	got, err = e.pendingDownloadLimit(id)
 	require.NoError(t, err)
 	assert.Equal(t, perTask, got, "the tighter per-task limit wins")
+}
+
+// A negative limit is a caller bug: it is rejected outright rather than
+// stored into the argv of the next spawn, for both the global and the
+// per-task form.
+func TestSetRateLimitsRejectsNegative(t *testing.T) {
+	e := newTestEngine(t, "/nonexistent/yt-dlp")
+	id := addPausedTask(t, e)
+
+	negative := int64(-1)
+	assert.Error(t, e.SetRateLimits(context.Background(), id, &negative, nil))
+	assert.Error(t, e.SetRateLimits(context.Background(), "", &negative, nil))
+
+	got, err := e.pendingDownloadLimit(id)
+	require.NoError(t, err)
+	assert.Zero(t, got)
 }
 
 // Remove drops the record and the info document — dl-tool bookkeeping,
@@ -370,6 +399,7 @@ func TestEventsFanOutToSubscribers(t *testing.T) {
 	defer cancel()
 
 	var wg sync.WaitGroup
+	var mu sync.Mutex
 	seen := make([]map[engine.EventKind]bool, 2)
 	for i := range 2 {
 		events, err := e.Events(ctx)
@@ -379,7 +409,9 @@ func TestEventsFanOutToSubscribers(t *testing.T) {
 		go func(m map[engine.EventKind]bool, ch <-chan engine.TaskEvent) {
 			defer wg.Done()
 			for ev := range ch {
+				mu.Lock()
 				m[ev.Kind] = true
+				mu.Unlock()
 			}
 		}(seen[i], events)
 	}
@@ -389,10 +421,17 @@ func TestEventsFanOutToSubscribers(t *testing.T) {
 		SaveDir: t.TempDir(),
 	})
 	require.NoError(t, err)
-	time.Sleep(300 * time.Millisecond)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen[0][engine.EventAdded] && seen[1][engine.EventAdded]
+	}, 5*time.Second, 20*time.Millisecond)
 	cancel()
 	wg.Wait()
 
+	mu.Lock()
+	defer mu.Unlock()
 	for i, m := range seen {
 		assert.True(t, m[engine.EventAdded], fmt.Sprintf("subscriber %d", i))
 	}

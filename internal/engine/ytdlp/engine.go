@@ -107,19 +107,23 @@ func (e *Engine) Close() error {
 		close(ch)
 		delete(e.subs, ch)
 	}
-	live := make([]string, 0, len(e.tasks))
+	live := make(map[string]*Proc, len(e.tasks))
 	for id, rec := range e.tasks {
 		if rec.proc != nil {
-			live = append(live, id)
+			live[id] = rec.proc
 		}
 	}
 	e.mu.Unlock()
 
 	var errs []error
-	for _, id := range live {
+	for id, proc := range live {
 		if err := e.runner.Cancel(id); err != nil && !errors.Is(err, engine.ErrNotFound) {
 			errs = append(errs, err)
+			continue
 		}
+		// Settle the record too: without this, Get and List would keep
+		// reporting a killed transfer as downloading with a stale rate.
+		e.finishProc(id, proc, Outcome{State: engine.StatePaused})
 	}
 	return errors.Join(errs...)
 }
@@ -175,10 +179,13 @@ func (e *Engine) Add(ctx context.Context, req engine.AddRequest) (string, error)
 	snap := rec.info
 	e.mu.Unlock()
 
+	// Added is announced before the watcher starts so subscribers never see
+	// progress for a task they have not been told about. Progress lines
+	// buffer in the pipe meanwhile; nothing is lost.
+	e.emit(engine.TaskEvent{TaskID: id, Kind: engine.EventAdded, Info: &snap})
 	if proc != nil {
 		go e.watch(id, proc)
 	}
-	e.emit(engine.TaskEvent{TaskID: id, Kind: engine.EventAdded, Info: &snap})
 	return id, nil
 }
 
@@ -237,7 +244,10 @@ func (e *Engine) Files(_ context.Context, id string) ([]engine.FileEntry, error)
 // Pause kills the process through Runner.Cancel and marks the task
 // paused; the partial file plus the download archive are what makes the
 // respawn a resume (section 10.1). Pausing a paused task is a no-op;
-// pausing a terminal one is an error, not a state rewrite.
+// pausing a terminal one is an error, not a state rewrite. A process
+// that exits on its own between the snapshot and the kill settles
+// through the watcher as completed or error instead, while Pause still
+// returns nil — the last writer wins, by design.
 func (e *Engine) Pause(_ context.Context, id string) error {
 	e.mu.Lock()
 	rec, ok := e.tasks[id]
@@ -265,7 +275,9 @@ func (e *Engine) Pause(_ context.Context, id string) error {
 
 // Resume respawns a paused task with the stored AddRequest. A running
 // task is a no-op; a respawn clears the terminal fields the last exit
-// left so a retry after error does not present stale codes.
+// left so a retry after error does not present stale codes. Resuming a
+// completed task respawns it too, but the download archive makes the
+// re-run a fast near-no-op that re-settles completed.
 func (e *Engine) Resume(ctx context.Context, id string) error {
 	e.mu.Lock()
 	rec, ok := e.tasks[id]
@@ -288,8 +300,10 @@ func (e *Engine) Resume(ctx context.Context, id string) error {
 	snap := rec.info
 	e.mu.Unlock()
 
-	go e.watch(id, proc)
+	// As in Add, the transition is announced before the watcher can emit
+	// the first progress line of the respawned process.
 	e.emit(engine.TaskEvent{TaskID: id, Kind: engine.EventStarted, Info: &snap})
+	go e.watch(id, proc)
 	return nil
 }
 
@@ -376,6 +390,9 @@ func (e *Engine) Rename(_ context.Context, id, name string) error {
 // uploads nothing. An empty id stores the global limit the next spawn
 // of any task combines with its own.
 func (e *Engine) SetRateLimits(_ context.Context, id string, down, _ *int64) error {
+	if down != nil && *down < 0 {
+		return fmt.Errorf("ytdlp: negative download rate limit %d", *down)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
