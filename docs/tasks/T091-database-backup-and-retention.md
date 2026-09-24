@@ -28,7 +28,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
-| `internal/store/maintenance.go` | create | `BackupInto`, `PruneBackups` and the five retention deletes. |
+| `internal/store/maintenance.go` | create | `BackupsDirName`, `BackupInto`, `PruneBackups` and the five retention deletes. |
 | `internal/store/maintenance_test.go` | create | The four store-level cases `## Verification` names. |
 | `internal/api/system.go` | create | The `POST /system/backup` handler; later system routes join this file. |
 | `internal/api/system_test.go` | create | Success, conflict and partial-file cases. |
@@ -54,6 +54,11 @@ type BackupResult struct {
 	SizeBytes int64     `db:"-"`
 	CreatedAt time.Time `db:"-"`
 }
+
+// BackupsDirName is the ConfigDir subdirectory every backup lives in — the one
+// derivation site, so the store.Open join, the handler and the scheduler attach
+// cannot spell the directory two ways.
+const BackupsDirName = "backups"
 
 // MaintenanceStore is the domain store for backup and retention — the
 // TaskStore/SettingsStore shape, not a package-wide aggregate. The composition
@@ -103,7 +108,7 @@ type CreateBackupOutput struct {
 }
 
 // NewSystemHandlers takes the one MaintenanceStore and the backup directory —
-// the filepath.Join(cfg.ConfigDir, "backups") the composition root resolves once.
+// filepath.Join(cfg.ConfigDir, store.BackupsDirName), resolved once.
 func NewSystemHandlers(m *store.MaintenanceStore, backupDir string) *SystemHandlers
 
 func (h *SystemHandlers) CreateBackup(ctx context.Context, in *struct{}) (*CreateBackupOutput, error)
@@ -139,13 +144,16 @@ Worked response, `201`:
    and any other failure to `500` `/problems/internal`.
 8. Edit `internal/jobs/cron.go` to add `Scheduler.WithMaintenance(m *store.MaintenanceStore, backupDir
    string)` — the `WithGovernor`/`WithWatcher` attach pattern — and, while a store is attached, three
-   entries on T066's `Scheduler`: `0 3 * * *` running the backup then `PruneBackups(backupDir, 7)` then
-   the two nightly prunes, and `@hourly` running `PruneSearchJobs`. The call site is
+   entries on T066's `Scheduler`: `0 3 * * *` running `BackupInto(backupDir)` then
+   `PruneBackups(backupDir, 7)`, a second `0 3 * * *` entry running the two retention prunes
+   (`PruneTaskEvents`, `PruneDoneJobs`), and `@hourly` running `PruneSearchJobs`. The call site is
    `cmd/dl-tool/main.go`'s scheduler chain —
-   `NewScheduler(db, logger).WithGovernor(governor).WithWatcher(watcher).WithMaintenance(server.Maintenance, filepath.Join(cfg.ConfigDir, backupsDirName))`.
+   `NewScheduler(db, logger).WithGovernor(governor).WithWatcher(watcher).WithMaintenance(server.Maintenance, filepath.Join(cfg.ConfigDir, store.BackupsDirName))`
+   — with `store.BackupsDirName` superseding the file-local `backupsDirName` const, the `store.Open`
+   join included.
 9. Edit `internal/api/server.go` to register the operation as `create-backup` on `POST /system/backup`,
    building the `*store.MaintenanceStore` in `NewServer`, handing it to `NewSystemHandlers` with
-   `filepath.Join(cfg.ConfigDir, "backups")` and exporting it as `Server.Maintenance` — the
+   `filepath.Join(cfg.ConfigDir, store.BackupsDirName)` and exporting it as `Server.Maintenance` — the
    `RuleCreator`/`WatchCreator` sharing rule of doc 14 §8.3 — so `cmd/dl-tool` attaches the same
    instance to the scheduler.
 10. Create `internal/api/system_test.go`: a successful backup returns `201` and a file that opens and
@@ -200,7 +208,7 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 home of the four store-level cases `## Verification` names — and `cmd/dl-tool/main.go`, the only
 `NewScheduler` call site. `internal/jobs/cron.go` gains `Scheduler.WithMaintenance` beside
 `WithGovernor`/`WithWatcher`, step 8 names the `cmd/dl-tool/main.go` call site that attaches the
-store and `filepath.Join(cfg.ConfigDir, backupsDirName)`, and step 9 has `NewServer` build and export
+store and `filepath.Join(cfg.ConfigDir, store.BackupsDirName)`, and step 9 has `NewServer` build and export
 the one `*store.MaintenanceStore` as `Server.Maintenance`, so the `ErrBackupRunning` lock spans the
 nightly entry and `POST /system/backup`. The contract receiver is `MaintenanceStore`, matching the
 merged `TaskStore`/`SettingsStore` precedent. The original record is preserved below.
