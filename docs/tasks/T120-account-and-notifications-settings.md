@@ -316,6 +316,3 @@ grep -n "^func" internal/store/users.go
   T117/T118/T119 chain through T092.
 - M6's exit checkpoint cannot pass while this deferral stands; the gap stays visible through
   this record and the checkpoint.
-
-## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
