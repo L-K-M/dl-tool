@@ -4,13 +4,13 @@
 |---|---|
 | **ID** | T091 |
 | **Milestone** | M6 |
-| **Status** | deferred — see the open `## Blocked — 2026-09-23` record |
+| **Status** | todo |
 | **Depends on** | T006, T012, T066 |
 | **Blocks** | T092, T121 |
-| **Parallel-safe** | no — it edits `internal/jobs/cron.go` and `internal/api/server.go` |
+| **Parallel-safe** | no — it edits `internal/jobs/cron.go`, `internal/api/server.go` and `cmd/dl-tool/main.go` |
 | **Implements** | [FR-142](../02-requirements.md#fr-142-produce-consistent-backups), [NFR-026](../02-requirements.md#nfr-026-store-data-durably-in-one-sqlite-database) |
 | **Decisions** | [ADR-0004](../decisions/0004-sqlite-as-the-only-datastore.md), [ADR-0015](../decisions/0015-db-backed-in-process-job-queue.md) |
-| **Est. size** | 3 new files, ~380 LOC |
+| **Est. size** | 4 new files, ~480 LOC |
 
 ## Goal
 `POST /api/v1/system/backup` writes a consistent snapshot with `VACUUM INTO` and returns its path and size.
@@ -29,10 +29,12 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | Path | Action | Purpose |
 |---|---|---|
 | `internal/store/maintenance.go` | create | `BackupInto`, `PruneBackups` and the five retention deletes. |
+| `internal/store/maintenance_test.go` | create | The four store-level cases `## Verification` names. |
 | `internal/api/system.go` | create | The `POST /system/backup` handler; later system routes join this file. |
 | `internal/api/system_test.go` | create | Success, conflict and partial-file cases. |
-| `internal/jobs/cron.go` | edit | Add the nightly backup and retention entries and the hourly search prune. |
-| `internal/api/server.go` | edit | Register `create-backup`. |
+| `internal/jobs/cron.go` | edit | Add `Scheduler.WithMaintenance`, the nightly backup and retention entries and the hourly search prune. |
+| `internal/api/server.go` | edit | Register `create-backup`; build and export the one `MaintenanceStore`. |
+| `cmd/dl-tool/main.go` | edit | Attach the maintenance store and the backup directory to the scheduler chain. |
 
 No other file may be modified.
 
@@ -53,6 +55,13 @@ type BackupResult struct {
 	CreatedAt time.Time `db:"-"`
 }
 
+// MaintenanceStore is the domain store for backup and retention — the
+// TaskStore/SettingsStore shape, not a package-wide aggregate. The composition
+// root shares one instance between NewSystemHandlers and the scheduler's
+// WithMaintenance attach, so the ErrBackupRunning lock spans the cron entry
+// and POST /system/backup.
+func NewMaintenanceStore(db *sqlx.DB) *MaintenanceStore
+
 // BackupInto writes a consistent snapshot into dir using SQLite's VACUUM INTO.
 //
 // It generates the name dl-tool.db.<UTC>.bak — where <UTC> is the existing backupTimestampFormat
@@ -62,7 +71,7 @@ type BackupResult struct {
 // enforces 0600, fsyncs it, renames it into place and fsyncs the directory. An interrupted
 // statement never produces a file that looks like a good backup. It returns ErrBackupRunning when
 // another backup holds the in-process lock.
-func (s *Store) BackupInto(ctx context.Context, dir string) (BackupResult, error)
+func (s *MaintenanceStore) BackupInto(ctx context.Context, dir string) (BackupResult, error)
 
 // ErrBackupRunning maps to 409 /problems/conflict.
 var ErrBackupRunning = errors.New("store: a backup is already running")
@@ -71,13 +80,13 @@ var ErrBackupRunning = errors.New("store: a backup is already running")
 // the glob dl-tool.db.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9]*Z.bak, whose timestamp-shaped
 // middle segment excludes the dl-tool.db.pre-migration-*.bak and dl-tool.db.replaced-*.bak families,
 // which this job must never count or prune (docs/04-data-model.md §6).
-func (s *Store) PruneBackups(ctx context.Context, dir string, keep int) (deleted int, err error)
+func (s *MaintenanceStore) PruneBackups(ctx context.Context, dir string, keep int) (deleted int, err error)
 
 
 // Retention windows from docs/04-data-model.md §7. now is injected so the tests are deterministic.
-func (s *Store) PruneTaskEvents(ctx context.Context, now time.Time) (int64, error)   // at < now-90d
-func (s *Store) PruneDoneJobs(ctx context.Context, now time.Time) (int64, error)     // state='done', older than 7d
-func (s *Store) PruneSearchJobs(ctx context.Context, now time.Time) (int64, error)   // created_at < now-24h
+func (s *MaintenanceStore) PruneTaskEvents(ctx context.Context, now time.Time) (int64, error)   // at < now-90d
+func (s *MaintenanceStore) PruneDoneJobs(ctx context.Context, now time.Time) (int64, error)     // state='done', older than 7d
+func (s *MaintenanceStore) PruneSearchJobs(ctx context.Context, now time.Time) (int64, error)   // created_at < now-24h
 ```
 
 ```go
@@ -92,6 +101,10 @@ type CreateBackupOutput struct {
 		CreatedAt string `json:"created_at"` // RFC 3339 UTC
 	}
 }
+
+// NewSystemHandlers takes the one MaintenanceStore and the backup directory —
+// the filepath.Join(cfg.ConfigDir, "backups") the composition root resolves once.
+func NewSystemHandlers(m *store.MaintenanceStore, backupDir string) *SystemHandlers
 
 func (h *SystemHandlers) CreateBackup(ctx context.Context, in *struct{}) (*CreateBackupOutput, error)
 ```
@@ -119,13 +132,22 @@ Worked response, `201`:
    everything past `keep`. Never touch a temporary `*.tmp` file younger than one hour.
 5. Implement `PruneTaskEvents`, `PruneDoneJobs` and `PruneSearchJobs` with the exact windows and columns of
    doc 04 §7. `search_results` follows its `ON DELETE CASCADE`; write no separate delete for it.
-6. Create `internal/api/system.go` with `SystemHandlers`, its constructor taking the store and the config
-   directory, and `CreateBackup` calling `BackupInto(ctx, cfg.ConfigDir+"/backups")` then `PruneBackups(…, 7)`.
+6. Create `internal/api/system.go` with `SystemHandlers`, its constructor taking the
+   `*store.MaintenanceStore` and the backup directory, and `CreateBackup` calling
+   `BackupInto(ctx, backupDir)` then `PruneBackups(ctx, backupDir, 7)`.
 7. Map `ErrBackupRunning` to `409` `/problems/conflict`
    and any other failure to `500` `/problems/internal`.
-8. Edit `internal/jobs/cron.go` to add three entries to T066's `Scheduler`: `0 3 * * *` running the backup
-   then `PruneBackups(7)` then the two nightly prunes, and `@hourly` running `PruneSearchJobs`.
-9. Edit `internal/api/server.go` to register the operation as `create-backup` on `POST /system/backup`.
+8. Edit `internal/jobs/cron.go` to add `Scheduler.WithMaintenance(m *store.MaintenanceStore, backupDir
+   string)` — the `WithGovernor`/`WithWatcher` attach pattern — and, while a store is attached, three
+   entries on T066's `Scheduler`: `0 3 * * *` running the backup then `PruneBackups(backupDir, 7)` then
+   the two nightly prunes, and `@hourly` running `PruneSearchJobs`. The call site is
+   `cmd/dl-tool/main.go`'s scheduler chain —
+   `NewScheduler(db, logger).WithGovernor(governor).WithWatcher(watcher).WithMaintenance(server.Maintenance, filepath.Join(cfg.ConfigDir, backupsDirName))`.
+9. Edit `internal/api/server.go` to register the operation as `create-backup` on `POST /system/backup`,
+   building the `*store.MaintenanceStore` in `NewServer`, handing it to `NewSystemHandlers` with
+   `filepath.Join(cfg.ConfigDir, "backups")` and exporting it as `Server.Maintenance` — the
+   `RuleCreator`/`WatchCreator` sharing rule of doc 14 §8.3 — so `cmd/dl-tool` attaches the same
+   instance to the scheduler.
 10. Create `internal/api/system_test.go`: a successful backup returns `201` and a file that opens and
     answers `PRAGMA integrity_check` with `ok`; a second concurrent call returns `409`; and a forced
     failure mid-statement leaves no file matching `dl-tool.db.*.bak`.
@@ -172,7 +194,20 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 ## Evidence
 <Agent pastes command output here before marking done.>
 
-## Blocked — 2026-09-23: the `## Files` table lacks the wiring file and the store test file
+## Blocked — resolved
+
+**Remedy 1 was applied.** The `## Files` table now lists `internal/store/maintenance_test.go` — the
+home of the four store-level cases `## Verification` names — and `cmd/dl-tool/main.go`, the only
+`NewScheduler` call site. `internal/jobs/cron.go` gains `Scheduler.WithMaintenance` beside
+`WithGovernor`/`WithWatcher`, step 8 names the `cmd/dl-tool/main.go` call site that attaches the
+store and `filepath.Join(cfg.ConfigDir, backupsDirName)`, and step 9 has `NewServer` build and export
+the one `*store.MaintenanceStore` as `Server.Maintenance`, so the `ErrBackupRunning` lock spans the
+nightly entry and `POST /system/backup`. The contract receiver is `MaintenanceStore`, matching the
+merged `TaskStore`/`SettingsStore` precedent. The original record is preserved below.
+
+---
+
+### The original 2026-09-23 record
 
 The `dl-tool.db.<UTC>.bak` remedy below resolved the naming contradiction; the contract is now
 self-consistent. Implementing it still cannot stay inside `## Files`: two files the work
