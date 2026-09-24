@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T120 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | deferred — see the open `## Blocked — 2026-09-24` record |
 | **Depends on** | T053, T084, T106 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `SettingsScreen.tsx` and `settings.json`, shared with T116–T119 and T121 |
@@ -236,6 +236,86 @@ of these files are new and `git diff --name-only` never lists an untracked file.
 
 ## Evidence
 <Agent pastes command output here before marking done.>
+
+## Blocked — 2026-09-24: no task owns the `GET`/`PATCH /account` operations the section is built on
+
+The Account half of this task cannot be implemented inside `## Files` because the endpoints it
+calls do not exist, and the generated client makes the gap a compile error rather than a stub
+the tests could hide.
+
+### The gap
+
+The interface contract binds `AccountSection.tsx` to `GET /account` and `PATCH /account`
+(doc 05 §12) through the T014 `api` client, and three acceptance criteria name that pair —
+`TestPasswordChangeSendsCurrentPassword` asserts the `PATCH /account` body carries `password`
+and `current_password`, and `TestWrongCurrentPasswordRendersInline` asserts its
+`403 /problems/forbidden`. But `api/openapi.json` has no `/account` path at all: T084, the task
+doc 05 §12's token half was carved into, registered only `list-api-tokens`, `create-api-token`
+and `revoke-api-token`. Because `web/src/api/schema.d.ts` is generated from that document and
+may not be hand-edited, `api.GET("/account")` and `api.PATCH("/account", …)` do not typecheck —
+`make typecheck`, the second command in `## Verification`, fails on the call the contract
+mandates.
+
+Root cause is a dropped hand-off, not a contradiction: T009's out-of-scope note reads "Do NOT
+implement `/account` or `/api-tokens`; T084 and T120 own them", T084's Files table covered only
+the three `/api-tokens` operations, and T120's table is five `web/` files. No task ever carried
+`internal/api/account.go`, its test, the `server.go` registration or the store writes.
+
+The missing work is wider than two handlers. Doc 05 §12 requires `PATCH /account` to verify
+`current_password` (403 on mismatch), enforce the 12-character floor (422), and revoke every
+session except the caller's — but `internal/store/users.go` has no update for `username`,
+`locale` or `password_hash` and no delete-sessions-except (only `DeleteSession(id)` and
+`DeleteExpiredSessions`). The read side alone could come from `GET /auth/me` — its `user` member
+is the same shape the contract calls `Account` — but the write side has no substitute anywhere
+in the spec, and routing the form through a different path than the one the contract and tests
+name would be overriding a documented requirement.
+
+The Notifications half is unblocked — every `/notifications` operation including
+`POST /notifications/{id}/test` is in the committed OpenAPI — but the task is one commit: two of
+five Files-table rows and three of six acceptance tests are account work, so the task cannot
+land half-built.
+
+Rerunnable evidence on this commit:
+
+```bash
+# No /account path in the committed OpenAPI document; the three token ops are all T084 shipped.
+python3 -c "import json; print([p for p in json.load(open('api/openapi.json'))['paths'] if 'account' in p or 'token' in p])"
+# → ['/api-tokens', '/api-tokens/{id}']
+
+# So the generated client has no "/account" key and the mandated call cannot compile.
+grep -n '"/account"' web/src/api/schema.d.ts   # → no matches
+
+# T009 punted the pair; T084's table lists only the token operations.
+grep -n "account" docs/tasks/T009-first-run-setup-and-login.md docs/tasks/T084-api-tokens.md
+
+# The store has no profile/password update and no delete-sessions-except-the-caller's.
+grep -n "^func" internal/store/users.go
+```
+
+### Remedies — either unblocks the task
+
+1. Widen this task's `## Files` table to full-stack — add `internal/api/account.go | create`,
+   `internal/api/account_test.go | create`, `internal/api/server.go | edit` (register
+   `get-account`/`patch-account`) and `internal/store/users.go | edit` (profile/password update
+   and delete-other-sessions); `api/openapi.json` and `web/src/api/schema.d.ts` are already
+   implicit under doc 13 §7.1. Doc 05 §12 adjudicates every behaviour the handlers need, so no
+   new ADR is required — only the file rows.
+2. Or file a carrier task (next free id) owning the two account operations and the store
+   methods end-to-end — the T084 shape — and add it to this task's `Depends on`, keeping T120
+   web-only.
+
+### Deferral mechanics — same shape as T091's record
+
+- The picker takes the topmost eligible `todo` row and T120 is eligible today, so leaving it
+  `todo` re-selects it on every iteration. The row is set to `deferred` — the status the picker
+  skips — in this file's `**Status**` cell and both `00-task-index.md` rows (the
+  T078/T091/T108 precedent). This chooses neither remedy; un-deferring flips the same three
+  cells back to `todo` in the same change that lands the remedy.
+- The deferral stalls nothing: T120's `**Blocks**` is empty. With it parked, the picker's next
+  eligible row is T087 (T005, T016 `done`) — T092 remains stalled on T091's open deferral and
+  T117/T118/T119 chain through T092.
+- M6's exit checkpoint cannot pass while this deferral stands; the gap stays visible through
+  this record and the checkpoint.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
