@@ -186,7 +186,12 @@ func (s *MaintenanceStore) PruneBackups(ctx context.Context, dir string, keep in
 		if err := ctx.Err(); err != nil {
 			return deleted, err
 		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(path); err != nil {
+			// A file that vanished between Glob and Remove needed no
+			// deletion and is not counted as one.
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return deleted, fmt.Errorf("store: remove old backup %q: %w", path, err)
 		}
 		deleted++
