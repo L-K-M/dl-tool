@@ -199,21 +199,21 @@ All matched files use Prettier code style!
 ```
 $ make test PKG=./internal/...
 go test -race -count=1 ./internal/...
-ok  	github.com/L-K-M/dl-tool/internal/api	199.697s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.137s
-ok  	github.com/L-K-M/dl-tool/internal/engine	35.142s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.246s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.840s
-ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.659s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	3.134s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	30.978s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.261s
-ok  	github.com/L-K-M/dl-tool/internal/rss	20.880s
-ok  	github.com/L-K-M/dl-tool/internal/search	7.493s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.583s
-ok  	github.com/L-K-M/dl-tool/internal/store	86.177s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.384s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.081s
+ok  	github.com/L-K-M/dl-tool/internal/api	209.224s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.154s
+ok  	github.com/L-K-M/dl-tool/internal/engine	35.356s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.236s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.864s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.434s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	3.037s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	29.645s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.277s
+ok  	github.com/L-K-M/dl-tool/internal/rss	19.516s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.495s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.488s
+ok  	github.com/L-K-M/dl-tool/internal/store	84.304s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.416s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.100s
 ```
 
 The named tests Verification requires, run verbosely:
