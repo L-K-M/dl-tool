@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T119 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T050, T053, T074, T083, T092, T107 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `SettingsScreen.tsx` and `settings.json`, shared with T116–T118, T120 and T121 |
@@ -169,16 +169,16 @@ dirty.
 12. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestSavesOnlyChangedSettingKeys` asserts the `PATCH /settings` body holds exactly the changed keys and
+- [x] `TestSavesOnlyChangedSettingKeys` asserts the `PATCH /settings` body holds exactly the changed keys and
       no key outside `DOWNLOAD_KEYS`.
-- [ ] `TestPasswordListNeverEchoesRedaction` asserts the stored list is never rendered and that no request
+- [x] `TestPasswordListNeverEchoesRedaction` asserts the stored list is never rendered and that no request
       body ever carries `"__redacted__"` as a value.
-- [ ] `TestMinFreeSpacePerRoot` renders one input per `GET /fs/roots` entry and sends the whole map.
-- [ ] `TestWatchFolderScanRendersReport` asserts `scanned`, the created count and each `skipped.reason`.
-- [ ] `TestCategoryTableCrud` asserts a create, a rename and a delete against `/categories`.
-- [ ] `TestBitTorrentSectionIsReadOnly` asserts nine rows, zero form controls, no Save bar, and that the
+- [x] `TestMinFreeSpacePerRoot` renders one input per `GET /fs/roots` entry and sends the whole map.
+- [x] `TestWatchFolderScanRendersReport` asserts `scanned`, the created count and each `skipped.reason`.
+- [x] `TestCategoryTableCrud` asserts a create, a rename and a delete against `/categories`.
+- [x] `TestBitTorrentSectionIsReadOnly` asserts nine rows, zero form controls, no Save bar, and that the
       `qbittorrent` `last_error` string is rendered.
-- [ ] Every path on the screen is chosen through `FolderBrowserDialog`, never typed free-hand.
+- [x] Every path on the screen is chosen through `FolderBrowserDialog`, never typed free-hand.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -214,7 +214,61 @@ of these files are new and `git diff --name-only` never lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test-web && echo DOWNLOADS_OK` on the final
+tree (the MSW `onUnhandledRequest` and React `flushSync` stderr lines are
+pre-existing test noise; only the per-file results and the summary are
+reproduced):
+
+```text
+$ make lint && make typecheck && make test-web && echo DOWNLOADS_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+cd web && npx vitest run
+
+ ✓ src/components/Settings/DownloadsSection.test.tsx (6 tests) 1588ms
+
+ Test Files  25 passed (25)
+      Tests  298 passed (298)
+
+DOWNLOADS_OK
+```
+
+The six acceptance-named tests, run verbosely on the same tree:
+
+```text
+$ npx vitest run src/components/Settings/DownloadsSection.test.tsx --reporter=verbose
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestSavesOnlyChangedSettingKeys 312ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestPasswordListNeverEchoesRedaction 131ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestMinFreeSpacePerRoot 67ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestWatchFolderScanRendersReport 67ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestCategoryTableCrud 233ms
+ ✓ src/components/Settings/DownloadsSection.test.tsx > TestBitTorrentSectionIsReadOnly 27ms
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+```
+
+Scope check on the working tree before the task commit — exactly the `## Files`
+table and nothing else:
+
+```text
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+web/src/components/Settings/BitTorrentSection.tsx
+web/src/components/Settings/DownloadsSection.test.tsx
+web/src/components/Settings/DownloadsSection.tsx
+web/src/components/Settings/SettingsScreen.tsx
+web/src/locales/en/settings.json
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

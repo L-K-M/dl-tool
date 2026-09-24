@@ -6,7 +6,9 @@ import { initI18n } from "../../i18n";
 import settingsStrings from "../../locales/en/settings.json";
 import { Button } from "../ui/button";
 import { BandwidthSection } from "./BandwidthSection";
+import { BitTorrentSection } from "./BitTorrentSection";
 import { ConnectionSection } from "./ConnectionSection";
+import { DownloadsSection } from "./DownloadsSection";
 import { GeneralSection } from "./GeneralSection";
 import { IndexersSection } from "./IndexersSection";
 import { RssSection } from "./RssSection";
@@ -34,6 +36,8 @@ const SECTION_FORMS = {
   general: GeneralSection,
   connection: ConnectionSection,
   bandwidth: BandwidthSection,
+  bittorrent: BitTorrentSection,
+  downloads: DownloadsSection,
   rss: RssSection,
   indexers: IndexersSection,
 } satisfies Partial<Record<Section, () => JSX.Element>>;
@@ -52,8 +56,6 @@ export const ARRIVAL: Record<
   Exclude<Section, keyof typeof SECTION_FORMS>,
   string
 > = {
-  bittorrent: "M6",
-  downloads: "M6",
   account: "M6",
   notifications: "M6",
   advanced: "M7",
