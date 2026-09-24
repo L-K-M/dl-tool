@@ -163,6 +163,9 @@ type Server struct {
 	// 14, including the test send.
 	notifications *NotificationHandlers
 
+	// account owns the /account operations of doc 05 section 12.
+	account *AccountHandlers
+
 	// tokens owns the /api-tokens operations of doc 05 section 12.
 	tokens *TokenHandlers
 
@@ -423,6 +426,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 		notifications: NewNotificationHandlers(
 			db, cfg.SecretKey, notifyHTTP, taskGuard, net.DefaultResolver,
 		),
+		account:      NewAccountHandlers(db),
 		tokens:       NewTokenHandlers(db),
 		system:       systemHandlers,
 		RuleCreator:  creator,
@@ -596,6 +600,7 @@ func (s *Server) registerOperations() {
 	s.feeds.Register(s.API)
 	s.rules.Register(s.API)
 	s.notifications.Register(s.API)
+	s.account.Register(s.API)
 	s.tokens.Register(s.API)
 	s.system.Register(s.API)
 	s.SSE.RegisterOperations(s.API)

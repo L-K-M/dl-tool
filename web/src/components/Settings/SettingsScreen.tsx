@@ -5,12 +5,14 @@ import { create } from "zustand";
 import { initI18n } from "../../i18n";
 import settingsStrings from "../../locales/en/settings.json";
 import { Button } from "../ui/button";
+import { AccountSection } from "./AccountSection";
 import { BandwidthSection } from "./BandwidthSection";
 import { BitTorrentSection } from "./BitTorrentSection";
 import { ConnectionSection } from "./ConnectionSection";
 import { DownloadsSection } from "./DownloadsSection";
 import { GeneralSection } from "./GeneralSection";
 import { IndexersSection } from "./IndexersSection";
+import { NotificationsSection } from "./NotificationsSection";
 import { RssSection } from "./RssSection";
 
 initI18n().addResourceBundle("en", "settings", settingsStrings);
@@ -40,6 +42,8 @@ const SECTION_FORMS = {
   downloads: DownloadsSection,
   rss: RssSection,
   indexers: IndexersSection,
+  account: AccountSection,
+  notifications: NotificationsSection,
 } satisfies Partial<Record<Section, () => JSX.Element>>;
 
 /** Sections whose endpoints exist at M3. Every other section renders the one-line note
@@ -56,8 +60,6 @@ export const ARRIVAL: Record<
   Exclude<Section, keyof typeof SECTION_FORMS>,
   string
 > = {
-  account: "M6",
-  notifications: "M6",
   advanced: "M7",
 };
 
