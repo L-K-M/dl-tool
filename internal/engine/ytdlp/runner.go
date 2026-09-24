@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
 )
@@ -76,13 +77,15 @@ func Argv(cfg Config, req engine.AddRequest, archivePath, infoJSONPath string, r
 		"--no-simulate",
 	}
 	if len(req.URIs) > 0 {
-		args = append(args, req.URIs[0])
+		// "--" ends option parsing: a submitted URI that begins with "-" must
+		// be treated as a URL, never consumed as a yt-dlp flag.
+		args = append(args, "--", req.URIs[0])
 	}
 	return args
 }
 
-// boundedBuffer is an io.Writer that keeps at most limit bytes and reports a
-// full write either way, so a chatty child never blocks on stderr.
+// boundedBuffer is an io.Writer that keeps at most the last limit bytes and
+// reports a full write either way, so a chatty child never blocks on stderr.
 type boundedBuffer struct {
 	mu    sync.Mutex
 	buf   []byte
@@ -92,8 +95,9 @@ type boundedBuffer struct {
 func (b *boundedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if rem := b.limit - len(b.buf); rem > 0 {
-		b.buf = append(b.buf, p[:min(len(p), rem)]...)
+	b.buf = append(b.buf, p...)
+	if overflow := len(b.buf) - b.limit; overflow > 0 {
+		b.buf = slices.Delete(b.buf, 0, overflow)
 	}
 	return len(p), nil
 }
@@ -111,6 +115,10 @@ type Proc struct {
 	SaveDir   string
 	InfoPath  string
 	StartedAt time.Time
+	// Stdout is the child's stdout, a line reader for T089. It yields a clean
+	// EOF once the process exits; the consumer owns closing it and must drain
+	// it promptly or the child blocks on a full pipe.
+	Stdout *os.File
 
 	cancel   context.CancelFunc
 	done     chan struct{} // closed by the reaper goroutine once Cmd.Wait returns
@@ -154,11 +162,22 @@ func childEnv() []string {
 }
 
 // Spawn starts one process for req under the caller-supplied engine-namespaced id and returns
-// immediately. Stdout is available as proc.Cmd.Stdout, a line reader for T089; stderr is
-// captured into a bounded buffer.
+// immediately. Stdout is returned as a line reader for T089; stderr is captured into a
+// bounded buffer.
 func (r *Runner) Spawn(ctx context.Context, id string, req engine.AddRequest, rateLimitBytesPerSecond int64) (*Proc, error) {
 	if len(req.URIs) == 0 {
 		return nil, fmt.Errorf("ytdlp spawn %s: request carries no URI", id)
+	}
+	saveDir, err := filepath.Abs(req.SaveDir)
+	if err != nil {
+		return nil, fmt.Errorf("ytdlp spawn %s: resolving save dir: %w", id, err)
+	}
+	req.SaveDir = saveDir
+	if err := rejectEscapingOutputTemplate(req.Filename); err != nil {
+		return nil, fmt.Errorf("ytdlp spawn %s: %w", id, err)
+	}
+	if err := os.MkdirAll(r.cfg.ArchiveDir, 0o777); err != nil {
+		return nil, fmt.Errorf("ytdlp spawn %s: archive dir: %w", id, err)
 	}
 	infoPath := filepath.Join(req.SaveDir, InfoJSONName)
 	args := Argv(r.cfg, req, r.ArchivePath(id), infoPath, rateLimitBytesPerSecond)
@@ -174,10 +193,16 @@ func (r *Runner) Spawn(ctx context.Context, id string, req engine.AddRequest, ra
 	cmd := exec.CommandContext(spawnCtx, r.cfg.BinaryPath, args...)
 	cmd.Dir = req.SaveDir
 	cmd.Env = childEnv()
-	if _, err := cmd.StdoutPipe(); err != nil {
+	// A raw os.Pipe, not StdoutPipe: exec documents that Wait must not run
+	// while a StdoutPipe is still being read, and T089 drains this stream
+	// across the child's exit. With an *os.File the fd is inherited directly
+	// and the reader sees a clean EOF.
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("ytdlp spawn %s: stdout pipe: %w", id, err)
 	}
+	cmd.Stdout = stdoutW
 	stderr := &boundedBuffer{limit: stderrBound}
 	cmd.Stderr = stderr
 
@@ -187,12 +212,17 @@ func (r *Runner) Spawn(ctx context.Context, id string, req engine.AddRequest, ra
 	if _, dup := r.live[id]; dup {
 		r.mu.Unlock()
 		cancel()
-		return nil, fmt.Errorf("ytdlp spawn %s: id already running", id)
+		return nil, fmt.Errorf("ytdlp spawn %s: %w", id, errors.Join(errors.New("id already running"), stdoutR.Close(), stdoutW.Close()))
 	}
 	if err := cmd.Start(); err != nil {
 		r.mu.Unlock()
 		cancel()
-		return nil, fmt.Errorf("ytdlp spawn %s: %w", id, err)
+		return nil, fmt.Errorf("ytdlp spawn %s: %w", id, errors.Join(err, stdoutR.Close(), stdoutW.Close()))
+	}
+	// The child inherited its own copy of the write end; the parent's copy
+	// must close now or the reader never sees EOF.
+	if err := stdoutW.Close(); err != nil {
+		r.log.Warn("ytdlp stdout write-end close failed", slog.String("task_id", id), slog.String("error", err.Error()))
 	}
 	p := &Proc{
 		ID:        id,
@@ -200,6 +230,7 @@ func (r *Runner) Spawn(ctx context.Context, id string, req engine.AddRequest, ra
 		SaveDir:   req.SaveDir,
 		InfoPath:  infoPath,
 		StartedAt: time.Now(),
+		Stdout:    stdoutR,
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		stderr:    stderr,
@@ -209,6 +240,7 @@ func (r *Runner) Spawn(ctx context.Context, id string, req engine.AddRequest, ra
 
 	go func() {
 		err := cmd.Wait()
+		cancel() // release the spawn context; the process is already gone
 		p.waitErr = err
 		p.exitCode = -1
 		if err == nil {
@@ -220,6 +252,24 @@ func (r *Runner) Spawn(ctx context.Context, id string, req engine.AddRequest, ra
 	}()
 
 	return p, nil
+}
+
+// rejectEscapingOutputTemplate refuses a Filename that would write outside the
+// task's SaveDir: an absolute -o overrides --paths entirely, and ".."/"~"
+// templates traverse out of it.
+func rejectEscapingOutputTemplate(output string) error {
+	if output == "" {
+		return nil
+	}
+	if filepath.IsAbs(output) || strings.HasPrefix(output, "~") {
+		return fmt.Errorf("output template escapes save dir: %q", output)
+	}
+	for _, seg := range strings.FieldsFunc(output, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if seg == ".." {
+			return fmt.Errorf("output template escapes save dir: %q", output)
+		}
+	}
+	return nil
 }
 
 // Cancel kills the process for id via its context. It is idempotent and returns
@@ -236,7 +286,10 @@ func (r *Runner) Cancel(id string) error {
 	select {
 	case <-p.done:
 	case <-time.After(cancelGrace):
-		r.log.Warn("ytdlp process did not exit within cancel grace", slog.String("task_id", id))
+		// Keep the entry registered: the process may still be alive and Live
+		// must not under-report it. The caller learns the kill did not take.
+		r.log.Error("ytdlp process did not exit within cancel grace", slog.String("task_id", id))
+		return fmt.Errorf("ytdlp cancel %s: process did not exit within %s", id, cancelGrace)
 	}
 
 	r.mu.Lock()
@@ -277,6 +330,14 @@ func (r *Runner) Live() []string {
 }
 
 // ArchivePath returns <ArchiveDir>/<id>.txt with the engine prefix stripped from id.
+// The stem is sanitized to filename characters so a malformed id can never
+// traverse out of the archive directory.
 func (r *Runner) ArchivePath(id string) string {
-	return filepath.Join(r.cfg.ArchiveDir, strings.TrimPrefix(id, engineIDPrefix)+".txt")
+	stem := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, strings.TrimPrefix(id, engineIDPrefix))
+	return filepath.Join(r.cfg.ArchiveDir, stem+".txt")
 }

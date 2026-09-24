@@ -202,15 +202,31 @@ All matched files use Prettier code style!
 
 $ make test PKG=./internal/engine/ytdlp/...
 go test -race -count=1 ./internal/engine/ytdlp/...
-ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.050s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.057s
 ```
 
-`go test -race -count=1 -v ./internal/engine/ytdlp/...` lists all ten tests PASS, including
+`go test -race -count=1 -v ./internal/engine/ytdlp/...` lists all fifteen tests PASS, including
 `TestArgvPutsURILast`, `TestArgvRejectsShellComposition`, `TestSpawnAndCancel` and
 `TestCancelUnknownIDIsNotFound`. No `FAIL`.
 
-`grep -rn "sh -c\|bash -c\|exec.Command(\"" internal/engine/ytdlp/` prints nothing (exit 1);
-no line invokes `-U` or `--update-to` (the package comment names the rule, per step 1).
+Negative-space checks on the final tree:
+
+```
+$ grep -rn "sh -c\|bash -c\|exec.Command(\"" internal/engine/ytdlp/
+(exit 1, no output)
+
+$ grep -rn "LookPath" internal/engine/ytdlp/
+(exit 1, no output)
+
+$ grep -rn -- "-U\|--update-to" internal/engine/ytdlp/
+internal/engine/ytdlp/runner_test.go:88:	// parsed as a yt-dlp flag (ADR-0018 invariant: never -U or --update-to).
+internal/engine/ytdlp/runner_test.go:89:	for _, uri := range []string{"--update-to=nightly", "--simulate", "-x"} {
+internal/engine/ytdlp/runner.go:5:// invokes -U or --update-to: freshness comes from the weekly image rebuild,
+```
+
+The only `-U`/`--update-to` hits are the package comment naming the rule (per step 1), a test
+comment and a test URI literal fed to `Argv` to prove the end-of-options guard — nothing invokes
+either flag.
 
 Scope check:
 
