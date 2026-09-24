@@ -422,7 +422,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 			db, cfg.SecretKey, notifyHTTP, taskGuard, net.DefaultResolver,
 		),
 		tokens:       NewTokenHandlers(db),
-		system:       NewSystemHandlers(maintenance, filepath.Join(cfg.ConfigDir, store.BackupsDirName)),
+		system:       NewSystemHandlers(maintenance, store.BackupsDirFor(cfg.ConfigDir)),
 		RuleCreator:  creator,
 		WatchCreator: watchCreator,
 		SSE:          sseHandlers,

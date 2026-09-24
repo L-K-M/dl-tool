@@ -125,8 +125,9 @@ func main() {
 			// One derivation of the backup directory for the whole
 			// composition root: store.Open's pre-migration backups and the
 			// scheduler's WithMaintenance attach must agree with the
-			// ConfigDir/backups join NewServer hands NewSystemHandlers.
-			backupsDir := filepath.Join(cfg.ConfigDir, store.BackupsDirName)
+			// join NewServer hands NewSystemHandlers — so all three go
+			// through store.BackupsDirFor.
+			backupsDir := store.BackupsDirFor(cfg.ConfigDir)
 			db, err := store.Open(ctx, cfg.DBPath, backupsDir)
 			if err != nil {
 				logger.Error("database open failed", "err", err)

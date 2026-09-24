@@ -21,6 +21,14 @@ import (
 // cannot spell the directory two ways.
 const BackupsDirName = "backups"
 
+// BackupsDirFor is the one spelling of the join: the composition root and
+// NewServer must resolve the same path for pre-migration backups, the nightly
+// entry and POST /system/backup, or each would prune a directory the others
+// never write to.
+func BackupsDirFor(configDir string) string {
+	return filepath.Join(configDir, BackupsDirName)
+}
+
 // BackupKeepCount is the retention window of docs/04-data-model.md section 6:
 // POST /system/backup and the nightly entry each keep the newest seven
 // snapshots. One constant serves both call sites so they cannot drift.
