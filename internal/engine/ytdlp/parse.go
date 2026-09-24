@@ -90,6 +90,12 @@ func (p Progress) Apply(info *engine.TaskInfo) {
 	}
 	if p.Speed != nil {
 		info.DownloadRate = *p.Speed
+	} else if p.Status != progressStatusDownloading {
+		// Terminal lines emit speed:null; a finished or errored task is not
+		// transferring, so freezing the last downloading rate would be wrong.
+		// Mid-download a null keeps the last known value: int64 has no
+		// "unknown" representation.
+		info.DownloadRate = 0
 	}
 	// A null eta means "unknown", including on the terminal finished/error
 	// lines, so it clears a previously known value rather than going stale.

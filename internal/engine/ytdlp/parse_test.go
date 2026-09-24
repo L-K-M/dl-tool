@@ -142,11 +142,15 @@ func TestProgressApplyMapsStatusAndFields(t *testing.T) {
 		t.Fatalf("ContentPath = %q, want %q", info.ContentPath, "video.mp4")
 	}
 
-	// A terminal line reports eta:null — "unknown" — so it clears the ETA a
-	// downloading line left behind instead of letting it go stale.
+	// A terminal line reports eta:null and speed:null — "unknown" — so it
+	// clears the ETA a downloading line left behind and zeroes the rate
+	// instead of letting either go stale on a completed task.
 	(Progress{Status: "finished", Downloaded: int64ptr(2048), Total: int64ptr(2048), Filename: "video.mp4"}).Apply(&info)
 	if info.ETASeconds != nil {
 		t.Fatalf("ETASeconds = %v after a finished line with null eta, want nil", *info.ETASeconds)
+	}
+	if info.DownloadRate != 0 {
+		t.Fatalf("DownloadRate = %d after a finished line with null speed, want 0", info.DownloadRate)
 	}
 }
 
