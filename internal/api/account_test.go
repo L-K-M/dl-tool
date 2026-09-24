@@ -159,8 +159,8 @@ FROM users WHERE id = ?`, user.ID,
 
 // TestPatchAccountShortPasswordIs422 pins the validation failures of doc 05
 // section 12: a password under twelve characters and a password change
-// without current_password are both 422 /problems/validation-failed, as is
-// a username that normalises to the empty string.
+// without current_password are both 422 /problems/validation-failed, as are
+// a username or a locale that trims to the empty string.
 func TestPatchAccountShortPasswordIs422(t *testing.T) {
 	api, db := newAuthTestAPI(t)
 	user := seedUserWithPassword(t, db, accountTestPassword)
@@ -171,6 +171,7 @@ func TestPatchAccountShortPasswordIs422(t *testing.T) {
 		{"password": "short", "current_password": accountTestPassword},
 		{"password": "a perfectly long new password"},
 		{"username": "   "},
+		{"locale": "   "},
 	} {
 		response := api.Patch("/account", body, bearer)
 		assertProblem(t, response, http.StatusUnprocessableEntity, SlugValidationFailed)
