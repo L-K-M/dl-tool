@@ -592,6 +592,11 @@ var settingsKeys = []string{
 	settingAutoExtract, settingExtractPasswords, settingConfirmOnDelete,
 }
 
+// SettingsKeys returns a copy of the closed key set so other packages —
+// the API's PATCH schema — share this one canonical list instead of
+// duplicating it.
+func SettingsKeys() []string { return slices.Clone(settingsKeys) }
+
 // queryAllSettings reads only the documented keys; the whitelist, not a
 // blacklist, so an internal key can never leak into GET /settings.
 // settingsKeys must remain compile-time constants: they are interpolated
@@ -758,7 +763,7 @@ func canonicalSetting(key string, raw json.RawMessage) (encoded string, skip boo
 		// The typed Settings narrows these to int; bounding at MaxInt32
 		// keeps that conversion exact on every platform.
 		if decErr != nil || n < 0 || n > math.MaxInt32 {
-			return "", false, outOfRange("want a non-negative integer")
+			return "", false, outOfRange("want a non-negative integer no greater than 2147483647")
 		}
 		return strconv.FormatInt(n, 10), false, nil
 	case settingRSSIntervalS:

@@ -210,20 +210,20 @@ cd web && npx prettier --check .
 Checking formatting...
 All matched files use Prettier code style!
 go test -race -count=1 ./internal/...
-ok  	github.com/L-K-M/dl-tool/internal/api	195.758s
-ok  	github.com/L-K-M/dl-tool/internal/config	1.317s
-ok  	github.com/L-K-M/dl-tool/internal/engine	35.976s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.258s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.838s
-ok  	github.com/L-K-M/dl-tool/internal/fsx	3.104s
-ok  	github.com/L-K-M/dl-tool/internal/jobs	31.229s
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.260s
-ok  	github.com/L-K-M/dl-tool/internal/rss	21.858s
-ok  	github.com/L-K-M/dl-tool/internal/search	7.870s
-ok  	github.com/L-K-M/dl-tool/internal/secure	4.381s
-ok  	github.com/L-K-M/dl-tool/internal/store	84.558s
-ok  	github.com/L-K-M/dl-tool/internal/sync	4.430s
-ok  	github.com/L-K-M/dl-tool/internal/uri	1.069s
+ok  	github.com/L-K-M/dl-tool/internal/api	196.071s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.150s
+ok  	github.com/L-K-M/dl-tool/internal/engine	34.163s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.230s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.792s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.957s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	29.692s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.249s
+ok  	github.com/L-K-M/dl-tool/internal/rss	19.400s
+ok  	github.com/L-K-M/dl-tool/internal/search	7.050s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.388s
+ok  	github.com/L-K-M/dl-tool/internal/store	82.010s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.396s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.080s
 ```
 
 The named tests, individually (`go test -race -count=1 -v -run
@@ -231,36 +231,36 @@ The named tests, individually (`go test -race -count=1 -v -run
 ./internal/api/`):
 
 ```
---- PASS: TestSettingsRedactsExtractPasswords (0.45s)
---- PASS: TestPatchRedactedIsNoOp (0.37s)
---- PASS: TestPatchUnknownKeyIs422 (0.46s)
---- PASS: TestPatchOutOfRangeIs422 (0.46s)
-    --- PASS: TestPatchOutOfRangeIs422/relative_min_free_space_key (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_key (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/max_active_per_engine_overflows_int (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/process_order_other_enum (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/extract_passwords_non-array (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_as_a_string (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/negative_rate_limit (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/negative_min_free_space_value (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_traversal (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/default_destination_traversal (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/schedule_enabled_as_a_string (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_below_the_300s_floor (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_per_engine (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/min_free_space_placeholder (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/default_destination_empty (0.00s)
+--- PASS: TestSettingsRedactsExtractPasswords (0.42s)
+--- PASS: TestPatchRedactedIsNoOp (0.38s)
+--- PASS: TestPatchUnknownKeyIs422 (0.39s)
+--- PASS: TestPatchOutOfRangeIs422 (0.48s)
     --- PASS: TestPatchOutOfRangeIs422/default_destination_relative (0.00s)
     --- PASS: TestPatchOutOfRangeIs422/max_active_total_overflows_int (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/download_rate_limit_null (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_total (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/default_destination_placeholder (0.00s)
-    --- PASS: TestPatchOutOfRangeIs422/default_destination_outside_roots (0.00s)
     --- PASS: TestPatchOutOfRangeIs422/min_free_space_null (0.00s)
     --- PASS: TestPatchOutOfRangeIs422/extract_passwords_null (0.00s)
---- PASS: TestPatchMinFreeSpaceReplacesWholesale (0.44s)
---- PASS: TestSystemInfoCarriesNoSecret (0.46s)
-ok  	github.com/L-K-M/dl-tool/internal/api	3.903s
+    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_as_a_string (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_per_engine (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_empty (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_outside_roots (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/download_rate_limit_null (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/process_order_other_enum (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_max_active_total (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_min_free_space_value (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/relative_min_free_space_key (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_traversal (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/min_free_space_placeholder (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_placeholder (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/max_active_per_engine_overflows_int (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/extract_passwords_non-array (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/rss_interval_s_below_the_300s_floor (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/default_destination_traversal (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/schedule_enabled_as_a_string (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/negative_rate_limit (0.00s)
+    --- PASS: TestPatchOutOfRangeIs422/non-canonical_min_free_space_key (0.00s)
+--- PASS: TestPatchMinFreeSpaceReplacesWholesale (0.43s)
+--- PASS: TestSystemInfoCarriesNoSecret (0.42s)
+ok  	github.com/L-K-M/dl-tool/internal/api	3.715s
 ```
 
 Criterion-to-test map: criteria 1, 2 and the verbatim-map criterion 6 →

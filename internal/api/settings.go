@@ -115,33 +115,56 @@ type GetSettingsOutput struct{ Body SettingsBody }
 type SettingsPatch map[string]json.RawMessage
 
 // Schema implements huma.SchemaProvider: the declared object names the
-// fifteen documented properties, but every member stays opaque so the raw
-// bytes reach the store's per-key grammar checks. AdditionalProperties is
-// left open on purpose: an unknown key must reach PutSettings and come
-// back as 422 /problems/validation-failed, not huma's own validation
-// error shape.
+// fifteen documented properties with each member's documented type, so
+// generated clients get a typed contract. Huma-side rejections still
+// surface as 422 /problems/validation-failed through installErrorFactory,
+// and the members that huma cannot express — canonical path keys, the
+// bare-integer grammar, the absent-vs-null distinction — keep their raw
+// bytes for the store's own checks. AdditionalProperties stays open so an
+// unknown key reaches PutSettings and returns the documented 422.
 func (SettingsPatch) Schema(r huma.Registry) *huma.Schema {
-	any := &huma.Schema{}
-	props := make(map[string]*huma.Schema, len(settingsPatchKeys))
-	for _, key := range settingsPatchKeys {
-		props[key] = any
+	minimum := func(v float64) *float64 { return &v }
+	nonNegativeInt := &huma.Schema{Type: huma.TypeInteger, Minimum: minimum(0)}
+	boolean := &huma.Schema{Type: huma.TypeBoolean}
+	str := &huma.Schema{Type: huma.TypeString}
+	memberTypes := map[string]*huma.Schema{
+		"download_rate_limit":     nonNegativeInt,
+		"upload_rate_limit":       nonNegativeInt,
+		"alt_download_rate_limit": nonNegativeInt,
+		"alt_upload_rate_limit":   nonNegativeInt,
+		"schedule_enabled":        boolean,
+		"default_destination":     str,
+		"min_free_space": {
+			Type:                 huma.TypeObject,
+			AdditionalProperties: &huma.Schema{Type: huma.TypeInteger, Minimum: minimum(0)},
+		},
+		"max_active_total":      nonNegativeInt,
+		"max_active_per_engine": nonNegativeInt,
+		"process_order":         {Type: huma.TypeString, Enum: []any{"by_date_created"}},
+		"rss_enabled":           boolean,
+		"rss_interval_s":        {Type: huma.TypeInteger, Minimum: minimum(300)},
+		"auto_extract":          boolean,
+		"extract_passwords": {OneOf: []*huma.Schema{
+			{Type: huma.TypeString, Enum: []any{RedactedPlaceholder}},
+			{Type: huma.TypeArray, Items: str},
+		}},
+		"confirm_on_delete": boolean,
+	}
+
+	// The property names come from the store's canonical list, so a key
+	// added there can never silently vanish from the contract — it would
+	// surface as an opaque member here rather than disappearing.
+	props := make(map[string]*huma.Schema, len(memberTypes))
+	for _, key := range store.SettingsKeys() {
+		props[key] = memberTypes[key]
+		if props[key] == nil {
+			props[key] = &huma.Schema{}
+		}
 	}
 	return &huma.Schema{
 		Type:       huma.TypeObject,
 		Properties: props,
 	}
-}
-
-// settingsPatchKeys mirrors store.settingsKeys; the API package cannot
-// reach the store's unexported list, so the schema spells the same closed
-// set out by name.
-var settingsPatchKeys = []string{
-	"download_rate_limit", "upload_rate_limit",
-	"alt_download_rate_limit", "alt_upload_rate_limit",
-	"schedule_enabled", "default_destination", "min_free_space",
-	"max_active_total", "max_active_per_engine",
-	"process_order", "rss_enabled", "rss_interval_s",
-	"auto_extract", "extract_passwords", "confirm_on_delete",
 }
 
 // PatchSettingsInput carries the subset of keys PATCH /settings writes.
@@ -301,9 +324,13 @@ func (h *SettingsHandlers) GetSettings(ctx context.Context, _ *struct{}) (*GetSe
 // stored document rather than echoing the request. The store's two
 // sentinel errors are the 422 of doc 05 section 11.1.
 func (h *SettingsHandlers) PatchSettings(ctx context.Context, in *PatchSettingsInput) (*GetSettingsOutput, error) {
-	if raw, ok := in.Body["default_destination"]; ok && len(h.roots) > 0 {
+	if raw, ok := in.Body["default_destination"]; ok {
 		var destination string
-		if err := json.Unmarshal(raw, &destination); err == nil && !destinationInRoots(destination, h.roots) {
+		// Fail closed: with no configured roots nothing can satisfy the
+		// documented "inside a data root" domain. A non-string member
+		// defers to the store's own out-of-range error — same 422.
+		if err := json.Unmarshal(raw, &destination); err == nil &&
+			(len(h.roots) == 0 || !destinationInRoots(destination, h.roots)) {
 			return nil, Problem(SlugValidationFailed, http.StatusUnprocessableEntity, "default_destination must be inside a configured data root")
 		}
 	}
@@ -326,6 +353,10 @@ func (h *SettingsHandlers) PatchSettings(ctx context.Context, in *PatchSettingsI
 // falls through to the store's own out-of-range error.
 func destinationInRoots(destination string, roots []string) bool {
 	for _, root := range roots {
+		// The store requires a canonical destination, so the roots must
+		// be compared in canonical form too — a root carrying a trailing
+		// separator would otherwise reject every patch.
+		root = filepath.Clean(root)
 		if destination == root || strings.HasPrefix(destination, root+string(filepath.Separator)) {
 			return true
 		}

@@ -4336,21 +4336,24 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": {
-          alt_download_rate_limit?: unknown;
-          alt_upload_rate_limit?: unknown;
-          auto_extract?: unknown;
-          confirm_on_delete?: unknown;
-          default_destination?: unknown;
-          download_rate_limit?: unknown;
-          extract_passwords?: unknown;
-          max_active_per_engine?: unknown;
-          max_active_total?: unknown;
-          min_free_space?: unknown;
-          process_order?: unknown;
-          rss_enabled?: unknown;
-          rss_interval_s?: unknown;
-          schedule_enabled?: unknown;
-          upload_rate_limit?: unknown;
+          alt_download_rate_limit?: number;
+          alt_upload_rate_limit?: number;
+          auto_extract?: boolean;
+          confirm_on_delete?: boolean;
+          default_destination?: string;
+          download_rate_limit?: number;
+          extract_passwords?: "__redacted__" | string[];
+          max_active_per_engine?: number;
+          max_active_total?: number;
+          min_free_space?: {
+            [key: string]: number;
+          };
+          /** @enum {string} */
+          process_order?: "by_date_created";
+          rss_enabled?: boolean;
+          rss_interval_s?: number;
+          schedule_enabled?: boolean;
+          upload_rate_limit?: number;
         };
       };
     };
