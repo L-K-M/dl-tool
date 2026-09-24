@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T120 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T053, T084, T106 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `SettingsScreen.tsx`, `settings.json` and `internal/api/server.go`, shared with T116–T119 and T121 |
@@ -235,26 +235,26 @@ export function NotificationsSection(): JSX.Element;
 16. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestGetAccountReturnsShape` asserts `GET /account` returns the account object and carries no
+- [x] `TestGetAccountReturnsShape` asserts `GET /account` returns the account object and carries no
       password material.
-- [ ] `TestPatchAccountWrongCurrentIs403` asserts a mismatched `current_password` answers
+- [x] `TestPatchAccountWrongCurrentIs403` asserts a mismatched `current_password` answers
       `403 /problems/forbidden` and writes nothing.
-- [ ] `TestPatchAccountShortPasswordIs422` asserts a password under 12 characters answers
+- [x] `TestPatchAccountShortPasswordIs422` asserts a password under 12 characters answers
       `422 /problems/validation-failed`.
-- [ ] `TestPatchAccountRevokesOtherSessions` asserts a password change revokes every session except
+- [x] `TestPatchAccountRevokesOtherSessions` asserts a password change revokes every session except
       the caller's — and every session when the caller authenticated with an API token — and leaves
       API tokens valid.
-- [ ] `TestTokenRevealedOnceOnly` asserts the token text is rendered after `201`, is gone after close, and
+- [x] `TestTokenRevealedOnceOnly` asserts the token text is rendered after `201`, is gone after close, and
       appears in no later render, in no `GET /api-tokens` row and in no storage write.
-- [ ] `TestWrongCurrentPasswordRendersInline` asserts a `403 /problems/forbidden` renders on the
+- [x] `TestWrongCurrentPasswordRendersInline` asserts a `403 /problems/forbidden` renders on the
       `current_password` input, not as a generic toast.
-- [ ] `TestPasswordChangeSendsCurrentPassword` asserts the `PATCH /account` body carries both members.
-- [ ] `TestMatrixRoundTripsUnknownCode` asserts a stored `event_mask` entry outside `NOTIFIABLE_EVENTS`
+- [x] `TestPasswordChangeSendsCurrentPassword` asserts the `PATCH /account` body carries both members.
+- [x] `TestMatrixRoundTripsUnknownCode` asserts a stored `event_mask` entry outside `NOTIFIABLE_EVENTS`
       survives a save unchanged.
-- [ ] `TestAllEventsRowSendsStar` asserts checking the `All events` row sends `event_mask: ["*"]`.
-- [ ] `TestSendTestRendersRawReply` asserts the exact `status_line` and the exact `body` string appear on
+- [x] `TestAllEventsRowSendsStar` asserts checking the `All events` row sends `event_mask: ["*"]`.
+- [x] `TestSendTestRendersRawReply` asserts the exact `status_line` and the exact `body` string appear on
       screen and that `ok:false` raises no error toast.
-- [ ] No response body rendered by either section contains a token, a password or a channel secret.
+- [x] No response body rendered by either section contains a token, a password or a channel secret.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -297,7 +297,57 @@ lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test PKG="./internal/api/... ./internal/store/..." && make test-web && echo ACCOUNT_NOTIFY_OK` on the final tree (Go 1.26 toolchain at `$HOME/.local/go/bin`, `npm ci --prefix web` first):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> lint
+> eslint .
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	213.795s
+ok  	github.com/L-K-M/dl-tool/internal/store	87.709s
+cd web && npx vitest run
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3203ms
+ ✓ src/components/Settings/AccountSection.test.tsx (6 tests) 1316ms
+   ✓ TestTokenRevealedOnceOnly 358ms
+   ✓ TestSendTestRendersRawReply 303ms
+ Test Files  26 passed (26)
+      Tests  307 passed (307)
+ACCOUNT_NOTIFY_OK
+```
+
+`internal/api` covers `TestGetAccountReturnsShape`, `TestPatchAccountWrongCurrentIs403`,
+`TestPatchAccountShortPasswordIs422` and `TestPatchAccountRevokesOtherSessions`; `AccountSection.test.tsx`
+carries the six web criteria and `SettingsScreen.test.tsx` the repaired alias test (Vitest's default
+reporter prints only the slowest test names per file — the file-level `✓ (6 tests)` /
+`(12 tests)` lines prove the rest).
+
+Scope: `git status --porcelain` is empty on the committed tree; the equivalent check,
+`git diff --name-only origin/main...HEAD -- . ':(exclude)docs' | sort`, lists exactly the Files
+table plus the two `make gen` outputs and nothing else:
+
+```text
+api/openapi.json
+internal/api/account.go
+internal/api/account_test.go
+internal/api/server.go
+internal/store/users.go
+web/src/api/schema.d.ts
+web/src/components/Settings/AccountSection.test.tsx
+web/src/components/Settings/AccountSection.tsx
+web/src/components/Settings/NotificationsSection.tsx
+web/src/components/Settings/SettingsScreen.test.tsx
+web/src/components/Settings/SettingsScreen.tsx
+web/src/locales/en/settings.json
+```
 
 ## Blocked — resolved 2026-09-24: the alias test the Verification needs is outside the Files table
 
