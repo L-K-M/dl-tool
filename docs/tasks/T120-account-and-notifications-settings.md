@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T120 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | deferred |
 | **Depends on** | T053, T084, T106 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `SettingsScreen.tsx`, `settings.json` and `internal/api/server.go`, shared with T116–T119 and T121 |
@@ -297,6 +297,60 @@ lists an untracked file.
 
 ## Evidence
 <Agent pastes command output here before marking done.>
+
+## Blocked — open 2026-09-24: the alias test the Verification needs is outside the Files table
+
+The repair recorded below widened this task to full-stack, and the implementation it
+describes is built and verified — `make lint`, `make typecheck` and
+`make test PKG="./internal/api/... ./internal/store/..."` pass, and Vitest reports 306
+passed with exactly one failure: `TestUsersAliasRendersAccountNote` in
+`web/src/components/Settings/SettingsScreen.test.tsx` mounts `/settings/users` and asserts
+`This section arrives with M6.` — the stub text that exists only while `account` is
+unimplemented. Step 14 puts `account` in `IMPLEMENTED` and renders `AccountSection` for the
+alias, so the assertion is false on any correct diff. The test file is owned by the
+T053/T072/T073/T118/T129 Files tables, not this one, and "No other file may be modified"
+covers tests: the Verification block and the Files table contradict each other, and that is
+a planning error rather than something to code around.
+
+The earlier repair caught the missing `/account` operations but not that
+`IMPLEMENTED += account` retires the stub a sibling task's test asserts. The gap is exactly
+one test update:
+
+```tsx
+// SettingsScreen.test.tsx — fails under the implemented section, cannot be edited in scope.
+test("TestUsersAliasRendersAccountNote", async () => {
+  mount("/settings/users");
+  await screen.findByText("This section arrives with M6.");
+  expect(screen.getByTestId("path-probe").textContent).toBe("/settings/users");
+});
+```
+
+### Remedy
+
+Add one row to this task's Files table:
+
+| `web/src/components/Settings/SettingsScreen.test.tsx` | edit | Update `TestUsersAliasRendersAccountNote` to stub `GET /account` and `GET /api-tokens` and assert the account section renders under `/settings/users`. |
+
+The assertion change is not a weakening: the stub text is the pre-implementation state this
+task exists to retire, and the alias-resolution guarantee lives in the path-probe assertion
+the same test already makes.
+
+### Deferral mechanics — same shape as the first record
+
+- The picker takes the topmost eligible `todo` row; leaving T120 `todo` re-selects it on
+  every iteration. The row is set to `deferred` — the status the picker skips — in this
+  file's `**Status**` cell and both `00-task-index.md` rows. Un-deferring flips the same
+  three cells back to `todo` in the same change that lands the remedy.
+- The deferral stalls nothing: T120's `**Blocks**` is empty.
+- The complete implementation is preserved on branch `loop/t120-2-1790284074` — the account
+  store methods, the `get-account`/`patch-account` handlers and their registration, both
+  sections, the six web acceptance tests, the locale catalogue and the regenerated
+  `api/openapi.json`/`web/src/api/schema.d.ts` — so the repaired attempt starts from that
+  tree rather than rewriting it.
+- M6's exit checkpoint cannot pass while this deferral stands; the gap stays visible through
+  this record and the checkpoint.
+
+---
 
 ## Blocked — resolved 2026-09-24: no task owns the `GET`/`PATCH /account` operations the section is built on
 
