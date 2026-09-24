@@ -4,6 +4,30 @@
  */
 
 export interface paths {
+  "/account": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Read the operator account
+     * @description The single operator account: id, username, enabled, locale and timestamps — the same shape GET /auth/me reports as its user member. No password material is ever returned.
+     */
+    get: operations["get-account"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update the operator account
+     * @description Partial update of username, locale and password; omitted fields are untouched. A password change requires current_password in the same body — verified before any write, 403 /problems/forbidden on mismatch — and revokes every session except the caller's; API tokens are unaffected. A password under 12 characters or a username that normalises to the empty string is 422 /problems/validation-failed.
+     */
+    patch: operations["patch-account"];
+    trace?: never;
+  };
   "/api-tokens": {
     parameters: {
       query?: never;
@@ -2013,6 +2037,16 @@ export interface components {
       path: string;
       writable: boolean;
     };
+    PatchAccountInputBody: {
+      /** @description Verified before any write when present; required whenever password is present */
+      current_password?: string;
+      /** @description Preferred UI locale */
+      locale?: string;
+      /** @description New password; requires current_password in the same body */
+      password?: string;
+      /** @description New account username */
+      username?: string;
+    };
     PatchCategoryInputBody: {
       /** @description Rename; must be non-empty and carry no / */
       new_name?: string;
@@ -2652,6 +2686,68 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  "get-account": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["UserBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "patch-account": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PatchAccountInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["UserBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "list-api-tokens": {
     parameters: {
       query?: {

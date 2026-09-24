@@ -93,6 +93,18 @@ WHERE id = ?`
 
 	queryDeleteExpiredSessions = `DELETE FROM sessions WHERE expires_at <= ?`
 
+	queryUpdateUserProfile = `UPDATE users
+SET username = ?, locale = ?, updated_at = ?
+WHERE id = ?`
+
+	queryUpdatePasswordHash = `UPDATE users
+SET password_hash = ?, updated_at = ?
+WHERE id = ?`
+
+	// The empty exceptSessionID a token-authenticated caller passes matches
+	// no session id, so the predicate revokes every session of the account.
+	queryDeleteOtherSessions = `DELETE FROM sessions WHERE user_id = ? AND id <> ?`
+
 	// A revoked or expired token — or a disabled account — is
 	// indistinguishable from an unknown token.
 	queryUserByAPITokenHash = `SELECT
@@ -272,6 +284,66 @@ func DeleteExpiredSessions(ctx context.Context, db *sqlx.DB, now int64) (int64, 
 	deleted, err := result.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("store: delete expired sessions: %w", err)
+	}
+
+	return deleted, nil
+}
+
+// UpdateUserProfile applies the PATCH /account profile fields (doc 05
+// section 12): the caller passes the resolved username and locale — the
+// stored values for fields the request omitted. An unknown id is
+// ErrNotFound.
+func UpdateUserProfile(ctx context.Context, db *sqlx.DB, id, username, locale string) error {
+	now := time.Now().UnixMilli()
+	result, err := db.ExecContext(ctx, queryUpdateUserProfile, username, locale, now, id)
+	if err != nil {
+		return fmt.Errorf("store: update user profile %q: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update user profile %q: read rows affected: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: update user profile %q: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+// UpdatePasswordHash replaces the account's password_hash with an
+// already-hashed value — the store never sees the clear text. An unknown
+// id is ErrNotFound.
+func UpdatePasswordHash(ctx context.Context, db *sqlx.DB, id, passwordHash string) error {
+	now := time.Now().UnixMilli()
+	result, err := db.ExecContext(ctx, queryUpdatePasswordHash, passwordHash, now, id)
+	if err != nil {
+		return fmt.Errorf("store: update password hash %q: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update password hash %q: read rows affected: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("store: update password hash %q: %w", id, ErrNotFound)
+	}
+
+	return nil
+}
+
+// DeleteOtherSessions revokes every session the user holds except
+// exceptSessionID; the password-change rule of doc 05 section 12 revokes
+// the attacker's stolen sessions while keeping the caller logged in.
+// PATCH /account accepts token auth, where the caller holds no session:
+// pass exceptSessionID == "" and every session is revoked. API tokens are
+// unaffected — they are revoked individually through the token endpoints.
+func DeleteOtherSessions(ctx context.Context, db *sqlx.DB, userID, exceptSessionID string) (int64, error) {
+	result, err := db.ExecContext(ctx, queryDeleteOtherSessions, userID, exceptSessionID)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete other sessions %q: %w", userID, err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: delete other sessions %q: read rows affected: %w", userID, err)
 	}
 
 	return deleted, nil
