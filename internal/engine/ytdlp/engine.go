@@ -430,6 +430,9 @@ func (e *Engine) Events(ctx context.Context) (<-chan engine.TaskEvent, error) {
 // so the caller's request or sweep deadline must not kill it — only
 // Pause, Remove and Close cancel a spawn.
 func (e *Engine) spawnLocked(ctx context.Context, id string, rec *taskRecord) (*Proc, error) {
+	if e.closed {
+		return nil, errors.New("ytdlp: engine closed")
+	}
 	proc, err := e.runner.Spawn(context.WithoutCancel(ctx), id, rec.req, e.effectiveLimitLocked(rec))
 	if err != nil {
 		return nil, err
