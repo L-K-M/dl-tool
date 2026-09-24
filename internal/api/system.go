@@ -116,16 +116,20 @@ var processStartedAt = time.Now()
 var buildStamp = sync.OnceValues(func() (commit, builtAt string) {
 	commit = "unknown"
 	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return commit, builtAt
-	}
-	for _, setting := range info.Settings {
-		switch setting.Key {
-		case "vcs.revision":
-			commit = setting.Value
-		case "vcs.time":
-			builtAt = setting.Value
+	if ok {
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				commit = setting.Value
+			case "vcs.time":
+				builtAt = setting.Value
+			}
 		}
+	}
+	if builtAt == "" {
+		// The schema declares format date-time, so an absent VCS stamp
+		// must still render a valid RFC 3339 value.
+		builtAt = time.Time{}.UTC().Format(time.RFC3339)
 	}
 
 	return commit, builtAt
@@ -215,9 +219,9 @@ func (h *SystemHandlers) GetSystemInfo(ctx context.Context, _ *struct{}) (*Syste
 		return output, nil
 	}
 
-	if stat, err := os.Stat(h.dbPath); err != nil {
-		return nil, internalFailure(ctx, "stat database", err)
-	} else {
+	// Size is best-effort: a transient stat failure (restore in progress,
+	// path raced) must not take down the whole status payload.
+	if stat, err := os.Stat(h.dbPath); err == nil {
 		output.Body.Database.SizeBytes = stat.Size()
 	}
 	schemaVersion, err := store.SchemaVersion(ctx, h.db)
