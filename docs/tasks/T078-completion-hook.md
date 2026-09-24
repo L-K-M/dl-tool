@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T078 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | deferred — see `## Blocked` |
 | **Depends on** | T074 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it also edits the shared files `internal/api/settings.go`, `internal/jobs/postprocess.go` |
@@ -150,6 +150,106 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 
 ## Evidence
 <Agent pastes command output here before marking done.>
+
+## Blocked
+
+### 2026-09-24 — `cfg.ConfigDir` cannot reach the chain inside the Files table
+
+Step 7 makes the hook the chain's last step, so `OnCompleted` must call
+`NewHook(configDir, …)` — the contract pins the directory to
+`cfg.ConfigDir`. The chain is constructed exactly once, at the
+composition root: `cmd/dl-tool/main.go` calls
+`jobs.NewChain(db, store.NewTaskStore(db))` and that function is the only
+place the process's `cfg` is in scope. `cmd/dl-tool/main.go` is not in
+`## Files`, and every in-table route to the directory fails:
+
+- `Chain` holds `{db, tasks, notify}` — no config field. Giving
+  `NewChain` a parameter, or a `SetConfigDir` setter a call, both edit
+  `cmd/dl-tool/main.go`.
+- `internal/jobs` never reads the environment: `internal/config` is the
+  single reader of every `DLTOOL_` name (doc 11 §2), and a second
+  `os.Getenv("DLTOOL_CONFIG_DIR")` would duplicate `defaultConfigDir` —
+  a hardcoded path, and a second parser for a setting the config package
+  owns.
+- `*sqlx.DB` exposes no DSN, and `pragma_database_list` yields
+  `cfg.DBPath`, which `config.Load` validates independently of
+  `ConfigDir` — "the database may live elsewhere"
+  (`internal/config/config.go`) — so `filepath.Dir(dbfile)` is not the
+  hooks root.
+- No `settings` row carries a config path; `00001_init.sql` seeds only
+  `max_active_total`, `max_active_per_engine` and `min_free_space`.
+- Wiring a preconstructed `*Hook` from the root would still need
+  `main.go`, and would be wrong besides: the switch must be re-evaluated
+  per finished task — installing the hook mid-run takes effect on the
+  next completion (doc 11 §2) — so the composition root must hand the
+  chain the directory, never a one-time discovery result.
+- A variadic `NewChain(db, tasks, configDir ...string)` compiles against
+  the unmodified call site but leaves the production chain holding no
+  directory — the hook would be dead code, the §8.3 "built and never
+  wired" defect the acceptance criteria exist to forbid.
+
+This is the same defect class T091's first record named for its own
+table — work with no legal call site — and the repair that unblocked
+T091 (#277) applies verbatim.
+
+Rerunnable evidence on this commit:
+
+```bash
+# The only Chain construction site — outside the Files table.
+grep -rn 'jobs.NewChain(' cmd/ internal/ --include='*.go' | grep -v _test
+#   cmd/dl-tool/main.go:190: postprocess := jobs.NewChain(db, store.NewTaskStore(db))
+
+# internal/jobs reads no environment and imports no config package.
+grep -rn 'os.Getenv\|internal/config' internal/jobs/ --include='*.go' | grep -v _test
+#   (no output)
+
+# DBPath is validated independently of ConfigDir — Dir(db) is not the hooks root.
+grep -n 'database may live elsewhere' internal/config/config.go
+#   internal/config/config.go:278
+
+# The seeded settings carry no path.
+grep -n 'INSERT INTO settings' internal/store/migrations/00001_init.sql
+```
+
+### Remedy
+
+Add one row to `## Files` — `cmd/dl-tool/main.go | edit` for passing
+`cfg.ConfigDir` to the post-processing chain — plus a step-7 clause
+naming the call site (a `NewChain` third parameter, or a `SetConfigDir`
+beside `SetNotifier`; the shape is the implementer's). At the same time
+the contract's `st *store.Store` should name the merged reality —
+`*sqlx.DB` per F086 (`NewNotifier(db, …)`), the same drift T091's repair
+corrected.
+
+Step 8 needs no repair: T092's `PATCH /settings` already maps a
+hook-named key to `422` `/problems/validation-failed` through the
+unknown-key path — `TestPatchUnknownKeyIs422` already exercises
+`"completion_hook"` — so the remaining edit is the explicit guard the
+step prescribes. And `TestSettingsRejectsHookKey` can live in
+`internal/jobs/hook_test.go` as `package jobs_test`: an external test
+package may sit beside `package jobs` tests, and importing
+`internal/api` — which imports `internal/jobs` — is no cycle for it.
+
+One secondary drift the repair may settle or leave: doc 14 §4 asks for
+an i18next key per new `task_events` code, and
+`web/src/locales/en/errors.json` is not in the table — but
+`postprocess.extract.started`, `postprocess.extract.completed` and
+`postprocess.autoremoved` already ship with no key, so the message
+fallback is the running precedent.
+
+### Deferral mechanics — same shape as the first record
+
+- The picker takes the topmost eligible `todo` row and T078 heads the
+  eligible set, so leaving it `todo` re-selects it on every iteration
+  and nothing below it can start. The row is set to `deferred` — the
+  status the picker skips — in this file's `**Status**` cell and both
+  `00-task-index.md` rows (the first T078 deferral, #250, and T091's,
+  #267).
+- No row depends on T078 (`Blocks: —`), so the deferral stalls nothing
+  downstream.
+- Reactivation trigger: flip both index rows and the `**Status**` cell
+  back to `todo` in the same change that adds `cmd/dl-tool/main.go` to
+  `## Files`, so the deferral cannot outlive its cause.
 
 ## Blocked — resolved
 
