@@ -760,6 +760,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/settings/export": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Export the portable settings document
+     * @description The versioned document of doc 05 section 11.5: settings, categories, indexers, feeds, rules, watch folders and the schedule. Sessions, the account row, API tokens, engine and channel secrets, indexer API keys and every task table are excluded at the query level — the document is safe to attach to a bug report.
+     */
+    get: operations["export-settings"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings/import": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Import a portable settings document
+     * @description Applies an export document, dry-run first. dry_run defaults to true and is side-effect free while reporting exactly what a commit would do; a committing call writes every accepted row in one transaction. on_conflict is skip (keep the existing row) or overwrite; matching is by categories.name, indexers.definition_id else name, feeds.url, rules.name and watch_folders.path. Paths are re-validated against this host's data roots and failures are rejected, never rewritten. A document_version newer than the binary understands is 409.
+     */
+    post: operations["import-settings"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/settings/schedule": {
     parameters: {
       query?: never;
@@ -1224,6 +1264,16 @@ export interface components {
       /** @description Write-only; __redacted__ leaves the stored secret, null clears it */
       secret?: string | null;
     };
+    Counts: {
+      /** Format: int64 */
+      created: number;
+      /** Format: int64 */
+      rejected: number;
+      /** Format: int64 */
+      skipped: number;
+      /** Format: int64 */
+      updated: number;
+    };
     CreateCategoryInputBody: {
       /** @description Unique category name; never carries a / */
       name: string;
@@ -1517,6 +1567,71 @@ export interface components {
        */
       type: string;
     };
+    ExportCategory: {
+      name: string;
+      save_path: string;
+    };
+    ExportDocument: {
+      categories: components["schemas"]["ExportCategory"][];
+      /** Format: int64 */
+      document_version: number;
+      /** Format: date-time */
+      exported_at: string;
+      feeds: components["schemas"]["ExportFeed"][];
+      indexers: components["schemas"]["ExportIndexer"][];
+      rules: components["schemas"]["ExportRule"][];
+      schedule: components["schemas"]["ExportSchedule"];
+      /** Format: int64 */
+      schema_version: number;
+      settings: {
+        [key: string]: unknown;
+      };
+      watch_folders: components["schemas"]["ExportWatch"][];
+    };
+    ExportFeed: {
+      enabled: boolean;
+      /** Format: int64 */
+      item_cap: number;
+      /** Format: int64 */
+      refresh_interval_s: number;
+      title: string | null;
+      url: string;
+    };
+    ExportIndexer: {
+      definition_id: string | null;
+      enabled: boolean;
+      /** @enum {string} */
+      kind: "torznab" | "newznab" | "dlsearch";
+      name: string;
+      /** Format: int64 */
+      priority: number;
+      settings: {
+        [key: string]: unknown;
+      };
+      url: string | null;
+    };
+    ExportRule: {
+      definition: {
+        [key: string]: unknown;
+      };
+      enabled: boolean;
+      name: string;
+      /** Format: int64 */
+      priority: number;
+    };
+    ExportSchedule: {
+      cells: number[];
+      enabled: boolean;
+    };
+    ExportWatch: {
+      category: string | null;
+      delete_after_load: boolean;
+      destination: string;
+      enabled: boolean;
+      path: string;
+      /** Format: int64 */
+      poll_interval_s: number;
+    };
     FSRoot: {
       /** Format: int64 */
       free_bytes: number;
@@ -1618,9 +1733,25 @@ export interface components {
       total_bytes: number;
     };
     HeartbeatEvent: Record<string, never>;
+    ImportInputBody: {
+      document: components["schemas"]["ExportDocument"];
+      dry_run?: boolean;
+      /** @enum {string} */
+      on_conflict?: "skip" | "overwrite";
+    };
     ImportOutputBody: {
       indexer: components["schemas"]["IndexerDTO"];
       warnings: string[] | null;
+    };
+    ImportReport: {
+      collections: {
+        [key: string]: components["schemas"]["Counts"];
+      };
+      /** Format: int64 */
+      document_version: number;
+      dry_run: boolean;
+      rejected: components["schemas"]["RejectedRow"][] | null;
+      totals: components["schemas"]["Counts"];
     };
     IndexerDTO: {
       api_key_set: boolean;
@@ -1935,6 +2066,12 @@ export interface components {
       /** Format: int64 */
       status: number;
       status_line: string;
+    };
+    RejectedRow: {
+      collection: string;
+      detail: string;
+      key: string;
+      type: string;
     };
     RejectedURI: {
       detail: string;
@@ -3982,6 +4119,68 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "export-settings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ExportDocument"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "import-settings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ImportInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ImportReport"];
+        };
       };
       /** @description Error */
       default: {

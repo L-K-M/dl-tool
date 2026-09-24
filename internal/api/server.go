@@ -132,6 +132,10 @@ type Server struct {
 	// 11.4.
 	prefs *PrefsHandlers
 
+	// settingsExport owns the export and import operations of doc 05
+	// section 11.5.
+	settingsExport *SettingsExportHandlers
+
 	// categories owns the category operations of doc 05 section 8.1 and
 	// the tag list of section 8.2.
 	categories *CategoryHandlers
@@ -373,22 +377,23 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	}
 
 	server := &Server{
-		Router:       root,
-		Base:         base,
-		V1:           v1,
-		API:          humachi.New(v1, humaConfig),
-		db:           db,
-		Health:       health,
-		auth:         auth,
-		Engines:      engines,
-		tasks:        tasks,
-		settings:     NewSettingsHandlers(db, engines),
-		prefs:        NewPrefsHandlers(db),
-		categories:   NewCategoryHandlers(db, cfg.DataRoots),
-		tags:         NewTagHandlers(db),
-		watchFolders: NewWatchFolderHandlers(db, cfg.DataRoots, scanWatcher),
-		fs:           NewFSHandlers(cfg.DataRoots),
-		search:       NewSearchHandlers(log, searchDeps),
+		Router:         root,
+		Base:           base,
+		V1:             v1,
+		API:            humachi.New(v1, humaConfig),
+		db:             db,
+		Health:         health,
+		auth:           auth,
+		Engines:        engines,
+		tasks:          tasks,
+		settings:       NewSettingsHandlers(db, engines),
+		prefs:          NewPrefsHandlers(db),
+		settingsExport: NewSettingsExportHandlers(db, cfg.DataRoots),
+		categories:     NewCategoryHandlers(db, cfg.DataRoots),
+		tags:           NewTagHandlers(db),
+		watchFolders:   NewWatchFolderHandlers(db, cfg.DataRoots, scanWatcher),
+		fs:             NewFSHandlers(cfg.DataRoots),
+		search:         NewSearchHandlers(log, searchDeps),
 		// The feed poller shares the SSRF-guarded client with the search
 		// fan-out; its item parser is T067's parse.go and its grab
 		// creator the shared ruleTaskCreator, so a 200 that adds items
@@ -560,6 +565,7 @@ func (s *Server) registerOperations() {
 	s.settings.registerOperations(s.API)
 	s.settings.registerScheduleOperations(s.API)
 	s.prefs.Register(s.API)
+	s.settingsExport.Register(s.API)
 	s.categories.Register(s.API)
 	s.tags.Register(s.API)
 	s.watchFolders.Register(s.API)

@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T108 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T080, T106, T107 |
 | **Blocks** | T121 |
 | **Parallel-safe** | no — it also edits the shared files `cmd/dl-tool/main.go`, `internal/api/server.go`, `internal/store/db.go` |
@@ -157,20 +157,20 @@ var (
 9. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] An export contains no session id, password hash, API token, indexer API key or engine secret.
-- [ ] Importing an export into an empty instance reproduces all seven collections.
-- [ ] A dry run writes nothing and reports exactly what a commit would do.
-- [ ] A committing import is transactional: a rejected row leaves the database unchanged.
-- [ ] A `document_version` newer than the binary is `409` `/problems/conflict`.
-- [ ] `restore --from` refuses with `restore_server_running` while a server holds the database.
-- [ ] `restore --from` refuses with `restore_source_rejected` for a path outside `DLTOOL_CONFIG_DIR`
+- [x] An export contains no session id, password hash, API token, indexer API key or engine secret.
+- [x] Importing an export into an empty instance reproduces all seven collections.
+- [x] A dry run writes nothing and reports exactly what a commit would do.
+- [x] A committing import is transactional: a rejected row leaves the database unchanged.
+- [x] A `document_version` newer than the binary is `409` `/problems/conflict`.
+- [x] `restore --from` refuses with `restore_server_running` while a server holds the database.
+- [x] `restore --from` refuses with `restore_source_rejected` for a path outside `DLTOOL_CONFIG_DIR`
   or naming the live database, its lock or its sidecars, and the live database is untouched.
-- [ ] `restore --from` refuses with `restore_schema_too_new` on a backup newer than the embedded
+- [x] `restore --from` refuses with `restore_schema_too_new` on a backup newer than the embedded
   migration maximum, printing both versions; an older-schema backup is accepted and migrates forward
   at the next boot.
-- [ ] `restore --from` refuses with `restore_integrity_failed` on a corrupt file, and the live
+- [x] `restore --from` refuses with `restore_integrity_failed` on a corrupt file, and the live
   database is untouched.
-- [ ] A failure injected before the final atomic rename leaves the original database intact, and a
+- [x] A failure injected before the final atomic rename leaves the original database intact, and a
   successful restore reports the source's task count.
 
 ## Verification
@@ -208,7 +208,94 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+```
+$ make lint && make test PKG="./internal/api/... ./internal/store/..." && echo BACKUP_OK
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	186.251s
+ok  	github.com/L-K-M/dl-tool/internal/store	79.357s
+BACKUP_OK
+```
+
+Named tests (verbose run, each `--- PASS`):
+
+```
+$ go test -race -count=1 -v ./internal/api/... ./internal/store/... -run 'TestExportExcludesEverySecret|TestExportImportRoundTrip|TestDryRunWritesNothing|TestImportIsTransactional|TestNewerDocumentVersionConflict|TestRestoreRefusesRunningServer|TestRestoreRefusesWhileServerLockHeld|TestRestoreRejectsForeignSource|TestRestoreRefusesSchemaTooNew|TestRestoreRefusesCorrupt|TestRestoreReplacesCorruptDatabase|TestRestoreAcceptsOlderSchema|TestRestoreFailureLeavesOriginal|TestProcessLockCreatesDatabaseDirectory|TestRejectRowErrorMapsSchemaConstraints'
+--- PASS: TestExportExcludesEverySecret (0.46s)
+--- PASS: TestExportImportRoundTrip (1.06s)
+--- PASS: TestDryRunWritesNothing (1.21s)
+--- PASS: TestImportIsTransactional (1.05s)
+--- PASS: TestNewerDocumentVersionConflict (0.39s)
+--- PASS: TestRestoreRefusesRunningServer (0.53s)
+--- PASS: TestRestoreRejectsForeignSource (0.59s)
+--- PASS: TestRestoreRefusesSchemaTooNew (0.57s)
+--- PASS: TestRestoreRefusesCorrupt (0.37s)
+--- PASS: TestRestoreAcceptsOlderSchema (0.98s)
+--- PASS: TestRestoreFailureLeavesOriginal (0.91s)
+--- PASS: TestRejectRowErrorMapsSchemaConstraints (0.41s)
+--- PASS: TestRestoreRefusesWhileServerLockHeld (0.83s)
+--- PASS: TestProcessLockCreatesDatabaseDirectory (0.00s)
+--- PASS: TestRestoreReplacesCorruptDatabase (0.67s)
+ok  	github.com/L-K-M/dl-tool/internal/api	11.528s
+ok  	github.com/L-K-M/dl-tool/internal/store	1.073s [no tests to run]
+```
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+api/openapi.json
+cmd/dl-tool/main.go
+internal/api/server.go
+internal/api/settings_export.go
+internal/api/settings_export_test.go
+internal/store/db.go
+web/src/api/schema.d.ts
+```
+
+`api/openapi.json` and `web/src/api/schema.d.ts` are the `make gen` output of the two newly registered
+Huma operations (`export-settings`, `import-settings`). `docs/13-testing-and-verification.md` §7.1 makes
+them part of the Files table of every task that registers or changes a Huma operation, whether or not
+the table lists them by name. Both were regenerated by `scripts/gen.sh`, not hand-edited.
+
+Review hardening beyond the letter of the contract, all inside the Files table:
+
+- `cmd/dl-tool/main.go` now acquires the stable process lock via `store.AcquireProcessLock` before
+  `store.Open` and holds it for the process lifetime — doc 17 §1.3 stage S3's server half. No task
+  owned it; without it `restore_server_running` could never fire against a real running server, and
+  the Files table already permits `main.go` for the `restore` subcommand. A second server exits
+  `database_locked`; `TestRestoreRefusesWhileServerLockHeld` proves the two ends meet and that
+  releasing the lock frees the restore.
+- `preserveLiveDatabase` falls back to a byte-copy `.replaced-*.bak` when `VACUUM INTO` cannot read
+  a corrupt live database — a corrupt file is the common reason to restore at all — and preserves a
+  live `-wal` beside it as `.bak-wal` since the copy runs before the checkpoint and committed frames
+  may exist only there; `TestRestoreReplacesCorruptDatabase` covers it. `backupReplacedDatabase` also
+  frees the `CreateTemp` name before `VACUUM INTO`, which refuses an existing output file on some
+  builds.
+- The process-lock handle stays reachable for the server lifetime (`defer` in `OnStart` — an
+  unreachable `*os.File` finalizer would silently drop the flock), and `acquireDatabaseLock` creates
+  the database directory itself so first boot does not fail the acquire with ENOENT.
+  `TestProcessLockCreatesDatabaseDirectory` covers the fresh-directory acquire.
+- `checkStagedSchema` re-reads the schema version from the staged bytes after the copy, closing a
+  source-swap race between the schema gate and the copy.
+- Row writes feed `rejectRowError`: a constraint the conflict keys cannot catch (CHECK, NOT NULL)
+  becomes a `rejected[]` row — UNIQUE maps to `/problems/conflict`, the rest to
+  `/problems/validation-failed` — instead of aborting the import;
+  `TestRejectRowErrorMapsSchemaConstraints` drives it with real SQLite errors.
+- `importJSONInt` rejects 2^63 (`float64(math.MaxInt64)` rounds up to it, overflowing `int64`), the
+  body-reader distinguishes a clean `MaxBytesError` from other read failures, indexer `kind` is
+  checked against the schema's CHECK set, and `__redacted__` inside indexer settings is rejected.
 
 ## Blocked — resolved
 

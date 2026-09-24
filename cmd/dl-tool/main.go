@@ -102,6 +102,27 @@ func main() {
 			logger := obs.NewLogger(os.Stdout, cfg.LogLevel, cfg.LogFormat)
 			slog.SetDefault(logger)
 
+			// Doc 17 section 1.3 stage S3: hold the stable process lock
+			// beside the database for the process lifetime, so a second
+			// server exits database_locked and `dl-tool restore` refuses
+			// with restore_server_running instead of swapping the file
+			// out from under a live instance. The handle must stay
+			// reachable — an unreachable *os.File's finalizer would close
+			// the descriptor and silently drop the flock — so it lives in
+			// a named variable released when OnStart returns at shutdown.
+			processLock, lockErr := store.AcquireProcessLock(cfg.DBPath)
+			if lockErr != nil {
+				// database_locked names the held-flock refusal; a
+				// directory or open failure is a different fault.
+				errCode := "database_locked"
+				if !errors.Is(lockErr, store.ErrDatabaseLocked) {
+					errCode = "database_lock_failed"
+				}
+				logger.Error("database lock failed", "err_code", errCode, "err", lockErr)
+				os.Exit(exitFailure)
+			}
+			defer processLock.Release()
+
 			db, err := store.Open(ctx, cfg.DBPath, filepath.Join(cfg.ConfigDir, backupsDirName))
 			if err != nil {
 				logger.Error("database open failed", "err", err)
@@ -344,6 +365,7 @@ func main() {
 	})
 	cli.Root().AddCommand(versionCmd())
 	cli.Root().AddCommand(openapiCmd())
+	cli.Root().AddCommand(restoreCmd())
 	cli.Run()
 }
 
@@ -416,6 +438,49 @@ func versionCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// restoreCmd is the dl-tool restore --from <file> of
+// docs/17-operations-and-runbook.md section 3.4. It never touches the HTTP
+// server: store.RestoreFrom owns the four refusal gates and the staged
+// atomic replacement, and a refusal or failure exits 1 with the named
+// error — humacli's Run drops a RunE return, so the command exits like the
+// boot failure paths rather than relying on cobra's error propagation.
+func restoreCmd() *cobra.Command {
+	var from string
+	cmd := &cobra.Command{
+		Use:   "restore",
+		Short: "Replace the database with a backup file",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if from == "" {
+				fmt.Fprintln(os.Stderr, "restore: --from <file> is required")
+				os.Exit(exitFailure)
+			}
+
+			ctx := context.Background()
+			cfg, err := config.Load(ctx)
+			if err != nil {
+				logConfigError(err)
+				os.Exit(exitFailure)
+			}
+
+			tasks, err := store.RestoreFrom(ctx, cfg.DBPath, cfg.ConfigDir, from)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "restore:", err)
+				os.Exit(exitFailure)
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "restored %d tasks\n", tasks); err != nil {
+				fmt.Fprintln(os.Stderr, "restore: write result:", err)
+				os.Exit(exitFailure)
+			}
+
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&from, "from", "", "backup file inside DLTOOL_CONFIG_DIR")
+
+	return cmd
 }
 
 // openapiCmd prints the canonical (empty base path) OpenAPI document; the
