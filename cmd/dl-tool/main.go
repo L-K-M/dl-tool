@@ -20,6 +20,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/api"
 	"github.com/L-K-M/dl-tool/internal/config"
 	"github.com/L-K-M/dl-tool/internal/engine"
+	"github.com/L-K-M/dl-tool/internal/engine/ytdlp"
 	"github.com/L-K-M/dl-tool/internal/fsx"
 	"github.com/L-K-M/dl-tool/internal/jobs"
 	"github.com/L-K-M/dl-tool/internal/obs"
@@ -48,6 +49,11 @@ const (
 	// governorBootTimeout bounds the stored-limits fan-out so a black-holed
 	// engine can hold the boot for one window, not per daemon RPC.
 	governorBootTimeout = 10 * time.Second
+
+	// engineBootProbeTimeout bounds the yt-dlp "--version" probe the same
+	// way connectEngine bounds a daemon probe: one window at boot, never a
+	// hang. A frozen binary surfaces as a recorded last_error, not a stall.
+	engineBootProbeTimeout = 10 * time.Second
 
 	// healthcheckTimeout stays under the image HEALTHCHECK's --timeout=5s so
 	// the probe process always answers before Docker kills it.
@@ -204,6 +210,49 @@ func main() {
 			if err != nil {
 				logger.Error("server build failed", "err", err)
 				os.Exit(exitFailure)
+			}
+
+			// The yt-dlp engine joins the same registry beside aria2 and
+			// qBittorrent (T090): api.NewServer owns the daemon adapters, so
+			// the media lane — a local subprocess configured entirely
+			// through DLTOOL_YTDLP_PATH and DLTOOL_JS_RUNTIME_PATH — is
+			// composed here, on the registry pointer the task handlers
+			// captured. It registers unconditionally: the environment
+			// always names a binary, and a missing one is Health's report,
+			// never a construction failure. The engines row makes
+			// GET /engines list it and POST /engines/{id}/test probe it
+			// (FR-143); the boot probe mirrors connectEngine's, a warn and
+			// a recorded last_error rather than a boot failure.
+			ytdlpEngine := ytdlp.NewEngine(ytdlp.Config{
+				BinaryPath:    cfg.YtdlpPath,
+				JSRuntimePath: cfg.JSRuntimePath,
+				ArchiveDir:    filepath.Join(cfg.ConfigDir, "archives"),
+			}, logger)
+			server.Engines.Register(ytdlpEngine)
+
+			engineRows := store.NewSettingsStore(db)
+			if err := engineRows.EnsureEngine(ctx, store.EngineIDYTDLP, engine.NameYtDlp, ytdlpEngine.Name(), cfg.YtdlpPath, time.Now().UnixMilli()); err != nil {
+				logger.Error("engine row sync failed", "engine", engine.NameYtDlp, "err", err)
+			} else {
+				probeCtx, cancelProbe := context.WithTimeout(ctx, engineBootProbeTimeout)
+				probeErr := ytdlpEngine.Connect(probeCtx)
+				version := ""
+				if probeErr == nil {
+					version, probeErr = ytdlpEngine.Health(probeCtx)
+				}
+				cancelProbe()
+				at := time.Now().UnixMilli()
+				var touchErr error
+				if probeErr != nil {
+					logger.Warn("ytdlp engine unavailable", "engine", engine.NameYtDlp, "err", probeErr)
+					detail := probeErr.Error()
+					touchErr = engineRows.TouchEngine(ctx, store.EngineIDYTDLP, nil, &detail, at)
+				} else {
+					touchErr = engineRows.TouchEngine(ctx, store.EngineIDYTDLP, &version, nil, at)
+				}
+				if touchErr != nil {
+					logger.Warn("engine probe outcome not recorded", "engine", engine.NameYtDlp, "err", touchErr)
+				}
 			}
 
 			// store.Open has returned: migrations are applied and the database
