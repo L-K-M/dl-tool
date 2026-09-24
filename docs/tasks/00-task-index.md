@@ -204,7 +204,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T111](T111-delete-data-and-hardlink-safety.md) | Delete downloaded data safely and prove hardlink survival | T023, T076 | done |
 | [T117](T117-rss-settings-section.md) | Build the RSS settings section | T053, T065, T066, T068, T092 | done |
 | [T118](T118-bandwidth-settings-and-schedule-grid.md) | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | done |
-| [T119](T119-downloads-and-bittorrent-settings.md) | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | todo |
+| [T119](T119-downloads-and-bittorrent-settings.md) | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | done |
 | [T120](T120-account-and-notifications-settings.md) | Build the Account and Notifications settings sections | T053, T084, T106 | deferred |
 
 ## M7 — yt-dlp, packaging and release
@@ -412,7 +412,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T111 | Delete downloaded data safely and prove hardlink survival | T023, T076 | no | done | [T111](T111-delete-data-and-hardlink-safety.md) |
 | T117 | Build the RSS settings section | T053, T065, T066, T068, T092 | no | done | [T117](T117-rss-settings-section.md) |
 | T118 | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | no | done | [T118](T118-bandwidth-settings-and-schedule-grid.md) |
-| T119 | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | no | todo | [T119](T119-downloads-and-bittorrent-settings.md) |
+| T119 | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | no | done | [T119](T119-downloads-and-bittorrent-settings.md) |
 | T120 | Build the Account and Notifications settings sections | T053, T084, T106 | no | deferred | [T120](T120-account-and-notifications-settings.md) |
 
 ### M7
