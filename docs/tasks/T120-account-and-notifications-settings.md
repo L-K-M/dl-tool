@@ -10,7 +10,7 @@
 | **Parallel-safe** | no — it edits `SettingsScreen.tsx`, `settings.json` and `internal/api/server.go`, shared with T116–T119 and T121 |
 | **Implements** | — (renders [FR-104](../02-requirements.md#fr-104-send-notifications-and-offer-a-per-channel-test) covered by T077, [FR-107](../02-requirements.md#fr-107-manage-notification-channels) covered by T106, and [FR-117](../02-requirements.md#fr-117-issue-and-revoke-api-tokens) covered by T084) |
 | **Decisions** | [ADR-0007](../decisions/0007-react-spa-embedded-in-the-binary.md), [ADR-0013](../decisions/0013-mandatory-built-in-authentication.md) |
-| **Est. size** | 6 new files, ~900 LOC |
+| **Est. size** | 5 new files, ~900 LOC |
 
 ## Goal
 `/settings/account` changes the operator's password and issues API tokens whose secret is shown exactly
@@ -64,6 +64,8 @@ func UpdatePasswordHash(ctx context.Context, db *sqlx.DB, id, passwordHash strin
 
 // DeleteOtherSessions revokes every session the user holds except exceptSessionID; the
 // password-change rule revokes the attacker's stolen sessions while keeping the caller logged in.
+// PATCH /account accepts token auth (doc 05 §12), where the caller holds no session: pass
+// exceptSessionID == "" and every session is revoked.
 func DeleteOtherSessions(ctx context.Context, db *sqlx.DB, userID, exceptSessionID string) (int64, error)
 ```
 
@@ -201,7 +203,8 @@ export function NotificationsSection(): JSX.Element;
    of doc 05 §12, and `PatchAccount` verifying `current_password` before any write
    (`403 /problems/forbidden`), enforcing the 12-character floor (`422 /problems/validation-failed`),
    applying the profile/password writes and — on a password change — calling `DeleteOtherSessions`
-   for every session except the caller's. API tokens are unaffected.
+   for every session except the caller's (a token-authenticated caller passes `""`, revoking every
+   session). API tokens are unaffected.
 3. Edit `internal/api/server.go` to register `get-account` on `GET /account` and `patch-account` on
    `PATCH /account`, then run `make gen` so `api/openapi.json` and `web/src/api/schema.d.ts` carry the
    operations the web section calls.
@@ -238,7 +241,8 @@ export function NotificationsSection(): JSX.Element;
 - [ ] `TestPatchAccountShortPasswordIs422` asserts a password under 12 characters answers
       `422 /problems/validation-failed`.
 - [ ] `TestPatchAccountRevokesOtherSessions` asserts a password change revokes every session except
-      the caller's and leaves API tokens valid.
+      the caller's — and every session when the caller authenticated with an API token — and leaves
+      API tokens valid.
 - [ ] `TestTokenRevealedOnceOnly` asserts the token text is rendered after `201`, is gone after close, and
       appears in no later render, in no `GET /api-tokens` row and in no storage write.
 - [ ] `TestWrongCurrentPasswordRendersInline` asserts a `403 /problems/forbidden` renders on the
@@ -257,9 +261,10 @@ Run exactly this. Paste the output under "Evidence".
 make lint && make typecheck && make test PKG="./internal/api/... ./internal/store/..." && make test-web && echo ACCOUNT_NOTIFY_OK
 ```
 Expected: `ok  github.com/L-K-M/dl-tool/internal/api` and `ok  github.com/L-K-M/dl-tool/internal/store`
-with `TestGetAccountReturnsShape`, `TestPatchAccountWrongCurrentIs403`,
-`TestPatchAccountShortPasswordIs422` and `TestPatchAccountRevokesOtherSessions` each reported as
-`--- PASS`; Vitest lists `src/components/Settings/AccountSection.test.tsx` among the passed files,
+covering `TestGetAccountReturnsShape`, `TestPatchAccountWrongCurrentIs403`,
+`TestPatchAccountShortPasswordIs422` and `TestPatchAccountRevokesOtherSessions` — `make test` runs
+`go test` without `-v`, so the `ok` package lines are the proof and per-test `--- PASS` lines do not
+appear; Vitest lists `src/components/Settings/AccountSection.test.tsx` among the passed files,
 each of the web tests named above appears with a `✓`, no file reports a failure, and the final line
 of stdout is exactly `ACCOUNT_NOTIFY_OK`.
 
