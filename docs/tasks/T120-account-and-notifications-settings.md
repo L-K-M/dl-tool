@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T120 |
 | **Milestone** | M6 |
-| **Status** | deferred |
+| **Status** | todo |
 | **Depends on** | T053, T084, T106 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `SettingsScreen.tsx`, `settings.json` and `internal/api/server.go`, shared with T116–T119 and T121 |
@@ -42,6 +42,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/Settings/NotificationsSection.tsx` | create | Channel list, the event × channel matrix and `Send test`. |
 | `web/src/components/Settings/AccountSection.test.tsx` | create | Both sections: reveal-once, password change, matrix round-trip and raw reply. |
 | `web/src/components/Settings/SettingsScreen.tsx` | edit | Add `account` and `notifications` to `IMPLEMENTED` and render them. |
+| `web/src/components/Settings/SettingsScreen.test.tsx` | edit | Update `TestUsersAliasRendersAccountNote` to stub `GET /account` and `GET /api-tokens` and assert the account section renders under `/settings/users`. |
 | `web/src/locales/en/settings.json` | edit | Labels, column headers, the reveal warning and the event names. |
 | `internal/store/users.go` | edit | `UpdateUserProfile`, `UpdatePasswordHash` and `DeleteOtherSessions` for `PATCH /account`. |
 | `internal/api/account.go` | create | The `get-account` and `patch-account` handlers. |
@@ -298,7 +299,19 @@ lists an untracked file.
 ## Evidence
 <Agent pastes command output here before marking done.>
 
-## Blocked — open 2026-09-24: the alias test the Verification needs is outside the Files table
+## Blocked — resolved 2026-09-24: the alias test the Verification needs is outside the Files table
+
+**The remedy was applied: `web/src/components/Settings/SettingsScreen.test.tsx` joined the
+Files table** with the exact purpose the record prescribed — `TestUsersAliasRendersAccountNote`
+now stubs `GET /account` and `GET /api-tokens` and asserts the account section renders under
+`/settings/users`, keeping the path-probe alias assertion. The assertion change is not a
+weakening: the stub text was the pre-implementation state this task exists to retire. The
+implementation was taken from `loop/t120-2-1790284074` unchanged. The original record is
+preserved below.
+
+---
+
+### The gap (original 2026-09-24 record)
 
 The repair recorded below widened this task to full-stack, and the implementation it
 describes is built and verified — `make lint`, `make typecheck` and
