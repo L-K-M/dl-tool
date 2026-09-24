@@ -117,7 +117,7 @@ func (e *Engine) Close() error {
 
 	var errs []error
 	for id, proc := range live {
-		if err := e.runner.Cancel(id); err != nil && !errors.Is(err, engine.ErrNotFound) {
+		if err := e.killProc(id, proc); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -266,7 +266,7 @@ func (e *Engine) Pause(_ context.Context, id string) error {
 		return fmt.Errorf("ytdlp pause %s: task is %s", id, state)
 	}
 
-	if err := e.runner.Cancel(id); err != nil && !errors.Is(err, engine.ErrNotFound) {
+	if err := e.killProc(id, proc); err != nil {
 		return fmt.Errorf("ytdlp pause %s: %w", id, err)
 	}
 	e.finishProc(id, proc, Outcome{State: engine.StatePaused})
@@ -323,7 +323,7 @@ func (e *Engine) Remove(_ context.Context, id string) error {
 	e.mu.Unlock()
 
 	if proc != nil {
-		if err := e.runner.Cancel(id); err != nil && !errors.Is(err, engine.ErrNotFound) {
+		if err := e.killProc(id, proc); err != nil {
 			e.mu.Lock()
 			if cur, live := e.tasks[id]; live {
 				cur.removing = false
@@ -459,6 +459,30 @@ func (e *Engine) spawnLocked(ctx context.Context, id string, rec *taskRecord) (*
 	return proc, nil
 }
 
+// killProc stops proc through its context and reaps the runner's live
+// slot only when it still names this process. The conditional delete is
+// the whole point: runner.Cancel deletes r.live[id] blindly after the
+// kill, and a respawn under the same id can register in the gap —
+// deleting its slot would orphan a live process while callers believe
+// it is tracked. Like Runner.Cancel it keeps the slot on a grace
+// timeout, so Live never under-reports a process that may still run.
+func (e *Engine) killProc(id string, proc *Proc) error {
+	proc.cancel()
+	select {
+	case <-proc.done:
+	case <-time.After(cancelGrace):
+		e.log.Error("ytdlp process did not exit within cancel grace", slog.String("task_id", id))
+		return fmt.Errorf("ytdlp cancel %s: process did not exit within %s", id, cancelGrace)
+	}
+	e.runner.mu.Lock()
+	if cur, ok := e.runner.live[id]; ok && cur == proc {
+		delete(e.runner.live, id)
+	}
+	e.runner.mu.Unlock()
+	e.log.Info("ytdlp process cancelled", slog.String("task_id", id))
+	return nil
+}
+
 // effectiveLimitLocked combines the per-task and global stores into the
 // single value the next spawn carries: the smallest non-zero of the
 // two, 0 meaning unlimited. Caller holds e.mu.
@@ -510,12 +534,23 @@ func (e *Engine) watch(id string, proc *Proc) {
 		e.log.Warn("ytdlp stdout close failed", slog.String("task_id", id), slog.String("error", err.Error()))
 	}
 
-	code, err := e.runner.Wait(id)
-	if errors.Is(err, engine.ErrNotFound) {
-		// Cancel reaped it first: Pause, Remove or Close already owns the
-		// transition and its event, so the watcher retires quietly.
-		return
+	// Wait on the proc's own done channel rather than runner.Wait: Wait
+	// deletes r.live[id] unconditionally, and by the time this watcher
+	// runs the slot may hold a respawn under the same id — deleting it
+	// would orphan the new process (Pause's Cancel then reports
+	// ErrNotFound while a live process runs). The reaper sets exitCode
+	// before closing done, so it is safe to read here.
+	<-proc.done
+	code := proc.exitCode
+
+	// Reap the runner's live entry only when the slot still names this
+	// process; a respawn already owns it otherwise.
+	e.runner.mu.Lock()
+	if cur, ok := e.runner.live[id]; ok && cur == proc {
+		delete(e.runner.live, id)
 	}
+	e.runner.mu.Unlock()
+
 	outcome := ClassifyExit(code, proc.stderr.String())
 	if outcome.State == engine.StateError {
 		e.log.Error("ytdlp process failed",
