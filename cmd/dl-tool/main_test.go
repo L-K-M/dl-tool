@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -62,7 +64,13 @@ func testDB(t *testing.T) *sqlx.DB {
 		filepath.Join(dir, "backups"),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { db.Close() })
+	// Belt and braces for aborts before the drain: the drain's own close
+	// is the normal path, so ErrConnDone here means cleanup, not failure.
+	t.Cleanup(func() {
+		if cerr := db.Close(); cerr != nil && !errors.Is(cerr, sql.ErrConnDone) {
+			t.Logf("test db close: %v", cerr)
+		}
+	})
 
 	return db
 }
