@@ -9,7 +9,7 @@
 | **Blocks** | T113, T115 |
 | **Parallel-safe** | yes — touches `.github/` and `CONTRIBUTING.md` only |
 | **Implements** | [NFR-028](../02-requirements.md#nfr-028-harden-the-release-supply-chain), [NFR-005](../02-requirements.md#nfr-005-publish-a-multi-architecture-image) |
-| **Decisions** | [ADR-0018](../decisions/0018-pin-ytdlp-by-version-and-hash.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md) |
+| **Decisions** | [ADR-0018](../decisions/0018-pin-ytdlp-by-version-and-hash.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md), [ADR-0022](../decisions/0022-generate-ytdlp-routing-table.md) |
 | **Est. size** | 3 new files, ~330 LOC |
 
 ## Goal
@@ -69,7 +69,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Download both musllinux assets and compute the hashes
+      - name: Download the release assets and the PyPI wheel, compute the hashes
         id: sums
         run: |
           set -euo pipefail
@@ -77,16 +77,25 @@ jobs:
           base="https://github.com/yt-dlp/yt-dlp/releases/download/$tag"
           curl -fsSL -o amd64 "$base/yt-dlp_musllinux"
           curl -fsSL -o arm64 "$base/yt-dlp_musllinux_aarch64"
+          wheel_url=$(python3 -c "import json,urllib.request,sys; v='.'.join(str(int(x)) for x in sys.argv[1].split('.')); d=json.load(urllib.request.urlopen(f'https://pypi.org/pypi/yt-dlp/{v}/json')); print(next(u['url'] for u in d['urls'] if u['filename'].endswith('py3-none-any.whl')))" "$tag")
+          curl -fsSL -o wheel "$wheel_url"
           echo "amd64=$(sha256sum amd64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "arm64=$(sha256sum arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - name: Rewrite the three ARG lines in the Dockerfile
+          echo "wheel=$(sha256sum wheel | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Rewrite the four ARG lines in the Dockerfile
         run: |
           set -euo pipefail
           sed -i \
             -e 's|^ARG YTDLP_VERSION=.*|ARG YTDLP_VERSION="${{ steps.rel.outputs.tag }}"|' \
             -e 's|^ARG YTDLP_SHA256_AMD64=.*|ARG YTDLP_SHA256_AMD64="${{ steps.sums.outputs.amd64 }}"|' \
             -e 's|^ARG YTDLP_SHA256_ARM64=.*|ARG YTDLP_SHA256_ARM64="${{ steps.sums.outputs.arm64 }}"|' \
+            -e 's|^ARG YTDLP_SHA256_WHEEL=.*|ARG YTDLP_SHA256_WHEEL="${{ steps.sums.outputs.wheel }}"|' \
             Dockerfile
+          grep -q '^ARG YTDLP_SHA256_WHEEL=' Dockerfile   # sed no-ops if T088's arg is absent — fail loudly
+      - name: Regenerate the yt-dlp routing table for the new pin
+        run: python3 scripts/gen-ytdlp-patterns.py   # ADR-0022: the bump PR carries the table diff too
+      - name: Verify residual overrides cover the regenerated table
+        run: go test ./internal/engine/ytdlp/...   # fails the bump job when a new residual lacks an override
       - name: Smoke-test the pinned build
         run: docker build --build-arg TARGETARCH=amd64 --target ytdlp -t ytdlp-pin-check .
       - name: Open a pull request
