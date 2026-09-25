@@ -147,7 +147,8 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
    maintainer-supplied). With the stdlib only it:
    - enumerates every extractor class and collects `_VALID_URL` / `_VALID_URLS`, skipping `Generic`;
    - transpiles each pattern: when it starts with `(?x` (all such occurrences in the corpus are
-     pattern-initial) strip the flag group, then drop unescaped whitespace and `#`-to-EOL comments
+     pattern-initial) remove `x` from the flag set but **preserve co-flags** — `(?xi)` becomes `(?i)`,
+     `(?x:` becomes `(?:`, `(?x)` vanishes — then drop unescaped whitespace and `#`-to-EOL comments
      outside character classes; rewrite every capturing group — `(…)` and `(?P<name>…)` — to `(?:…)`,
      skipping escaped `\(` and parens inside character classes exactly as the whitespace pass does
      (a naive rewrite still compiles yet silently changes what matches), since routing needs only a
