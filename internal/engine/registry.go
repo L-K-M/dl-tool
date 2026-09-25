@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 )
@@ -71,6 +72,27 @@ func (r *Registry) Names() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// CloseAll runs every registered engine's Close once, in sorted-name order,
+// and returns their errors joined — one adapter's failure never skips the
+// rest. The composition root calls it at shutdown after the loops that call
+// into engines are dead and before the store closes
+// (docs/17-operations-and-runbook.md section 2). The mutex is held only to
+// read the map: adapter teardown must never run under it.
+func (r *Registry) CloseAll() error {
+	var errs []error
+	for _, name := range r.Names() {
+		e, ok := r.Get(name)
+		if !ok {
+			continue
+		}
+		if err := e.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("engine %s: %w", name, err))
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // TaskOpMode selects how AcquireTaskOp answers a held lease: an enum,

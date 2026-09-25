@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -331,6 +332,82 @@ func TestTaskOpReleaseIsIdempotent(t *testing.T) {
 		t.Fatalf("Try after both holders left = %v, want the freed lease", err)
 	} else {
 		release()
+	}
+}
+
+// closeSpy records the sequence of Close invocations; only Name and Close
+// are live — the embedded nil Engine panics on anything else.
+type closeSpy struct {
+	Engine
+	name     string
+	closeErr error
+	order    *[]string
+	calls    atomic.Int32
+}
+
+func (e *closeSpy) Name() string { return e.name }
+
+func (e *closeSpy) Close() error {
+	e.calls.Add(1)
+	if e.order != nil {
+		*e.order = append(*e.order, e.name)
+	}
+	return e.closeErr
+}
+
+// Every registered engine gets exactly one Close, in Names order.
+func TestCloseAllClosesEachEngineOnceInSortedOrder(t *testing.T) {
+	reg := NewRegistry()
+	var order []string
+	reg.Register(&closeSpy{name: "ytdlp", order: &order})
+	reg.Register(&closeSpy{name: "aria2", order: &order})
+	reg.Register(&closeSpy{name: "qbittorrent", order: &order})
+
+	if err := reg.CloseAll(); err != nil {
+		t.Fatalf("CloseAll = %v, want nil", err)
+	}
+	if got, want := order, []string{"aria2", "qbittorrent", "ytdlp"}; !slices.Equal(got, want) {
+		t.Fatalf("close order = %v, want %v", got, want)
+	}
+	for _, name := range reg.Names() {
+		e, _ := reg.Get(name)
+		if got := e.(*closeSpy).calls.Load(); got != 1 {
+			t.Fatalf("%s closed %d times, want 1", name, got)
+		}
+	}
+}
+
+// One adapter's failure is joined into the return and never skips the
+// others: teardown runs to completion on every engine.
+func TestCloseAllJoinsErrorsAndClosesEveryEngine(t *testing.T) {
+	reg := NewRegistry()
+	errAlpha := errors.New("alpha teardown failed")
+	errBeta := errors.New("beta teardown failed")
+	reg.Register(&closeSpy{name: "alpha", closeErr: errAlpha})
+	reg.Register(&closeSpy{name: "beta", closeErr: errBeta})
+	ok := &closeSpy{name: "gamma"}
+	reg.Register(ok)
+
+	err := reg.CloseAll()
+	if !errors.Is(err, errAlpha) || !errors.Is(err, errBeta) {
+		t.Fatalf("CloseAll = %v, want both engine errors joined", err)
+	}
+	for _, name := range reg.Names() {
+		e, _ := reg.Get(name)
+		if got := e.(*closeSpy).calls.Load(); got != 1 {
+			t.Fatalf("%s closed %d times despite a sibling failure, want 1", name, got)
+		}
+	}
+}
+
+// No engines, nothing to join — and a second call is a no-op too.
+func TestCloseAllOnEmptyRegistryIsNil(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.CloseAll(); err != nil {
+		t.Fatalf("CloseAll on empty registry = %v, want nil", err)
+	}
+	if err := reg.CloseAll(); err != nil {
+		t.Fatalf("repeat CloseAll on empty registry = %v, want nil", err)
 	}
 }
 
