@@ -50,9 +50,10 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/ytdlp/patterns.go` | create | `ExtractorCache`, `LoadExtractors`, `Match`, `Loaded`, `Len`. |
 | `internal/engine/ytdlp/patterns_test.go` | create | Table compiles, residual↔override coverage, YouTube/Vimeo routing, non-match, `generic` exclusion. |
 | `internal/engine/ytdlp/engine.go` | edit | `Engine` gains a `cache *ExtractorCache` field; `Connect` loads it (already called at boot by main.go's probe — no main.go edit needed); the `Accepts` stub delegates to `cache.Match`. |
+| `internal/engine/ytdlp/engine_test.go` | edit | The pre-T088 `TestAcceptsMatchesNothing` asserts the stub the `Accepts` criterion replaces; it is updated to assert the loaded cache's answers. Added to this table because the restated table omitted it — same amendment class as T090's missing unit-test row. |
 | `internal/api/tasks.go` | edit | `NewTaskHandlers` gains the `mediaMatch func(string) bool` param (stored on the struct); its two `engine.Route(n, nil)` call sites pass `h.mediaMatch` — T091-#277 class: the hook exists but the composition root cannot reach it from the task's own package. |
 | `internal/api/tasks_inspect.go` | edit | The third `engine.Route(n, nil)` site passes `h.mediaMatch`; the `TaskHandlers` receiver is shared, so no second constructor change. |
-| `internal/api/server.go` | edit | Pull the registered ytdlp engine from the `engines` registry and pass its `Accepts` bound method into `NewTaskHandlers` — one cache, loaded once by `Engine.Connect`; absent engine → nil → rows 4-6, unchanged from today. |
+| `internal/api/server.go` | edit | Add `mediaMatcher(engines)`: a hook that resolves the registered ytdlp engine through the shared registry at match time and calls its `Accepts` — one cache, loaded once by `Engine.Connect`; absent engine → false → rows 4-6, unchanged from today. A bound method taken here would capture nil because cmd/dl-tool registers the adapter only after `NewServer` returns — see `## Blocked`. |
 | `internal/api/tasks_files_test.go` | edit | Update the `NewTaskHandlers` call for the new param (pass nil — today's assertions unchanged). |
 | `internal/api/tasks_actions_test.go` | edit | Same signature update, plus one new case proving the wiring: a `TaskHandlers` built with `cache.Match` accepts a YouTube URL onto the yt-dlp engine where nil would route it to aria2. |
 | `Dockerfile` | edit | Add `ARG YTDLP_SHA256_WHEEL` beside the existing pins — the generator refuses to import a wheel whose hash differs. For the current pin it is `1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf` (sha256 of `yt_dlp-2026.8.19-py3-none-any.whl`, measured during this repair). |
@@ -213,18 +214,18 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
    covered in the ytdlp package — this case only proves the param reaches `Route`).
 
 ## Acceptance criteria
-- [ ] `Match` performs no network or subprocess call.
-- [ ] `Engine.Accepts` answers from the same cache, so an engine-forced YouTube submission
+- [x] `Match` performs no network or subprocess call.
+- [x] `Engine.Accepts` answers from the same cache, so an engine-forced YouTube submission
       (`engine: "ytdlp"`) is no longer refused at the `tasks.go` accept gate.
-- [ ] `generic` patterns are never generated into the table.
-- [ ] `youtube.com/watch`, `youtu.be` and `vimeo.com` URLs route to `ytdlp` via the override hosts, and
+- [x] `generic` patterns are never generated into the table.
+- [x] `youtube.com/watch`, `youtu.be` and `vimeo.com` URLs route to `ytdlp` via the override hosts, and
       `x.com/…/status/…` via the generated table.
-- [ ] `https://releases.ubuntu.com/24.04/ubuntu-24.04.iso` routes to `aria2`, with and without the matcher.
-- [ ] Every line in `extractor_patterns.txt` compiles, and every `extractors_residual.txt` name has an
+- [x] `https://releases.ubuntu.com/24.04/ubuntu-24.04.iso` routes to `aria2`, with and without the matcher.
+- [x] Every line in `extractor_patterns.txt` compiles, and every `extractors_residual.txt` name has an
       override entry — both enforced by tests, so a stale regen or a dropped override fails CI.
-- [ ] `extractor_patterns.txt` and `extractors_residual.txt` carry the wheel-version header and are
+- [x] `extractor_patterns.txt` and `extractors_residual.txt` carry the wheel-version header and are
       byte-identical across reruns against the same pin.
-- [ ] The generator refuses to run against a `yt_dlp` package whose version ≠ `YTDLP_VERSION`, and
+- [x] The generator refuses to run against a `yt_dlp` package whose version ≠ `YTDLP_VERSION`, and
       aborts before unpacking when the downloaded wheel's SHA-256 ≠ `YTDLP_SHA256_WHEEL`.
 
 ## Verification
@@ -260,7 +261,106 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint` on the final tree:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+```
+
+`make test PKG=./internal/engine/...` on the same tree:
+
+```
+$ make test PKG=./internal/engine/...
+go test -race -count=1 ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	35.428s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.291s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.141s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	8.201s
+```
+
+Scope check — exactly the paths in the Files table and nothing else:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+Dockerfile
+internal/api/server.go
+internal/api/tasks.go
+internal/api/tasks_actions_test.go
+internal/api/tasks_files_test.go
+internal/api/tasks_inspect.go
+internal/engine/ytdlp/engine.go
+internal/engine/ytdlp/engine_test.go
+internal/engine/ytdlp/extractor_patterns.txt
+internal/engine/ytdlp/extractors_residual.txt
+internal/engine/ytdlp/overrides.go
+internal/engine/ytdlp/patterns.go
+internal/engine/ytdlp/patterns_test.go
+scripts/gen-ytdlp-patterns.py
+```
+
+Same-pin regeneration is byte-identical (re-ran the generator against the
+pinned wheel and diffed both outputs against the pre-run copies):
+
+```
+BYTE-IDENTICAL
+```
+
+Both refusal gates fire:
+
+```
+$ scripts/gen-ytdlp-patterns.py --yt-dlp /tmp/fake.whl
+gen-ytdlp-patterns: error: /tmp/fake.whl sha256 mismatch: got e7dc6be1…,
+Dockerfile pins 1d57897e… — refusing to unpack   (exit 1)
+$ scripts/gen-ytdlp-patterns.py --yt-dlp /tmp/fakepkg   # yt_dlp 1999.01.01
+gen-ytdlp-patterns: error: imported yt_dlp is version 1999.01.01,
+Dockerfile pins 2026.08.19 — refusing to generate   (exit 1)
+```
+
+`make ci` on the same tree — lint, vet, typecheck, `go test -race -count=1
+./...` (every package `ok`), frontend suite, compose-check and doclint all
+passed (exit 0). Tail:
+
+```
+ Test Files  26 passed (26)
+      Tests  311 passed (311)
+
+docker compose -f compose.yaml config -q
+docker compose -f compose.yaml -f compose.dev.yaml config -q
+./scripts/doclint.sh
+🔍 2535 Total (in 150ms) 🔗 581 Unique ✅ 2507 OK 🚫 0 Errors 👻 28 Excluded
+```
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Resolved planning errors found while implementing — recorded here per the
+stop-and-document rule, resolved by the task's own explicit instructions:
+
+- The restated Files table omitted `internal/engine/ytdlp/engine_test.go`, but
+  `TestAcceptsMatchesNothing` there pins the pre-T088 `Accepts` stub the
+  acceptance criteria replace (`engine-forced YouTube submission is no
+  longer refused`). The table above is amended to add it — the same
+  amendment class T090 used for its missing unit-test row — and the test now
+  asserts the loaded cache's answers.
+- The `internal/api/server.go` row says to pass the registered engine's
+  `Accepts` bound method, but the ytdlp adapter registers on
+  `server.Engines` in `cmd/dl-tool/main.go` *after* `NewServer` returns — a
+  bound method taken at `NewTaskHandlers` time would be permanently nil and
+  row 3 would never fire in production. The hook is therefore the named
+  `mediaMatcher(engines)` helper, whose returned closure resolves the engine
+  through the shared registry at match time and calls its `Accepts` — the
+  same `engine.Engine` value the contract intends, the same single cache,
+  and `absent engine → false`, which is Route's nil-matcher semantics.
+  `TestMediaMatchLateRegistration` builds a handler with `mediaMatcher`
+  before registering the fake media engine and proves the late-arriving
+  registration still claims the YouTube submission.
