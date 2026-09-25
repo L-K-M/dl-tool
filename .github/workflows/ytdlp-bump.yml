@@ -32,7 +32,8 @@ jobs:
           curl -fsSL -o arm64 "$base/yt-dlp_musllinux_aarch64"
           read -r wheel_url wheel_pypi_sha < <(python3 -c "import json,urllib.request,sys; v='.'.join(str(int(x)) for x in sys.argv[1].lstrip('v').split('.')); d=json.load(urllib.request.urlopen(f'https://pypi.org/pypi/yt-dlp/{v}/json', timeout=30)); u=next((u for u in d['urls'] if u['filename'].endswith('py3-none-any.whl')), None); sys.exit(f'no py3-none-any wheel on PyPI for {v}') if u is None else print(u['url'], u['digests']['sha256'])" "$TAG")
           curl -fsSL -o wheel "$wheel_url"
-          [ "$(sha256sum wheel | cut -d' ' -f1)" = "$wheel_pypi_sha" ]   # cross-check the download against PyPI's published digest
+          # cross-check the download against PyPI's published digest; annotate on mismatch
+          [ "$(sha256sum wheel | cut -d' ' -f1)" = "$wheel_pypi_sha" ] || { echo "::error::wheel sha256 mismatch — expected $wheel_pypi_sha from PyPI"; exit 1; }
           echo "amd64=$(sha256sum amd64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "arm64=$(sha256sum arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "wheel=$(sha256sum wheel | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
@@ -61,7 +62,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   # v7
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
       - name: Verify residual overrides cover the regenerated table
         run: go test ./internal/engine/ytdlp/...   # fails the bump job when a new residual lacks an override
       - name: Set up QEMU
