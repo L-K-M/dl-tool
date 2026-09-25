@@ -411,6 +411,24 @@ func TestCloseAllOnEmptyRegistryIsNil(t *testing.T) {
 	}
 }
 
+// A drained registry is inert: a second CloseAll must not re-run Close —
+// adapters close channels there, so a repeat would panic mid-shutdown.
+func TestCloseAllTwiceClosesEachEngineOnce(t *testing.T) {
+	reg := NewRegistry()
+	spy := &closeSpy{name: "aria2"}
+	reg.Register(spy)
+
+	if err := reg.CloseAll(); err != nil {
+		t.Fatalf("first CloseAll = %v, want nil", err)
+	}
+	if err := reg.CloseAll(); err != nil {
+		t.Fatalf("second CloseAll = %v, want nil", err)
+	}
+	if got := spy.calls.Load(); got != 1 {
+		t.Fatalf("Close ran %d times across two CloseAll calls, want 1", got)
+	}
+}
+
 // Entries do not accumulate: after every holder and waiter of an id has
 // left — plain cycles, handoffs, skipped cancellations — the table holds
 // nothing. Pinned on the table itself, because no behaviour can observe

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
@@ -127,7 +128,8 @@ func TestShutdownDrainStopsHTTPBeforeEnginesClose(t *testing.T) {
 	go func() { _ = httpServer.Serve(listener) }()
 
 	base := "http://" + listener.Addr().String()
-	resp, err := http.Get(base + "/healthz")
+	probe := &http.Client{Timeout: 2 * time.Second}
+	resp, err := probe.Get(base + "/healthz")
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusOK, resp.StatusCode, "the listener must be live before the drain")
@@ -137,7 +139,7 @@ func TestShutdownDrainStopsHTTPBeforeEnginesClose(t *testing.T) {
 		name: "probe",
 		onClose: func() error {
 			// When engines close, the listener must already be gone.
-			midResp, midErr := http.Get(base + "/healthz")
+			midResp, midErr := probe.Get(base + "/healthz")
 			if midErr == nil {
 				_ = midResp.Body.Close()
 			}

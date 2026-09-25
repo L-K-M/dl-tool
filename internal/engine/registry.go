@@ -21,6 +21,9 @@ import (
 type Registry struct {
 	mu      sync.Mutex
 	engines map[string]Engine
+	// closed is set by the first CloseAll, which then owns teardown;
+	// guarded by mu so a repeat call is a plain no-op.
+	closed bool
 	// leases is the task-operation lock table: one entry per task id
 	// that has a live holder or waiter. Entries are created lazily and
 	// deleted by the last release, so the table does not grow with the
@@ -79,8 +82,17 @@ func (r *Registry) Names() []string {
 // rest. The composition root calls it at shutdown after the loops that call
 // into engines are dead and before the store closes
 // (docs/17-operations-and-runbook.md section 2). The mutex is held only to
-// read the map: adapter teardown must never run under it.
+// read the map: adapter teardown must never run under it. A second call is a
+// no-op — adapters' Close closes channels, so a repeat would panic.
 func (r *Registry) CloseAll() error {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil
+	}
+	r.closed = true
+	r.mu.Unlock()
+
 	var errs []error
 	for _, name := range r.Names() {
 		e, ok := r.Get(name)
