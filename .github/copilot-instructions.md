@@ -17,7 +17,8 @@ other task files. Branch as `task/T0NN-slug`; commit as `T0NN: <imperative summa
 
 ## The seven hard rules
 
-From [`docs/14-conventions.md`](../docs/14-conventions.md) §7:
+An excerpt of [`docs/14-conventions.md`](../docs/14-conventions.md) §7, not a second source of
+truth — update both files in the same commit when §7 changes:
 
 1. NEVER modify a file not listed in the current task file's `Files` table. If you believe you must,
    stop and write why under `## Blocked` in that task file.
