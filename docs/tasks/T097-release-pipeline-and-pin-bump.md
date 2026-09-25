@@ -77,9 +77,7 @@ jobs:
           base="https://github.com/yt-dlp/yt-dlp/releases/download/$tag"
           curl -fsSL -o amd64 "$base/yt-dlp_musllinux"
           curl -fsSL -o arm64 "$base/yt-dlp_musllinux_aarch64"
-          wheel_url=$(python3 -c "import json,urllib.request,sys
-          d=json.load(urllib.request.urlopen(f'https://pypi.org/pypi/yt-dlp/{sys.argv[1]}/json'))
-          print(next(u['url'] for u in d['urls'] if u['filename'].endswith('py3-none-any.whl')))" "$tag")
+          wheel_url=$(python3 -c "import json,urllib.request,sys; v='.'.join(str(int(x)) for x in sys.argv[1].split('.')); d=json.load(urllib.request.urlopen(f'https://pypi.org/pypi/yt-dlp/{v}/json')); print(next(u['url'] for u in d['urls'] if u['filename'].endswith('py3-none-any.whl')))" "$tag")
           curl -fsSL -o wheel "$wheel_url"
           echo "amd64=$(sha256sum amd64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "arm64=$(sha256sum arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"

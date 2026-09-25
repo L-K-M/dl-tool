@@ -137,8 +137,10 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
 ## Steps
 1. Create `scripts/gen-ytdlp-patterns.py` per ADR-0022. It reads `YTDLP_VERSION` and
    `YTDLP_SHA256_WHEEL` from the `Dockerfile`, downloads that version's `py3-none-any` wheel from
-   PyPI with stdlib `urllib` + `zipfile` (no pip, no third-party Python), **verifies the wheel's
-   SHA-256 against the pin before unpacking or importing anything** — abort on mismatch — and then
+   PyPI with stdlib `urllib` + `zipfile` (no pip, no third-party Python) — PyPI normalizes the
+   version, so query with `08` → `8`-style segments (`".".join(str(int(s)) for s in tag.split("."))`)
+   not the raw pin — **verifies the wheel's SHA-256 against the pin before unpacking or importing
+   anything** — abort on mismatch — and then
    also refuses to run when the imported `yt_dlp.version.__version__` does not match
    `YTDLP_VERSION`. Optionally it accepts `--yt-dlp <path>` pointing at an already-unpacked package
    or wheel (the hash gate still applies to a wheel path; an unpacked dir is trusted as
@@ -146,8 +148,10 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
    - enumerates every extractor class and collects `_VALID_URL` / `_VALID_URLS`, skipping `Generic`;
    - transpiles each pattern: when it starts with `(?x` (all such occurrences in the corpus are
      pattern-initial) strip the flag group, then drop unescaped whitespace and `#`-to-EOL comments
-     outside character classes; rewrite every capturing group — `(…)` and `(?P<name>…)` — to `(?:…)`
-     since routing needs only a boolean match; leave `(?i)` alone — Go's `regexp` accepts it;
+     outside character classes; rewrite every capturing group — `(…)` and `(?P<name>…)` — to `(?:…)`,
+     skipping escaped `\(` and parens inside character classes exactly as the whitespace pass does
+     (a naive rewrite still compiles yet silently changes what matches), since routing needs only a
+     boolean match; leave `(?i)` alone — Go's `regexp` accepts it;
    - writes every surviving pattern to a temp file and pipes it through a `go run` probe that
      `regexp.Compile`s each line; patterns that fail are dropped and their owning extractor name is
      recorded. `go` must be on the maintainer's `PATH` **and the probe must run under the repo's
