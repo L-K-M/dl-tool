@@ -12,7 +12,7 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7
       - name: Resolve the newest stable yt-dlp release
         id: rel
         run: |
@@ -23,21 +23,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Download both musllinux assets and compute the hashes
         id: sums
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
         run: |
           set -euo pipefail
-          tag='${{ steps.rel.outputs.tag }}'
-          base="https://github.com/yt-dlp/yt-dlp/releases/download/$tag"
+          base="https://github.com/yt-dlp/yt-dlp/releases/download/${TAG}"
           curl -fsSL -o amd64 "$base/yt-dlp_musllinux"
           curl -fsSL -o arm64 "$base/yt-dlp_musllinux_aarch64"
           echo "amd64=$(sha256sum amd64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "arm64=$(sha256sum arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Rewrite the three ARG lines in the Dockerfile
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          AMD64: ${{ steps.sums.outputs.amd64 }}
+          ARM64: ${{ steps.sums.outputs.arm64 }}
         run: |
           set -euo pipefail
           sed -i \
-            -e 's|^ARG YTDLP_VERSION=.*|ARG YTDLP_VERSION="${{ steps.rel.outputs.tag }}"|' \
-            -e 's|^ARG YTDLP_SHA256_AMD64=.*|ARG YTDLP_SHA256_AMD64="${{ steps.sums.outputs.amd64 }}"|' \
-            -e 's|^ARG YTDLP_SHA256_ARM64=.*|ARG YTDLP_SHA256_ARM64="${{ steps.sums.outputs.arm64 }}"|' \
+            -e "s|^ARG YTDLP_VERSION=.*|ARG YTDLP_VERSION=\"${TAG}\"|" \
+            -e "s|^ARG YTDLP_SHA256_AMD64=.*|ARG YTDLP_SHA256_AMD64=\"${AMD64}\"|" \
+            -e "s|^ARG YTDLP_SHA256_ARM64=.*|ARG YTDLP_SHA256_ARM64=\"${ARM64}\"|" \
             Dockerfile
       - name: Smoke-test the pinned build
         run: docker build --build-arg TARGETARCH=amd64 --target ytdlp -t ytdlp-pin-check .
@@ -48,5 +53,6 @@ jobs:
           title: 'chore: bump yt-dlp pin to ${{ steps.rel.outputs.tag }}'
           body: |
             Automated weekly pin bump. A human must review and merge; nothing auto-merges.
+            Note: CI does not run on this PR (opened with GITHUB_TOKEN); the smoke build above is the only automated check.
             Policy: docs/decisions/0018-pin-ytdlp-by-version-and-hash.md
           commit-message: 'chore: bump yt-dlp pin to ${{ steps.rel.outputs.tag }}'
