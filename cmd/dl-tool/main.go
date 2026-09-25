@@ -41,11 +41,10 @@ const (
 
 	// readHeaderTimeout bounds slow-header exposure on the main listener;
 	// readTimeout bounds the whole request read (body included); idleTimeout
-	// bounds keep-alive idling; shutdownTimeout bounds the graceful drain.
+	// bounds keep-alive idling.
 	readHeaderTimeout = 10 * time.Second
 	readTimeout       = 60 * time.Second
 	idleTimeout       = 120 * time.Second
-	shutdownTimeout   = 10 * time.Second
 
 	// governorBootTimeout bounds the stored-limits fan-out so a black-holed
 	// engine can hold the boot for one window, not per daemon RPC.
@@ -62,6 +61,10 @@ const (
 	loopbackHost       = "127.0.0.1"
 	healthzPath        = "/healthz"
 )
+
+// shutdownTimeout bounds the graceful drain. A var, not a const, so a drain
+// test can shrink the budget and exercise the overrun path.
+var shutdownTimeout = 10 * time.Second
 
 // Options are the humacli-bound flags.
 type Options struct {

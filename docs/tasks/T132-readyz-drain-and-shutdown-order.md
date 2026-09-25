@@ -84,6 +84,9 @@ No other file may be modified.
       `server.Shutdown()`, engine close and `db.Close()` run — the join order is unchanged.
 - [ ] In-flight SSE connections keep the existing bounded `shutdownTimeout` drain; no new timers or
       grace windows are invented.
+- [ ] A handler that overruns the `Shutdown` budget is force-cancelled before engines close —
+      `TestShutdownDrainForceClosesOverrunningHandler` fails deterministically when the
+      `httpServer.Close()` escalation is removed.
 - [ ] The ordering test failed deterministically before the fix (step 2 output in Evidence).
 
 ## Verification
@@ -144,5 +147,19 @@ ok  	github.com/L-K-M/dl-tool/cmd/dl-tool	3.595s
 go test -race -count=1 ./internal/obs/...
 ok  	github.com/L-K-M/dl-tool/internal/obs	1.319s
 ```
+
+The HTTP-overrun case — an in-flight handler parked on its request context outliving the
+`Shutdown` budget — is pinned by `TestShutdownDrainForceClosesOverrunningHandler`. Red observed by
+temporarily removing the `httpServer.Close()` escalation:
+
+```
+--- FAIL: TestShutdownDrainForceClosesOverrunningHandler (2.50s)
+    main_test.go:218: an overrunning handler was still live when engines closed
+FAIL	github.com/L-K-M/dl-tool/cmd/dl-tool	2.560s
+```
+
+With the escalation restored the whole drain suite passes under `-race` (output above), including
+`TestShutdownDrainForceClosesOverrunningHandler` at ~0.5s — the 50 ms shrunken budget overruns, the
+force-close cancels the parked handler, and the engine's `Close` observes it already exited.
 
 A full `go test -count=1 ./...` also passed — every package `ok`, no `FAIL`, no `DATA RACE`.

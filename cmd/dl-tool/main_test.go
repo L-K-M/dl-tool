@@ -173,6 +173,69 @@ func TestShutdownDrainStopsIngressBeforeRuntimeDrain(t *testing.T) {
 	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
 }
 
+// A handler still in flight when Shutdown's budget expires must be dead
+// before engines close — the SSE pattern, a handler parked on its request
+// context, is what holds Shutdown to the deadline. The drain escalates to
+// httpServer.Close, which cancels the request context; the engine's own
+// Close observes the handler exited.
+func TestShutdownDrainForceClosesOverrunningHandler(t *testing.T) {
+	db := testDB(t)
+	server := testServer(t)
+
+	entered := make(chan struct{})
+	exited := make(chan struct{})
+	server.Router.Get("/stuck", func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-r.Context().Done()
+		close(exited)
+	})
+
+	httpServer := &http.Server{Handler: server.Router}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() { _ = httpServer.Serve(listener) }()
+	addr := listener.Addr().String()
+
+	go func() {
+		resp, err := http.Get("http://" + addr + "/stuck")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the parked handler never ran")
+	}
+
+	// Shrink the budget so Shutdown overruns on the live handler.
+	savedTimeout := shutdownTimeout
+	shutdownTimeout = 50 * time.Millisecond
+	defer func() { shutdownTimeout = savedTimeout }()
+
+	engine := &closeProbeEngine{
+		name: "probe",
+		onClose: func() error {
+			// A bounded wait, not a sleep-ordering: the engine must find
+			// the cancelled handler already gone, and without the Close
+			// escalation it never is.
+			select {
+			case <-exited:
+			case <-time.After(2 * time.Second):
+				t.Error("an overrunning handler was still live when engines closed")
+			}
+
+			return nil
+		},
+	}
+	server.Engines.Register(engine)
+
+	shutdownDrain(httpServer, server, db, func() {})
+
+	require.Equal(t, int32(1), engine.calls.Load())
+	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
+}
+
 // The HTTP listener is released before the engines: an in-flight request
 // never meets a closed engine mid-handler.
 func TestShutdownDrainStopsHTTPBeforeEnginesClose(t *testing.T) {
