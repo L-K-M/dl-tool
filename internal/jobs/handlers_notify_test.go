@@ -478,10 +478,10 @@ func TestChainFanoutDeliversEvent(t *testing.T) {
 	db := newTestDB(t)
 	// The stub parks after recording, so arrival is provably earlier than
 	// the notifier persisting the send. OnceFunc releases it exactly once —
-	// the explicit release below or a failed assertion's cleanup.
+	// the explicit release below or function exit before test cleanup.
 	hold := make(chan struct{})
 	release := sync.OnceFunc(func() { close(hold) })
-	t.Cleanup(release)
+	defer release()
 	stub := newHeldRecordingStub(t, http.StatusOK, "{}", hold)
 
 	id := insertChannel(t, db, "webhook", "hook", true,

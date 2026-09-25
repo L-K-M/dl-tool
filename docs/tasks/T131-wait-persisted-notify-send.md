@@ -54,7 +54,7 @@ No other file may be modified.
    racy cross-goroutine field write.
 2. In `TestChainFanoutDeliversEvent` switch to the held stub and **observe the deterministic red
    first**: keep the existing `waitFor(stub.count() == 1)` then immediate row assertions while the
-   hold is still closed. The notifier cannot have persisted anything — `LastSendAt` is nil by
+   hold remains unreleased. The notifier cannot have persisted anything — `LastSendAt` is nil by
    construction — so the test fails every run, proving the ordering defect rather than a scheduling
    coincidence.
 3. Apply the fix: assert the recorded request (unchanged — it is fully populated under the mutex),
@@ -66,11 +66,11 @@ No other file may be modified.
 
 ## Acceptance criteria
 
-- [ ] With the response hold still armed, the count-based wait followed by the row assertions fails
+- [x] With the response hold still armed, the count-based wait followed by the row assertions fails
       deterministically — observed once, recorded in Evidence.
-- [ ] The fixed test waits on `LastSendAt != nil` and passes under `-race` with the hold released
+- [x] The fixed test waits on `LastSendAt != nil` and passes under `-race` with the hold released
       only after the arrival assertions.
-- [ ] Every pre-existing assertion (method, event payload, `LastSendAt` non-nil, `LastError` nil) is
+- [x] Every pre-existing assertion (method, event payload, `LastSendAt` non-nil, `LastError` nil) is
       unchanged; no sleep replaces the channel-based hold.
 
 ## Verification
@@ -121,4 +121,30 @@ cd web && npx prettier --check .             # clean
 go vet ./...                                 # clean
 go test -race -count=1 ./internal/jobs/...
 ok  	github.com/L-K-M/dl-tool/internal/jobs	40.352s
+```
+
+Parent verification after syncing main:
+
+```text
+Temporary forced abort before response release:
+  before: panic: test timed out after 3s (held server handler)
+  after: expected forced assertion failure exits in 0.054s; no timeout
+$ go test -race ./internal/jobs -run '^TestChainFanoutDeliversEvent$' -count=10 -timeout=30s
+ok  github.com/L-K-M/dl-tool/internal/jobs  5.111s
+```
+
+The response is now released by a function defer before test cleanup drains
+workers and closes the server. The temporary abort probe was removed; every
+original assertion remains.
+
+The required block passed again after the cleanup fix:
+
+```text
+$ make lint
+0 issues; eslint clean; Prettier clean
+$ make vet
+exit 0
+$ make test PKG=./internal/jobs/...
+go test -race -count=1 ./internal/jobs/...
+ok  	github.com/L-K-M/dl-tool/internal/jobs	39.296s
 ```
