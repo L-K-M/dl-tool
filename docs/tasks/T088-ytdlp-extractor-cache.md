@@ -175,7 +175,9 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
 4. Create `internal/engine/ytdlp/patterns.go` per the contract: `//go:embed` the table, skip `#`
    comment and blank lines, compile the rest as one `^(?:(?:p1)|(?:p2)|…)` alternation inside
    `LoadExtractors` (measured ≈163 ms on this corpus — do it once, never per `Match`), flatten
-   `ResidualOverrides` into a lowercase host list.
+   `ResidualOverrides` into a lowercase host list. The alternation is start-anchored — yt-dlp
+   evaluates `_VALID_URL` with `re.match`, so an unanchored `MatchString` would substring-match
+   e.g. `https://evil.example/?next=youtube.com/watch`.
    `Match(uri)`: parse with `net/url`, lowercase the hostname (no match on parse failure or empty
    host), suffix-check the override hosts, then `pattern.MatchString`. No I/O anywhere.
 5. Wire the hook. `internal/engine/ytdlp/engine.go`: add the `cache` field, load it in `Connect`

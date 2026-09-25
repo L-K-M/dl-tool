@@ -47,8 +47,9 @@ least one override host, so a regenerating pin bump that strands an extractor fa
 
 `Match` is two lookups and no I/O: a hostname suffix-match against the overrides **on label
 boundaries** — lowercase host, `host == suffix` or `host` ends in `"." + suffix`, so
-`evilyoutube.com` never matches `youtube.com` — then a match against one compiled alternation of the
-generated table (measured on this corpus: 163 ms to compile once at load, ≈0.5 ms per lookup).
+`evilyoutube.com` never matches `youtube.com` — then a start-anchored match against one compiled
+alternation of the generated table, mirroring yt-dlp's `re.match` semantics so a pattern cannot
+match mid-URL (measured on this corpus: 163 ms to compile once at load, ≈0.5 ms per lookup).
 
 ## Measured basis (yt-dlp 2026.08.19 wheel, Go 1.26)
 
@@ -59,8 +60,9 @@ generated table (measured on this corpus: 163 ms to compile once at load, ≈0.5
   counts classes rather than printed names, which is why both totals moved.)
 - Transpiling the verbose flag (all 214 `(?x` occurrences are pattern-initial: remove `x` from the
   flag set while preserving co-flags — `(?xi)` becomes `(?i)` — then strip unescaped whitespace and
-  `#` comments outside character classes, within the verbose region only) brings the pass count to
-  1 694 — 94.8 % of the corpus.
+  `#` comments outside character classes, within the verbose region only — a leading scoped
+  `(?x:…)` group that leaves a tail lands on the residual list rather than transpiling) brings the
+  pass count to 1 694 — 94.8 % of the corpus.
 - The 93 residual patterns belong to 89 extractors — including Youtube, Vimeo, Instagram, Soundcloud,
   Dailymotion, CBC, Imgur, Rumble and Nebula — and fail on look-around, conditional and backreference
   constructs RE2 has no equivalent for. They are precisely the hosts that must not be dropped, which
