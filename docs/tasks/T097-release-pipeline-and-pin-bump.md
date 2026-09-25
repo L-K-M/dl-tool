@@ -9,7 +9,7 @@
 | **Blocks** | T113, T115 |
 | **Parallel-safe** | yes — touches `.github/` and `CONTRIBUTING.md` only |
 | **Implements** | [NFR-028](../02-requirements.md#nfr-028-harden-the-release-supply-chain), [NFR-005](../02-requirements.md#nfr-005-publish-a-multi-architecture-image) |
-| **Decisions** | [ADR-0018](../decisions/0018-pin-ytdlp-by-version-and-hash.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md) |
+| **Decisions** | [ADR-0018](../decisions/0018-pin-ytdlp-by-version-and-hash.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md), [ADR-0022](../decisions/0022-generate-ytdlp-routing-table.md) |
 | **Est. size** | 3 new files, ~330 LOC |
 
 ## Goal
@@ -87,6 +87,8 @@ jobs:
             -e 's|^ARG YTDLP_SHA256_AMD64=.*|ARG YTDLP_SHA256_AMD64="${{ steps.sums.outputs.amd64 }}"|' \
             -e 's|^ARG YTDLP_SHA256_ARM64=.*|ARG YTDLP_SHA256_ARM64="${{ steps.sums.outputs.arm64 }}"|' \
             Dockerfile
+      - name: Regenerate the yt-dlp routing table for the new pin
+        run: python3 scripts/gen-ytdlp-patterns.py   # ADR-0022: the bump PR carries the table diff too
       - name: Smoke-test the pinned build
         run: docker build --build-arg TARGETARCH=amd64 --target ytdlp -t ytdlp-pin-check .
       - name: Open a pull request

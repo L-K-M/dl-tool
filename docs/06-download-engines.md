@@ -1064,20 +1064,13 @@ args := []string{
 Row 3 of §2 must be **cheap** and must answer without a network call, **skipping the `generic` extractor,
 which matches everything**. Never run a metadata extraction to answer `Accepts`.
 
-> **OPEN — the mechanism is undecided, and the one this document used to prescribe does not exist.**
-> The rule was "shell out once at start-up to enumerate extractor URL patterns and make `Accepts` a regexp
-> match against that cache". Measured against the pinned yt-dlp 2026.08.19:
->
-> - **No flag enumerates URL patterns.** `--list-extractors` prints 1752 *names* only (`10play`,
->   `17live`, …); `--extractor-descriptions` prints prose. The patterns live in each class's `_VALID_URL`
->   and are not reachable from the CLI at all.
-> - **The patterns are Python `re`, not RE2.** Compiling all 1702 `_VALID_URL` values with Go's `regexp`
->   fails on **284 of them (16.7 %)**, `(?x)` verbose mode being the commonest cause. `Youtube`,
->   `YoutubePlaylist` and `YoutubeTab` are all in that set, so a "drop any pattern that fails to compile"
->   rule silently stops routing YouTube — the single most important case — to the media lane.
->
-> [T088](tasks/T088-ytdlp-extractor-cache.md) is `deferred` until this is decided. Whatever replaces it must
-> keep row 3 offline and cheap, and must route YouTube. It needs a decision record, not a patch.
+> **Resolved by [ADR-0022](decisions/0022-generate-ytdlp-routing-table.md).** A maintainer-run
+> generator (`scripts/gen-ytdlp-patterns.py`, run on every pin bump) transpiles the wheel's
+> `_VALID_URL` patterns to RE2 into a committed table; the extractor names that cannot transpile go
+> to a residual list with a hand-maintained host-suffix override map. The earlier measurement stands:
+> no flag enumerates patterns, and verbatim `regexp.Compile` fails on 291 of 1 787 — after the `(?x)`
+> transpile 1 694 pass (94.7 %); the 93 residuals are look-around/conditional constructs that the
+> overrides cover, so YouTube routes.
 
 ### 7.3 Reading progress: files, not stdout
 

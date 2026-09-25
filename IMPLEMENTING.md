@@ -109,19 +109,17 @@ The plan is done when every task row is `done` or `deferred`, every milestone
 exit checkpoint in [`docs/00-INDEX.md`](docs/00-INDEX.md) passes, and `make ci`
 is green.
 
-Two items are deliberately unresolved and need an ADR from the repository owner
-before their tasks can run. Surface them when you reach them rather than deciding
+One item is deliberately unresolved and needs an ADR from the repository owner
+before its task can run. Surface it when you reach it rather than deciding
 yourself:
 
-- **T088** (`deferred`): routing a URL to the yt-dlp lane. The mechanism the plan
-  assumed does not exist — see
-  [`docs/06-download-engines.md` §7.2](docs/06-download-engines.md#72-routing-check).
-  Until it is decided, `MediaMatcher` stays nil and such URLs route to aria2.
 - **`ffmpeg` in the runtime image** — an open question in
   [`docs/06-download-engines.md`](docs/06-download-engines.md#open-questions). (The sibling
   question, whether Alpine's `7zip` carries the RAR codec, is answered: it does not, and the
   image ships upstream's pinned `7zzs` instead — see
-  [`docs/decisions/0021-pin-7zz-by-version-and-hash.md`](docs/decisions/0021-pin-7zz-by-version-and-hash.md).)
+  [`docs/decisions/0021-pin-7zz-by-version-and-hash.md`](docs/decisions/0021-pin-7zz-by-version-and-hash.md).
+  And the row-3 routing gap T088 once parked is decided —
+  [`docs/decisions/0022-generate-ytdlp-routing-table.md`](docs/decisions/0022-generate-ytdlp-routing-table.md).)
 
 Report after each milestone: what you built, what the exit checkpoint printed, and
 anything you wrote under `## Blocked`.
