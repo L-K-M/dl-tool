@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -37,10 +38,12 @@ const eventsBuffer = 64
 type Engine struct {
 	runner *Runner
 	log    *slog.Logger
-	// cache is the T088 routing table: written once by Connect before the
-	// listener accepts traffic, read by Accepts at routing time. A nil
-	// cache answers false.
-	cache *ExtractorCache
+	// cache is the T088 routing table: published by Connect before the
+	// listener accepts traffic, read by Accepts at routing time. Atomic
+	// publication, not a boot-ordering invariant, is what keeps a
+	// concurrent Connect/Accepts pair safe; an unpublished cache answers
+	// false through Match's nil-receiver contract.
+	cache atomic.Pointer[ExtractorCache]
 
 	mu      sync.Mutex
 	tasks   map[string]*taskRecord // keyed by the engine-namespaced id
@@ -91,7 +94,7 @@ func (e *Engine) Capabilities() []engine.Capability {
 // section 7.2, ADR-0022). A nil or unloaded cache answers false, which
 // keeps forced-engine submissions rejecting exactly as they did before
 // the cache existed.
-func (e *Engine) Accepts(uri string) bool { return e.cache.Match(uri) }
+func (e *Engine) Accepts(uri string) bool { return e.cache.Load().Match(uri) }
 
 // Connect readies the lane: it compiles the committed extractor table
 // into the routing cache of T088. A load failure is logged and leaves a
@@ -105,7 +108,7 @@ func (e *Engine) Connect(context.Context) error {
 			slog.String("error", err.Error()))
 		cache = &ExtractorCache{}
 	}
-	e.cache = cache
+	e.cache.Store(cache)
 	return nil
 }
 

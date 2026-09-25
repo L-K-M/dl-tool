@@ -27,18 +27,27 @@ func TestExtractorTableCompiles(t *testing.T) {
 
 // TestResidualOverridesCoverTable asserts every extractor the generator
 // could not transpile has a ResidualOverrides entry — the drift check that
-// makes a regenerating pin bump fail loudly when it strands a name.
+// makes a regenerating pin bump fail loudly when it strands a name. A
+// surplus override (a name a regen moved back into the table) is logged,
+// not failed — ADR-0022 records that as a note, not an error.
 func TestResidualOverridesCoverTable(t *testing.T) {
 	data, err := os.ReadFile("extractors_residual.txt")
 	if err != nil {
 		t.Fatalf("read extractors_residual.txt: %v", err)
 	}
+	residual := make(map[string]bool)
 	for i, line := range strings.Split(string(data), "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		residual[line] = true
 		if len(ResidualOverrides[line]) == 0 {
 			t.Errorf("extractors_residual.txt line %d: %q has no ResidualOverrides entry", i+1, line)
+		}
+	}
+	for name := range ResidualOverrides {
+		if !residual[name] {
+			t.Logf("ResidualOverrides surplus: %q is not in extractors_residual.txt", name)
 		}
 	}
 }
@@ -76,6 +85,54 @@ func TestMatchGeneratedTable(t *testing.T) {
 	cache := loadCache(t)
 	if !cache.Match("https://x.com/nasa/status/1234567890") {
 		t.Error("Match(x.com status URL) = false, want true via the generated table")
+	}
+}
+
+// TestMatchPathScopedOverrides proves the host/fragment grammar: a residual
+// extractor that claims only specific paths on a shared host routes inside
+// the claim, while a document, portal, profile or archived non-media page
+// on the same host stays on the plain-download lane.
+func TestMatchPathScopedOverrides(t *testing.T) {
+	cache := loadCache(t)
+	for _, tc := range []struct {
+		uri  string
+		want bool
+	}{
+		{"https://tenant.sharepoint.com/:v:/r/sites/team/video", true},
+		{"https://tenant.sharepoint.com/stream.aspx?id=abc", true},
+		{"https://tenant.sharepoint.com/sites/team/report.docx", false},
+		{"https://web.archive.org/web/20200101000000/https://www.youtube.com/watch?v=dQw4w9WgXcQ", true},
+		{"https://web.archive.org/web/20200101000000/https://example.com/page.html", false},
+		{"https://www.imdb.com/list/ls123456789/", true},
+		{"https://www.imdb.com/title/tt0111161/", false},
+		{"https://vk.com/video/playlist/-123_456", true},
+		{"https://vk.com/durov", false},
+		{"https://open.spotify.com/track/abc", true},
+		{"https://spotify.com/us/account/overview/", false},
+		{"https://www.amazon.com/gp/video/detail/B0ABC", true},
+		{"https://www.amazon.com/s?k=widget", false},
+		{"https://music.amazon.de/albums/B0ABC", true},
+		{"https://www.lequipe.fr/video/x", true},
+		{"https://www.lequipe.fr/Football/Article/x", false},
+	} {
+		if got := cache.Match(tc.uri); got != tc.want {
+			t.Errorf("Match(%q) = %v, want %v", tc.uri, got, tc.want)
+		}
+	}
+}
+
+// TestMatchCaseNormalizedAuthority lowercases scheme and authority before
+// the table match, mirroring how yt-dlp normalizes netloc before _VALID_URL.
+// The override lane already lowercases the hostname on its own.
+func TestMatchCaseNormalizedAuthority(t *testing.T) {
+	cache := loadCache(t)
+	for _, uri := range []string{
+		"HTTPS://X.COM/nasa/status/1234567890",
+		"https://WWW.X.COM/nasa/status/1234567890",
+	} {
+		if !cache.Match(uri) {
+			t.Errorf("Match(%q) = false, want true via the generated table", uri)
+		}
 	}
 }
 

@@ -98,11 +98,10 @@ def normalized(version):
 
 
 def wheel_url(version):
-    meta = json.load(
-        urllib.request.urlopen(
-            f"https://pypi.org/pypi/yt-dlp/{normalized(version)}/json", timeout=60
-        )
-    )
+    with urllib.request.urlopen(
+        f"https://pypi.org/pypi/yt-dlp/{normalized(version)}/json", timeout=60
+    ) as resp:
+        meta = json.load(resp)
     for entry in meta["urls"]:
         if entry["filename"].endswith("-py3-none-any.whl"):
             return entry["url"], entry["filename"]
@@ -111,7 +110,8 @@ def wheel_url(version):
 
 def fetch_wheel(version, want_sha256):
     url, filename = wheel_url(version)
-    data = urllib.request.urlopen(url, timeout=300).read()
+    with urllib.request.urlopen(url, timeout=300) as resp:
+        data = resp.read()
     got = hashlib.sha256(data).hexdigest()
     if got != want_sha256:
         die(
@@ -144,6 +144,8 @@ def resolve_source(path, want_sha256, workdir):
         if not os.path.isdir(os.path.join(pkg_root, "yt_dlp")):
             die(f"--yt-dlp {path}: no yt_dlp package found there or one level up")
         return pkg_root
+    if not os.path.isfile(path):
+        die(f"--yt-dlp {path}: not a directory or a wheel file")
     data = open(path, "rb").read()
     got = hashlib.sha256(data).hexdigest()
     if got != want_sha256:
@@ -175,8 +177,13 @@ def iter_patterns(pkg_root, want_version):
         if valid is False or valid is None:
             continue
         for pattern in variadic(valid):
-            if isinstance(pattern, str):
-                yield cls.ie_key(), pattern
+            if not isinstance(pattern, str):
+                # Not a regex source (a compiled object, a callable): nothing
+                # here can transpile it, so it must surface on the residual
+                # list for an override entry rather than silently dropping.
+                yield cls.ie_key(), None
+                continue
+            yield cls.ie_key(), pattern
 
 
 def close_paren(s, i):
@@ -271,6 +278,100 @@ def rewrite_captures(s):
     return "".join(out)
 
 
+# Python's re reads the shorthands as Unicode classes for str patterns while
+# RE2's are ASCII-only: \w is exactly \p{L}\p{N} plus the underscore (Python
+# excludes marks and other connector punctuation), \d is \p{Nd}, and \s is the
+# ASCII whitespace set plus \x1c-\x1f, \x85 and everything in \p{Z}. Widening
+# is load-bearing for routing, not pedantry — the extractor's own _VALID_URL
+# accepts URLs the ASCII transpile would miss (measured on the 2026.08.19
+# corpus: PlayerFM's `[\w-]+` slugs match
+# https://player.fm/series/ポッドキャスト/ep-1 under re.match but not under
+# Go's regexp), and a table miss is a silent aria2 fall-through.
+_WORD = r"\p{L}\p{N}_"
+_SPACE = r"\t\n\f\r\v\x{1c}-\x{1f}\x{85}\p{Z}"
+
+
+def widen_shorthands(s):
+    """Widen \\d \\w \\s and their complements to Python's Unicode semantics.
+    Returns the widened pattern, or None to mark it residual.
+
+    \\b and \\B pass through: RE2 has no Unicode word boundary, and on this
+    corpus every \\b sits beside an ASCII literal (`\\bid=`, `\\bv=` — query
+    parameter names) where the two semantics agree; any residual divergence
+    over-matches, which row 3 tolerates because yt-dlp still arbitrates.
+
+    Inside a character class the affirmative shorthands flatten into the
+    class body; a negated shorthand (\\D \\W \\S) cannot be expressed there —
+    RE2 has no nested negated classes — unless the class is the complementary
+    pair itself ([\\s\\S] and friends, the any-character idiom), which
+    collapses to (?s:.). Anything else lands residual rather than guessing.
+    """
+    out = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt == "d":
+                out.append(r"\p{Nd}")
+            elif nxt == "D":
+                out.append(r"\P{Nd}")
+            elif nxt == "w":
+                out.append("[" + _WORD + "]")
+            elif nxt == "W":
+                out.append("[^" + _WORD + "]")
+            elif nxt == "s":
+                out.append("[" + _SPACE + "]")
+            elif nxt == "S":
+                out.append("[^" + _SPACE + "]")
+            else:
+                out.append(s[i : i + 2])
+            i += 2
+            continue
+        if c != "[":
+            out.append(c)
+            i += 1
+            continue
+        # Character class: tokenize the body, keeping escapes whole.
+        j = i + 1
+        body = []
+        while j < len(s):
+            if s[j] == "\\" and j + 1 < len(s):
+                body.append(s[j : j + 2])
+                j += 2
+                continue
+            if s[j] == "]":
+                break
+            body.append(s[j])
+            j += 1
+        if j == len(s):
+            return None  # unbalanced class
+        if (
+            len(body) == 2
+            and body[0].startswith("\\")
+            and body[1].startswith("\\")
+            and {body[0][1], body[1][1]} in ({"d", "D"}, {"w", "W"}, {"s", "S"})
+        ):
+            out.append("(?s:.)")  # [x\X] is the match-anything idiom
+            i = j + 1
+            continue
+        inner = []
+        for tok in body:
+            if tok == r"\d":
+                inner.append(r"\p{Nd}")
+            elif tok == r"\w":
+                inner.append(_WORD)
+            elif tok == r"\s":
+                inner.append(_SPACE)
+            elif tok in (r"\D", r"\W", r"\S"):
+                return None
+            else:
+                inner.append(tok)
+        out.append("[" + "".join(inner) + "]")
+        i = j + 1
+    return "".join(out)
+
+
 def transpile(pattern):
     """Python re -> RE2. Returns the pattern, or None to mark it residual.
 
@@ -281,7 +382,7 @@ def transpile(pattern):
     Anything else lands residual rather than guessing.
     """
     if "(?x" not in pattern:
-        return rewrite_captures(pattern)
+        return widen_shorthands(rewrite_captures(pattern))
 
     m = re.match(r"\(\?([a-zA-Z]+)(:|\))", pattern)
     if not m or "x" not in m.group(1):
@@ -290,13 +391,17 @@ def transpile(pattern):
 
     if m.group(2) == ")":
         head = f"(?{coflags})" if coflags else ""
-        return rewrite_captures(strip_verbose(head + pattern[m.end() :]))
+        return widen_shorthands(
+            rewrite_captures(strip_verbose(head + pattern[m.end() :]))
+        )
 
     close = close_paren(pattern, 0)
     if close != len(pattern) - 1:
         return None
     head = f"(?{coflags}:" if coflags else "(?:"
-    return rewrite_captures(head + strip_verbose(pattern[m.end() : close]) + ")")
+    return widen_shorthands(
+        rewrite_captures(head + strip_verbose(pattern[m.end() : close]) + ")")
+    )
 
 
 def probe_compile(patterns):
@@ -321,7 +426,16 @@ def probe_compile(patterns):
         )
         if out.returncode != 0:
             die(f"go compile probe failed: {out.stderr.strip()}")
-        return {int(line) for line in out.stdout.split()}
+        # Fail closed on unexpected output: the probe prints only 0-based
+        # indices, so anything else means the pass/fail mapping is
+        # untrustworthy and the run must not produce a table.
+        failed = set()
+        for line in out.stdout.split():
+            try:
+                failed.add(int(line))
+            except ValueError:
+                die(f"go compile probe emitted unexpected stdout: {line!r}")
+        return failed
     finally:
         shutil.rmtree(probe_dir, ignore_errors=True)
         if candidates is not None:
@@ -361,7 +475,8 @@ def main():
     compiled_in = []
     residual = {}
     for name, pattern in pairs:
-        t = transpile(pattern)
+        # A non-str _VALID_URL entry is untranspilable by definition.
+        t = None if pattern is None else transpile(pattern)
         # One pattern per line: anything still carrying a raw newline (a
         # character class escaped the verbose strip) cannot be serialized,
         # and an empty result would substring-match everything.
@@ -384,16 +499,20 @@ def main():
         f"# Generated by scripts/gen-ytdlp-patterns.py from yt-dlp {version} "
         f"({wheel_name}). Do not edit.\n"
     )
-    write_table(PATTERNS_OUT, header, sorted(set(table)))
-    write_table(RESIDUAL_OUT, header, sorted(residual))
+    patterns = sorted(set(table))
+    residual_sorted = sorted(residual)
+    write_table(PATTERNS_OUT, header, patterns)
+    write_table(RESIDUAL_OUT, header, residual_sorted)
 
-    print(f"table: {len(set(table))} patterns -> {os.path.relpath(PATTERNS_OUT, REPO)}")
+    print(f"table: {len(patterns)} patterns -> {os.path.relpath(PATTERNS_OUT, REPO)}")
     print(
-        f"residual: {len(residual)} extractors -> {os.path.relpath(RESIDUAL_OUT, REPO)}"
+        f"residual: {len(residual_sorted)} extractors -> "
+        f"{os.path.relpath(RESIDUAL_OUT, REPO)}"
     )
-    print("ResidualOverrides must cover:")
-    for name in sorted(residual):
-        print(f"  {name}")
+    if residual_sorted:
+        print("ResidualOverrides must cover:")
+        for name in residual_sorted:
+            print(f"  {name}")
 
 
 if __name__ == "__main__":

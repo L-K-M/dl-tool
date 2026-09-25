@@ -1,28 +1,33 @@
 package ytdlp
 
 // ResidualOverrides maps each extractor name in extractors_residual.txt to the
-// host suffixes that route its URIs (hostnames, lowercase, no port). It is
-// hand-maintained: the generator tells you which names need entries on each
-// regen, and the coverage test fails if any residual name lacks one. Hostname
-// granularity is deliberate — row 3 answers "should yt-dlp see this URL";
-// yt-dlp picks its own extractor later.
+// routing specs that claim its URIs. A spec is "host" or "host/fragment":
+// the host is a lowercase label-boundary suffix (no port), and the optional
+// fragment must appear in the URI's decoded path — the path scoping keeps
+// whole-host claims off shared infrastructure: a SharePoint document or an
+// archived non-YouTube page must still reach the plain-download lane, since
+// the residual extractor never claimed it. It is hand-maintained: the
+// generator tells you which names need entries on each regen, and the
+// coverage test fails if any residual name lacks one.
 var ResidualOverrides = map[string][]string{
-	"Allstar":               {"allstar.gg"},
-	"AltCensoredChannel":    {"altcensored.com"},
-	"Audiomack":             {"audiomack.com"},
-	"AudiomackAlbum":        {"audiomack.com"},
-	"Audius":                {"audius.co"},
-	"BBCCoUk":               {"bbc.co.uk"},
-	"BYUtv":                 {"byutv.org"},
-	"BandcampUser":          {"bandcamp.com"},
-	"CBC":                   {"cbc.ca"},
-	"CBCPlayerPlaylist":     {"cbc.ca"},
-	"CBSSportsEmbed":        {"cbssports.com", "247sports.com"},
-	"CNN":                   {"cnn.com"},
-	"CTVNews":               {"ctvnews.ca"},
-	"DLFCorpus":             {"deutschlandfunk.de"},
-	"DLiveStream":           {"dlive.tv"},
-	"Dailymotion":           {"dailymotion.com", "dai.ly", "lequipe.fr"},
+	"Allstar":            {"allstar.gg"},
+	"AltCensoredChannel": {"altcensored.com"},
+	"Audiomack":          {"audiomack.com"},
+	"AudiomackAlbum":     {"audiomack.com"},
+	"Audius":             {"audius.co"},
+	"BBCCoUk":            {"bbc.co.uk"},
+	"BYUtv":              {"byutv.org"},
+	"BandcampUser":       {"bandcamp.com"},
+	"CBC":                {"cbc.ca"},
+	"CBCPlayerPlaylist":  {"cbc.ca"},
+	"CBSSportsEmbed":     {"cbssports.com", "247sports.com"},
+	"CNN":                {"cnn.com"},
+	"CTVNews":            {"ctvnews.ca"},
+	"DLFCorpus":          {"deutschlandfunk.de"},
+	"DLiveStream":        {"dlive.tv"},
+	// Dailymotion claims only video/player/swf paths on lequipe.fr — the
+	// rest of the host is news pages, which stay on the plain lane.
+	"Dailymotion":           {"dailymotion.com", "dai.ly", "lequipe.fr/video/", "lequipe.fr/player", "lequipe.fr/swf/"},
 	"DailymotionUser":       {"dailymotion.com", "dai.ly"},
 	"DangalPlay":            {"dangalplay.com"},
 	"DiscoveryPlus":         {"discoveryplus.com"},
@@ -36,7 +41,7 @@ var ResidualOverrides = map[string][]string{
 	"IPrima":                {"iprima.cz"},
 	"IdagioPlaylist":        {"idagio.com"},
 	"IdagioRecording":       {"idagio.com"},
-	"ImdbList":              {"imdb.com"},
+	"ImdbList":              {"imdb.com/list/ls"},
 	"Imgur":                 {"imgur.com"},
 	"Instagram":             {"instagram.com"},
 	"IviCompilation":        {"ivi.ru"},
@@ -70,7 +75,9 @@ var ResidualOverrides = map[string][]string{
 	"RedBull":               {"redbull.com"},
 	"RokfinChannel":         {"rokfin.com"},
 	"Rumble":                {"rumble.com"},
-	"SharePoint":            {"sharepoint.com"},
+	// SharePoint claims only :v: video views and stream.aspx endpoints;
+	// every other sharepoint.com URL is a document or portal page.
+	"SharePoint":            {"sharepoint.com/:v:/", "sharepoint.com/stream.aspx"},
 	"SimplecastEpisode":     {"simplecast.com"},
 	"SimplecastPodcast":     {"simplecast.com"},
 	"Sohu":                  {"tv.sohu.com"},
@@ -90,17 +97,24 @@ var ResidualOverrides = map[string][]string{
 	// module — no hostname can carry it, so no host suffix can route it. The
 	// entry exists because the coverage test requires one per residual name;
 	// it can never match.
-	"UnicodeBOM":        {"\ufeff"},
-	"VKUserVideos":      {"vk.com", "vkvideo.ru"},
-	"Vevo":              {"vevo.com"},
-	"Vimeo":             {"vimeo.com"},
-	"VimeoGroups":       {"vimeo.com"},
-	"VimeoUser":         {"vimeo.com"},
-	"WDR":               {"wdr.de"},
-	"YouPornVideos":     {"youporn.com"},
-	"Youtube":           youtubeHosts,
-	"YoutubeTab":        youtubeHosts,
-	"YoutubeWebArchive": {"web.archive.org"},
+	"UnicodeBOM": {"\ufeff"},
+	// VKUserVideos claims only vk.com/video paths; the rest of the social
+	// network — profiles, photos, docs — stays on the plain lane.
+	"VKUserVideos":  {"vk.com/video", "vkvideo.ru"},
+	"Vevo":          {"vevo.com"},
+	"Vimeo":         {"vimeo.com"},
+	"VimeoGroups":   {"vimeo.com"},
+	"VimeoUser":     {"vimeo.com"},
+	"WDR":           {"wdr.de"},
+	"YouPornVideos": {"youporn.com"},
+	"Youtube":       youtubeHosts,
+	"YoutubeTab":    youtubeHosts,
+	// YoutubeWebArchive claims only Wayback captures of YouTube URLs and the
+	// fake host upstream's tests use — a whole-host claim on web.archive.org
+	// would route every archived page download to the media lane. The
+	// ytarchive: pseudo-scheme in the same pattern has no host and cannot
+	// be routed here.
+	"YoutubeWebArchive": {"web.archive.org/youtube.com/", "wayback-fakeurl.archive.org/yt/"},
 	"ZenYandexChannel":  {"zen.yandex.ru", "dzen.ru"},
 }
 
@@ -126,42 +140,58 @@ var pornhubHosts = []string{
 }
 
 // knownDRMHosts are the services the KnownDRM extractor claims so yt-dlp can
-// answer with its DRM notice instead of aria2 downloading a portal page. The
-// amazon entry covers the store TLDs whose /gp/video and music paths the
-// pattern names.
+// answer with its DRM notice instead of aria2 downloading a portal page.
+// Entries stay scoped to what the upstream pattern claims — the video
+// subdomain or path, never the whole host: amazon's store TLDs route only
+// under /gp/video and the music. subdomain, so a store URL stays a plain
+// download. plus.rtl.de keeps a whole-host claim because upstream's
+// /podcast/ exclusion is a lookahead this grammar cannot express; the
+// over-claim is benign — yt-dlp still arbitrates. web.nhk mirrors the
+// pattern's literal www.web.nhk host (a real name under the .nhk gTLD).
 var knownDRMHosts = []string{
-	"hbomax.com",
+	"play.hbomax.com",
 	"channel4.com",
 	"channel5.com",
 	"peacocktv.com",
 	"disneyplus.com",
-	"spotify.com",
+	"open.spotify.com",
 	"tvnz.co.nz",
 	"oneplus.ch",
-	"artstation.com",
+	"artstation.com/learning/courses",
 	"philo.com",
 	"mech-plus.com",
 	"aha.video",
 	"mubi.com",
 	"vootkids.com",
-	"nowtv.it",
+	"nowtv.it/watch",
 	"tv.apple.com",
 	"primevideo.com",
 	"hulu.com",
-	"inkryptvideos.com",
+	"resource.inkryptvideos.com",
 	"joyn.de",
-	"amazon.com",
-	"amazon.co.uk",
-	"amazon.de",
-	"amazon.fr",
-	"amazon.it",
-	"amazon.es",
-	"amazon.ca",
-	"amazon.co.jp",
-	"amazon.com.au",
-	"amazon.in",
-	"njpwworld.com",
-	"qub.ca",
+	"amazon.com/gp/video",
+	"music.amazon.com",
+	"amazon.co.uk/gp/video",
+	"music.amazon.co.uk",
+	"amazon.de/gp/video",
+	"music.amazon.de",
+	"amazon.fr/gp/video",
+	"music.amazon.fr",
+	"amazon.it/gp/video",
+	"music.amazon.it",
+	"amazon.es/gp/video",
+	"music.amazon.es",
+	"amazon.ca/gp/video",
+	"music.amazon.ca",
+	"amazon.co.jp/gp/video",
+	"music.amazon.co.jp",
+	"amazon.com.au/gp/video",
+	"music.amazon.com.au",
+	"amazon.in/gp/video",
+	"music.amazon.in",
+	"watch.njpwworld.com",
+	"front.njpwworld.com",
+	"qub.ca/vrai",
 	"crunchyroll.com",
 	"viki.com",
 	"deezer.com",
@@ -177,15 +207,15 @@ var knownDRMHosts = []string{
 	"cwseed.com",
 	"6play.fr",
 	"rtlplay.be",
-	"rtl.hr",
+	"play.rtl.hr",
 	"rtlmost.hu",
-	"rtl.de",
+	"plus.rtl.de",
 	"mediasetinfinity.es",
 	"tv5mondeplus.com",
-	"rakuten.co.jp",
-	"telusoriginals.com",
-	"unext.jp",
+	"tv.rakuten.co.jp",
+	"watch.telusoriginals.com",
+	"video.unext.jp",
 	"web.nhk",
-	"fujitv.co.jp",
+	"fod.fujitv.co.jp",
 	"zee5.com",
 }
