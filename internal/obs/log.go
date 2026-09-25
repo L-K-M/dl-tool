@@ -30,18 +30,20 @@ const (
 func NewLogger(w io.Writer, level, format string) *slog.Logger {
 	options := &slog.HandlerOptions{Level: parseLevel(level), ReplaceAttr: RedactAttr}
 
-	// A missing or unwritable config directory leaves the file sink off:
-	// logger construction cannot fail — the signature is fixed by the
-	// cmd/dl-tool call sites — and neither the openapi subcommand's
-	// document nor a unit test may gain a stray warning line on stdout.
-	sink := w
-	if tee, _, err := NewLogWriter(w, logConfigDir(), logFileMaxBytes); err == nil {
-		sink = tee
+	var h slog.Handler = slog.NewJSONHandler(w, options)
+	if format == textFormat {
+		h = tint.NewTextHandler(w, &tint.Options{Level: options.Level, ReplaceAttr: RedactAttr})
 	}
 
-	var h slog.Handler = slog.NewJSONHandler(sink, options)
-	if format == textFormat {
-		h = tint.NewTextHandler(sink, &tint.Options{Level: options.Level, ReplaceAttr: RedactAttr})
+	// The file keeps its own JSON handler rather than the console bytes —
+	// the dl-tool.jsonl name promises one JSON object per line whatever
+	// format stdout shows. A missing or unwritable config directory leaves
+	// the file sink off: logger construction cannot fail — the signature
+	// is fixed by the cmd/dl-tool call sites — and neither the openapi
+	// subcommand's document nor a unit test may gain a stray warning line
+	// on stdout.
+	if file, _, err := logFileWriter(logConfigDir(), logFileMaxBytes); err == nil {
+		h = fanoutHandler{console: h, file: slog.NewJSONHandler(file, options)}
 	}
 
 	return slog.New(NewRecorder(h, recorderCapacity))

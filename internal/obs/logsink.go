@@ -35,29 +35,112 @@ var redactedURLParameters = []string{"apikey", "api_key", "token", "passkey"}
 
 // RedactAttr is the slog.HandlerOptions.ReplaceAttr function. It replaces any attribute whose key
 // is in RedactedAttrKeys, any value of type secure.Secret, and rewrites any string value that
-// parses as a URL through RedactURL.
+// parses as a URL through RedactURL. Maps and slices are walked to their leaves — a headers map or
+// a settings dump holds the same never-logged classes under the same key names.
 func RedactAttr(_ []string, a slog.Attr) slog.Attr {
-	for _, key := range RedactedAttrKeys {
-		if strings.EqualFold(a.Key, key) {
-			return slog.String(a.Key, Placeholder)
-		}
+	if redactedKey(a.Key) {
+		return slog.String(a.Key, Placeholder)
 	}
 
-	if a.Value.Kind() == slog.KindAny {
-		if _, isSecret := a.Value.Any().(secure.Secret); isSecret {
+	// Resolve so a LogValuer is judged by the value it actually carries;
+	// the handlers resolve it the same way at render time.
+	v := a.Value.Resolve()
+	switch v.Kind() {
+	case slog.KindString:
+		return slog.String(a.Key, RedactURL(v.String()))
+	case slog.KindAny:
+		switch v.Any().(type) {
+		case secure.Secret, *secure.Secret:
+			// A secret is caught by the type alone — under any key, as a
+			// value or a pointer, nil included, which is never dereferenced.
 			return slog.String(a.Key, Placeholder)
 		}
-		if _, isSecret := a.Value.Any().(*secure.Secret); isSecret {
-			// A secret carried by pointer is caught by the same type
-			// switch, nil included — the pointer is never dereferenced.
-			return slog.String(a.Key, Placeholder)
-		}
-	}
-	if a.Value.Kind() == slog.KindString {
-		return slog.String(a.Key, RedactURL(a.Value.String()))
-	}
 
-	return a
+		return slog.Any(a.Key, redactAny(v.Any()))
+	default:
+		return a
+	}
+}
+
+// redactedKey reports whether key names a never-logged class
+// (docs/17-operations-and-runbook.md section 6), case-insensitively.
+func redactedKey(key string) bool {
+	return slices.ContainsFunc(RedactedAttrKeys, func(k string) bool {
+		return strings.EqualFold(key, k)
+	})
+}
+
+// redactAny deep-copies a container, applying the redaction rules at every
+// leaf: a map key on RedactedAttrKeys, a secure.Secret of either type, and
+// a string that parses as a URL — including what an error or a Stringer
+// renders, so url.URL and *url.Error values do not leak credentials. The
+// copy keeps the caller's value immutable; a non-container is returned
+// unchanged.
+func redactAny(value any) any {
+	switch v := value.(type) {
+	case secure.Secret, *secure.Secret:
+		return Placeholder
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			if redactedKey(key) {
+				out[key] = Placeholder
+				continue
+			}
+			out[key] = redactAny(item)
+		}
+
+		return out
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for key, item := range v {
+			if redactedKey(key) {
+				out[key] = Placeholder
+				continue
+			}
+			out[key] = RedactURL(item)
+		}
+
+		return out
+	case map[string][]string:
+		// http.Header's shape — the never-logged headers' canonical carrier.
+		out := make(map[string][]string, len(v))
+		for key, items := range v {
+			if redactedKey(key) {
+				out[key] = []string{Placeholder}
+				continue
+			}
+			redacted := make([]string, len(items))
+			for i, item := range items {
+				redacted[i] = RedactURL(item)
+			}
+			out[key] = redacted
+		}
+
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = redactAny(item)
+		}
+
+		return out
+	case []string:
+		out := make([]string, len(v))
+		for i, item := range v {
+			out[i] = RedactURL(item)
+		}
+
+		return out
+	case error:
+		return RedactURL(v.Error())
+	case fmt.Stringer:
+		return RedactURL(v.String())
+	case string:
+		return RedactURL(v)
+	default:
+		return value
+	}
 }
 
 // RedactURL strips userinfo and rewrites the query parameters apikey, api_key, token and passkey
@@ -132,15 +215,26 @@ type boundAttr struct {
 
 // recordRing is the fixed-capacity store every Recorder clone shares.
 type recordRing struct {
-	mu   sync.RWMutex
-	buf  []Record
-	head int // index of the oldest live record
-	n    int
+	mu     sync.RWMutex
+	buf    []Record
+	head   int // index of the oldest live record
+	n      int
+	lastAt time.Time // At of the newest record; stored instants strictly increase
 }
 
 func (r *recordRing) push(rec Record) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// The page cursor is the previous page's last At, so two records
+	// sharing an instant are indistinguishable at a boundary — the older
+	// one would be skipped forever. Keep the stored instant strictly
+	// increasing in arrival order; the nudge is a nanosecond and only
+	// fires on a tie or a backward clock.
+	if !rec.At.After(r.lastAt) {
+		rec.At = r.lastAt.Add(time.Nanosecond)
+	}
+	r.lastAt = rec.At
 
 	if r.n < len(r.buf) {
 		r.buf[(r.head+r.n)%len(r.buf)] = rec
@@ -188,7 +282,10 @@ func (r *Recorder) Handle(ctx context.Context, rec slog.Record) error {
 		At:    rec.Time.UTC(),
 		Level: levelTag(rec.Level),
 		lvl:   rec.Level,
-		Msg:   rec.Message,
+		// ReplaceAttr reaches the message on the sink side — the JSON
+		// handler runs it on the msg attribute — so the ring applies the
+		// same redaction or the API would serve what stdout never shows.
+		Msg:   RedactURL(rec.Message),
 		Attrs: make(map[string]any, rec.NumAttrs()+len(r.bound)),
 	}
 	for _, b := range r.bound {
@@ -232,62 +329,66 @@ func (r *Recorder) WithGroup(name string) slog.Handler {
 // page resumes strictly older than it — the ring is newest-first. A zero cursor starts at the newest.
 // next is the cursor to pass for the following page, or the zero time when the page is the last.
 func (r *Recorder) Since(minLevel slog.Level, after time.Time, cursor time.Time, limit int) (recs []Record, next time.Time) {
-	if limit < 1 {
-		return nil, time.Time{}
-	}
+	recs, next, _ = r.Page(minLevel, after, cursor, limit)
 
+	return recs, next
+}
+
+// Page is the one read GET /system/logs needs: a single locked pass that
+// collects the newest-first page and counts every record matching the
+// level and since filters — the envelope's total — so items and total
+// never come from different snapshots of a ring the process logger keeps
+// writing. A limit below 1 collects nothing but still counts.
+func (r *Recorder) Page(minLevel slog.Level, after time.Time, cursor time.Time, limit int) (recs []Record, next time.Time, total int) {
 	r.ring.mu.RLock()
 	defer r.ring.mu.RUnlock()
 
 	for i := 0; i < r.ring.n; i++ {
 		rec := r.ring.at(i)
-		if !rec.visible(minLevel, after, cursor) {
+		if !rec.matches(minLevel, after) {
 			continue
 		}
-		if len(recs) == limit {
+		total++
+		if !rec.olderThan(cursor) {
+			continue
+		}
+		if len(recs) >= limit {
 			// A further eligible record exists: the page continues at the
 			// At of this page's last record.
-			return recs, recs[len(recs)-1].At
+			if next.IsZero() && len(recs) > 0 {
+				next = recs[len(recs)-1].At
+			}
+
+			continue
 		}
 		recs = append(recs, rec)
 	}
 
-	return recs, time.Time{}
+	return recs, next, total
 }
 
 // Count reports how many stored records satisfy the level and since
 // filters while ignoring the cursor — the pagination envelope's total
 // (docs/05-api-contract.md section 1.4).
 func (r *Recorder) Count(minLevel slog.Level, after time.Time) int {
-	r.ring.mu.RLock()
-	defer r.ring.mu.RUnlock()
-
-	total := 0
-	for i := 0; i < r.ring.n; i++ {
-		if r.ring.at(i).visible(minLevel, after, time.Time{}) {
-			total++
-		}
-	}
+	_, _, total := r.Page(minLevel, after, time.Time{}, 0)
 
 	return total
 }
 
-// visible applies the level floor, the since filter and the page cursor:
-// a record shows when its level reaches minLevel, its At is not before the
-// since bound, and — the page being newest-first — its At is older than the
-// cursor that ended the previous page.
-func (r Record) visible(minLevel slog.Level, after, cursor time.Time) bool {
-	if r.lvl < minLevel {
-		return false
-	}
-	if !after.IsZero() && r.At.Before(after) {
-		return false
-	}
-	if !cursor.IsZero() && !r.At.Before(cursor) {
-		return false
-	}
+// matches applies the level floor and the since bound — the filters the
+// envelope's total shares with the page itself.
+func (r Record) matches(minLevel slog.Level, after time.Time) bool {
+	return r.lvl >= minLevel && (after.IsZero() || !r.At.Before(after))
+}
 
-	return true
+// olderThan applies the page cursor: the page is newest-first, so a
+// record shows only when its At is older than the previous page's last
+// record. Stored instants strictly increase with arrival — see
+// recordRing.push — so the comparison never drops a record that shares
+// the boundary's clock tick.
+func (r Record) olderThan(cursor time.Time) bool {
+	return cursor.IsZero() || r.At.Before(cursor)
 }
 
 // putAttr stores one already-redacted attribute under its group path in dst.
@@ -381,8 +482,23 @@ func levelTag(l slog.Level) string {
 // shorter-lived sink — the process logger keeps it open for the process
 // lifetime, as it does stdout.
 func NewLogWriter(stdout io.Writer, configDir string, maxBytes int64) (io.Writer, func() error, error) {
+	file, closeFile, err := logFileWriter(configDir, maxBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return io.MultiWriter(stdout, file), closeFile, nil
+}
+
+// logFileWriter opens <configDir>/logs/dl-tool.jsonl under the single size
+// cap — the file side of the tee NewLogWriter builds, and the always-JSON
+// sink NewLogger pairs with the console handler. The directory gets 0755:
+// world-writable would let another local user pre-place a symlink at the
+// file's path. The file keeps 0666, the mode the task contract prescribes
+// so the container umask decides the result.
+func logFileWriter(configDir string, maxBytes int64) (io.Writer, func() error, error) {
 	dir := filepath.Join(configDir, "logs")
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("create log directory: %w", err)
 	}
 	file, err := os.OpenFile(filepath.Join(dir, "dl-tool.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
@@ -395,7 +511,37 @@ func NewLogWriter(stdout io.Writer, configDir string, maxBytes int64) (io.Writer
 		capped.size = stat.Size()
 	}
 
-	return io.MultiWriter(stdout, capped), file.Close, nil
+	return capped, file.Close, nil
+}
+
+// fanoutHandler mirrors every record to two handlers — the console in the
+// operator's chosen format and the log file, which is always JSON because
+// the .jsonl name promises one object per line whatever stdout shows.
+type fanoutHandler struct {
+	console slog.Handler
+	file    slog.Handler
+}
+
+var _ slog.Handler = fanoutHandler{}
+
+func (f fanoutHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return f.console.Enabled(ctx, level) || f.file.Enabled(ctx, level)
+}
+
+func (f fanoutHandler) Handle(ctx context.Context, rec slog.Record) error {
+	if err := f.console.Handle(ctx, rec); err != nil {
+		return err
+	}
+
+	return f.file.Handle(ctx, rec)
+}
+
+func (f fanoutHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return fanoutHandler{console: f.console.WithAttrs(attrs), file: f.file.WithAttrs(attrs)}
+}
+
+func (f fanoutHandler) WithGroup(name string) slog.Handler {
+	return fanoutHandler{console: f.console.WithGroup(name), file: f.file.WithGroup(name)}
 }
 
 // cappedWriter truncates the file back to empty once a write would carry it
@@ -407,6 +553,12 @@ type cappedWriter struct {
 }
 
 func (w *cappedWriter) Write(p []byte) (int, error) {
+	// A single record larger than the cap would leave the file over max
+	// even right after truncation; dropping it reports success without
+	// writing — the io.Writer deviation is deliberate for a capped sink.
+	if w.max > 0 && int64(len(p)) > w.max {
+		return len(p), nil
+	}
 	if w.max > 0 && w.size+int64(len(p)) > w.max {
 		if err := w.file.Truncate(0); err != nil {
 			return 0, fmt.Errorf("truncate log file: %w", err)

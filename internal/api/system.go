@@ -425,11 +425,13 @@ func (h *SystemHandlers) GetSystemLogs(ctx context.Context, in *SystemLogsInput)
 	}
 
 	level := systemLogLevel(in.Level)
-	records, next := h.logs.Since(level, after, cursor, in.Limit)
+	// Page is one locked pass, so items and total describe the same ring
+	// snapshot even while the process logger keeps writing.
+	records, next, total := h.logs.Page(level, after, cursor, in.Limit)
 	if len(records) > 0 {
 		output.Body.Items = records
 	}
-	output.Body.Total = h.logs.Count(level, after)
+	output.Body.Total = total
 
 	if !next.IsZero() {
 		token, err := encodeLogCursor(next)

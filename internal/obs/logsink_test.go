@@ -3,10 +3,12 @@ package obs
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +145,9 @@ func TestLoggerSurfacesAgree(t *testing.T) {
 		slog.String("url", "https://indexer.example.org/api?apikey=abc123"),
 		slog.String("passkey", "tracker-secret"),
 	)
+	// A credential-bearing URL as the message: ReplaceAttr reaches msg on
+	// the sink side, so the ring must apply the same redaction itself.
+	logger.Info("https://indexer.example.org/api?apikey=abc123")
 
 	stdoutText := stdout.String()
 	if strings.Contains(stdoutText, "abc123") || strings.Contains(stdoutText, "tracker-secret") {
@@ -169,13 +174,16 @@ func TestLoggerSurfacesAgree(t *testing.T) {
 		t.Fatalf("logger handler is %T, not *Recorder", logger.Handler())
 	}
 	recs, _ := recorder.Since(slog.LevelDebug, time.Time{}, time.Time{}, 10)
-	if len(recs) != 1 {
-		t.Fatalf("ring holds %d records, want 1", len(recs))
+	if len(recs) != 2 {
+		t.Fatalf("ring holds %d records, want 2", len(recs))
 	}
-	if got := recs[0].Attrs["url"]; got != "https://indexer.example.org/api?apikey="+Placeholder {
+	if strings.Contains(recs[0].Msg, "abc123") || !strings.Contains(recs[0].Msg, "apikey="+Placeholder) {
+		t.Errorf("ring message kept its credential: %q", recs[0].Msg)
+	}
+	if got := recs[1].Attrs["url"]; got != "https://indexer.example.org/api?apikey="+Placeholder {
 		t.Errorf("ring url attr: got %v", got)
 	}
-	if got := recs[0].Attrs["passkey"]; got != Placeholder {
+	if got := recs[1].Attrs["passkey"]; got != Placeholder {
 		t.Errorf("ring passkey attr: got %v, want %q", got, Placeholder)
 	}
 }
@@ -199,6 +207,127 @@ func TestRecorderWithAttrsSharesRing(t *testing.T) {
 	}
 }
 
+// A map or slice attr holds the same never-logged classes under the same
+// key names, so redaction walks containers on every surface.
+func TestRedactNestedContainer(t *testing.T) {
+	var stdout bytes.Buffer
+	recorder := NewRecorder(slog.NewJSONHandler(&stdout, &slog.HandlerOptions{ReplaceAttr: RedactAttr}), 10)
+	handle(t, recorder, slog.LevelInfo, "request",
+		slog.Any("headers", map[string]any{
+			"Authorization": "Bearer live-credential",
+			"Referer":       "https://indexer.example.org/api?token=abc123",
+		}),
+		slog.Any("header_pairs", map[string][]string{"X-Api-Key": {"k3y"}, "Accept": {"*/*"}}),
+		slog.Any("chain", []any{"https://h/t?passkey=zzz", secure.Secret("shh")}),
+	)
+
+	out := stdout.String()
+	for _, secret := range []string{"live-credential", "abc123", "k3y", "zzz", "shh"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("stdout carries unredacted nested value %q: %s", secret, out)
+		}
+	}
+
+	recs, _ := recorder.Since(slog.LevelDebug, time.Time{}, time.Time{}, 10)
+	if len(recs) != 1 {
+		t.Fatalf("ring holds %d records, want 1", len(recs))
+	}
+	headers, ok := recs[0].Attrs["headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("headers attr stored as %T", recs[0].Attrs["headers"])
+	}
+	if headers["Authorization"] != Placeholder {
+		t.Errorf("nested Authorization: got %v, want %q", headers["Authorization"], Placeholder)
+	}
+	if referer, _ := headers["Referer"].(string); strings.Contains(referer, "abc123") {
+		t.Errorf("nested Referer kept its token: %q", referer)
+	}
+	pairs, ok := recs[0].Attrs["header_pairs"].(map[string][]string)
+	if !ok {
+		t.Fatalf("header_pairs attr stored as %T", recs[0].Attrs["header_pairs"])
+	}
+	if pairs["X-Api-Key"][0] != Placeholder {
+		t.Errorf("nested X-Api-Key: got %v", pairs["X-Api-Key"])
+	}
+	chain, ok := recs[0].Attrs["chain"].([]any)
+	if !ok {
+		t.Fatalf("chain attr stored as %T", recs[0].Attrs["chain"])
+	}
+	if chain[1] != Placeholder {
+		t.Errorf("nested secret: got %v, want %q", chain[1], Placeholder)
+	}
+	if s, _ := chain[0].(string); strings.Contains(s, "zzz") {
+		t.Errorf("slice string kept its passkey: %q", s)
+	}
+}
+
+// handleAt feeds one record with a fixed instant — identical timestamps
+// are how a page boundary is exercised.
+func handleAt(t *testing.T, r *Recorder, at time.Time, msg string) {
+	t.Helper()
+	rec := slog.NewRecord(at, slog.LevelInfo, msg, 0)
+	if err := r.Handle(context.Background(), rec); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+}
+
+// TestSincePaginatesWithCursor pages a five-record ring two at a time —
+// the multi-page path — including records sharing an instant, which a
+// timestamp-only cursor must neither skip nor repeat.
+func TestSincePaginatesWithCursor(t *testing.T) {
+	recorder := NewRecorder(slog.NewJSONHandler(io.Discard, nil), 10)
+	base := time.Now()
+	handleAt(t, recorder, base, "m0")
+	handleAt(t, recorder, base, "m1") // same tick as m0, the page-2 boundary
+	handleAt(t, recorder, base.Add(time.Second), "m2")
+	handleAt(t, recorder, base.Add(2*time.Second), "m3")
+	handleAt(t, recorder, base.Add(2*time.Second), "m4") // same tick as m3, inside page 1
+
+	var got []string
+	var cursor time.Time
+	for {
+		recs, next := recorder.Since(slog.LevelDebug, time.Time{}, cursor, 2)
+		got = append(got, messages(recs)...)
+		if next.IsZero() {
+			break
+		}
+		cursor = next
+	}
+
+	want := []string{"m4", "m3", "m2", "m1", "m0"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("paged through %v, want %v", got, want)
+	}
+	if total := recorder.Count(slog.LevelDebug, time.Time{}); total != len(want) {
+		t.Errorf("Count %d disagrees with the paged union %d", total, len(want))
+	}
+}
+
+// The file is dl-tool.jsonl — one JSON object per line even when the
+// console renders text.
+func TestLogFileStaysJSONInTextFormat(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DLTOOL_CONFIG_DIR", dir)
+
+	var stdout bytes.Buffer
+	logger := NewLogger(&stdout, "info", "text")
+	logger.Info("text format record")
+
+	fileBytes, err := os.ReadFile(filepath.Join(dir, "logs", "dl-tool.jsonl"))
+	if err != nil {
+		t.Fatalf("log file not written: %v", err)
+	}
+	for i, line := range strings.Split(strings.TrimSpace(string(fileBytes)), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("file line %d is not JSON: %q: %v", i, line, err)
+		}
+	}
+	if !strings.Contains(stdout.String(), "text format record") {
+		t.Errorf("stdout lacks the record: %s", stdout.String())
+	}
+}
+
 func TestLogWriterTruncatesAtCap(t *testing.T) {
 	dir := t.TempDir()
 	writer, closeFile, err := NewLogWriter(io.Discard, dir, 64)
@@ -216,6 +345,33 @@ func TestLogWriterTruncatesAtCap(t *testing.T) {
 		if _, err := writer.Write(line); err != nil {
 			t.Fatalf("write %d: %v", i, err)
 		}
+	}
+
+	stat, err := os.Stat(filepath.Join(dir, "logs", "dl-tool.jsonl"))
+	if err != nil {
+		t.Fatalf("stat log file: %v", err)
+	}
+	if stat.Size() > 64 {
+		t.Errorf("log file is %d bytes, over the 64 cap", stat.Size())
+	}
+}
+
+// A record larger than the whole cap is dropped rather than parked over
+// max until the next write.
+func TestLogWriterDropsOversizedRecord(t *testing.T) {
+	dir := t.TempDir()
+	writer, closeFile, err := NewLogWriter(io.Discard, dir, 64)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+	defer func() {
+		if err := closeFile(); err != nil {
+			t.Errorf("close log file: %v", err)
+		}
+	}()
+
+	if _, err := writer.Write([]byte(strings.Repeat("x", 128) + "\n")); err != nil {
+		t.Fatalf("oversized write: %v", err)
 	}
 
 	stat, err := os.Stat(filepath.Join(dir, "logs", "dl-tool.jsonl"))
