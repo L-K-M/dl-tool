@@ -222,6 +222,6 @@ an implicit name doc 12 §6.5 does not allow.
 file's `## Files` table with `internal/api/server_test.go`, `internal/api/auth_test.go` and
 `internal/obs/health_test.go` — the three files whose request construction must carry an allowed
 `Host` — and keep the middleware unconditional. `internal/api/static_test.go` needs no table row:
-it only calls `do()` (verified: no direct `httptest.NewRequest`/`http.Request` construction in the
-file). The file that should answer the question "may tests set Host to satisfy an
+it only calls `do()` (verified as of the 2026-09-25 block record — no direct
+`httptest.NewRequest`/`http.Request` construction in the file). The file that should answer the question "may tests set Host to satisfy an
 always-on allowlist" is this task file's Files table.
