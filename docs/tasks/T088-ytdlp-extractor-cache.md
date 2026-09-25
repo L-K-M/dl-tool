@@ -149,10 +149,11 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
    - transpiles each pattern (the verbose flag is pattern-initial in every corpus case): strip `x`
      from a leading flag group while **preserving co-flags** — `(?xi)` becomes `(?i)`, `(?x)`
      vanishes — then drop unescaped whitespace and `#`-to-EOL comments outside character classes,
-     **only inside the verbose region** — the whole pattern for a bare `(?x)`, but a scoped
-     `(?x:…)` group ends at its `)` and the tail's literal spaces and `#` must survive. A `(?x` in
-     any other position, or a scoped group not covering to EOL, lands the pattern on the residual
-     list rather than guessing. Rewrite every capturing group — `(…)` and `(?P<name>…)` — to
+     **only inside the verbose region** — the whole pattern for a bare `(?x)`, or the interior of
+     a leading `(?x:…)` group that reaches end-of-pattern. A `(?x` in any other position, or a
+     scoped group that leaves a tail (whose literal spaces and `#` the strip would corrupt), lands
+     the pattern on the residual list rather than guessing. Rewrite every capturing group — `(…)`
+     and `(?P<name>…)` — to
      `(?:…)`, skipping escaped `\(` and parens inside character classes exactly as the whitespace
      pass does (a naive rewrite still compiles yet silently changes what matches), since routing
      needs only a boolean match; leave `(?i)` alone — Go's `regexp` accepts it;

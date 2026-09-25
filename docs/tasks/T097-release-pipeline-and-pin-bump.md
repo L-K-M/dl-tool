@@ -91,6 +91,7 @@ jobs:
             -e 's|^ARG YTDLP_SHA256_ARM64=.*|ARG YTDLP_SHA256_ARM64="${{ steps.sums.outputs.arm64 }}"|' \
             -e 's|^ARG YTDLP_SHA256_WHEEL=.*|ARG YTDLP_SHA256_WHEEL="${{ steps.sums.outputs.wheel }}"|' \
             Dockerfile
+          grep -q '^ARG YTDLP_SHA256_WHEEL=' Dockerfile   # sed no-ops if T088's arg is absent — fail loudly
       - name: Regenerate the yt-dlp routing table for the new pin
         run: python3 scripts/gen-ytdlp-patterns.py   # ADR-0022: the bump PR carries the table diff too
       - name: Verify residual overrides cover the regenerated table
