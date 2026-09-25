@@ -7,10 +7,10 @@
 | **Status** | todo |
 | **Depends on** | T016, T087 |
 | **Blocks** | — (T090 no longer depends on it; see `## Blocked`) |
-| **Parallel-safe** | no — it edits `internal/engine/router.go` |
+| **Parallel-safe** | no — it edits `internal/api/tasks.go`, `server.go` and `internal/engine/ytdlp/engine.go` |
 | **Implements** | [FR-002](../02-requirements.md#fr-002-route-each-uri-to-an-engine-by-scheme) |
 | **Decisions** | [ADR-0005](../decisions/0005-aria2-qbittorrent-ytdlp-engines.md), [ADR-0010](../decisions/0010-never-execute-third-party-definitions.md), [ADR-0022](../decisions/0022-generate-ytdlp-routing-table.md) |
-| **Est. size** | 5 new files + 1 script, ~350 LOC |
+| **Est. size** | 5 new files + 1 script + 7 edits, ~450 LOC |
 
 ## Blocked
 Resolved 2026-09-25 (remedy: decision record + contract rewrite). The premise below was measured false —
@@ -33,7 +33,7 @@ generated patterns, and it never makes a network call, shells out, or runs a met
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
-1. [`docs/decisions/0022-generate-ytdlp-routing-table.md`](../decisions/0022-generate-ytdlp-routing-table.md) — the mechanism this task implements, with the measured corpus numbers.
+1. [`docs/decisions/0022-generate-ytdlp-routing-table.md`](../decisions/0022-generate-ytdlp-routing-table.md) — the mechanism this task implements, with the measured corpus numbers. It also bounds ADR-0010 for this task: "never execute third-party definitions" scopes to the product at runtime; the generator's maintainer-time import of the hash-verified wheel is the sanctioned exception, per the ADR's Consequences.
 2. [`docs/06-download-engines.md` §7.2 Routing check](../06-download-engines.md#72-routing-check) — the rule and the failure the old mechanism hit.
 3. [`docs/06-download-engines.md` §2 Routing table](../06-download-engines.md#2-routing-table) — where row 3 sits and what happens above and below it.
 4. [`docs/06-download-engines.md` §1 The `Engine` interface](../06-download-engines.md#1-the-engine-interface) — `Accepts`, `ErrUnavailable`.
@@ -49,7 +49,13 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/engine/ytdlp/overrides.go` | create | Hand-maintained `ResidualOverrides` map: residual extractor name → host suffixes. |
 | `internal/engine/ytdlp/patterns.go` | create | `ExtractorCache`, `LoadExtractors`, `Match`, `Loaded`, `Len`. |
 | `internal/engine/ytdlp/patterns_test.go` | create | Table compiles, residual↔override coverage, YouTube/Vimeo routing, non-match, `generic` exclusion. |
-| `internal/engine/router.go` | edit | Point row 3's `mediaMatch` hook at the cache. |
+| `internal/engine/ytdlp/engine.go` | edit | `Engine` gains a `cache *ExtractorCache` field; `Connect` loads it (already called at boot by main.go's probe — no main.go edit needed); the `Accepts` stub delegates to `cache.Match`. |
+| `internal/api/tasks.go` | edit | `NewTaskHandlers` gains the `mediaMatch func(string) bool` param (stored on the struct); its two `engine.Route(n, nil)` call sites pass `h.mediaMatch` — T091-#277 class: the hook exists but the composition root cannot reach it from the task's own package. |
+| `internal/api/tasks_inspect.go` | edit | The third `engine.Route(n, nil)` site passes `h.mediaMatch`; the `TaskHandlers` receiver is shared, so no second constructor change. |
+| `internal/api/server.go` | edit | Pull the registered ytdlp engine from the `engines` registry and pass its `Accepts` bound method into `NewTaskHandlers` — one cache, loaded once by `Engine.Connect`; absent engine → nil → rows 4-6, unchanged from today. |
+| `internal/api/tasks_files_test.go` | edit | Update the `NewTaskHandlers` call for the new param (pass nil — today's assertions unchanged). |
+| `internal/api/tasks_actions_test.go` | edit | Same signature update, plus one new case proving the wiring: a `TaskHandlers` built with `cache.Match` accepts a YouTube URL onto the yt-dlp engine where nil would route it to aria2. |
+| `Dockerfile` | edit | Add `ARG YTDLP_SHA256_WHEEL` beside the existing pins — the generator refuses to import a wheel whose hash differs. For the current pin it is `1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf` (sha256 of `yt_dlp-2026.8.19-py3-none-any.whl`, measured during this repair). |
 
 No other file may be modified.
 
@@ -103,30 +109,50 @@ func (c *ExtractorCache) Len() int
 ```
 
 ```go
-package engine
+package api
 
-// mediaMatch is row 3 of the routing table. It is nil until an adapter installs one, and a nil
-// hook makes row 3 fall through to rows 4-6 rather than rejecting the URI.
-type MediaMatcher func(uri string) bool
-
-// SetMediaMatcher installs the yt-dlp extractor cache as row 3 of the routing table.
-func (r *Router) SetMediaMatcher(m MediaMatcher)
+// TaskHandlers.mediaMatch is the row-3 hook handed to every engine.Route call.
+// NewTaskHandlers receives it already bound — typically (*ytdlp.ExtractorCache).Match —
+// or nil, which makes row 3 fall through to rows 4-6 rather than rejecting the URI.
+func NewTaskHandlers(db *sqlx.DB, engines *engine.Registry, roots []string,
+	guard *secure.Guard, resolver secure.Resolver, mediaMatch func(string) bool) *TaskHandlers
 ```
 
+```go
+package ytdlp
+
+// Engine owns the one cache instance. Connect — already invoked at boot by the
+// main.go engine probe — loads it; a load error is logged and leaves a usable
+// empty cache, so Connect still succeeds and row 3 degrades to nil semantics.
+// Accepts replaces today's `return false` stub; a nil cache answers false, which
+// keeps forced-engine submissions rejecting exactly as they do today.
+func (e *Engine) Accepts(uri string) bool // e.cache.Match(uri)
+```
+
+`internal/api/server.go` pulls the registered ytdlp engine from the `engines` registry
+(`engines.Get(engine.NameYtDlp)`) and passes its `Accepts` into `NewTaskHandlers` — one
+cache, one load, one source of "does yt-dlp claim this". If no ytdlp engine is
+registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as today.
+
 ## Steps
-1. Create `scripts/gen-ytdlp-patterns.py` per ADR-0022. It reads `YTDLP_VERSION` from the
-   `Dockerfile`, downloads that version's `py3-none-any` wheel from PyPI with stdlib `urllib` +
-   `zipfile` (no pip, no third-party Python), imports `yt_dlp` from the unpacked wheel, and **refuses
-   to run** when the package's `yt_dlp.version.__version__` does not match the pin. Optionally it
-   accepts `--yt-dlp <path>` pointing at an already-unpacked package or wheel. With the stdlib only
-   it:
+1. Create `scripts/gen-ytdlp-patterns.py` per ADR-0022. It reads `YTDLP_VERSION` and
+   `YTDLP_SHA256_WHEEL` from the `Dockerfile`, downloads that version's `py3-none-any` wheel from
+   PyPI with stdlib `urllib` + `zipfile` (no pip, no third-party Python), **verifies the wheel's
+   SHA-256 against the pin before unpacking or importing anything** — abort on mismatch — and then
+   also refuses to run when the imported `yt_dlp.version.__version__` does not match
+   `YTDLP_VERSION`. Optionally it accepts `--yt-dlp <path>` pointing at an already-unpacked package
+   or wheel (the hash gate still applies to a wheel path; an unpacked dir is trusted as
+   maintainer-supplied). With the stdlib only it:
    - enumerates every extractor class and collects `_VALID_URL` / `_VALID_URLS`, skipping `Generic`;
    - transpiles each pattern: when it starts with `(?x` (all such occurrences in the corpus are
      pattern-initial) strip the flag group, then drop unescaped whitespace and `#`-to-EOL comments
-     outside character classes; leave `(?i)` and `(?P<name>…)` alone — Go's `regexp` accepts both;
+     outside character classes; rewrite every capturing group — `(…)` and `(?P<name>…)` — to `(?:…)`
+     since routing needs only a boolean match; leave `(?i)` alone — Go's `regexp` accepts it;
    - writes every surviving pattern to a temp file and pipes it through a `go run` probe that
      `regexp.Compile`s each line; patterns that fail are dropped and their owning extractor name is
-     recorded. `go` must be on the maintainer's `PATH`;
+     recorded. `go` must be on the maintainer's `PATH` **and the probe must run under the repo's
+     pinned toolchain** — honour `go.mod`'s `toolchain` directive (`GOTOOLCHAIN` default behaviour)
+     since which regexp syntax compiles can shift between Go releases;
    - writes `internal/engine/ytdlp/extractor_patterns.txt` — a `#` comment header naming the wheel
      version (no date: output must be byte-identical across reruns on the same pin), then the patterns,
      sorted and deduplicated — and `internal/engine/ytdlp/extractors_residual.txt` with the same
@@ -143,8 +169,17 @@ func (r *Router) SetMediaMatcher(m MediaMatcher)
    `ResidualOverrides` into a lowercase host list.
    `Match(uri)`: parse with `net/url`, lowercase the hostname (no match on parse failure or empty
    host), suffix-check the override hosts, then `pattern.MatchString`. No I/O anywhere.
-5. Edit `internal/engine/router.go`: add the `MediaMatcher` type and `SetMediaMatcher`, and have row 3
-   consult it. A nil matcher falls through to rows 4-6.
+5. Wire the hook. `internal/engine/ytdlp/engine.go`: add the `cache` field, load it in `Connect`
+   (a failed load logs and leaves a usable empty cache — `Connect` still succeeds, and a nil or
+   unloaded cache makes `Accepts`/`Match` answer false, preserving today's semantics), delegate
+   `Accepts` to `cache.Match`. `internal/api/tasks.go`: `NewTaskHandlers` gains
+   `mediaMatch func(string) bool`, stored on `TaskHandlers`; both `engine.Route(n, nil)` sites pass
+   `h.mediaMatch`. `internal/api/tasks_inspect.go`: the third site does the same (shared receiver).
+   `internal/api/server.go`: `engines.Get(engine.NameYtDlp)` and pass the engine's `Accepts` — the
+   cache loads once inside `Connect`, not twice. Update the two test call sites in
+   `tasks_files_test.go`/`tasks_actions_test.go` to pass nil. `internal/engine/router.go` needs **no
+   edit** — row 3 already consults its `mediaMatch` param (T090 shipped it); only the call sites'
+   nil changes.
 6. Create `internal/engine/ytdlp/patterns_test.go` covering:
    - every non-comment line of `extractor_patterns.txt` compiles with `regexp.Compile` (the test is
      the permanent re-verification of generated output, so it does not silently rot);
@@ -156,12 +191,20 @@ func (r *Router) SetMediaMatcher(m MediaMatcher)
    - `Match` returns false for `https://releases.ubuntu.com/24.04/ubuntu-24.04.iso` — this is also the
      `generic` check: only Generic's pattern would claim such a URL, so a non-match proves it was
      never generated into the table;
+   - `Match` returns false for `https://evilyoutube.com/x` and `https://notyoutu.be/x` — the override
+     lookup is a label-boundary suffix match (`host == suffix` or `host` ends in `"." + suffix`),
+     never a raw `strings.HasSuffix`;
    - the zero-value cache reports `Loaded() == false` and `Match() == false`.
-7. Add a router test asserting that with the matcher installed the media URL routes to `ytdlp`, and
-   with a nil matcher the same URL routes to `aria2`.
+7. In `tasks_actions_test.go`, add the wiring assertion: a `TaskHandlers` built with a stub
+   `mediaMatch` that matches youtube URLs routes a `https://www.youtube.com/watch?v=…` submission to
+   the yt-dlp engine while the same handler built with nil falls through to aria2 (the engine-side
+   row-3 mechanics are already covered by `internal/engine/router_test.go`, and the real `Match` is
+   covered in the ytdlp package — this case only proves the param reaches `Route`).
 
 ## Acceptance criteria
 - [ ] `Match` performs no network or subprocess call.
+- [ ] `Engine.Accepts` answers from the same cache, so an engine-forced YouTube submission
+      (`engine: "ytdlp"`) is no longer refused at the `tasks.go` accept gate.
 - [ ] `generic` patterns are never generated into the table.
 - [ ] `youtube.com/watch`, `youtu.be` and `vimeo.com` URLs route to `ytdlp` via the override hosts, and
       `x.com/…/status/…` via the generated table.
@@ -170,7 +213,8 @@ func (r *Router) SetMediaMatcher(m MediaMatcher)
       override entry — both enforced by tests, so a stale regen or a dropped override fails CI.
 - [ ] `extractor_patterns.txt` and `extractors_residual.txt` carry the wheel-version header and are
       byte-identical across reruns against the same pin.
-- [ ] The generator refuses to run against a `yt_dlp` package whose version ≠ `YTDLP_VERSION`.
+- [ ] The generator refuses to run against a `yt_dlp` package whose version ≠ `YTDLP_VERSION`, and
+      aborts before unpacking when the downloaded wheel's SHA-256 ≠ `YTDLP_SHA256_WHEEL`.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -193,8 +237,9 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
   permitted source.
 - Do NOT hand-edit `extractor_patterns.txt` or `extractors_residual.txt`; change the generator or
   `ResidualOverrides` instead.
-- Do NOT wire the generator into `make gen`, CI or the image build; it is maintainer-run only, on a
-  machine that has both Python and `go`. Scheduling it belongs to T097.
+- Do NOT wire the generator into `make gen`, the lint/test CI, or the image build. The one sanctioned
+  automated run is T097's pin-bump workflow (a runner with both Python and `go`); anywhere else it is
+  maintainer-run only.
 - Do NOT implement the `engine.Engine` methods or register the adapter; T090 owns that.
 - Do NOT add the capability probe or the media-lane disable switch; T113 owns them.
 

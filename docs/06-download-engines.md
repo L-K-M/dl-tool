@@ -1067,10 +1067,10 @@ which matches everything**. Never run a metadata extraction to answer `Accepts`.
 > **Resolved by [ADR-0022](decisions/0022-generate-ytdlp-routing-table.md).** A maintainer-run
 > generator (`scripts/gen-ytdlp-patterns.py`, run on every pin bump) transpiles the wheel's
 > `_VALID_URL` patterns to RE2 into a committed table; the extractor names that cannot transpile go
-> to a residual list with a hand-maintained host-suffix override map. The earlier measurement stands:
-> no flag enumerates patterns, and verbatim `regexp.Compile` fails on 291 of 1 787 — after the `(?x)`
-> transpile 1 694 pass (94.7 %); the 93 residuals are look-around/conditional constructs that the
-> overrides cover, so YouTube routes.
+> to a residual list with a hand-maintained host-suffix override map. No flag enumerates patterns,
+> and verbatim `regexp.Compile` fails on 291 of 1 787 — after the `(?x)` transpile 1 694 pass
+> (94.8 %); the 93 residuals are look-around/conditional constructs that the overrides cover, so
+> YouTube routes.
 
 ### 7.3 Reading progress: files, not stdout
 

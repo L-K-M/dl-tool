@@ -118,7 +118,7 @@ yourself:
   question, whether Alpine's `7zip` carries the RAR codec, is answered: it does not, and the
   image ships upstream's pinned `7zzs` instead — see
   [`docs/decisions/0021-pin-7zz-by-version-and-hash.md`](docs/decisions/0021-pin-7zz-by-version-and-hash.md).
-  And the row-3 routing gap T088 once parked is decided —
+  The row-3 routing gap that had parked T088 is likewise decided —
   [`docs/decisions/0022-generate-ytdlp-routing-table.md`](docs/decisions/0022-generate-ytdlp-routing-table.md).)
 
 Report after each milestone: what you built, what the exit checkpoint printed, and
