@@ -39,7 +39,8 @@ from depending on Go's tolerance for duplicate group names), verifies each resul
   compile, so regeneration diffs show coverage drift instead of hiding it.
 
 `internal/engine/ytdlp/overrides.go` is the hand-maintained counterpart: a map from each residual
-extractor name to host suffixes (e.g. `Youtube: youtube.com, youtu.be`). Hostname granularity is
+extractor name to host suffixes (e.g. `Youtube: youtube.com, youtube-nocookie.com, youtubekids.com,
+youtu.be`). Hostname granularity is
 correct for routing — row 3 answers "should yt-dlp see this URL", not "which extractor claims it";
 yt-dlp still picks its own extractor at download time. A test asserts every residual name has at
 least one override host, so a regenerating pin bump that strands an extractor fails CI loudly.
@@ -56,8 +57,9 @@ generated table (measured on this corpus: 163 ms to compile once at load, ≈0.5
   the corpus the OPEN note surveyed — 1 702 patterns / 284 failures / 1 752 `--list-extractors`
   names: the recount expands multi-pattern `_VALID_URLS` tuples per pattern instead of per class and
   counts classes rather than printed names, which is why both totals moved.)
-- Transpiling the verbose flag (all 214 `(?x` occurrences are pattern-initial: strip the flag, then
-  strip unescaped whitespace and `#` comments outside character classes) brings the pass count to
+- Transpiling the verbose flag (all 214 `(?x` occurrences are pattern-initial: remove `x` from the
+  flag set while preserving co-flags — `(?xi)` becomes `(?i)` — then strip unescaped whitespace and
+  `#` comments outside character classes, within the verbose region only) brings the pass count to
   1 694 — 94.8 % of the corpus.
 - The 93 residual patterns belong to 89 extractors — including Youtube, Vimeo, Instagram, Soundcloud,
   Dailymotion, CBC, Imgur, Rumble and Nebula — and fail on look-around, conditional and backreference

@@ -146,13 +146,16 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
    or wheel (the hash gate still applies to a wheel path; an unpacked dir is trusted as
    maintainer-supplied). With the stdlib only it:
    - enumerates every extractor class and collects `_VALID_URL` / `_VALID_URLS`, skipping `Generic`;
-   - transpiles each pattern: when it starts with `(?x` (all such occurrences in the corpus are
-     pattern-initial) remove `x` from the flag set but **preserve co-flags** — `(?xi)` becomes `(?i)`,
-     `(?x:` becomes `(?:`, `(?x)` vanishes — then drop unescaped whitespace and `#`-to-EOL comments
-     outside character classes; rewrite every capturing group — `(…)` and `(?P<name>…)` — to `(?:…)`,
-     skipping escaped `\(` and parens inside character classes exactly as the whitespace pass does
-     (a naive rewrite still compiles yet silently changes what matches), since routing needs only a
-     boolean match; leave `(?i)` alone — Go's `regexp` accepts it;
+   - transpiles each pattern (the verbose flag is pattern-initial in every corpus case): strip `x`
+     from a leading flag group while **preserving co-flags** — `(?xi)` becomes `(?i)`, `(?x)`
+     vanishes — then drop unescaped whitespace and `#`-to-EOL comments outside character classes,
+     **only inside the verbose region** — the whole pattern for a bare `(?x)`, but a scoped
+     `(?x:…)` group ends at its `)` and the tail's literal spaces and `#` must survive. A `(?x` in
+     any other position, or a scoped group not covering to EOL, lands the pattern on the residual
+     list rather than guessing. Rewrite every capturing group — `(…)` and `(?P<name>…)` — to
+     `(?:…)`, skipping escaped `\(` and parens inside character classes exactly as the whitespace
+     pass does (a naive rewrite still compiles yet silently changes what matches), since routing
+     needs only a boolean match; leave `(?i)` alone — Go's `regexp` accepts it;
    - writes every surviving pattern to a temp file and pipes it through a `go run` probe that
      `regexp.Compile`s each line; patterns that fail are dropped and their owning extractor name is
      recorded. `go` must be on the maintainer's `PATH` **and the probe must run under the repo's
