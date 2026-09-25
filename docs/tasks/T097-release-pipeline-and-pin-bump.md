@@ -181,7 +181,66 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+Local run of the Verification block (2026-09-25, this worktree):
+
+```
+$ make doclint && docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max --sbom=true --output=type=cacheonly -f Dockerfile . && echo RELEASE_DRYRUN_OK
+./scripts/doclint.sh
+🔍 2531 Total (in 204ms) 🔗 579 Unique ✅ 2503 OK 🚫 0 Errors 👻 28 Excluded
+unknown flag: --platform
+```
+
+**Sandbox limitation (same as T124 and T093; stated, not worked around):** this session runs as
+uid 1000 in a container with no Docker daemon, no buildx plugin and seccomp blocking `unshare`:
+
+```
+$ docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max --sbom=true --output=type=cacheonly -f Dockerfile .
+unknown flag: --platform
+$ unshare -U -r true
+unshare: unshare failed: Operation not permitted
+```
+
+`make doclint` exits 0 above (lychee reports `0 Errors`). The multi-arch dry run runs on this PR's
+`verify` job (`.github/workflows/task-verification.yml` executes this block verbatim on a
+Docker-capable runner); its observed output is pasted below once it lands.
+
+Scope check:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+.github/copilot-instructions.md
+.github/workflows/release.yml
+.github/workflows/ytdlp-bump.yml
+CONTRIBUTING.md
+```
+
+Both workflow files parse as YAML (`go.yaml.in/yaml/v3` unmarshal: `YAML-OK` for each).
+
+Pin resolutions at implementation time (per the task's `UNVERIFIED` note), confirmed via
+`git ls-remote` and each project's own documentation:
+
+- `sigstore/cosign-installer` → commit `6f9f17788090df1f26f669e9d70d6ae9567deba6` (tag `v4.1.2`).
+  The doc's `v3` placeholder predates cosign-installer v4, which is the first major able to install
+  cosign v3.x. `cosign sign --yes` and `cosign verify --certificate-identity-regexp` /
+  `--certificate-oidc-issuer` are the documented flags.
+- `peter-evans/create-pull-request` → commit `5f6978faf089d4d20b00c7766989d076bb2fc7f1` (tag
+  `v8.1.1`). The doc's `v7` placeholder predates v8.0.0, which is the Node 24 bump; the `branch`,
+  `title`, `body` and `commit-message` inputs are unchanged.
+- `actions/checkout@v7` — the doc §10 prose verified `v4` on 2026-09-01, but the repository's own
+  workflows already run `v7` (Dependabot bumps, #261) and Node 20 was removed from hosted runners on
+  2026-09-23, so a new workflow takes the repo's current major.
+- All `docker/*` majors verified in doc §10 (`setup-qemu@v4`, `setup-buildx@v4`, `login@v4`,
+  `metadata@v6`, `build-push@v7`) are still the current majors — kept verbatim.
+
+Deviation from the verbatim doc workflow, and why:
+
+- `cache-to` is emitted only when the event is not `pull_request`
+  (`cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache,mode=max', matrix.image) || '' }}`).
+  The doc step exports a registry cache unconditionally while deliberately skipping the GHCR login on
+  `pull_request`; an unauthenticated registry cache export fails the job with a `403`, so the workflow
+  would go red on every PR — including this one, since it triggers on `pull_request`. `cache-from`,
+  `push: false` on PRs, and all three cosign/login gates are unchanged from the doc.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
