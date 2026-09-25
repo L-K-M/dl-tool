@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T096 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T004, T010, T024, T092 |
 | **Blocks** | T121 |
 | **Parallel-safe** | no — it edits `internal/obs/log.go` and `internal/api/server.go` |
@@ -156,12 +156,12 @@ Worked response:
    `Since` at `warn` excluding `info` records.
 
 ## Acceptance criteria
-- [ ] A log line carrying an indexer URL with `passkey=` stores the marker and never the passkey.
-- [ ] A `secure.Secret` value is redacted by type even under an unrecognised attribute key.
-- [ ] Redaction happens before the ring and before the file write, so all three surfaces agree.
-- [ ] A non-URL string attribute is returned byte-identical.
-- [ ] The ring never grows past its capacity and returns records newest-first.
-- [ ] `GET /system/logs?level=warn` excludes `info` and `debug` records.
+- [x] A log line carrying an indexer URL with `passkey=` stores the marker and never the passkey.
+- [x] A `secure.Secret` value is redacted by type even under an unrecognised attribute key.
+- [x] Redaction happens before the ring and before the file write, so all three surfaces agree.
+- [x] A non-URL string attribute is returned byte-identical.
+- [x] The ring never grows past its capacity and returns records newest-first.
+- [x] `GET /system/logs?level=warn` excludes `info` and `debug` records.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -193,7 +193,82 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/...` (2026-09-25, on the task branch):
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	210.889s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.169s
+ok  	github.com/L-K-M/dl-tool/internal/engine	35.349s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.226s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.797s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.435s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	3.027s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	41.610s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.270s
+ok  	github.com/L-K-M/dl-tool/internal/rss	20.089s
+ok  	github.com/L-K-M/dl-tool/internal/search	8.025s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.436s
+ok  	github.com/L-K-M/dl-tool/internal/store	85.501s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.409s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.080s
+```
+
+Named tests, verbose (`go test -race -v -run <names> ./internal/obs/`):
+
+```
+--- PASS: TestRedactAttrByKey (0.00s)
+--- PASS: TestRedactSecretByType (0.00s)
+--- PASS: TestRedactURLPasskey (0.00s)
+--- PASS: TestRedactURLUserinfo (0.00s)
+--- PASS: TestRedactLeavesPlainStringAlone (0.00s)
+--- PASS: TestRecorderRingWraps (0.00s)
+--- PASS: TestSystemLogsLevelFilter (0.00s)
+--- PASS: TestLoggerSurfacesAgree (0.00s)
+--- PASS: TestRecorderWithAttrsSharesRing (0.00s)
+--- PASS: TestLogWriterTruncatesAtCap (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.078s
+```
+
+Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+api/openapi.json
+internal/api/server.go
+internal/api/system.go
+internal/obs/log.go
+internal/obs/logsink.go
+internal/obs/logsink_test.go
+web/src/api/schema.d.ts
+```
+
+The two generated files are the standing §7.1 exception: `get-system-logs` is a new Huma
+operation, so `api/openapi.json` and `web/src/api/schema.d.ts` were regenerated with `make gen`.
+
+Two deviations from the interface contract, both forced by the Files table:
+
+- `NewLogger`'s signature is fixed by the `cmd/dl-tool/main.go` call sites, which the table does
+  not list, so `log.go` resolves `DLTOOL_CONFIG_DIR` itself (same env var and `/config` default
+  `config.Load` owns — `internal/config` exports no accessor) and degrades to the caller's writer
+  alone when the file cannot be opened: construction has no error return and the `openapi`
+  subcommand's stdout must stay a pure document.
+- `Recorder` stores the ring behind a `*recordRing` pointer rather than as value fields, because
+  `WithAttrs`/`WithGroup` clones must append to the same store or request-scoped records would
+  never reach `GET /system/logs`. `Count` (exported) reports the envelope's `total`, which the
+  contract's `Since` signature cannot return.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

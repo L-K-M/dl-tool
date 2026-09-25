@@ -398,6 +398,10 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	maintenance := store.NewMaintenanceStore(db)
 	systemHandlers := NewSystemHandlers(maintenance, store.BackupsDirFor(cfg.ConfigDir))
 	systemHandlers.attachInfo(db, cfg.DBPath, engines)
+	// The recorder is the process logger's own handler — obs.NewLogger
+	// wraps the sink in it — so the log the endpoint serves is the exact
+	// stream stdout and the file carry.
+	systemHandlers.attachLogs(log)
 
 	server := &Server{
 		Router:         root,
@@ -604,6 +608,21 @@ func (s *Server) registerOperations() {
 	s.tokens.Register(s.API)
 	s.system.Register(s.API)
 	s.SSE.RegisterOperations(s.API)
+
+	// GET /system/logs of docs/05-api-contract.md section 13 — the
+	// recorder attachLogs wired serves the page, already redacted at
+	// storage time (docs/17-operations-and-runbook.md section 6).
+	huma.Register(s.API, huma.Operation{
+		OperationID: "get-system-logs",
+		Method:      http.MethodGet,
+		Path:        "/system/logs",
+		Summary:     "Read the system log",
+		Description: "Cursor-paginated, newest first; every record was redacted before it was stored, so the page shows exactly what stdout and the log file hold. level sets a minimum; since bounds by RFC 3339 instant.",
+		Security:    credentialRequired,
+		// Same strictness as every other query-carrying operation: a
+		// mistyped query key is 422, never silently ignored.
+		RejectUnknownQueryParameters: true,
+	}, s.system.GetSystemLogs)
 
 	// The bulk-action and patch operations of docs/05-api-contract.md
 	// sections 5.7 and 5.5; their handlers live in tasks_actions.go.

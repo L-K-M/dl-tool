@@ -932,6 +932,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/system/logs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Read the system log
+     * @description Cursor-paginated, newest first; every record was redacted before it was stored, so the page shows exactly what stdout and the log file hold. level sets a minimum; since bounds by RFC 3339 instant.
+     */
+    get: operations["get-system-logs"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/tags": {
     parameters: {
       query?: never;
@@ -2181,6 +2201,16 @@ export interface components {
       status: number;
       status_line: string;
     };
+    Record: {
+      /** Format: date-time */
+      at: string;
+      attrs: {
+        [key: string]: unknown;
+      };
+      /** @enum {string} */
+      level: "debug" | "info" | "warn" | "error";
+      msg: string;
+    };
     RejectedRow: {
       collection: string;
       detail: string;
@@ -2443,6 +2473,17 @@ export interface components {
       uptime_s: number;
       /** @description Build version stamped at link time */
       version: string;
+    };
+    SystemLogsOutputBody: {
+      /** @description Log records, newest first */
+      items: components["schemas"]["Record"][] | null;
+      /** @description Token for the next page; null on the last page */
+      next_cursor: string | null;
+      /**
+       * Format: int64
+       * @description Records matching level and since, ignoring the cursor
+       */
+      total: number;
     };
     TagDTO: {
       name: string;
@@ -4675,6 +4716,44 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["SystemInfoOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-system-logs": {
+    parameters: {
+      query?: {
+        /** @description Minimum level of the returned records */
+        level?: "debug" | "info" | "warn" | "error";
+        /** @description RFC 3339 instant; only records at or after it are returned */
+        since?: string;
+        /** @description Page size */
+        limit?: number;
+        /** @description Opaque page token from a previous response */
+        cursor?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SystemLogsOutputBody"];
         };
       };
       /** @description Error */
