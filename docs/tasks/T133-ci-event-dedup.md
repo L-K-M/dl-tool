@@ -1,4 +1,4 @@
-# T133 — Avoid duplicate CI runs on PR updates
+# T133 — Streamline independent PR verification
 
 | Field | Value |
 |---|---|
@@ -11,7 +11,9 @@
 ## Goal
 
 Run CI and doclint once per PR update while retaining main and tag checks.
-The September 25 audit observed duplicate jobs from branch-push and PR events.
+Allow independently owned PRs under the review workflow's existing per-PR
+concurrency. The September 25 audit found duplicate jobs and a stale brief
+that described cross-PR review cancellation.
 
 ## Context you need
 
@@ -25,6 +27,7 @@ The September 25 audit observed duplicate jobs from branch-push and PR events.
 | `.github/workflows/ci.yml` | Narrow push triggers; preserve all jobs. |
 | `.github/workflows/docs-lint.yml` | Apply the same event policy. |
 | `docs/13-testing-and-verification.md` | Own the event policy. |
+| `IMPLEMENTING.md` | Correct the stale cross-PR cancellation claim and require explicit ownership. |
 | `docs/tasks/T133-ci-event-dedup.md` | Record verification and disposition. |
 | `docs/tasks/00-task-index.md` | Track both task rows. |
 
@@ -37,6 +40,7 @@ checks and tool versions retain their existing behavior.
 
 1. Restrict push triggers to main and all tags; retain all pull requests.
 2. Update the canonical CI policy and link the doclint gate to it.
+   Correct the brief's parallel-review rule against the existing workflow.
 3. Validate workflow syntax and verify the job bodies are unchanged.
 4. Complete PR review and confirm the PR runs one copy of each affected job.
 
@@ -45,6 +49,7 @@ checks and tool versions retain their existing behavior.
 - [x] A PR update produces one CI run and one doclint run.
 - [x] Main pushes and all tag pushes still trigger both workflows.
 - [x] All existing job bodies and checks remain unchanged.
+- [x] Parallel PRs require isolated ownership and controller coordination.
 
 ## Verification
 
