@@ -10,7 +10,7 @@
 | **Parallel-safe** | no — it edits `compose.yaml`, `.env.example` and `README.md` |
 | **Implements** | [NFR-009](../02-requirements.md#nfr-009-collect-and-transmit-no-telemetry) |
 | **Decisions** | [ADR-0012](../decisions/0012-single-data-mount.md), [ADR-0011](../decisions/0011-alpine-runtime-with-puid-pgid.md) |
-| **Est. size** | 1 new file, 3 modified, ~180 net new lines |
+| **Est. size** | 1 new file, 3 modified, ~210 net new lines |
 
 ## Goal
 The three-service stack T125 wrote gains the two optional profiles of doc 10 §1 — `vpn` (gluetun) and
@@ -30,7 +30,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
-| `compose.yaml` | modify | Append the `gluetun` (`vpn`) and `caddy` (`proxy`) services of doc 10 §2. |
+| `compose.yaml` | modify | Append the `gluetun` (`vpn`) and `caddy` (`proxy`) services of doc 10 §2, and the `wireguard_private_key`/`wireguard_addresses` entries of §2's top-level `secrets:` block. |
 | `.env.example` | modify | Append the `vpn profile only` block of doc 10 §6. |
 | `deploy/unraid/dl-tool.xml` | create | Community Applications template. |
 | `README.md` | modify | Replace the placeholder quickstart, drop the "no runnable code" claim, add the release-verification commands. |
@@ -50,10 +50,32 @@ The two services appended to `compose.yaml`, verbatim from
     container_name: gluetun
     cap_add: [NET_ADMIN]
     devices: ["/dev/net/tun:/dev/net/tun"]
-    env_file: [.env]                               # VPN_*, WIREGUARD_*, FIREWALL_* — see doc 10 section 8
+    # No `env_file: [.env]`: that hands the VPN container every value in the file,
+    # including the qBittorrent password and the aria2 RPC secret it has no use for.
+    # Name the VPN variables explicitly and mount the two credentials as secrets.
     environment:
       TZ: "${TZ:-Etc/UTC}"
-      VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:?required for the vpn profile}"
+      # No `:?` here: Compose interpolates every service before it filters by profile, so a
+      # required variable in an inactive profile still fails a core-only `up` from a fresh `.env`
+      # — the same trap §2 avoids for the aria2 secret. gluetun refuses to start without a
+      # provider anyway, and only under the `vpn` profile.
+      VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:-}"
+      VPN_TYPE: "${VPN_TYPE:-wireguard}"
+      SERVER_COUNTRIES: "${SERVER_COUNTRIES:-}"
+      OPENVPN_USER: "${OPENVPN_USER:-}"
+      OPENVPN_PASSWORD: "${OPENVPN_PASSWORD:-}"
+      FIREWALL_OUTBOUND_SUBNETS: "${FIREWALL_OUTBOUND_SUBNETS:-}"
+      FIREWALL_VPN_INPUT_PORTS: "${FIREWALL_VPN_INPUT_PORTS:-}"
+      VPN_PORT_FORWARDING: "${VPN_PORT_FORWARDING:-off}"
+      WIREGUARD_PRIVATE_KEY_SECRETFILE: "/run/secrets/wireguard_private_key"
+      WIREGUARD_ADDRESSES_SECRETFILE: "/run/secrets/wireguard_addresses"
+    secrets:
+      - source: wireguard_private_key
+        target: wireguard_private_key
+        mode: 0400
+      - source: wireguard_addresses
+        target: wireguard_addresses
+        mode: 0400
     volumes:
       - ${CONFIG_DIR:-./config}/gluetun:/gluetun
     ports:
@@ -75,6 +97,17 @@ The two services appended to `compose.yaml`, verbatim from
       - ${CONFIG_DIR:-./config}/caddy/config:/config
 ```
 
+The `gluetun` service mounts two Compose named secrets; append their entries to the existing
+top-level `secrets:` block (T125 wrote `aria2_rpc_secret` and `qbt_password` there — change nothing
+it wrote):
+
+```yaml
+  wireguard_private_key:
+    environment: "WIREGUARD_PRIVATE_KEY"
+  wireguard_addresses:
+    environment: "WIREGUARD_ADDRESSES"
+```
+
 The block appended to `.env.example`:
 
 ```dotenv
@@ -83,6 +116,7 @@ VPN_SERVICE_PROVIDER=
 VPN_TYPE=wireguard
 WIREGUARD_PRIVATE_KEY=
 WIREGUARD_ADDRESSES=
+SERVER_COUNTRIES=
 OPENVPN_USER=
 OPENVPN_PASSWORD=
 FIREWALL_OUTBOUND_SUBNETS=
@@ -130,9 +164,12 @@ docker buildx imagetools inspect ghcr.io/l-k-m/dl-tool:1.0.0   # lists both plat
 
 ## Steps
 1. Append the `gluetun` and `caddy` services to `compose.yaml` exactly as above, after `aria2`, reusing the
-   existing `*service-defaults` anchor. Change nothing T125 wrote.
-2. Keep `VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:?required for the vpn profile}"` in its `:?` form, so
-   the `vpn` profile fails with a named error rather than routing traffic outside the tunnel.
+   existing `*service-defaults` anchor, and append the two `wireguard_*` entries to the top-level
+   `secrets:` block. Change nothing T125 wrote.
+2. Keep `VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:-}"` in its `:-` form. Compose interpolates every
+   service before it filters by profile, so a `:?` here would fail a core-only `up` from a fresh `.env`;
+   a missing provider is rejected by gluetun at container start, which exists only under the `vpn`
+   profile — no traffic routes outside the tunnel because the engines share gluetun's netns.
 3. Record, as a comment beside `caddy`, that the `proxy` profile wants the app port bound to loopback
    (`"127.0.0.1:${DLTOOL_PORT:-8091}:8080"`) so Caddy is the only public entry point.
 4. Append the `vpn profile only` block to `.env.example`. Every value stays empty except `VPN_TYPE` and
@@ -150,7 +187,13 @@ docker buildx imagetools inspect ghcr.io/l-k-m/dl-tool:1.0.0   # lists both plat
 ## Acceptance criteria
 - [ ] `make compose-check` exits `0` for the base file and for the base plus the dev overlay, with every profile selected.
 - [ ] `docker compose config` shows `dl-tool` and `qbittorrent` with no profile, `aria2` under `aria2`, `gluetun` under `vpn` and `caddy` under `proxy`.
-- [ ] Unsetting `VPN_SERVICE_PROVIDER` and running `COMPOSE_PROFILES=vpn docker compose config` fails with `required for the vpn profile`.
+- [ ] With `VPN_SERVICE_PROVIDER` empty in `.env`, `docker compose config` succeeds with no profile
+  selected and under `COMPOSE_PROFILES=vpn`; rejecting a missing provider is gluetun's job at container
+  start, not Compose's at config time.
+- [ ] Under `COMPOSE_PROFILES=vpn`, the rendered `gluetun` service has no `env_file`, sets
+  `WIREGUARD_PRIVATE_KEY_SECRETFILE` and `WIREGUARD_ADDRESSES_SECRETFILE`, and the rendered top-level
+  `secrets:` block carries `wireguard_private_key` and `wireguard_addresses` (Compose prunes them from
+  the render when the profile is inactive).
 - [ ] `docker compose config` still emits no `version` warning and publishes no engine WebUI or RPC port.
 - [ ] `.env.example` contains no secret value, only empty assignments, `wireguard`, `off` and comments.
 - [ ] A five-minute capture shows no request to any host the operator did not configure.
@@ -193,5 +236,46 @@ appear; add it to `.gitignore` only if T125 did not.
 ## Evidence
 <Agent pastes command output here before marking done.>
 
-## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+## Blocked — resolved
+
+**Remedy applied.** The `## Interface contract` now quotes doc 10 §2's current `gluetun` verbatim —
+explicit VPN variables, the two `*_SECRETFILE` vars, the service `secrets:` list, `:-` for the
+provider — and step 1 also appends `wireguard_private_key` and `wireguard_addresses` to the top-level
+`secrets:` block. The §6 `.env.example` quote carries `SERVER_COUNTRIES=`. Step 2's `:?` instruction is
+gone — §2's comment is the design — and the named-error acceptance criterion is replaced with the
+guarantee the design makes: `docker compose config` succeeds on a fresh `.env` with and without the
+`vpn` profile, and a missing provider is rejected by gluetun at container start, not by Compose at
+config time. The deferral proposed in the record below was never merged — its PR was closed and this
+repair applies its remedy instead; the status stays `todo`. The original record is preserved below.
+
+---
+
+### 2026-09-25 — the contract quotes a `gluetun` service doc 10 §2 deliberately rewrote
+
+The `## Interface contract` and steps 1–2 transcribed
+[`docs/10-deployment-and-compose.md`](../10-deployment-and-compose.md#2-composeyaml) §2 as of
+2026-09-01. Two commits on 2026-09-02 rewrote that service on purpose:
+
+- `3de51b7` removed `env_file: [.env]` — it handed the VPN container the qBittorrent password and
+  the aria2 RPC secret it has no use for — and moved `WIREGUARD_PRIVATE_KEY`/`WIREGUARD_ADDRESSES`
+  into Compose named secrets mounted `0400` behind the `*_SECRETFILE` variables.
+- `36f3af6` replaced `VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:?required for the vpn
+  profile}"` with the `:-` form: Compose interpolates every service before it filters by profile, so
+  a `:?` in the inactive `vpn` profile fails a core-only `up` from a fresh `.env`.
+
+Verified with Docker Compose v5.5.1 — the contract's literal block appended to `compose.yaml`, `.env`
+a fresh copy of `.env.example` (`VPN_SERVICE_PROVIDER` empty):
+
+```bash
+docker compose -f compose.yaml config -q
+#   error while interpolating services.gluetun.environment.VPN_SERVICE_PROVIDER:
+#   required variable VPN_SERVICE_PROVIDER is missing a value: required for the vpn profile
+#   (exit 1 — with NO profile selected)
+```
+
+So the task as written was unsatisfiable: the `:?` form step 2 mandated — and the third acceptance
+criterion required — made plain `docker compose -f compose.yaml config -q` fail for every operator
+whose `.env` left `VPN_SERVICE_PROVIDER` empty; the `env_file: [.env]` the contract dictated
+reintroduced the credential leak `3de51b7` removed; and following doc 10 §2 instead left the
+named-error criterion unmeetable, since Compose has no profile-scoped interpolation. The §6
+`.env.example` quote was stale the same way, lacking `SERVER_COUNTRIES=`.
