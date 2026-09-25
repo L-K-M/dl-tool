@@ -351,5 +351,28 @@ ok  	github.com/L-K-M/dl-tool/internal/obs	1.080s
 
 `make vet` and `make gen` clean — no `api/openapi.json` / `web/src/api/schema.d.ts` drift.
 
+### Review round 2 (PR #295, GLM 5.3 on `c550dd8`)
+
+Applied:
+
+- A `url.URL` *value* satisfies neither `error` nor `fmt.Stringer` (`String` is a pointer method),
+  so it marshaled `RawQuery` verbatim — an `apikey=`/`token=` leak through every surface. `redactAny`
+  now has an explicit `url.URL` case.
+- `error`/`fmt.Stringer` cases called `Error()`/`String()` unconditionally; a typed nil
+  (`(*url.URL)(nil)`, `(*url.Error)(nil)`) would panic inside `ReplaceAttr` and crash the calling
+  goroutine. `nilish` returns nil for them instead.
+- `fanoutHandler.Handle` skipped the file sink when the console failed; both now run unconditionally.
+- `TestLogWriterDropsOversizedRecord` asserted `size > 64`, which a partial write would pass; it now
+  requires `size == 0` — the record is dropped whole.
+- `TestSincePaginatesWithCursor`'s `for {}` loop could hang on a non-advancing cursor; bounded at 8
+  pages so a regression fails with the `got`/`want` diff.
+- `TestRedactNestedContainer` now proves `redactAny` clones rather than mutating the caller's map.
+- `recordRing.push`'s comment now states `At` is arrival-ordered and may differ from `rec.Time` by
+  nanoseconds.
+
+`make lint` re-run: 0 issues. `make test PKG=./internal/...` re-run (2026-09-25): all packages `ok`,
+including `internal/api` 206.835s and `internal/obs` 1.262s with `TestRedactURLValueAndTypedNil`
+passing.
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

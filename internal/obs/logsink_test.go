@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -212,11 +213,12 @@ func TestRecorderWithAttrsSharesRing(t *testing.T) {
 func TestRedactNestedContainer(t *testing.T) {
 	var stdout bytes.Buffer
 	recorder := NewRecorder(slog.NewJSONHandler(&stdout, &slog.HandlerOptions{ReplaceAttr: RedactAttr}), 10)
+	sent := map[string]any{
+		"Authorization": "Bearer live-credential",
+		"Referer":       "https://indexer.example.org/api?token=abc123",
+	}
 	handle(t, recorder, slog.LevelInfo, "request",
-		slog.Any("headers", map[string]any{
-			"Authorization": "Bearer live-credential",
-			"Referer":       "https://indexer.example.org/api?token=abc123",
-		}),
+		slog.Any("headers", sent),
 		slog.Any("header_pairs", map[string][]string{"X-Api-Key": {"k3y"}, "Accept": {"*/*"}}),
 		slog.Any("chain", []any{"https://h/t?passkey=zzz", secure.Secret("shh")}),
 	)
@@ -259,6 +261,36 @@ func TestRedactNestedContainer(t *testing.T) {
 	if s, _ := chain[0].(string); strings.Contains(s, "zzz") {
 		t.Errorf("slice string kept its passkey: %q", s)
 	}
+	if sent["Authorization"] != "Bearer live-credential" {
+		t.Errorf("redaction mutated the caller-owned map: %v", sent)
+	}
+}
+
+// A url.URL value satisfies neither error nor fmt.Stringer (String is a
+// pointer method) and a typed-nil error or Stringer must not panic inside
+// ReplaceAttr.
+func TestRedactURLValueAndTypedNil(t *testing.T) {
+	u, err := url.Parse("https://indexer.example.org/api?token=abc123")
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+	got := redactedFrom(slog.Any("u", *u))
+	if s, _ := got.Any().(string); strings.Contains(s, "abc123") || !strings.Contains(s, "token="+Placeholder) {
+		t.Errorf("url.URL value not redacted: %v", got.Any())
+	}
+
+	for name, value := range map[string]any{"url": (*url.URL)(nil), "err": (*url.Error)(nil)} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s: redaction panicked on a typed nil: %v", name, r)
+				}
+			}()
+			if got := redactedFrom(slog.Any(name, value)).Any(); got != nil {
+				t.Errorf("%s: typed nil rendered as %v, want nil", name, got)
+			}
+		}()
+	}
 }
 
 // handleAt feeds one record with a fixed instant — identical timestamps
@@ -285,7 +317,9 @@ func TestSincePaginatesWithCursor(t *testing.T) {
 
 	var got []string
 	var cursor time.Time
-	for {
+	// Five records at limit 2 need three pages; a cursor that fails to
+	// advance must fall out of the loop into a readable diff, not hang.
+	for page := 0; page < 8; page++ {
 		recs, next := recorder.Since(slog.LevelDebug, time.Time{}, cursor, 2)
 		got = append(got, messages(recs)...)
 		if next.IsZero() {
@@ -378,7 +412,7 @@ func TestLogWriterDropsOversizedRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat log file: %v", err)
 	}
-	if stat.Size() > 64 {
-		t.Errorf("log file is %d bytes, over the 64 cap", stat.Size())
+	if stat.Size() != 0 {
+		t.Errorf("log file is %d bytes; an oversized record must be dropped whole, not partially written", stat.Size())
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -132,14 +133,39 @@ func redactAny(value any) any {
 		}
 
 		return out
+	case url.URL:
+		// String is a pointer method, so the value form escapes the
+		// Stringer case below and would marshal its RawQuery verbatim.
+		return RedactURL(v.String())
 	case error:
+		if nilish(v) {
+			return nil
+		}
+
 		return RedactURL(v.Error())
 	case fmt.Stringer:
+		if nilish(v) {
+			return nil
+		}
+
 		return RedactURL(v.String())
 	case string:
 		return RedactURL(v)
 	default:
 		return value
+	}
+}
+
+// nilish reports a typed nil — an interface holding a nil pointer, map and
+// friends — whose Error or String method would dereference it and panic
+// inside ReplaceAttr, taking the calling goroutine down with the logger.
+func nilish(v any) bool {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return rv.IsNil()
+	default:
+		return false
 	}
 }
 
@@ -230,7 +256,8 @@ func (r *recordRing) push(rec Record) {
 	// sharing an instant are indistinguishable at a boundary — the older
 	// one would be skipped forever. Keep the stored instant strictly
 	// increasing in arrival order; the nudge is a nanosecond and only
-	// fires on a tie or a backward clock.
+	// fires on a tie or a backward clock, so At is arrival-ordered and may
+	// differ from rec.Time by nanoseconds under burst logging.
 	if !rec.At.After(r.lastAt) {
 		rec.At = r.lastAt.Add(time.Nanosecond)
 	}
@@ -529,11 +556,15 @@ func (f fanoutHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (f fanoutHandler) Handle(ctx context.Context, rec slog.Record) error {
-	if err := f.console.Handle(ctx, rec); err != nil {
-		return err
+	// Both sinks run unconditionally — the file is the durable one, and a
+	// broken console writer is exactly when it must not lose the record.
+	consoleErr := f.console.Handle(ctx, rec)
+	fileErr := f.file.Handle(ctx, rec)
+	if consoleErr != nil {
+		return consoleErr
 	}
 
-	return f.file.Handle(ctx, rec)
+	return fileErr
 }
 
 func (f fanoutHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
