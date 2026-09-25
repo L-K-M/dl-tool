@@ -8,10 +8,10 @@ A self-hosted replacement for **Synology Download Station**, deployed with Docke
 One queue for every protocol. One folder picker. Pluggable search. RSS rules that can land anywhere.
 A modern UI that works on a phone.
 
-> ### Status: planning
+> ### Status: implementation in progress
 >
-> **This repository currently contains a complete implementation plan, not an implementation.**
-> There is no runnable code yet. Everything below describes what the plan builds.
+> The plan is complete and the code is being built from it task by task. It builds and runs from
+> source (`make build`), but there is no published release yet.
 > If you are here to build it, start at **[`docs/00-INDEX.md`](docs/00-INDEX.md)**.
 
 ---
@@ -98,7 +98,10 @@ quotas — see [`ADR-0019`](docs/decisions/0019-single-account-no-ownership.md).
 | No API for automation beyond the undocumented DS2 endpoints | One documented `/api/v1` with an OpenAPI spec generated from the handlers, and revocable API tokens |
 | No dark mode, no mobile layout | Both, in v1 |
 
-## Quickstart (once it exists)
+## Quickstart
+
+Prerequisites: Docker Compose v2.24 or newer — the top-level `secrets:` block uses the
+`environment:` source, which landed in v2.24.0.
 
 ```bash
 git clone https://github.com/L-K-M/dl-tool.git && cd dl-tool
@@ -108,6 +111,17 @@ docker compose up -d
 
 Then open `http://<host>:8091` and complete the first-run setup wizard. There are **no default
 credentials** — the wizard creates the operator account.
+
+Before trusting a published image, verify its signature and inspect the platforms, SBOM and
+provenance attestation it carries:
+
+```bash
+cosign verify ghcr.io/l-k-m/dl-tool:1.0.0 \
+  --certificate-identity-regexp '^https://github\.com/L-K-M/dl-tool/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+docker buildx imagetools inspect ghcr.io/l-k-m/dl-tool:1.0.0   # lists both platforms, the SBOM and the provenance attestation
+```
 
 The full deployment reference, including the single `/data` mount rule, reverse-proxy snippets, optional
 VPN routing, and notes for Synology, QNAP, Unraid and TrueNAS, is in
