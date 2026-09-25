@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -97,7 +98,7 @@ func TestShutdownDrainClosesEnginesBeforeDatabaseClose(t *testing.T) {
 	server.Engines.Register(live)
 	server.Engines.Register(second)
 
-	shutdownDrain(nil, server, db)
+	shutdownDrain(nil, server, db, func() {})
 
 	require.Equal(t, int32(1), live.calls.Load(), "Close must run exactly once in the drain")
 	require.Equal(t, int32(1), second.calls.Load(), "every registered engine must close")
@@ -116,11 +117,60 @@ func TestShutdownDrainClosesDatabaseWhenEngineCloseFails(t *testing.T) {
 	server.Engines.Register(broken)
 	server.Engines.Register(healthy)
 
-	shutdownDrain(nil, server, db)
+	shutdownDrain(nil, server, db, func() {})
 
 	require.Equal(t, int32(1), broken.calls.Load())
 	require.Equal(t, int32(1), healthy.calls.Load(), "one engine's failure must not skip the rest")
 	require.Error(t, db.PingContext(context.Background()), "a failed engine close must not strand the store")
+}
+
+// Doc 17 §2 orders ingress ahead of the runtime drain: by the time the
+// scheduler and workers begin draining, /readyz must already report the
+// draining 503 — not merely a failed probe — and the listener must already
+// refuse new connections. The injected step probes both mid-drain.
+func TestShutdownDrainStopsIngressBeforeRuntimeDrain(t *testing.T) {
+	db := testDB(t)
+	server := testServer(t)
+
+	httpServer := &http.Server{Handler: server.Router}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() { _ = httpServer.Serve(listener) }()
+
+	addr := listener.Addr().String()
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err, "the listener must be live before the drain")
+	require.NoError(t, conn.Close())
+
+	drainRuntime := func() {
+		// The draining 503 carries its own detail — a nil-db or pre-migration
+		// 503 does not count as a withdrawn readiness.
+		recorder := httptest.NewRecorder()
+		server.Health.Ready(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+		require.Contains(t, recorder.Body.String(), "shutting down",
+			"readiness must be withdrawn before the runtime drain runs")
+
+		// New connections must already be refused: Shutdown closes the
+		// listener first, so refusal is near-instant once it starts.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			c, dialErr := net.Dial("tcp", addr)
+			if dialErr != nil {
+				return
+			}
+			_ = c.Close()
+			if time.Now().After(deadline) {
+				t.Error("the listener still accepts connections during the runtime drain")
+
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	shutdownDrain(httpServer, server, db, drainRuntime)
+	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
 }
 
 // The HTTP listener is released before the engines: an in-flight request
@@ -156,7 +206,7 @@ func TestShutdownDrainStopsHTTPBeforeEnginesClose(t *testing.T) {
 		},
 	})
 
-	shutdownDrain(httpServer, server, db)
+	shutdownDrain(httpServer, server, db, func() {})
 
 	require.Error(t, midCloseErr, "the HTTP listener must be dead before engines close")
 }

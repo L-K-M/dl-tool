@@ -400,17 +400,15 @@ func main() {
 			// Drain in the goroutine that owns the values; stopped and drained
 			// are the happens-before edges, so there is no racy cross-goroutine
 			// read and humacli cannot return before the close completes.
-			shutdownDrain(httpServer, server, db)
+			shutdownDrain(httpServer, server, db, func() {
+				cancelRun()
+				runDone.Wait()
+			})
 		})
 		hooks.OnStop(func() {
 			slog.Info("stopped")
-			// Ask the metrics listener and the tasks_total sampler to stop and
-			// join them before signalling the main shutdown path, so both drain
-			// before the store closes.
-			if cancelRun != nil {
-				cancelRun()
-			}
-			runDone.Wait()
+			// The whole teardown runs in the OnStart goroutine — the one that
+			// owns the values — released by stopped and fenced by drained.
 			close(stopped)
 			<-drained
 		})
@@ -422,25 +420,39 @@ func main() {
 }
 
 // shutdownDrain performs the ordered teardown of docs/17 §2 once OnStop has
-// cancelled the runtime loops: stop accepting HTTP, join the server's
-// background loops — the sync hub, the reconciler and the admission pass must
-// stop before the store closes — then close the database.
-func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB) {
+// signalled: withdraw readiness and close ingress first — step 1 — then run
+// drainRuntime, which stops and joins the runtime loops — cron, job workers,
+// metrics — then the server's background loops, the engines and the store.
+// http.Server.Shutdown closes the listener immediately but waits for
+// in-flight connections, and an open SSE stream can hold it for the whole
+// budget, so it runs beside the runtime drain rather than serialized ahead
+// of it: ingress stops accepting first either way.
+func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, drainRuntime func()) {
+	server.Health.MarkDraining()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
+	httpDone := make(chan struct{})
 	if httpServer != nil {
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			slog.Error("http shutdown failed", "err", err)
-			// Shutdown overran with requests still live. Close reaps the
-			// listener and sockets — cancelling request contexts — but cannot
-			// join hung handler goroutines; a handler that ignores its
-			// request context may still race the teardown below.
-			if cerr := httpServer.Close(); cerr != nil {
-				slog.Error("http force-close failed", "err", cerr)
+		go func() {
+			defer close(httpDone)
+			if err := httpServer.Shutdown(shutdownCtx); err != nil {
+				slog.Error("http shutdown failed", "err", err)
+				// Shutdown overran with requests still live. Close reaps
+				// the listener and sockets — cancelling request contexts —
+				// but cannot join hung handler goroutines.
+				if cerr := httpServer.Close(); cerr != nil {
+					slog.Error("http force-close failed", "err", cerr)
+				}
 			}
-		}
+		}()
+	} else {
+		close(httpDone)
 	}
+
+	drainRuntime()
+	<-httpDone
 	server.Shutdown()
 	// Engine teardown — yt-dlp's subprocess kills, qBittorrent's poll stop,
 	// aria2's websocket abort — runs only after the loops that call into

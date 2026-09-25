@@ -226,6 +226,7 @@ The yt-dlp engine, the release hardening of the image and the compose stack, the
 | [T115](T115-aria2-image-build-and-publish.md) | Build and publish the aria2 image | T093, T094, T097 | todo |
 | [T121](T121-advanced-settings-and-log-viewer.md) | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | todo |
 | [T130](T130-close-engines-on-shutdown.md) | Close registered engines before the database at shutdown | T090 | done |
+| [T132](T132-readyz-drain-and-shutdown-order.md) | Withdraw readiness and stop HTTP before the runtime drain | T130 | done |
 | [T133](T133-ci-event-dedup.md) | Streamline independent PR verification | T002 | done |
 
 ## Deferral register
@@ -249,7 +250,7 @@ reason and the task that will carry it.
 Task identifiers **T098–T129** are overflow numbers allocated after the original ranges were set. They
 belong to earlier milestones than their number suggests — T098, T099 and T126–T128 are M1, T100 and T101 are M2,
 T103 and T104 are M3, T105, T116, T122, T123 and T129 are M4, T106–T111 and T117–T120 are M6,
-T113, T115, T121, T130 and T133 are M7, and T124 and T125 are M0. A dependency on a numerically higher identifier is
+T113, T115, T121, T130, T132 and T133 are M7, and T124 and T125 are M0. A dependency on a numerically higher identifier is
 therefore usually not a forward reference: work milestones in order and the dependency is already
 satisfied. Do not "fix" these edges.
 
@@ -433,6 +434,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T115 | Build and publish the aria2 image | T093, T094, T097 | no | todo | [T115](T115-aria2-image-build-and-publish.md) |
 | T121 | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | no | todo | [T121](T121-advanced-settings-and-log-viewer.md) |
 | T130 | Close registered engines before the database at shutdown | T090 | no | done | [T130](T130-close-engines-on-shutdown.md) |
+| T132 | Withdraw readiness and stop HTTP before the runtime drain | T130 | no | done | [T132](T132-readyz-drain-and-shutdown-order.md) |
 | T133 | Streamline independent PR verification | T002 | no | done | [T133](T133-ci-event-dedup.md) |
 
 ## Decisions referenced
@@ -454,3 +456,4 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | 2026-09-08 | Reset T030 to `todo` after correcting its qBittorrent rid-recovery contract. |
 | 2026-09-10 | Reset T032 to `todo`: its Files table omitted `internal/engine/qbittorrent/files_test.go`, which its Verification block requires. |
 | 2026-09-25 | Added T130 (close registered engines before the database at shutdown) — the final audit of ae072b5 found `Engine.Close` implemented by all three adapters but never invoked from the composition root's drain. |
+| 2026-09-25 | Added T132 (withdraw readiness and stop HTTP before the runtime drain) — the same audit found `/readyz` can never return 503 during shutdown and the runtime drain precedes the ingress close, inverting doc 17 §2 steps 1–2. |
