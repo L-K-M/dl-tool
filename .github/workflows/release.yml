@@ -87,4 +87,4 @@ jobs:
 
       - name: Sign the image (keyless)
         if: github.event_name != 'pull_request'
-        run: cosign sign --yes ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes --recursive ${{ matrix.image }}@${{ steps.build.outputs.digest }}
