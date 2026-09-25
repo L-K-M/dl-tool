@@ -40,6 +40,24 @@ every item on that list is true.
 Open an issue describing the user-visible behaviour first. If it changes an interface, it needs a
 requirement in [`docs/02-requirements.md`](docs/02-requirements.md) and a task before it needs code.
 
+## Releasing
+
+1. Every task in `docs/tasks/00-task-index.md` is `done` or `dropped`.
+2. `make ci` is green on `main`.
+3. `make test-integration` is green against real qBittorrent and aria2 containers.
+4. `make e2e` is green, including the accessibility and installability gates.
+5. The yt-dlp pin in `Dockerfile` is at most seven days old.
+6. `docs/` carries no `[NEEDS CLARIFICATION]` marker: `make doclint` proves it.
+7. Tag `v1.0.0` and push the tag; the `release` workflow publishes and signs both images.
+8. Verify the published image before announcing it:
+
+    cosign verify ghcr.io/l-k-m/dl-tool:1.0.0 \
+      --certificate-identity-regexp '^https://github\.com/L-K-M/dl-tool/\.github/workflows/release\.yml@refs/tags/v' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+9. `docker buildx imagetools inspect ghcr.io/l-k-m/dl-tool:1.0.0` lists `linux/amd64` and `linux/arm64`.
+10. A clean `docker compose up -d` from the published tag reaches the first-run wizard.
+
 ## Scope boundaries
 
 Contributions that add a bundled indexer for a site whose catalogue is predominantly infringing will be

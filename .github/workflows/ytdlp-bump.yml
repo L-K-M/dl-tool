@@ -1,0 +1,64 @@
+name: ytdlp-bump
+on:
+  schedule:
+    - cron: '17 4 * * 1'      # Mondays, 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7
+      - name: Resolve the newest stable yt-dlp release
+        id: rel
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --repo yt-dlp/yt-dlp --json tagName -q .tagName)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download both musllinux assets and compute the hashes
+        id: sums
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/yt-dlp/yt-dlp/releases/download/${TAG}"
+          curl -fsSL -o amd64 "$base/yt-dlp_musllinux"
+          curl -fsSL -o arm64 "$base/yt-dlp_musllinux_aarch64"
+          echo "amd64=$(sha256sum amd64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "arm64=$(sha256sum arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Rewrite the three ARG lines in the Dockerfile
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          AMD64: ${{ steps.sums.outputs.amd64 }}
+          ARM64: ${{ steps.sums.outputs.arm64 }}
+        run: |
+          set -euo pipefail
+          sed -i \
+            -e "s|^ARG YTDLP_VERSION=.*|ARG YTDLP_VERSION=\"${TAG}\"|" \
+            -e "s|^ARG YTDLP_SHA256_AMD64=.*|ARG YTDLP_SHA256_AMD64=\"${AMD64}\"|" \
+            -e "s|^ARG YTDLP_SHA256_ARM64=.*|ARG YTDLP_SHA256_ARM64=\"${ARM64}\"|" \
+            Dockerfile
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1   # v4
+        with:
+          platforms: arm64
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4
+      - name: Smoke-test the pinned build
+        run: docker buildx build --platform linux/amd64,linux/arm64 --target ytdlp --output=type=cacheonly .
+      - name: Open a pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1   # v8.1.1
+        with:
+          branch: chore/ytdlp-pin
+          title: 'chore: bump yt-dlp pin to ${{ steps.rel.outputs.tag }}'
+          body: |
+            Automated weekly pin bump. A human must review and merge; nothing auto-merges.
+            Note: CI does not run on this PR (opened with GITHUB_TOKEN); the smoke build above is the only automated check.
+            Policy: docs/decisions/0018-pin-ytdlp-by-version-and-hash.md
+          commit-message: 'chore: bump yt-dlp pin to ${{ steps.rel.outputs.tag }}'

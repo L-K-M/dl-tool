@@ -221,7 +221,7 @@ The yt-dlp engine, the release hardening of the image and the compose stack, the
 | [T094](T094-harden-compose-and-release-verification.md) | Harden the compose stack and document release verification | T093, T125 | done |
 | [T095](T095-proxy-hardening-and-headers.md) | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | deferred |
 | [T096](T096-log-redaction-and-system-logs.md) | Redact secrets in logs and serve the system log | T004, T010, T024, T092 | done |
-| [T097](T097-release-pipeline-and-pin-bump.md) | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | todo |
+| [T097](T097-release-pipeline-and-pin-bump.md) | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | done |
 | [T113](T113-ytdlp-pin-and-capability-probe.md) | Enforce the yt-dlp pin and probe the runtime at boot | T090, T093, T097 | todo |
 | [T115](T115-aria2-image-build-and-publish.md) | Build and publish the aria2 image | T093, T094, T097 | todo |
 | [T121](T121-advanced-settings-and-log-viewer.md) | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | todo |
@@ -426,7 +426,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T094 | Harden the compose stack and document release verification | T093, T125 | no | done | [T094](T094-harden-compose-and-release-verification.md) |
 | T095 | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | no | deferred | [T095](T095-proxy-hardening-and-headers.md) |
 | T096 | Redact secrets in logs and serve the system log | T004, T010, T024, T092 | no | done | [T096](T096-log-redaction-and-system-logs.md) |
-| T097 | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | yes | todo | [T097](T097-release-pipeline-and-pin-bump.md) |
+| T097 | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | yes | done | [T097](T097-release-pipeline-and-pin-bump.md) |
 | T113 | Enforce the yt-dlp pin and probe the runtime at boot | T090, T093, T097 | no | todo | [T113](T113-ytdlp-pin-and-capability-probe.md) |
 | T115 | Build and publish the aria2 image | T093, T094, T097 | no | todo | [T115](T115-aria2-image-build-and-publish.md) |
 | T121 | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | no | todo | [T121](T121-advanced-settings-and-log-viewer.md) |

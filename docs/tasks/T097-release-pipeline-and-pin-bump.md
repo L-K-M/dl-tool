@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T097 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T002, T093, T094 |
 | **Blocks** | T113, T115 |
 | **Parallel-safe** | yes — touches `.github/` and `CONTRIBUTING.md` only |
@@ -154,13 +154,13 @@ The `Releasing` section added to `CONTRIBUTING.md`, as a checklist:
    provenance and SBOM enabled.
 
 ## Acceptance criteria
-- [ ] The release workflow builds `linux/amd64` and `linux/arm64` from one tag.
-- [ ] `provenance: mode=max` and `sbom: true` are both set on the build step.
-- [ ] The cosign step is keyless and runs only when the event is not a pull request.
-- [ ] Every third-party action is pinned by commit SHA.
-- [ ] The weekly job opens a pull request and never merges or publishes anything.
-- [ ] The weekly job rewrites exactly the three `ARG` lines and nothing else in `Dockerfile`.
-- [ ] `CONTRIBUTING.md` carries the ten-step v1.0.0 checklist including the `cosign verify` command.
+- [x] The release workflow builds `linux/amd64` and `linux/arm64` from one tag.
+- [x] `provenance: mode=max` and `sbom: true` are both set on the build step.
+- [x] The cosign step is keyless and runs only when the event is not a pull request.
+- [x] Every third-party action is pinned by commit SHA.
+- [x] The weekly job opens a pull request and never merges or publishes anything.
+- [x] The weekly job rewrites exactly the three `ARG` lines and nothing else in `Dockerfile`.
+- [x] `CONTRIBUTING.md` carries the ten-step v1.0.0 checklist including the `cosign verify` command.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence". The two `docker` lines create the
@@ -197,7 +197,74 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+**Sandbox limitation (same as T093/T124; stated, not worked around):** this session runs as
+uid 1000 in a container with no Docker daemon, no buildx plugin, no `sudo`, and seccomp
+blocking `unshare`, so the verbatim Verification block cannot execute here:
+
+```
+$ make docker-build VERSION=t097
+docker build -t ghcr.io/l-k-m/dl-tool:t097 .
+Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+make: *** [Makefile:57: docker-build] Error 1
+$ unshare -r true
+unshare: unshare failed: Operation not permitted
+```
+
+The verbatim Verification block **ran and passed on the PR's `verify` job**
+(`.github/workflows/task-verification.yml` extracts this file's `## Verification`
+bash and executes it on a Docker-capable runner). Observed output from the
+"Run task Verification" step (run 36134082698, job 108067856708, head SHA
+`eb492a7`):
+
+```
+$ docker run --privileged --rm tonistiigi/binfmt --install arm64
+installing: arm64 OK
+{
+  "supported": [
+    "linux/amd64",
+    "linux/amd64/v2",
+    "linux/amd64/v3",
+    "linux/arm64",
+    "linux/386"
+  ],
+  "emulators": [ ..., "qemu-aarch64" ]
+}
+$ docker buildx create --name t097 --driver docker-container --use --bootstrap
+#1 [internal] booting buildkit
+#1 pulling image moby/buildkit:buildx-stable-1 2.0s done
+#1 creating container buildx_buildkit_t0970 0.3s done
+#1 DONE 2.3s
+t097
+$ make doclint
+./scripts/doclint.sh
+🔍 2531 Total (in 67ms) 🔗 579 Unique ✅ 2503 OK 🚫 0 Errors 👻 28 Excluded
+$ docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max --sbom=true --output=type=cacheonly -f Dockerfile .
+#0 building with "t097" instance using docker-container driver
+... both linux/amd64 and linux/arm64 stages complete ...
+#48 [linux/arm64] generating sbom using docker.io/docker/buildkit-syft-scanner:stable-1
+#48 DONE 2.5s
+#53 [linux/amd64] generating sbom using docker.io/docker/buildkit-syft-scanner:stable-1
+#53 DONE 2.3s
+RELEASE_DRYRUN_OK
+```
+
+The PR's `release` workflow run on `pull_request` independently exercised the same path:
+`docker buildx build --platform linux/amd64,linux/arm64 --attest type=provenance,mode=max
+--attest type=sbom` completed and the job finished green (run 36134086423), with
+`push: false` and no cosign steps, as designed for PR events.
+
+Scope check, run on the working tree before the task commit (the Files-table paths are
+untracked until then, which is why the block prescribes `git status` over `git diff`;
+the tree is clean afterwards):
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+.github/copilot-instructions.md
+.github/workflows/release.yml
+.github/workflows/ytdlp-bump.yml
+CONTRIBUTING.md
+```
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
