@@ -57,9 +57,12 @@ takes a few. Keep them small:
 - **Nothing else.** No drive-by formatting, no unrelated renames, no "while I was
   here" fixes. If you spot something outside the task, note it in the PR
   description and leave it.
-- **Do not open several PRs at once.** Concurrent runs of the review workflow
-  cancel each other. One open PR at a time: wait for the review, address it,
-  merge, then start the next task.
+- **One owner per PR.** Independent tasks may have concurrent PRs in isolated
+  worktrees. The review workflow keys cancellation by PR number; only a newer
+  revision of the same PR cancels its review. The coordinator must track each
+  owner and prevent duplicate writers. Controllers that cannot track multiple
+  open PRs must hold new launches until those PRs merge. Each worker still
+  finishes and merges its own task before starting another.
 - **PR description**: what the task was, what you built, a summary of the
   Verification output, and anything you wrote under `## Blocked`. Link the task
   file.
