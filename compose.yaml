@@ -120,6 +120,10 @@ services:
       start_period: 10s
     stop_grace_period: 30s
 
+  # The `vpn` profile is only half the topology: doc 10 §8.1's `compose.vpn.yaml` override
+  # moves `qbittorrent` and `aria2` into gluetun's network namespace and drops
+  # qbittorrent's own 6881 publish. Enabling `vpn` alone makes gluetun and qbittorrent
+  # claim host 6881 at once — it must be combined with that override.
   gluetun:
     <<: *service-defaults
     profiles: ["vpn"]

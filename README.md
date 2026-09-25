@@ -112,6 +112,9 @@ docker compose up -d
 Then open `http://<host>:8091` and complete the first-run setup wizard. There are **no default
 credentials** — the wizard creates the operator account.
 
+The published image ships with the first signed release; until then, build from source instead with
+`docker compose -f compose.yaml -f compose.dev.yaml up -d --build`.
+
 Before trusting a published image, verify its signature and inspect the platforms, SBOM and
 provenance attestation it carries:
 
