@@ -432,8 +432,10 @@ func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB) {
 	if httpServer != nil {
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			slog.Error("http shutdown failed", "err", err)
-			// Shutdown overran with requests still live; force-close the
-			// connections so no handler races the engine teardown below.
+			// Shutdown overran with requests still live. Close reaps the
+			// listener and sockets — cancelling request contexts — but cannot
+			// join hung handler goroutines; a handler that ignores its
+			// request context may still race the teardown below.
 			if cerr := httpServer.Close(); cerr != nil {
 				slog.Error("http force-close failed", "err", cerr)
 			}
