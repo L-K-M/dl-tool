@@ -21,7 +21,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Download both musllinux assets and compute the hashes
+      - name: Download the release assets and the PyPI wheel, compute the hashes
         id: sums
         env:
           TAG: ${{ steps.rel.outputs.tag }}
@@ -30,20 +30,41 @@ jobs:
           base="https://github.com/yt-dlp/yt-dlp/releases/download/${TAG}"
           curl -fsSL -o amd64 "$base/yt-dlp_musllinux"
           curl -fsSL -o arm64 "$base/yt-dlp_musllinux_aarch64"
+          read -r wheel_url wheel_pypi_sha < <(python3 -c "import json,urllib.request,sys; v='.'.join(str(int(x)) for x in sys.argv[1].lstrip('v').split('.')); d=json.load(urllib.request.urlopen(f'https://pypi.org/pypi/yt-dlp/{v}/json', timeout=30)); u=next((u for u in d['urls'] if u['filename'].endswith('py3-none-any.whl')), None); sys.exit(f'no py3-none-any wheel on PyPI for {v}') if u is None else print(u['url'], u['digests']['sha256'])" "$TAG")
+          curl -fsSL -o wheel "$wheel_url"
+          # cross-check the download against PyPI's published digest; annotate on mismatch
+          [ "$(sha256sum wheel | cut -d' ' -f1)" = "$wheel_pypi_sha" ] || { echo "::error::wheel sha256 mismatch — expected $wheel_pypi_sha from PyPI"; exit 1; }
           echo "amd64=$(sha256sum amd64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "arm64=$(sha256sum arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - name: Rewrite the three ARG lines in the Dockerfile
+          echo "wheel=$(sha256sum wheel | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Rewrite the four ARG lines in the Dockerfile
         env:
           TAG: ${{ steps.rel.outputs.tag }}
           AMD64: ${{ steps.sums.outputs.amd64 }}
           ARM64: ${{ steps.sums.outputs.arm64 }}
+          WHEEL: ${{ steps.sums.outputs.wheel }}
         run: |
           set -euo pipefail
           sed -i \
             -e "s|^ARG YTDLP_VERSION=.*|ARG YTDLP_VERSION=\"${TAG}\"|" \
             -e "s|^ARG YTDLP_SHA256_AMD64=.*|ARG YTDLP_SHA256_AMD64=\"${AMD64}\"|" \
             -e "s|^ARG YTDLP_SHA256_ARM64=.*|ARG YTDLP_SHA256_ARM64=\"${ARM64}\"|" \
+            -e "s|^ARG YTDLP_SHA256_WHEEL=.*|ARG YTDLP_SHA256_WHEEL=\"${WHEEL}\"|" \
             Dockerfile
+          # fail loudly if any rewrite no-opped (ARG missing, renamed, or left at its old value —
+          # sed silently skips a line that does not match, e.g. T088's WHEEL arg not yet landed)
+          grep -q "^ARG YTDLP_VERSION=\"${TAG}\"" Dockerfile
+          grep -q "^ARG YTDLP_SHA256_AMD64=\"${AMD64}\"" Dockerfile
+          grep -q "^ARG YTDLP_SHA256_ARM64=\"${ARM64}\"" Dockerfile
+          grep -q "^ARG YTDLP_SHA256_WHEEL=\"${WHEEL}\"" Dockerfile
+      - name: Regenerate the yt-dlp routing table for the new pin
+        run: python3 scripts/gen-ytdlp-patterns.py   # ADR-0022: the bump PR carries the table diff too
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e   # v7
+        with:
+          go-version-file: go.mod
+      - name: Verify residual overrides cover the regenerated table
+        run: go test ./internal/engine/ytdlp/...   # fails the bump job when a new residual lacks an override
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1   # v4
         with:

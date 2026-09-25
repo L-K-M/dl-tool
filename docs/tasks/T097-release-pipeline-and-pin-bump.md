@@ -15,8 +15,8 @@
 ## Goal
 A `v*.*.*` tag publishes `linux/amd64` and `linux/arm64` images to `ghcr.io/l-k-m/dl-tool` with an SBOM,
 `mode=max` provenance and a keyless cosign signature. A weekly job opens a pull request that bumps the
-yt-dlp version and its two SHA-256 pins; a human merges it. `CONTRIBUTING.md` carries the v1.0.0 release
-checklist.
+yt-dlp version and its three SHA-256 pins and regenerates the yt-dlp routing table; a human merges it.
+`CONTRIBUTING.md` carries the v1.0.0 release checklist.
 
 ## Context you need
 Read ONLY these, in this order. Do not explore the rest of the repo.
@@ -24,13 +24,13 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 2. [`docs/12-security-and-threat-model.md` §8 Supply chain](../12-security-and-threat-model.md#8-supply-chain) — digest pinning, SHA-pinned actions, keyless signing, SBOM.
 3. [`docs/12-security-and-threat-model.md` §8.1 yt-dlp: freshness versus unreviewed code](../12-security-and-threat-model.md#81-yt-dlp-freshness-versus-unreviewed-code) — the four-point policy the weekly job implements.
 4. [`docs/13-testing-and-verification.md` §7 CI](../13-testing-and-verification.md#7-ci) — which workflow owns which job, and the pinned action majors.
-5. [`docs/10-deployment-and-compose.md` §5 `Dockerfile`](../10-deployment-and-compose.md#5-dockerfile) — the three `ARG` lines the weekly job rewrites.
+5. [`docs/10-deployment-and-compose.md` §5 `Dockerfile`](../10-deployment-and-compose.md#5-dockerfile) — the `ARG` pin lines the weekly job rewrites.
 
 ## Files
 | Path | Action | Purpose |
 |---|---|---|
 | `.github/workflows/release.yml` | create | Multi-arch build, SBOM, provenance and cosign signing for `ghcr.io/l-k-m/dl-tool`. |
-| `.github/workflows/ytdlp-bump.yml` | create | Weekly pull request bumping `YTDLP_VERSION` and the two hashes. |
+| `.github/workflows/ytdlp-bump.yml` | create | Weekly pull request bumping `YTDLP_VERSION` and the three hashes, carrying the regenerated routing table. |
 | `.github/copilot-instructions.md` | create | Mirror of `AGENTS.md` so Copilot reads the same rules. |
 | `CONTRIBUTING.md` | edit | Add the "Releasing" section with the v1.0.0 checklist and the verify command. |
 
@@ -159,7 +159,7 @@ The `Releasing` section added to `CONTRIBUTING.md`, as a checklist:
 - [x] The cosign step is keyless and runs only when the event is not a pull request.
 - [x] Every third-party action is pinned by commit SHA.
 - [x] The weekly job opens a pull request and never merges or publishes anything.
-- [x] The weekly job rewrites exactly the three `ARG` lines and nothing else in `Dockerfile`.
+- [x] The weekly job rewrites exactly the four `ARG` lines and nothing else in `Dockerfile`.
 - [x] `CONTRIBUTING.md` carries the ten-step v1.0.0 checklist including the `cosign verify` command.
 
 ## Verification
@@ -265,6 +265,12 @@ $ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | so
 .github/workflows/ytdlp-bump.yml
 CONTRIBUTING.md
 ```
+
+**Post-merge repair:** #299 amended this file's Interface contract (ADR-0022 wheel pin,
+routing-table regeneration and residual-override check) before #298 merged, so the squash-merged
+`ytdlp-bump.yml` predated those requirements. A `fix/` repair brought the merged workflow up to the
+amended contract and reconciled the stale "two pins"/"three ARG lines" wording above; the multi-arch
+buildx smoke test from #298 is kept — it is a superset of the contract's amd64-only check.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
