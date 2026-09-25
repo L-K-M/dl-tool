@@ -359,9 +359,12 @@ func (e *closeSpy) Close() error {
 func TestCloseAllClosesEachEngineOnceInSortedOrder(t *testing.T) {
 	reg := NewRegistry()
 	var order []string
-	reg.Register(&closeSpy{name: "ytdlp", order: &order})
-	reg.Register(&closeSpy{name: "aria2", order: &order})
-	reg.Register(&closeSpy{name: "qbittorrent", order: &order})
+	ytdlp := &closeSpy{name: "ytdlp", order: &order}
+	aria2 := &closeSpy{name: "aria2", order: &order}
+	qbittorrent := &closeSpy{name: "qbittorrent", order: &order}
+	reg.Register(ytdlp)
+	reg.Register(aria2)
+	reg.Register(qbittorrent)
 
 	if err := reg.CloseAll(); err != nil {
 		t.Fatalf("CloseAll = %v, want nil", err)
@@ -369,10 +372,9 @@ func TestCloseAllClosesEachEngineOnceInSortedOrder(t *testing.T) {
 	if got, want := order, []string{"aria2", "qbittorrent", "ytdlp"}; !slices.Equal(got, want) {
 		t.Fatalf("close order = %v, want %v", got, want)
 	}
-	for _, name := range reg.Names() {
-		e, _ := reg.Get(name)
-		if got := e.(*closeSpy).calls.Load(); got != 1 {
-			t.Fatalf("%s closed %d times, want 1", name, got)
+	for _, s := range []*closeSpy{ytdlp, aria2, qbittorrent} {
+		if got := s.calls.Load(); got != 1 {
+			t.Fatalf("%s closed %d times, want 1", s.name, got)
 		}
 	}
 }
@@ -383,19 +385,20 @@ func TestCloseAllJoinsErrorsAndClosesEveryEngine(t *testing.T) {
 	reg := NewRegistry()
 	errAlpha := errors.New("alpha teardown failed")
 	errBeta := errors.New("beta teardown failed")
-	reg.Register(&closeSpy{name: "alpha", closeErr: errAlpha})
-	reg.Register(&closeSpy{name: "beta", closeErr: errBeta})
-	ok := &closeSpy{name: "gamma"}
-	reg.Register(ok)
+	alpha := &closeSpy{name: "alpha", closeErr: errAlpha}
+	beta := &closeSpy{name: "beta", closeErr: errBeta}
+	gamma := &closeSpy{name: "gamma"}
+	reg.Register(alpha)
+	reg.Register(beta)
+	reg.Register(gamma)
 
 	err := reg.CloseAll()
 	if !errors.Is(err, errAlpha) || !errors.Is(err, errBeta) {
 		t.Fatalf("CloseAll = %v, want both engine errors joined", err)
 	}
-	for _, name := range reg.Names() {
-		e, _ := reg.Get(name)
-		if got := e.(*closeSpy).calls.Load(); got != 1 {
-			t.Fatalf("%s closed %d times despite a sibling failure, want 1", name, got)
+	for _, s := range []*closeSpy{alpha, beta, gamma} {
+		if got := s.calls.Load(); got != 1 {
+			t.Fatalf("%s closed %d times despite a sibling failure, want 1", s.name, got)
 		}
 	}
 }
