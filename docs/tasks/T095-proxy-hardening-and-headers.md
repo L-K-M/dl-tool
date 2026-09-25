@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T095 |
 | **Milestone** | M7 |
-| **Status** | deferred — see the open Blocked record dated 2026-09-25 |
+| **Status** | todo |
 | **Depends on** | T007, T013, T094 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
@@ -35,6 +35,9 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `deploy/caddy/Caddyfile.example` | create | The subdomain and subfolder snippets of doc 10 §7.1. |
 | `deploy/traefik/labels.md` | create | The label set of doc 10 §7.2. |
 | `internal/api/server.go` | edit | Mount the three middlewares on the base sub-router, outermost first. |
+| `internal/api/server_test.go` | edit | Give the shared router-request helper and direct requests an allowed Host. |
+| `internal/api/auth_test.go` | edit | Give root-router authentication requests an allowed Host. |
+| `internal/obs/health_test.go` | edit | Give main-router health requests an allowed Host. |
 
 No other file may be modified.
 
@@ -116,7 +119,9 @@ including the `flush_interval -1` comment and the "do NOT add stripprefix" note.
    middleware chain, all on the base sub-router so a request outside the base still returns `404`.
    `cfg.AllowedHosts` and `cfg.ConfigLock` are the parsed `DLTOOL_ALLOWED_HOSTS` and `DLTOOL_CONFIG_LOCK`
    ([`11-config-reference.md`](../11-config-reference.md#2-dltool_-variables-application) §2) — they are
-   the only sources either has.
+   the only sources either has. Update router-driving requests in the three listed test files to use
+   an allowed Host; keep the middleware unconditional and preserve every existing assertion. The shared
+   `do()` helper also covers `static_test.go`, which needs no edit.
 8. Create `deploy/caddy/Caddyfile.example` and `deploy/traefik/labels.md` from doc 10 §7.1 and §7.2, carrying
    forward the UNVERIFIED note on the Traefik flush-interval label name.
 9. Create `internal/api/security_test.go` with: each header asserted on an HTML response; HSTS absent over
@@ -147,10 +152,10 @@ including the `flush_interval -1` comment and the "do NOT add stripprefix" note.
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-make lint && make test PKG=./internal/api/...
+make lint && go test -race -count=1 -v ./internal/api/... ./internal/obs/...
 ```
-Expected: `make lint` prints nothing, then `ok  	github.com/L-K-M/dl-tool/internal/api` followed by its
-elapsed time, with `TestSecurityHeadersOnHTML`, `TestHSTSOnlyOverHTTPS`, `TestUnexpectedHostIs421`,
+Expected: lint succeeds and both packages pass, with
+`TestSecurityHeadersOnHTML`, `TestHSTSOnlyOverHTTPS`, `TestUnexpectedHostIs421`,
 `TestAllowedHostTable`, `TestSafeRedirectTable` and `TestNoInsecureSkipVerify` all listed as passing.
 No `FAIL`.
 
@@ -158,7 +163,7 @@ Also confirm scope:
 ```bash
 git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
 ```
-Expected: exactly the paths in the Files table, in that order, and nothing else. Use `git status`, not
+Expected: only paths allowed by the Files table, sorted lexically. Use `git status`, not
 `git diff`: a file this task creates is untracked, and `git diff --name-only` never lists an untracked file.
 
 ## Out of scope — do NOT
@@ -176,6 +181,10 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
+
+Resolved by this plan repair: the Files table permits the three request-construction fixes below.
+The allowlist and existing assertions remain unchanged. The task is eligible again; implementation
+and its Verification output are still required.
 
 ### 2026-09-25 — the always-on host allowlist breaks 18 merged tests outside the Files table
 
