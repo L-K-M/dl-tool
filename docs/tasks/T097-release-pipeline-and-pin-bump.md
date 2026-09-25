@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T097 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | deferred — see the open Blocked record dated 2026-09-25 |
 | **Depends on** | T002, T093, T094 |
 | **Blocks** | T113, T115 |
 | **Parallel-safe** | yes — touches `.github/` and `CONTRIBUTING.md` only |
@@ -201,9 +201,26 @@ $ unshare -U -r true
 unshare: unshare failed: Operation not permitted
 ```
 
-`make doclint` exits 0 above (lychee reports `0 Errors`). The multi-arch dry run runs on this PR's
-`verify` job (`.github/workflows/task-verification.yml` executes this block verbatim on a
-Docker-capable runner); its observed output is pasted below once it lands.
+`make doclint` exits 0 above (lychee reports `0 Errors`). The multi-arch dry run was then executed by
+this PR's `verify` job (`.github/workflows/task-verification.yml` runs this block verbatim on a
+Docker-capable runner) and failed before the first stage — observed output (run 36123228114, job
+108033359898, "Run task Verification" step):
+
+```
+verify  Run task Verification  ./scripts/doclint.sh
+verify  Run task Verification  🔍 2531 Total 🔗 579 Unique ✅ 2503 OK 🚫 0 Errors 👻 28 Excluded
+verify  Run task Verification  ERROR: failed to build: Attestation is not supported for the docker driver.
+verify  Run task Verification  Switch to a different driver, or turn on the containerd image store, and try again.
+verify  Run task Verification  ##[error]Process completed with exit code 1.
+```
+
+See `## Blocked` — the failure is the block's choice of builder, not the shipped files.
+
+The shipped workflow was independently proven on this PR: the `release` job (docker-container driver
+via `setup-buildx-action`, QEMU via `setup-qemu-action`) ran
+`docker buildx build --platform linux/amd64,linux/arm64 --attest type=provenance,mode=max --attest type=sbom`
+to completion with `push: false` and the cosign steps correctly skipped — run 36123269506, job
+108033492825, conclusion `success`, every stage `DONE`, including `linux/arm64`.
 
 Scope check:
 
@@ -243,4 +260,36 @@ Deviation from the verbatim doc workflow, and why:
   `push: false` on PRs, and all three cosign/login gates are unchanged from the doc.
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+### 2026-09-25 — the Verification block's buildx dry run cannot run on the `verify` runner's docker driver
+
+The `## Verification` command
+`docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max --sbom=true --output=type=cacheonly -f Dockerfile .`
+is executed verbatim by `.github/workflows/task-verification.yml` on a stock `ubuntu-latest` runner,
+whose only buildx builder is the `docker` driver. That driver cannot produce attestations, so the
+command fails before the first stage (`ERROR: failed to build: Attestation is not supported for the
+docker driver.` — run 36123228114, quoted under `## Evidence`). The command's
+`--provenance`/`--sbom` attestations are precisely what the task exists to ship, so the driver
+mismatch is fatal to the block as written.
+
+No repair exists inside this task's `## Files` table: the `verify` job's environment is owned by
+`.github/workflows/task-verification.yml` (T002), and editing the `## Verification` command itself
+would override a documented requirement rather than surface it. The delivered files are complete and
+proven — the `release` workflow's `image` job built both platforms with `provenance: mode=max` and
+`sbom: true` green on this PR (run 36123269506) — so the defect is confined to the verification
+command's assumption about the executor's buildx driver.
+
+**Remedy:** a contract repair of the class of `fix/T043-live-update-contract`. Change this task file's
+`## Verification` block to create a `docker-container` builder (and register arm64 binfmt) first —
+exactly the prelude T093's Verification block already runs on the same runner image:
+
+```bash
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+docker buildx create --name t097 --driver docker-container --use --bootstrap
+```
+
+before the existing `docker buildx build ...` line — or add `docker/setup-buildx-action` +
+`docker/setup-qemu-action` to the `verify` job (T002's file). Dropping `--provenance`/`--sbom` from the
+dry run also works but weakens the check, so the builder fix is the faithful repair. The file that
+should answer "which buildx driver does the Verification environment provide" is this task file's
+`## Verification` block, jointly with `.github/workflows/task-verification.yml`.
