@@ -194,8 +194,8 @@ docker buildx imagetools inspect ghcr.io/l-k-m/dl-tool:1.0.0   # lists both plat
   start, not Compose's at config time.
 - [ ] Under `COMPOSE_PROFILES=vpn`, the rendered `gluetun` service has no `env_file`, sets
   `WIREGUARD_PRIVATE_KEY_SECRETFILE` and `WIREGUARD_ADDRESSES_SECRETFILE`, and the rendered top-level
-  `secrets:` block carries `wireguard_private_key` and `wireguard_addresses` (Compose v5.5.1 prunes
-  unreferenced secrets from the render when the profile is inactive).
+  `secrets:` block carries `wireguard_private_key` and `wireguard_addresses` (verified on Compose
+  v5.5.1 — it prunes unreferenced secrets from the render when the profile is inactive).
 - [ ] `docker compose config` still emits no `version` warning and publishes no engine WebUI or RPC port.
 - [ ] `.env.example` contains no secret value, only empty assignments, `wireguard`, `off` and comments.
 - [ ] A five-minute capture shows no request to any host the operator did not configure.
