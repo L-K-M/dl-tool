@@ -86,7 +86,7 @@ func overrideRoutes() []overrideRoute {
 			r := overrideRoute{host: spec}
 			if i := strings.IndexByte(spec, '/'); i >= 0 {
 				r.host = spec[:i]
-				r.path = spec[i+1:]
+				r.path = strings.ToLower(spec[i+1:])
 			}
 			routes = append(routes, r)
 		}
@@ -101,6 +101,34 @@ func overrideRoutes() []overrideRoute {
 		return routes[i].path < routes[j].path
 	})
 	return routes
+}
+
+func isAlnum(b byte) bool {
+	return '0' <= b && b <= '9' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
+}
+
+// pathClaims reports whether fragment occurs in path at a claim boundary:
+// preceded by a non-alphanumeric (path separators, dots, scheme colons) and —
+// when the fragment ends in an alphanumeric — followed by a non-letter, so
+// `vk.com/video` claims video-123_456 but not the profile `videographer`, and
+// `youtube.com/` claims an archived www.youtube.com URL but not an archived
+// fakeyoutube.com one.
+func pathClaims(path, fragment string) bool {
+	for i := 0; ; {
+		j := strings.Index(path[i:], fragment)
+		if j < 0 {
+			return false
+		}
+		at := i + j
+		end := at + len(fragment)
+		if (at == 0 || !isAlnum(path[at-1])) &&
+			(end == len(path) ||
+				!isAlnum(fragment[len(fragment)-1]) ||
+				path[end] < 'a' || 'z' < path[end]) {
+			return true
+		}
+		i = at + 1
+	}
 }
 
 // Match reports whether uri routes to yt-dlp: the URI's lowercase hostname is
@@ -120,11 +148,12 @@ func (c *ExtractorCache) Match(uri string) bool {
 	if host == "" {
 		return false
 	}
+	path := strings.ToLower(u.Path)
 	for _, r := range c.overrides {
 		if host != r.host && !strings.HasSuffix(host, "."+r.host) {
 			continue
 		}
-		if r.path == "" || strings.Contains(u.Path, r.path) {
+		if r.path == "" || pathClaims(path, r.path) {
 			return true
 		}
 	}

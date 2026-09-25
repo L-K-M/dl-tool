@@ -146,7 +146,8 @@ def resolve_source(path, want_sha256, workdir):
         return pkg_root
     if not os.path.isfile(path):
         die(f"--yt-dlp {path}: not a directory or a wheel file")
-    data = open(path, "rb").read()
+    with open(path, "rb") as fh:
+        data = fh.read()
     got = hashlib.sha256(data).hexdigest()
     if got != want_sha256:
         die(
@@ -280,7 +281,9 @@ def rewrite_captures(s):
 
 # Python's re reads the shorthands as Unicode classes for str patterns while
 # RE2's are ASCII-only: \w is exactly \p{L}\p{N} plus the underscore (Python
-# excludes marks and other connector punctuation), \d is \p{Nd}, and \s is the
+# excludes marks and other connector punctuation), \d is \p{Nd} (near-exact —
+# Python's isdigit also admits Numeric_Type=Digit characters like ²), and \s
+# is the
 # ASCII whitespace set plus \x1c-\x1f, \x85 and everything in \p{Z}. Widening
 # is load-bearing for routing, not pedantry — the extractor's own _VALID_URL
 # accepts URLs the ASCII transpile would miss (measured on the 2026.08.19
@@ -301,10 +304,11 @@ def widen_shorthands(s):
     over-matches, which row 3 tolerates because yt-dlp still arbitrates.
 
     Inside a character class the affirmative shorthands flatten into the
-    class body; a negated shorthand (\\D \\W \\S) cannot be expressed there —
-    RE2 has no nested negated classes — unless the class is the complementary
-    pair itself ([\\s\\S] and friends, the any-character idiom), which
-    collapses to (?s:.). Anything else lands residual rather than guessing.
+    class body; \\D still widens to \\P{Nd} (Go accepts \\P{...} inside
+    classes), but \\W and \\S cannot be complemented in place — unless the
+    class is the complementary pair itself ([\\s\\S] and friends, the
+    any-character idiom), which collapses to (?s:.). Anything else lands
+    residual rather than guessing.
     """
     out = []
     i = 0
@@ -332,7 +336,9 @@ def widen_shorthands(s):
             out.append(c)
             i += 1
             continue
-        # Character class: tokenize the body, keeping escapes whole.
+        # Character class: tokenize the body, keeping escapes whole. A ']' in
+        # the first body position (optionally after ^) is a literal member in
+        # both Python re and Go's regexp — keep it so []] and [^]] survive.
         j = i + 1
         body = []
         while j < len(s):
@@ -341,6 +347,10 @@ def widen_shorthands(s):
                 j += 2
                 continue
             if s[j] == "]":
+                if body == [] or body == ["^"]:
+                    body.append(s[j])
+                    j += 1
+                    continue
                 break
             body.append(s[j])
             j += 1
@@ -363,7 +373,9 @@ def widen_shorthands(s):
                 inner.append(_WORD)
             elif tok == r"\s":
                 inner.append(_SPACE)
-            elif tok in (r"\D", r"\W", r"\S"):
+            elif tok == r"\D":
+                inner.append(r"\P{Nd}")  # Go allows \P{...} inside a class
+            elif tok in (r"\W", r"\S"):
                 return None
             else:
                 inner.append(tok)
@@ -476,7 +488,7 @@ def main():
     residual = {}
     for name, pattern in pairs:
         # A non-str _VALID_URL entry is untranspilable by definition.
-        t = None if pattern is None else transpile(pattern)
+        t = transpile(pattern) if isinstance(pattern, str) else None
         # One pattern per line: anything still carrying a raw newline (a
         # character class escaped the verbose strip) cannot be serialized,
         # and an empty result would substring-match everything.

@@ -2,11 +2,13 @@ package ytdlp
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -52,12 +54,20 @@ func TestResidualOverridesCoverTable(t *testing.T) {
 	}
 }
 
-func loadCache(t *testing.T) *ExtractorCache {
-	t.Helper()
+// LoadExtractors recompiles the whole table (~0.7 s) on every call, so the
+// routing tests share one instance; only the zero-value and per-line compile
+// tests construct their own.
+var testCache = sync.OnceValue(func() *ExtractorCache {
 	cache, err := LoadExtractors()
 	if err != nil {
-		t.Fatalf("LoadExtractors: %v", err)
+		panic(fmt.Sprintf("LoadExtractors: %v", err))
 	}
+	return cache
+})
+
+func loadCache(t *testing.T) *ExtractorCache {
+	t.Helper()
+	cache := testCache()
 	if !cache.Loaded() {
 		t.Fatal("LoadExtractors returned an unloaded cache for a non-empty table")
 	}
@@ -100,13 +110,20 @@ func TestMatchPathScopedOverrides(t *testing.T) {
 	}{
 		{"https://tenant.sharepoint.com/:v:/r/sites/team/video", true},
 		{"https://tenant.sharepoint.com/stream.aspx?id=abc", true},
+		{"https://tenant.sharepoint.com/Stream.aspx?id=abc", true},
 		{"https://tenant.sharepoint.com/sites/team/report.docx", false},
+		{"https://tenant.sharepoint.com/TeamStream.aspx?id=abc", false},
 		{"https://web.archive.org/web/20200101000000/https://www.youtube.com/watch?v=dQw4w9WgXcQ", true},
+		{"https://web.archive.org/web/20200101000000/https://music.youtube.com/watch?v=abc", true},
+		{"https://web.archive.org/web/20200101000000/https://fakeyoutube.com/watch", false},
 		{"https://web.archive.org/web/20200101000000/https://example.com/page.html", false},
 		{"https://www.imdb.com/list/ls123456789/", true},
+		{"https://www.imdb.com/List/LS123456789/", true},
 		{"https://www.imdb.com/title/tt0111161/", false},
 		{"https://vk.com/video/playlist/-123_456", true},
+		{"https://vk.com/video/@user/all", true},
 		{"https://vk.com/durov", false},
+		{"https://vk.com/videographer", false},
 		{"https://open.spotify.com/track/abc", true},
 		{"https://spotify.com/us/account/overview/", false},
 		{"https://www.amazon.com/gp/video/detail/B0ABC", true},

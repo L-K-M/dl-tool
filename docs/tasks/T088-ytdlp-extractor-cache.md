@@ -73,10 +73,12 @@ var patternTable string
 
 // ResidualOverrides maps each extractor name in extractors_residual.txt to the
 // host specs that route its URIs. A spec is "host" (lowercase, no port, matched
-// on label boundaries) or "host/fragment" (the decoded path must contain the
-// fragment — for extractors whose upstream claim covers only specific paths on
-// a shared host such as sharepoint.com or web.archive.org, so a plain document
-// or page download there is not misrouted). It is hand-maintained: the generator
+// on label boundaries) or "host/fragment" (the decoded path, case-folded, must
+// contain the fragment at a boundary — preceded by a non-alphanumeric and, for
+// fragments ending in an alphanumeric, followed by a non-letter — so
+// `vk.com/video/` claims /video/playlist/… but not the profile /videographer,
+// and `web.archive.org/youtube.com/` claims an archived www.youtube.com capture
+// but not an archived fakeyoutube.com one). It is hand-maintained: the generator
 // tells you which names need entries on each regen, and the coverage test fails
 // if any residual name lacks one. Host granularity is still the default — row 3
 // answers "should yt-dlp see this URL"; yt-dlp picks its own extractor later.
@@ -102,7 +104,8 @@ func LoadExtractors() (*ExtractorCache, error)
 
 // Match reports whether uri routes to yt-dlp: the URI's lowercase hostname is
 // checked against the override routes (host suffix on label boundaries, plus
-// the path fragment when the spec carries one), then the URI — scheme and
+// a boundary-aware, case-folded fragment match when the spec carries one),
+// then the URI — scheme and
 // authority lowercased, mirroring yt-dlp's netloc normalization — is checked
 // against the compiled alternation. It never performs I/O.
 func (c *ExtractorCache) Match(uri string) bool
@@ -195,7 +198,9 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
    e.g. `https://evil.example/?next=youtube.com/watch`.
    `Match(uri)`: parse with `net/url`, lowercase the hostname (no match on parse failure or empty
    host), check the override routes (host suffix on label boundaries, plus the decoded-path
-   fragment when the spec carries one), then lowercase the URI's scheme and authority — yt-dlp's
+   fragment when the spec carries one — the fragment is case-folded like the host and must sit at
+   a path boundary so `vk.com/video/` cannot claim the profile `vk.com/videographer`), then
+   lowercase the URI's scheme and authority — yt-dlp's
    `re` sees a netloc-normalized URL, while path and query keep their case — and run
    `pattern.MatchString`. No I/O anywhere.
 5. Wire the hook. `internal/engine/ytdlp/engine.go`: add the `cache` field as
@@ -224,9 +229,10 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
    - `Match` returns false for `https://evilyoutube.com/x` and `https://notyoutu.be/x` — the override
      lookup is a label-boundary suffix match (`host == suffix` or `host` ends in `"." + suffix`),
      never a raw `strings.HasSuffix`;
-   - the `host/fragment` routes claim inside their paths only: SharePoint video/stream URLs and
-     archived YouTube captures route, while a SharePoint document, an archived non-media page, an
-     IMDb title page or a VK profile on the same hosts do not;
+   - the `host/fragment` routes claim inside their paths only, at path boundaries and case-folded:
+     SharePoint video/stream URLs and archived YouTube captures route, while a SharePoint document,
+     `TeamStream.aspx`, an archived `fakeyoutube.com` capture, an IMDb title page or a VK profile
+     (`vk.com/videographer`) on the same hosts do not;
    - an uppercase scheme/authority (`HTTPS://X.COM/…`) still routes — the table lane normalizes
      scheme and authority case before matching;
    - the zero-value cache reports `Loaded() == false` and `Match() == false`.
@@ -307,10 +313,10 @@ All matched files use Prettier code style!
 ```
 $ make test PKG=./internal/engine/...
 go test -race -count=1 ./internal/engine/...
-ok  	github.com/L-K-M/dl-tool/internal/engine	33.038s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.257s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.978s
-ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	19.258s
+ok  	github.com/L-K-M/dl-tool/internal/engine	32.450s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.252s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.082s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	14.327s
 ```
 
 Scope check — exactly the paths in the Files table and nothing else:
@@ -416,3 +422,9 @@ stop-and-document rule, resolved by the task's own explicit instructions:
     pre-fix table.
   - `Engine.cache` became `atomic.Pointer[ExtractorCache]` because the engine probe can re-run
     `Connect` while `Accepts` reads the field.
+- Review round 2 refined the fragment grammar itself: containment is now boundary-checked and
+  case-folded (`vk.com/videographer`, `sharepoint.com/TeamStream.aspx` and archived
+  `fakeyoutube.com` captures all stay on the plain lane), and the VK spec narrowed to
+  `vk.com/video/` matching upstream's exact path prefix. The generator also learned that a
+  leading `]` in a character class is a literal member in both Python and Go — it passes
+  through instead of mis-tokenizing — and `\D` inside a class widens to `\P{Nd}`.

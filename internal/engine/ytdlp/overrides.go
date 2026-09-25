@@ -98,9 +98,9 @@ var ResidualOverrides = map[string][]string{
 	// entry exists because the coverage test requires one per residual name;
 	// it can never match.
 	"UnicodeBOM": {"\ufeff"},
-	// VKUserVideos claims only vk.com/video paths; the rest of the social
-	// network — profiles, photos, docs — stays on the plain lane.
-	"VKUserVideos":  {"vk.com/video", "vkvideo.ru"},
+	// VKUserVideos claims only vk.com/video/ paths upstream; the rest of the
+	// social network — profiles, photos, docs — stays on the plain lane.
+	"VKUserVideos":  {"vk.com/video/", "vkvideo.ru"},
 	"Vevo":          {"vevo.com"},
 	"Vimeo":         {"vimeo.com"},
 	"VimeoGroups":   {"vimeo.com"},
