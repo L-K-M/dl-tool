@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T095 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | deferred — see the open Blocked record dated 2026-09-25 |
 | **Depends on** | T007, T013, T094 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
@@ -176,4 +176,52 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+### 2026-09-25 — the always-on host allowlist breaks 18 merged tests outside the Files table
+
+Step 7 mounts `HostAllowlist(cfg.AllowedHosts, log)` outermost on the base sub-router, and the
+interface contract makes the check unconditional: "There is no switch that turns it off", and nil
+`extra` "makes every reverse-proxied hostname answer 421". Verified against this tree with the
+middleware written exactly as the contract specifies — `AllowedHost` accepting `localhost`,
+`localhost.` and literal IPs, `extra` exact-matching — and mounted on `base` ahead of
+`SecurityHeaders`: every test that drives `server.Router` or `server.Base` through
+`httptest.NewRequest` — whose default `Host` is `example.com`, a DNS name that is neither
+implicitly allowed nor configured — now fails on the 421 instead of its own assertion:
+
+```text
+--- FAIL: TestSessionCookiesThroughRoot
+    auth_test.go:763: /auth/setup: status 421:
+    {"type":"/problems/validation-failed","title":"Misdirected Request","status":421,
+     "detail":"the request host \"example.com\" is not an allowed name"}
+```
+
+The full fallout of `go test ./internal/api/... ./internal/obs/...` with the middleware mounted is:
+
+- `internal/api/auth_test.go`: `TestSessionCookiesThroughRoot`, `TestBaseRoutesStayAnonymous` —
+  real-store builds that drive `server.Router`.
+- `internal/api/server_test.go`: `TestOpenAPIMatchesCommittedDocument`, `TestCDNBackedDocsAreDisabled`,
+  `TestBasePathMountsEverything`, `TestUnknownRouteIsProblemJSON`, `TestHumaErrorsCarryRegistrySlug`,
+  `TestValidationErrorsDoNotEchoCredentials`, `TestRealIPHonoursTrustedProxies`,
+  `TestPanicIsLoggedAndConforming`, `TestRecovererRepanicsAbortHandler` — nil-db router tests
+  through the `do()` helper and two direct `httptest.NewRequest` call sites.
+- `internal/api/static_test.go`: `TestBaseHrefInjected`, `TestSPAFallbackInsideBase`,
+  `TestAPIRouteNotShadowed`, `TestSPAMethodNotAllowed`, `TestReservedNamespacesStay404` — all reach
+  the SPA through `do()`, so they need no edit once the helper carries an allowed `Host`.
+- `internal/obs/health_test.go`: `TestHealthEndpointsRequireNoCredential`,
+  `TestMetricsNotOnMainListener` — the `doMainRouterRequest` helper drives the base router's
+  `/healthz`, `/readyz` and `/metrics` probes, which the allowlist also covers by design.
+
+The fixes are test-only — give each router-driving request an allowed `Host` (e.g. `localhost`) —
+but none of the four files appears in this task's `## Files` table and hard rule 1 forbids touching
+them. Neither alternative satisfies the contract: gating the middleware on `db != nil` (the
+auth-middleware precedent) weakens "no switch turns it off" for a build the plan otherwise treats as
+production-shaped, and still fails the two real-db auth tests; letting `example.com` through invents
+an implicit name doc 12 §6.5 does not allow.
+
+**Remedy:** a contract repair of the class of `1c71587` ("Repair the T091 Files table"): extend this
+file's `## Files` table with `internal/api/server_test.go`, `internal/api/auth_test.go` and
+`internal/obs/health_test.go` — the three files whose request construction must carry an allowed
+`Host` — and keep the middleware unconditional. `internal/api/static_test.go` needs no table row:
+it only calls `do()` (verified as of the 2026-09-25 block record — no direct
+`httptest.NewRequest`/`http.Request` construction in the file). The file that should answer the question "may tests set Host to satisfy an
+always-on allowlist" is this task file's Files table.
