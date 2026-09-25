@@ -218,7 +218,7 @@ The yt-dlp engine, the release hardening of the image and the compose stack, the
 | [T089](T089-ytdlp-progress-and-exit-codes.md) | Parse yt-dlp progress lines and exit codes | T087 | done |
 | [T090](T090-ytdlp-engine-registration.md) | Register the yt-dlp engine and run the contract suite | T028, T089 | done |
 | [T093](T093-harden-runtime-image.md) | Harden the runtime image for a multi-arch release | T124 | done |
-| [T094](T094-harden-compose-and-release-verification.md) | Harden the compose stack and document release verification | T093, T125 | todo |
+| [T094](T094-harden-compose-and-release-verification.md) | Harden the compose stack and document release verification | T093, T125 | deferred |
 | [T095](T095-proxy-hardening-and-headers.md) | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | todo |
 | [T096](T096-log-redaction-and-system-logs.md) | Redact secrets in logs and serve the system log | T004, T010, T024, T092 | todo |
 | [T097](T097-release-pipeline-and-pin-bump.md) | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | todo |
@@ -424,7 +424,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T089 | Parse yt-dlp progress lines and exit codes | T087 | yes | done | [T089](T089-ytdlp-progress-and-exit-codes.md) |
 | T090 | Register the yt-dlp engine and run the contract suite | T028, T089 | no | done | [T090](T090-ytdlp-engine-registration.md) |
 | T093 | Harden the runtime image for a multi-arch release | T124 | yes | done | [T093](T093-harden-runtime-image.md) |
-| T094 | Harden the compose stack and document release verification | T093, T125 | no | todo | [T094](T094-harden-compose-and-release-verification.md) |
+| T094 | Harden the compose stack and document release verification | T093, T125 | no | deferred | [T094](T094-harden-compose-and-release-verification.md) |
 | T095 | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | no | todo | [T095](T095-proxy-hardening-and-headers.md) |
 | T096 | Redact secrets in logs and serve the system log | T004, T010, T024, T092 | no | todo | [T096](T096-log-redaction-and-system-logs.md) |
 | T097 | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | yes | todo | [T097](T097-release-pipeline-and-pin-bump.md) |

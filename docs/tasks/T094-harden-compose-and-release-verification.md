@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T094 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | deferred — see the open `## Blocked — 2026-09-25` record |
 | **Depends on** | T093, T125 |
 | **Blocks** | T095, T097, T115 |
 | **Parallel-safe** | no — it edits `compose.yaml`, `.env.example` and `README.md` |
@@ -194,4 +194,67 @@ appear; add it to `.gitignore` only if T125 did not.
 <Agent pastes command output here before marking done.>
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+
+### 2026-09-25 — the contract quotes a `gluetun` service doc 10 §2 deliberately rewrote
+
+The `## Interface contract` and steps 1–2 transcribe
+[`docs/10-deployment-and-compose.md`](../10-deployment-and-compose.md#2-composeyaml) §2 as of
+2026-09-01 (this file's last edit). Two commits on 2026-09-02 rewrote that service on purpose:
+
+- `3de51b7` removed `env_file: [.env]` — it handed the VPN container the qBittorrent password and
+  the aria2 RPC secret it has no use for — and moved `WIREGUARD_PRIVATE_KEY`/`WIREGUARD_ADDRESSES`
+  into Compose named secrets mounted `0400` behind the `*_SECRETFILE` variables. The merged §2
+  service names every VPN variable explicitly and needs two top-level `secrets:` entries
+  (`wireguard_private_key`, `wireguard_addresses`) the contract block does not mention.
+- `36f3af6` replaced `VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER:?required for the vpn
+  profile}"` with the `:-` form, and §2 now carries a comment recording why: Compose interpolates
+  every service before it filters by profile, so a `:?` in the inactive `vpn` profile fails a
+  core-only `up` from a fresh `.env`.
+
+Verified on this commit with Docker Compose v5.5.1 — the contract's literal block appended to the
+merged `compose.yaml`, `.env` a fresh copy of `.env.example` (`VPN_SERVICE_PROVIDER` empty):
+
+```bash
+docker compose -f compose.yaml config -q
+#   error while interpolating services.gluetun.environment.VPN_SERVICE_PROVIDER:
+#   required variable VPN_SERVICE_PROVIDER is missing a value: required for the vpn profile
+#   (exit 1 — with NO profile selected)
+```
+
+So the task as written is unsatisfiable:
+
+- The `:?` form step 2 mandates — and which the third acceptance criterion requires
+  (`COMPOSE_PROFILES=vpn docker compose config` fails with `required for the vpn profile`) —
+  makes plain `docker compose -f compose.yaml config -q` fail for every operator whose `.env`
+  leaves `VPN_SERVICE_PROVIDER` empty: every fresh core-only install. `make compose-check` would
+  pass only inside the Verification block's own `VPN_SERVICE_PROVIDER=checkonly` override.
+- The `env_file: [.env]` the contract dictates reintroduces the credential leak `3de51b7` removed.
+- Following doc 10 §2 instead (explicit variables, `:-`, mounted secrets) leaves the named-error
+  criterion unmeetable: `:?` anywhere in the file rejects the inactive profile too, and Compose
+  has no profile-scoped interpolation.
+
+The §6 `.env.example` quote is stale the same way: it lacks `SERVER_COUNTRIES=`, which the merged
+block carries between `WIREGUARD_ADDRESSES` and `OPENVPN_USER`.
+
+Whichever version is implemented, the diff overrides a documented requirement — doc 10 §2's
+deliberate design, or this file's step 2 and acceptance criterion. That is the IMPLEMENTING.md
+stop case.
+
+#### Remedy
+
+Repair the contract against merged doc 10, the way #288 repaired the T078/T120 contracts:
+
+- Quote §2's current `gluetun` verbatim — explicit VPN variables, the two `*_SECRETFILE` vars, the
+  service `secrets:` list, `:-` for the provider — and extend step 1 to also append
+  `wireguard_private_key` and `wireguard_addresses` to the top-level `secrets:` block.
+- Quote §6's current `.env.example` block including `SERVER_COUNTRIES=`.
+- Replace the named-error acceptance criterion with the guarantee the design now makes —
+  `COMPOSE_PROFILES=vpn docker compose config` succeeds with `VPN_SERVICE_PROVIDER` empty, and
+  gluetun refuses to start without a provider under that profile (§2's comment) — since
+  config-time rejection of an inactive profile is not expressible in Compose.
+- Drop step 2's `:?` instruction; §2's comment is the design.
+
+Status set to `deferred` here and in both index rows: T094 heads the eligible todo set, so leaving
+it `todo` would re-select it on every iteration. T094 blocks T095, T097 and T115, so the deferral
+stalls them until the repair lands — unavoidable: either implementable version merges a
+known-wrong stack.
