@@ -374,5 +374,11 @@ Applied:
 including `internal/api` 206.835s and `internal/obs` 1.262s with `TestRedactURLValueAndTypedNil`
 passing.
 
+### Review round 3 (PR #295, GLM 5.3 on `ef29376`)
+
+One minor: the non-mutation check in `TestRedactNestedContainer` only asserted `Authorization`; it now
+also asserts `Referer`, the entry whose redacted form differs from its input. `go test` re-run: all
+obs tests pass.
+
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>

@@ -261,7 +261,10 @@ func TestRedactNestedContainer(t *testing.T) {
 	if s, _ := chain[0].(string); strings.Contains(s, "zzz") {
 		t.Errorf("slice string kept its passkey: %q", s)
 	}
-	if sent["Authorization"] != "Bearer live-credential" {
+	// The caller's map must be untouched — Referer is the entry whose
+	// redacted form differs from its input, so an in-place mutation shows.
+	if sent["Referer"] != "https://indexer.example.org/api?token=abc123" ||
+		sent["Authorization"] != "Bearer live-credential" {
 		t.Errorf("redaction mutated the caller-owned map: %v", sent)
 	}
 }
