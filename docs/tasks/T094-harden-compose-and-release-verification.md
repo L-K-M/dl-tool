@@ -177,7 +177,9 @@ docker buildx imagetools inspect ghcr.io/l-k-m/dl-tool:1.0.0   # lists both plat
 5. Create `deploy/unraid/dl-tool.xml` as above and carry the `UNVERIFIED` note forward into the file as an
    XML comment.
 6. Edit `README.md`: rename `## Quickstart (once it exists)` to `## Quickstart`, keep the three-command
-   sequence and the "no default credentials" sentence, and add the two verification commands above under it.
+   sequence and the "no default credentials" sentence, add the two verification commands above under it,
+   and state the prerequisites line: Docker Compose v2.24 or newer — the top-level `secrets:` block uses
+   the `environment:` source, which landed in v2.24.0.
 7. Edit the README status banner so it no longer claims the repository contains no runnable code, and leave
    the "On content" section — zero piracy indexers, no telemetry, no phone-home update check — untouched.
 8. Start the stack, exercise the UI for five minutes with outbound traffic captured, and confirm the only
@@ -192,8 +194,8 @@ docker buildx imagetools inspect ghcr.io/l-k-m/dl-tool:1.0.0   # lists both plat
   start, not Compose's at config time.
 - [ ] Under `COMPOSE_PROFILES=vpn`, the rendered `gluetun` service has no `env_file`, sets
   `WIREGUARD_PRIVATE_KEY_SECRETFILE` and `WIREGUARD_ADDRESSES_SECRETFILE`, and the rendered top-level
-  `secrets:` block carries `wireguard_private_key` and `wireguard_addresses` (Compose prunes them from
-  the render when the profile is inactive).
+  `secrets:` block carries `wireguard_private_key` and `wireguard_addresses` (Compose v5.5.1 prunes
+  unreferenced secrets from the render when the profile is inactive).
 - [ ] `docker compose config` still emits no `version` warning and publishes no engine WebUI or RPC port.
 - [ ] `.env.example` contains no secret value, only empty assignments, `wireguard`, `off` and comments.
 - [ ] A five-minute capture shows no request to any host the operator did not configure.
