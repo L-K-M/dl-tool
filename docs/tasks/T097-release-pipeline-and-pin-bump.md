@@ -154,12 +154,19 @@ The `Releasing` section added to `CONTRIBUTING.md`, as a checklist:
 - [ ] `CONTRIBUTING.md` carries the ten-step v1.0.0 checklist including the `cosign verify` command.
 
 ## Verification
-Run exactly this. Paste the output under "Evidence".
+Run exactly this. Paste the output under "Evidence". The two `docker` lines create the
+attestation-capable builder first: the stock runner's default `docker` driver cannot emit
+`--provenance`/`--sbom` attestations (`Attestation is not supported for the docker driver`), so the
+dry run needs a `docker-container` builder plus `arm64` binfmt — the same prelude T093's Verification
+block already runs on the same runner image.
 ```bash
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+docker buildx create --name t097 --driver docker-container --use --bootstrap
 make doclint && docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max --sbom=true --output=type=cacheonly -f Dockerfile . && echo RELEASE_DRYRUN_OK
 ```
-Expected: `doclint` prints nothing; buildx reports both `linux/amd64` and `linux/arm64` stages completing
-and no error; the final line of stdout is exactly `RELEASE_DRYRUN_OK`.
+Expected: binfmt registers `arm64` and the `t097` builder bootstraps; `doclint` exits 0; buildx
+reports both `linux/amd64` and `linux/arm64` stages completing and no error; the final line of stdout
+is exactly `RELEASE_DRYRUN_OK`.
 
 Also confirm scope:
 ```bash
