@@ -45,7 +45,10 @@ jobs:
             -e "s|^ARG YTDLP_SHA256_ARM64=.*|ARG YTDLP_SHA256_ARM64=\"${ARM64}\"|" \
             Dockerfile
       - name: Smoke-test the pinned build
-        run: docker build --build-arg TARGETARCH=amd64 --target ytdlp -t ytdlp-pin-check .
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --name ytdlp-pin-smoke --driver docker-container --use --bootstrap
+          docker buildx build --platform linux/amd64,linux/arm64 --target ytdlp --output=type=cacheonly .
       - name: Open a pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1   # v8.1.1
         with:
