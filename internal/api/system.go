@@ -5,7 +5,11 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"runtime"
@@ -17,6 +21,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/L-K-M/dl-tool/internal/engine"
+	"github.com/L-K-M/dl-tool/internal/obs"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
@@ -79,6 +84,64 @@ type (
 		Failed  int `json:"failed"`
 	}
 )
+
+// SystemLogsInput is the query of GET /system/logs: the level floor, the
+// optional since bound and the cursor pagination envelope of doc 05
+// sections 1.4 and 13.
+type SystemLogsInput struct {
+	Level  string `query:"level"  enum:"debug,info,warn,error" default:"info" doc:"Minimum level of the returned records"`
+	Since  string `query:"since"  doc:"RFC 3339 instant; only records at or after it are returned"`
+	Limit  int    `query:"limit"  minimum:"1" maximum:"500"   default:"100"  doc:"Page size"`
+	Cursor string `query:"cursor" doc:"Opaque page token from a previous response"`
+}
+
+// SystemLogsOutput is the cursor pagination envelope of doc 05 section
+// 1.4 carrying obs.Record rows — already redacted before they were
+// stored, so the page shows exactly what stdout and the log file hold.
+type SystemLogsOutput struct {
+	Body struct {
+		Items      []obs.Record `json:"items"       doc:"Log records, newest first"`
+		NextCursor *string      `json:"next_cursor" doc:"Token for the next page; null on the last page"`
+		Total      int          `json:"total"       doc:"Records matching level and since, ignoring the cursor"`
+	}
+}
+
+// logCursor is the page token of GET /system/logs: base64 JSON carrying
+// the At of the previous page's last record — the same envelope shape the
+// store's task-event cursor uses (docs/05-api-contract.md section 1.4).
+type logCursor struct {
+	At string `json:"at"`
+}
+
+// encodeLogCursor renders a page token for GET /system/logs.
+func encodeLogCursor(at time.Time) (string, error) {
+	encoded, err := json.Marshal(logCursor{At: at.UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		return "", fmt.Errorf("marshal log cursor: %w", err)
+	}
+
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+// decodeLogCursor parses a page token. A token that is not base64 JSON of
+// the cursor shape, or carries an unreadable At, belongs to no page —
+// the wire outcome is the same 422 as any other stale cursor.
+func decodeLogCursor(token string) (time.Time, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return time.Time{}, errors.New("token is not valid base64")
+	}
+	var cursor logCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil {
+		return time.Time{}, errors.New("token is not a page cursor")
+	}
+	at, err := time.Parse(time.RFC3339Nano, cursor.At)
+	if err != nil {
+		return time.Time{}, errors.New("token carries no record instant")
+	}
+
+	return at, nil
+}
 
 // SystemInfoOutput is the GET /system/info body: the twelve members of
 // doc 05 section 13, no others.
@@ -148,6 +211,10 @@ type SystemHandlers struct {
 	dbPath   string
 	settings *store.SettingsStore
 	engines  *engine.Registry
+
+	// logs is the process log recorder GET /system/logs reads, attached
+	// by NewServer through attachLogs.
+	logs *obs.Recorder
 }
 
 // NewSystemHandlers takes the one MaintenanceStore and the backup directory —
@@ -164,6 +231,19 @@ func (h *SystemHandlers) attachInfo(db *sqlx.DB, dbPath string, engines *engine.
 	h.dbPath = dbPath
 	h.settings = store.NewSettingsStore(db)
 	h.engines = engines
+}
+
+// attachLogs wires the recorder GET /system/logs reads. The process
+// logger's own handler is the *obs.Recorder obs.NewLogger installed; a
+// logger built any other way — a unit test's io.Discard logger — leaves
+// the recorder nil and the operation serves an empty page.
+func (h *SystemHandlers) attachLogs(log *slog.Logger) {
+	if log == nil {
+		return
+	}
+	if recorder, ok := log.Handler().(*obs.Recorder); ok {
+		h.logs = recorder
+	}
 }
 
 // CreateBackup runs VACUUM INTO into the backup directory and prunes to the
@@ -294,6 +374,89 @@ func (h *SystemHandlers) GetSystemInfo(ctx context.Context, _ *struct{}) (*Syste
 	}
 
 	return output, nil
+}
+
+// systemLogLevel maps the level query's enum to its slog floor; the enum
+// tag already rejected anything else, and the absent case carries huma's
+// info default.
+func systemLogLevel(name string) slog.Level {
+	switch name {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// GetSystemLogs serves GET /system/logs (doc 05 section 13): one
+// cursor-paginated page of the process log recorder, newest first. Every
+// record was redacted before it was stored, so no value on the page can
+// carry a secret. A malformed since or a cursor this endpoint never
+// issued is 422 /problems/validation-failed; on a nil-recorder build —
+// a logger not built by obs.NewLogger — the page is empty rather than an
+// error.
+func (h *SystemHandlers) GetSystemLogs(ctx context.Context, in *SystemLogsInput) (*SystemLogsOutput, error) {
+	var after time.Time
+	if in.Since != "" {
+		parsed, err := time.Parse(time.RFC3339, in.Since)
+		if err != nil {
+			return nil, invalidParameter("since", "is not an RFC 3339 instant")
+		}
+		after = parsed
+	}
+
+	var cursor time.Time
+	if in.Cursor != "" {
+		parsed, err := decodeLogCursor(in.Cursor)
+		if err != nil {
+			return nil, invalidParameter("cursor", staleCursorDetail)
+		}
+		cursor = parsed
+	}
+
+	output := &SystemLogsOutput{}
+	output.Body.Items = []obs.Record{}
+	if h.logs == nil {
+		return output, nil
+	}
+
+	level := systemLogLevel(in.Level)
+	// Page is one locked pass, so items and total describe the same ring
+	// snapshot even while the process logger keeps writing.
+	records, next, total := h.logs.Page(level, after, cursor, in.Limit)
+	if len(records) > 0 {
+		output.Body.Items = records
+	}
+	output.Body.Total = total
+
+	if !next.IsZero() {
+		token, err := encodeLogCursor(next)
+		if err != nil {
+			return nil, internalFailure(ctx, "encode log cursor", err)
+		}
+		output.Body.NextCursor = &token
+	}
+
+	return output, nil
+}
+
+// invalidParameter is the 422 a bad query parameter answers with, the
+// huma-generated shape mirrored for values the handler parses itself.
+func invalidParameter(name, detail string) error {
+	return &huma.ErrorModel{
+		Type:   SlugValidationFailed,
+		Title:  http.StatusText(http.StatusUnprocessableEntity),
+		Status: http.StatusUnprocessableEntity,
+		Detail: detail,
+		Errors: []*huma.ErrorDetail{{
+			Message:  detail,
+			Location: "query." + name,
+		}},
+	}
 }
 
 // Register mounts POST /system/backup and GET /system/info on the Huma

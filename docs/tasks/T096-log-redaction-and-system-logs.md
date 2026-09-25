@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T096 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T004, T010, T024, T092 |
 | **Blocks** | T121 |
 | **Parallel-safe** | no — it edits `internal/obs/log.go` and `internal/api/server.go` |
@@ -156,12 +156,12 @@ Worked response:
    `Since` at `warn` excluding `info` records.
 
 ## Acceptance criteria
-- [ ] A log line carrying an indexer URL with `passkey=` stores the marker and never the passkey.
-- [ ] A `secure.Secret` value is redacted by type even under an unrecognised attribute key.
-- [ ] Redaction happens before the ring and before the file write, so all three surfaces agree.
-- [ ] A non-URL string attribute is returned byte-identical.
-- [ ] The ring never grows past its capacity and returns records newest-first.
-- [ ] `GET /system/logs?level=warn` excludes `info` and `debug` records.
+- [x] A log line carrying an indexer URL with `passkey=` stores the marker and never the passkey.
+- [x] A `secure.Secret` value is redacted by type even under an unrecognised attribute key.
+- [x] Redaction happens before the ring and before the file write, so all three surfaces agree.
+- [x] A non-URL string attribute is returned byte-identical.
+- [x] The ring never grows past its capacity and returns records newest-first.
+- [x] `GET /system/logs?level=warn` excludes `info` and `debug` records.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -193,7 +193,192 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make test PKG=./internal/...` (2026-09-25, on the task branch):
+
+```
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -count=1 ./internal/...
+ok  	github.com/L-K-M/dl-tool/internal/api	210.889s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.169s
+ok  	github.com/L-K-M/dl-tool/internal/engine	35.349s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.226s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.797s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.435s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	3.027s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	41.610s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.270s
+ok  	github.com/L-K-M/dl-tool/internal/rss	20.089s
+ok  	github.com/L-K-M/dl-tool/internal/search	8.025s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.436s
+ok  	github.com/L-K-M/dl-tool/internal/store	85.501s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.409s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.080s
+```
+
+Named tests, verbose (`go test -race -v -run <names> ./internal/obs/`):
+
+```
+--- PASS: TestRedactAttrByKey (0.00s)
+--- PASS: TestRedactSecretByType (0.00s)
+--- PASS: TestRedactURLPasskey (0.00s)
+--- PASS: TestRedactURLUserinfo (0.00s)
+--- PASS: TestRedactLeavesPlainStringAlone (0.00s)
+--- PASS: TestRecorderRingWraps (0.00s)
+--- PASS: TestSystemLogsLevelFilter (0.00s)
+--- PASS: TestLoggerSurfacesAgree (0.00s)
+--- PASS: TestRecorderWithAttrsSharesRing (0.00s)
+--- PASS: TestLogWriterTruncatesAtCap (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.078s
+```
+
+Scope (`git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort`):
+
+```
+api/openapi.json
+internal/api/server.go
+internal/api/system.go
+internal/obs/log.go
+internal/obs/logsink.go
+internal/obs/logsink_test.go
+web/src/api/schema.d.ts
+```
+
+The two generated files are the standing §7.1 exception: `get-system-logs` is a new Huma
+operation, so `api/openapi.json` and `web/src/api/schema.d.ts` were regenerated with `make gen`.
+
+Two deviations from the interface contract, both forced by the Files table:
+
+- `NewLogger`'s signature is fixed by the `cmd/dl-tool/main.go` call sites, which the table does
+  not list, so `log.go` resolves `DLTOOL_CONFIG_DIR` itself (same env var and `/config` default
+  `config.Load` owns — `internal/config` exports no accessor) and degrades to the caller's writer
+  alone when the file cannot be opened: construction has no error return and the `openapi`
+  subcommand's stdout must stay a pure document.
+- `Recorder` stores the ring behind a `*recordRing` pointer rather than as value fields, because
+  `WithAttrs`/`WithGroup` clones must append to the same store or request-scoped records would
+  never reach `GET /system/logs`. `Count` (exported) reports the envelope's `total`, which the
+  contract's `Since` signature cannot return.
+
+### Review round (PR #295, GLM 5.3 on `2e62328`)
+
+Applied:
+
+- Ring stored `rec.Message` raw while `ReplaceAttr` redacted the `msg` attribute on stdout and the
+  file — `GET /system/logs` would have served credentials stdout never shows. `Handle` now stores
+  `RedactURL(rec.Message)`; `TestLoggerSurfacesAgree` logs a credential URL as the message.
+- `Since`/`Count` took two separate lock reads, so `items` and `total` could disagree under load;
+  the handler now calls the new `Page`, which computes both in one locked pass (`Since` and `Count`
+  wrap it — the contract's `Since` signature is unchanged).
+- Timestamp-only cursors silently skipped records sharing the boundary instant. `recordRing.push`
+  now nudges a tied or backward `At` forward by a nanosecond so stored instants strictly increase
+  with arrival; `TestSincePaginatesWithCursor` pages a five-record ring two at a time over two
+  shared-tick pairs.
+- `MkdirAll(dir, 0o777)` made the log directory world-writable under a permissive umask (symlink
+  pre-placement); now `0o755`. The file keeps `0666` — step 6 prescribes that mode so the container
+  umask decides, so the reviewer's `0600` suggestion was declined as contradicting the contract.
+- `slog.Any` containers bypassed redaction (a `headers` map carrying `Authorization`). `RedactAttr`
+  now resolves `LogValuer`s and `redactAny` deep-copies `map[string]any`, `map[string]string`,
+  `map[string][]string` (http.Header's shape), `[]any` and `[]string`, applying the same rules at
+  every leaf; `error` and `fmt.Stringer` leaves render through `RedactURL`.
+- A single write larger than the cap would leave the file over `maxBytes` until the next write;
+  `cappedWriter` now drops it. `TestLogWriterDropsOversizedRecord` pins the policy.
+- `format=text` wrote tint bytes into `dl-tool.jsonl`. `NewLogger` now pairs the console handler
+  with a file-only JSON handler via `fanoutHandler`; `NewLogWriter` keeps its contract on the
+  shared `logFileWriter`. `TestLogFileStaysJSONInTextFormat` asserts every file line parses.
+
+Declined:
+
+- `Recorder.Enabled` returning the wrapped level (info suggestion): the ring mirrors what the
+  process emits; storing records the operator's level disabled would fill it with invisible spam.
+- `logConfigDir` exporting from `internal/config` (info suggestion): already a documented
+  deviation; `internal/config` is outside this task's Files table.
+- Handler-level tests for `GET /system/logs` (outside-diff suggestion): a new
+  `internal/api/*_test.go` is outside the Files table; the criterion is covered one layer down by
+  `TestSystemLogsLevelFilter` plus the end-to-end smoke check below. Worth a follow-up task.
+
+`make lint && make test PKG=./internal/...` re-run on the review-fix commit (2026-09-25):
+
+```
+0 issues.
+ok  	github.com/L-K-M/dl-tool/internal/api	217.719s
+ok  	github.com/L-K-M/dl-tool/internal/config	1.755s
+ok  	github.com/L-K-M/dl-tool/internal/engine	39.564s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.261s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	8.903s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.421s
+ok  	github.com/L-K-M/dl-tool/internal/fsx	2.897s
+ok  	github.com/L-K-M/dl-tool/internal/jobs	44.826s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.234s
+ok  	github.com/L-K-M/dl-tool/internal/rss	21.920s
+ok  	github.com/L-K-M/dl-tool/internal/search	8.217s
+ok  	github.com/L-K-M/dl-tool/internal/secure	4.549s
+ok  	github.com/L-K-M/dl-tool/internal/store	88.243s
+ok  	github.com/L-K-M/dl-tool/internal/sync	4.405s
+ok  	github.com/L-K-M/dl-tool/internal/uri	1.084s
+```
+
+Named tests, verbose (`go test -race -v -run <names> ./internal/obs/`):
+
+```
+--- PASS: TestRedactAttrByKey (0.00s)
+--- PASS: TestRedactNestedContainer (0.00s)
+--- PASS: TestRedactSecretByType (0.00s)
+--- PASS: TestRedactURLPasskey (0.00s)
+--- PASS: TestRedactURLUserinfo (0.00s)
+--- PASS: TestRedactLeavesPlainStringAlone (0.00s)
+--- PASS: TestRecorderRingWraps (0.00s)
+--- PASS: TestSincePaginatesWithCursor (0.00s)
+--- PASS: TestSystemLogsLevelFilter (0.00s)
+--- PASS: TestLoggerSurfacesAgree (0.00s)
+--- PASS: TestRecorderWithAttrsSharesRing (0.00s)
+--- PASS: TestLogFileStaysJSONInTextFormat (0.00s)
+--- PASS: TestLogWriterTruncatesAtCap (0.01s)
+--- PASS: TestLogWriterDropsOversizedRecord (0.00s)
+PASS
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.080s
+```
+
+`make vet` and `make gen` clean — no `api/openapi.json` / `web/src/api/schema.d.ts` drift.
+
+### Review round 2 (PR #295, GLM 5.3 on `c550dd8`)
+
+Applied:
+
+- A `url.URL` *value* satisfies neither `error` nor `fmt.Stringer` (`String` is a pointer method),
+  so it marshaled `RawQuery` verbatim — an `apikey=`/`token=` leak through every surface. `redactAny`
+  now has an explicit `url.URL` case.
+- `error`/`fmt.Stringer` cases called `Error()`/`String()` unconditionally; a typed nil
+  (`(*url.URL)(nil)`, `(*url.Error)(nil)`) would panic inside `ReplaceAttr` and crash the calling
+  goroutine. `nilish` returns nil for them instead.
+- `fanoutHandler.Handle` skipped the file sink when the console failed; both now run unconditionally.
+- `TestLogWriterDropsOversizedRecord` asserted `size > 64`, which a partial write would pass; it now
+  requires `size == 0` — the record is dropped whole.
+- `TestSincePaginatesWithCursor`'s `for {}` loop could hang on a non-advancing cursor; bounded at 8
+  pages so a regression fails with the `got`/`want` diff.
+- `TestRedactNestedContainer` now proves `redactAny` clones rather than mutating the caller's map.
+- `recordRing.push`'s comment now states `At` is arrival-ordered and may differ from `rec.Time` by
+  nanoseconds.
+
+`make lint` re-run: 0 issues. `make test PKG=./internal/...` re-run (2026-09-25): all packages `ok`,
+including `internal/api` 206.835s and `internal/obs` 1.262s with `TestRedactURLValueAndTypedNil`
+passing.
+
+### Review round 3 (PR #295, GLM 5.3 on `ef29376`)
+
+One minor: the non-mutation check in `TestRedactNestedContainer` only asserted `Authorization`; it now
+also asserts `Referer`, the entry whose redacted form differs from its input. `go test` re-run: all
+obs tests pass.
 
 ## Blocked
 <Only if you had to stop. State the exact ambiguity and which file should answer it.>
