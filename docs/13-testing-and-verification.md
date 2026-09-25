@@ -311,6 +311,10 @@ writes are permitted.
 
 ## 7. CI
 
+CI and documentation lint run on all pull requests, pushes to `main`, and
+all tag pushes. Other branch pushes rely on their PR checks, avoiding a
+duplicate run for each PR update. Task verification retains its own triggers.
+
 | Workflow | Job | Runs | Blocking |
 |---|---|---|---|
 | `.github/workflows/ci.yml` | `lint` | `make lint`, `make vet`, `make typecheck` | yes |
@@ -382,7 +386,7 @@ and it licenses no other change to either file.
 
 ### 7.2 Gate 2 — the plan cannot rot
 
-`make doclint` runs `scripts/doclint.sh` (§8) on every push and pull request. It fails on a clarification left
+`make doclint` runs `scripts/doclint.sh` (§8) on the events defined in [§7](#7-ci). It fails on a clarification left
 outside `## Open questions`, a task file missing a mandatory section, hedging, or a broken relative link.
 
 ## 8. `scripts/doclint.sh`

@@ -226,6 +226,7 @@ The yt-dlp engine, the release hardening of the image and the compose stack, the
 | [T113](T113-ytdlp-pin-and-capability-probe.md) | Enforce the yt-dlp pin and probe the runtime at boot | T090, T093, T097 | todo |
 | [T115](T115-aria2-image-build-and-publish.md) | Build and publish the aria2 image | T093, T094, T097 | todo |
 | [T121](T121-advanced-settings-and-log-viewer.md) | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | todo |
+| [T133](T133-ci-event-dedup.md) | Streamline independent PR verification | T002 | done |
 
 ## Deferral register
 A `should` or `could` requirement may be deferred only by adding a row here, naming the requirement, the
@@ -432,6 +433,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T113 | Enforce the yt-dlp pin and probe the runtime at boot | T090, T093, T097 | no | todo | [T113](T113-ytdlp-pin-and-capability-probe.md) |
 | T115 | Build and publish the aria2 image | T093, T094, T097 | no | todo | [T115](T115-aria2-image-build-and-publish.md) |
 | T121 | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | no | todo | [T121](T121-advanced-settings-and-log-viewer.md) |
+| T133 | Streamline independent PR verification | T002 | no | done | [T133](T133-ci-event-dedup.md) |
 
 ## Decisions referenced
 | ADR | Decision |
