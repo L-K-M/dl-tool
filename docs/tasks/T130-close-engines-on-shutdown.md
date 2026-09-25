@@ -134,22 +134,24 @@ ran:
 ```
 
 Step 3 onward, the task's Verification block (`make lint && make vet && make test PKG=./cmd/... &&
-make test PKG=./internal/engine/...`):
+make test PKG=./internal/engine/...`), run after the review fixups — idempotent `CloseAll`
+(`TestCloseAllTwiceClosesEachEngineOnce`), HTTP-timeout force-close escalation — and after merging
+origin/main (PR #303):
 
 ```
 test -z "$(gofmt -l cmd internal)"          # clean
 golangci-lint run ./...
 0 issues.
-go vet ./...                                # clean
+cd web && npm run lint                       # clean
+cd web && npx prettier --check .             # clean
+go vet ./...                                 # clean
 go test -race -count=1 ./cmd/...
-ok  	github.com/L-K-M/dl-tool/cmd/dl-tool	2.351s
+ok  	github.com/L-K-M/dl-tool/cmd/dl-tool	2.230s
 go test -race -count=1 ./internal/engine/...
-ok  	github.com/L-K-M/dl-tool/internal/engine	33.420s
-ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.294s
-ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.064s
-ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.384s
+ok  	github.com/L-K-M/dl-tool/internal/engine	33.438s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.222s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.149s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	1.383s
 ```
 
-`make lint` additionally runs `cd web && npm run lint`, which cannot run in this worktree —
-`web/node_modules` is not installed (`eslint: not found`). The web side was untouched by this task.
-A full `go test ./...` across all packages also passed (all `ok`, no `FAIL`, no `DATA RACE`).
+A full `go test ./...` across all packages and `npx vitest run` (26 files, 311 tests) also passed.

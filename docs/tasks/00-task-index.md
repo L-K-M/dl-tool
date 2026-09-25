@@ -219,13 +219,14 @@ The yt-dlp engine, the release hardening of the image and the compose stack, the
 | [T090](T090-ytdlp-engine-registration.md) | Register the yt-dlp engine and run the contract suite | T028, T089 | done |
 | [T093](T093-harden-runtime-image.md) | Harden the runtime image for a multi-arch release | T124 | done |
 | [T094](T094-harden-compose-and-release-verification.md) | Harden the compose stack and document release verification | T093, T125 | done |
-| [T095](T095-proxy-hardening-and-headers.md) | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | deferred |
+| [T095](T095-proxy-hardening-and-headers.md) | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | todo |
 | [T096](T096-log-redaction-and-system-logs.md) | Redact secrets in logs and serve the system log | T004, T010, T024, T092 | done |
 | [T097](T097-release-pipeline-and-pin-bump.md) | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | done |
 | [T113](T113-ytdlp-pin-and-capability-probe.md) | Enforce the yt-dlp pin and probe the runtime at boot | T090, T093, T097 | todo |
 | [T115](T115-aria2-image-build-and-publish.md) | Build and publish the aria2 image | T093, T094, T097 | todo |
 | [T121](T121-advanced-settings-and-log-viewer.md) | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | todo |
 | [T130](T130-close-engines-on-shutdown.md) | Close registered engines before the database at shutdown | T090 | done |
+| [T133](T133-ci-event-dedup.md) | Streamline independent PR verification | T002 | done |
 
 ## Deferral register
 A `should` or `could` requirement may be deferred only by adding a row here, naming the requirement, the
@@ -248,7 +249,7 @@ reason and the task that will carry it.
 Task identifiers **T098–T129** are overflow numbers allocated after the original ranges were set. They
 belong to earlier milestones than their number suggests — T098, T099 and T126–T128 are M1, T100 and T101 are M2,
 T103 and T104 are M3, T105, T116, T122, T123 and T129 are M4, T106–T111 and T117–T120 are M6,
-T113, T115, T121 and T130 are M7, and T124 and T125 are M0. A dependency on a numerically higher identifier is
+T113, T115, T121, T130 and T133 are M7, and T124 and T125 are M0. A dependency on a numerically higher identifier is
 therefore usually not a forward reference: work milestones in order and the dependency is already
 satisfied. Do not "fix" these edges.
 
@@ -425,13 +426,14 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T090 | Register the yt-dlp engine and run the contract suite | T028, T089 | no | done | [T090](T090-ytdlp-engine-registration.md) |
 | T093 | Harden the runtime image for a multi-arch release | T124 | yes | done | [T093](T093-harden-runtime-image.md) |
 | T094 | Harden the compose stack and document release verification | T093, T125 | no | done | [T094](T094-harden-compose-and-release-verification.md) |
-| T095 | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | no | deferred | [T095](T095-proxy-hardening-and-headers.md) |
+| T095 | Harden the proxied deployment and ship the proxy snippets | T007, T013, T094 | no | todo | [T095](T095-proxy-hardening-and-headers.md) |
 | T096 | Redact secrets in logs and serve the system log | T004, T010, T024, T092 | no | done | [T096](T096-log-redaction-and-system-logs.md) |
 | T097 | Publish signed multi-arch images and bump the yt-dlp pin weekly | T002, T093, T094 | yes | done | [T097](T097-release-pipeline-and-pin-bump.md) |
 | T113 | Enforce the yt-dlp pin and probe the runtime at boot | T090, T093, T097 | no | todo | [T113](T113-ytdlp-pin-and-capability-probe.md) |
 | T115 | Build and publish the aria2 image | T093, T094, T097 | no | todo | [T115](T115-aria2-image-build-and-publish.md) |
 | T121 | Build the Advanced settings section and the system log viewer | T053, T091, T092, T096, T108 | no | todo | [T121](T121-advanced-settings-and-log-viewer.md) |
 | T130 | Close registered engines before the database at shutdown | T090 | no | done | [T130](T130-close-engines-on-shutdown.md) |
+| T133 | Streamline independent PR verification | T002 | no | done | [T133](T133-ci-event-dedup.md) |
 
 ## Decisions referenced
 | ADR | Decision |
