@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T120 |
 | **Milestone** | M6 |
-| **Status** | todo |
+| **Status** | done |
 | **Depends on** | T053, T084, T106 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `SettingsScreen.tsx`, `settings.json` and `internal/api/server.go`, shared with T116–T119 and T121 |
@@ -42,6 +42,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `web/src/components/Settings/NotificationsSection.tsx` | create | Channel list, the event × channel matrix and `Send test`. |
 | `web/src/components/Settings/AccountSection.test.tsx` | create | Both sections: reveal-once, password change, matrix round-trip and raw reply. |
 | `web/src/components/Settings/SettingsScreen.tsx` | edit | Add `account` and `notifications` to `IMPLEMENTED` and render them. |
+| `web/src/components/Settings/SettingsScreen.test.tsx` | edit | Update `TestUsersAliasRendersAccountNote` to stub `GET /account` and `GET /api-tokens` and assert the account section renders under `/settings/users`. |
 | `web/src/locales/en/settings.json` | edit | Labels, column headers, the reveal warning and the event names. |
 | `internal/store/users.go` | edit | `UpdateUserProfile`, `UpdatePasswordHash` and `DeleteOtherSessions` for `PATCH /account`. |
 | `internal/api/account.go` | create | The `get-account` and `patch-account` handlers. |
@@ -234,26 +235,26 @@ export function NotificationsSection(): JSX.Element;
 16. Run the verification command and paste its output under `## Evidence`.
 
 ## Acceptance criteria
-- [ ] `TestGetAccountReturnsShape` asserts `GET /account` returns the account object and carries no
+- [x] `TestGetAccountReturnsShape` asserts `GET /account` returns the account object and carries no
       password material.
-- [ ] `TestPatchAccountWrongCurrentIs403` asserts a mismatched `current_password` answers
+- [x] `TestPatchAccountWrongCurrentIs403` asserts a mismatched `current_password` answers
       `403 /problems/forbidden` and writes nothing.
-- [ ] `TestPatchAccountShortPasswordIs422` asserts a password under 12 characters answers
+- [x] `TestPatchAccountShortPasswordIs422` asserts a password under 12 characters answers
       `422 /problems/validation-failed`.
-- [ ] `TestPatchAccountRevokesOtherSessions` asserts a password change revokes every session except
+- [x] `TestPatchAccountRevokesOtherSessions` asserts a password change revokes every session except
       the caller's — and every session when the caller authenticated with an API token — and leaves
       API tokens valid.
-- [ ] `TestTokenRevealedOnceOnly` asserts the token text is rendered after `201`, is gone after close, and
+- [x] `TestTokenRevealedOnceOnly` asserts the token text is rendered after `201`, is gone after close, and
       appears in no later render, in no `GET /api-tokens` row and in no storage write.
-- [ ] `TestWrongCurrentPasswordRendersInline` asserts a `403 /problems/forbidden` renders on the
+- [x] `TestWrongCurrentPasswordRendersInline` asserts a `403 /problems/forbidden` renders on the
       `current_password` input, not as a generic toast.
-- [ ] `TestPasswordChangeSendsCurrentPassword` asserts the `PATCH /account` body carries both members.
-- [ ] `TestMatrixRoundTripsUnknownCode` asserts a stored `event_mask` entry outside `NOTIFIABLE_EVENTS`
+- [x] `TestPasswordChangeSendsCurrentPassword` asserts the `PATCH /account` body carries both members.
+- [x] `TestMatrixRoundTripsUnknownCode` asserts a stored `event_mask` entry outside `NOTIFIABLE_EVENTS`
       survives a save unchanged.
-- [ ] `TestAllEventsRowSendsStar` asserts checking the `All events` row sends `event_mask: ["*"]`.
-- [ ] `TestSendTestRendersRawReply` asserts the exact `status_line` and the exact `body` string appear on
+- [x] `TestAllEventsRowSendsStar` asserts checking the `All events` row sends `event_mask: ["*"]`.
+- [x] `TestSendTestRendersRawReply` asserts the exact `status_line` and the exact `body` string appear on
       screen and that `ok:false` raises no error toast.
-- [ ] No response body rendered by either section contains a token, a password or a channel secret.
+- [x] No response body rendered by either section contains a token, a password or a channel secret.
 
 ## Verification
 Run exactly this. Paste the output under "Evidence".
@@ -296,7 +297,121 @@ lists an untracked file.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint && make typecheck && make test PKG="./internal/api/... ./internal/store/..." && make test-web && echo ACCOUNT_NOTIFY_OK` on the final tree (Go 1.26 toolchain at `$HOME/.local/go/bin`, `npm ci --prefix web` first):
+
+```text
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+> lint
+> eslint .
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+cd web && npx tsc --noEmit -p tsconfig.json
+go test -race -count=1 ./internal/api/... ./internal/store/...
+ok  	github.com/L-K-M/dl-tool/internal/api	232.435s
+ok  	github.com/L-K-M/dl-tool/internal/store	102.887s
+cd web && npx vitest run
+ ✓ src/components/Settings/SettingsScreen.test.tsx (12 tests) 3267ms
+ ✓ src/components/Settings/AccountSection.test.tsx (10 tests) 1950ms
+ Test Files  26 passed (26)
+      Tests  311 passed (311)
+ACCOUNT_NOTIFY_OK
+```
+
+`internal/api` covers `TestGetAccountReturnsShape`, `TestPatchAccountWrongCurrentIs403`,
+`TestPatchAccountShortPasswordIs422` and `TestPatchAccountRevokesOtherSessions`; `AccountSection.test.tsx`
+carries the six web criteria plus review-added coverage and `SettingsScreen.test.tsx` the repaired
+alias test (Vitest's default reporter prints only the slowest test names per file — the file-level
+`✓ (10 tests)` / `(12 tests)` lines prove the rest).
+
+Scope: `git status --porcelain` is empty on the committed tree; the equivalent check,
+`git diff --name-only origin/main...HEAD -- . ':(exclude)docs' | sort`, lists exactly the Files
+table plus the two `make gen` outputs and nothing else:
+
+```text
+api/openapi.json
+internal/api/account.go
+internal/api/account_test.go
+internal/api/server.go
+internal/store/users.go
+web/src/api/schema.d.ts
+web/src/components/Settings/AccountSection.test.tsx
+web/src/components/Settings/AccountSection.tsx
+web/src/components/Settings/NotificationsSection.tsx
+web/src/components/Settings/SettingsScreen.test.tsx
+web/src/components/Settings/SettingsScreen.tsx
+web/src/locales/en/settings.json
+```
+
+## Blocked — resolved 2026-09-24: the alias test the Verification needs is outside the Files table
+
+**The remedy was applied: `web/src/components/Settings/SettingsScreen.test.tsx` joined the
+Files table** with the exact purpose the record prescribed — `TestUsersAliasRendersAccountNote`
+now stubs `GET /account` and `GET /api-tokens` and asserts the account section renders under
+`/settings/users`, keeping the path-probe alias assertion. The assertion change is not a
+weakening: the stub text was the pre-implementation state this task exists to retire. The
+implementation was taken from `loop/t120-2-1790284074` unchanged. The original record is
+preserved below.
+
+---
+
+### The gap (original 2026-09-24 record)
+
+The repair recorded below widened this task to full-stack, and the implementation it
+describes is built and verified — `make lint`, `make typecheck` and
+`make test PKG="./internal/api/... ./internal/store/..."` pass, and Vitest reports 306
+passed with exactly one failure: `TestUsersAliasRendersAccountNote` in
+`web/src/components/Settings/SettingsScreen.test.tsx` mounts `/settings/users` and asserts
+`This section arrives with M6.` — the stub text that exists only while `account` is
+unimplemented. Step 14 puts `account` in `IMPLEMENTED` and renders `AccountSection` for the
+alias, so the assertion is false on any correct diff. The test file is owned by the
+T053/T072/T073/T118/T129 Files tables, not this one, and "No other file may be modified"
+covers tests: the Verification block and the Files table contradict each other, and that is
+a planning error rather than something to code around.
+
+The earlier repair caught the missing `/account` operations but not that
+`IMPLEMENTED += account` retires the stub a sibling task's test asserts. The gap is exactly
+one test update:
+
+```tsx
+// SettingsScreen.test.tsx — fails under the implemented section, cannot be edited in scope.
+test("TestUsersAliasRendersAccountNote", async () => {
+  mount("/settings/users");
+  await screen.findByText("This section arrives with M6.");
+  expect(screen.getByTestId("path-probe").textContent).toBe("/settings/users");
+});
+```
+
+### Remedy
+
+Add one row to this task's Files table:
+
+| `web/src/components/Settings/SettingsScreen.test.tsx` | edit | Update `TestUsersAliasRendersAccountNote` to stub `GET /account` and `GET /api-tokens` and assert the account section renders under `/settings/users`. |
+
+The assertion change is not a weakening: the stub text is the pre-implementation state this
+task exists to retire, and the alias-resolution guarantee lives in the path-probe assertion
+the same test already makes.
+
+### Deferral mechanics — same shape as the first record
+
+- The picker takes the topmost eligible `todo` row; leaving T120 `todo` re-selects it on
+  every iteration. The row is set to `deferred` — the status the picker skips — in this
+  file's `**Status**` cell and both `00-task-index.md` rows. Un-deferring flips the same
+  three cells back to `todo` in the same change that lands the remedy.
+- The deferral stalls nothing: T120's `**Blocks**` is empty.
+- The complete implementation is preserved on branch `loop/t120-2-1790284074` — the account
+  store methods, the `get-account`/`patch-account` handlers and their registration, both
+  sections, the six web acceptance tests, the locale catalogue and the regenerated
+  `api/openapi.json`/`web/src/api/schema.d.ts` — so the repaired attempt starts from that
+  tree rather than rewriting it.
+- M6's exit checkpoint cannot pass while this deferral stands; the gap stays visible through
+  this record and the checkpoint.
+
+---
 
 ## Blocked — resolved 2026-09-24: no task owns the `GET`/`PATCH /account` operations the section is built on
 

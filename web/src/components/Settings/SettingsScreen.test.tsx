@@ -148,9 +148,28 @@ test("TestUnknownSectionRedirects", async () => {
 
 test("TestUsersAliasRendersAccountNote", async () => {
   // Doc 09 §2.1 names the account route `users`; it stays reachable and keeps
-  // its path rather than redirecting away.
+  // its path rather than redirecting away. The alias resolves to the account
+  // section, which reads GET /account and GET /api-tokens.
+  server.use(
+    http.get("*/api/v1/account", () =>
+      HttpResponse.json({
+        id: "usr_01",
+        username: "operator",
+        enabled: true,
+        locale: "en",
+        last_login_at: null,
+        created_at: "2026-01-01T00:00:00Z",
+      }),
+    ),
+    http.get("*/api/v1/api-tokens", () =>
+      HttpResponse.json({ items: [], next_cursor: null, total: 0 }),
+    ),
+  );
   mount("/settings/users");
-  await screen.findByText("This section arrives with M6.");
+  await screen.findByLabelText("Username");
+  // The label alone would pass on an unfetched form; the bound value
+  // proves GET /account ran and its payload reached the inputs.
+  await screen.findByDisplayValue("operator");
   expect(screen.getByTestId("path-probe").textContent).toBe("/settings/users");
 });
 
