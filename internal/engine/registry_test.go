@@ -403,6 +403,22 @@ func TestCloseAllJoinsErrorsAndClosesEveryEngine(t *testing.T) {
 	}
 }
 
+// Once CloseAll ran, a late registration must fail loudly rather than
+// store an engine no Close will ever reach — same panic as a duplicate
+// name, since both are composition bugs.
+func TestRegisterAfterCloseAllPanics(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.CloseAll(); err != nil {
+		t.Fatalf("CloseAll = %v, want nil", err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Register after CloseAll did not panic")
+		}
+	}()
+	reg.Register(&closeSpy{name: "late"})
+}
+
 // No engines, nothing to join — and a second call is a no-op too.
 func TestCloseAllOnEmptyRegistryIsNil(t *testing.T) {
 	reg := NewRegistry()

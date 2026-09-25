@@ -62,6 +62,7 @@ func testDB(t *testing.T) *sqlx.DB {
 		filepath.Join(dir, "backups"),
 	)
 	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
 
 	return db
 }

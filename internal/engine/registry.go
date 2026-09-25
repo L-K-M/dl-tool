@@ -49,6 +49,9 @@ func (r *Registry) Register(e Engine) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.closed {
+		panic("engine: registration after CloseAll: " + name)
+	}
 	if _, dup := r.engines[name]; dup {
 		panic("engine: duplicate registration: " + name)
 	}
