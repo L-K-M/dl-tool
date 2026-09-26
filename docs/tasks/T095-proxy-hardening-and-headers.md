@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T095 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | deferred — see the open Blocked record dated 2026-09-26 |
 | **Depends on** | T007, T013, T094 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
@@ -152,7 +152,8 @@ including the `flush_interval -1` comment and the "do NOT add stripprefix" note.
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
-make lint && go test -race -count=1 -v ./internal/api/... ./internal/obs/...
+make lint && go test -race -count=1 ./internal/api/... ./internal/obs/... \
+  && go test -race -count=1 -v -run 'TestSecurityHeadersOnHTML|TestHSTSOnlyOverHTTPS|TestUnexpectedHostIs421|TestAllowedHostTable|TestSafeRedirectTable|TestNoInsecureSkipVerify' ./internal/api/... ./internal/obs/...
 ```
 Expected: lint succeeds and both packages pass, with
 `TestSecurityHeadersOnHTML`, `TestHSTSOnlyOverHTTPS`, `TestUnexpectedHostIs421`,
@@ -234,3 +235,70 @@ file's `## Files` table with `internal/api/server_test.go`, `internal/api/auth_t
 it only calls `do()` (verified as of the 2026-09-25 block record — no direct
 `httptest.NewRequest`/`http.Request` construction in the file). The file that should answer the question "may tests set Host to satisfy an
 always-on allowlist" is this task file's Files table.
+
+### 2026-09-26 — the same allowlist also breaks the integration-tagged contract call site, again outside the Files table
+
+The 2026-09-25 repair scoped its verification to `go test ./internal/api/... ./internal/obs/...` —
+the Verification block still runs exactly that — and the fallout list it produced does not cover
+`//go:build integration` code in other packages — and `make test-integration` does cover it, because
+`.github/workflows/ci.yml` runs it in the `integration` job (green on main as of this record),
+and under that tag
+[`internal/engine/qbittorrent/contract_test.go`](../../internal/engine/qbittorrent/contract_test.go)
+`TestConformBootCorrection` drives `server.Router.ServeHTTP` twice with `httptest.NewRequest`'s
+default `Host: example.com` — once for `POST /api/v1/auth/setup` asserting `201 Created`
+(line ~1491), once in the `call` helper asserting `200 OK` (line ~1506).
+
+Verified against this tree with `HostAllowlist` written exactly as the contract specifies and
+mounted on `base` ahead of `SecurityHeaders` — the construction `TestConformBootCorrection` uses,
+replayed through `server.Router`:
+
+```text
+POST /api/v1/auth/setup: status 421: {"type":"/problems/validation-failed","title":"Misdirected Request","status":421,"detail":"the request host \"example.com\" is not an allowed name"}
+GET /api/v1/engines: status 421: {"type":"/problems/validation-failed","title":"Misdirected Request","status":421,"detail":"the request host \"example.com\" is not an allowed name"}
+```
+
+The request path is the base sub-router's, so the always-on allowlist answers before any handler —
+the `require.Equal(t, http.StatusCreated, setup.Code)` assertion can only see 421. The fix is again
+test-only: give both request constructions an allowed `Host` (`localhost`). But
+`internal/engine/qbittorrent/contract_test.go` is not in this task's `## Files` table, hard rule 1
+forbids touching it, and no Files-table file can carry the fix — the test constructs its own
+requests. The remaining fallouts were re-swept and are clean: every other `NewServer` caller either
+never serves a request (rss, jobs, engine unit tests, search, secure), drives `server.API` through
+humatest — which enters at the `v1` mux, below the base sub-router the allowlist guards — or listens
+on a real socket, where the client sends a `127.0.0.1` host a literal IP accepts
+(`cmd/dl-tool/main_test.go`, the e2e harness).
+
+**Remedy:** a second contract repair of the class of `3c2ea66` ("Repair T095 host-test scope"):
+extend this file's `## Files` table with `internal/engine/qbittorrent/contract_test.go` — the one
+remaining file whose request construction must carry an allowed `Host` — and keep the middleware
+unconditional, and extend this file's `## Verification` block with `make test-integration`, so the
+next attempt exercises the suite that has now broken twice locally rather than discovering it in
+CI. Verified as of this record: `grep -rn "go:build integration" --include="*.go" .`
+lists five files, and only this one calls `server.Router.ServeHTTP`; the untagged sweep
+`grep -rn "server\.Router" --include="*_test.go" .` adds only `cmd/dl-tool/main_test.go`, whose
+requests ride real listeners and send a `127.0.0.1` host the literal-IP rule accepts.
+
+#### Companion defect found while landing this record — the Verification block itself stalls `task-verification`
+
+This deferral's own PR could not go through the `task-verification` workflow: every run of the
+extracted script — `make lint && go test -race -count=1 -v ./internal/api/... ./internal/obs/...` —
+stalled at "Run task Verification" and wedged the runner so completely that cancellation and the
+job's own 60-minute `timeout-minutes` produced no effect for tens of minutes and no log blob was
+ever uploaded. Observed across four consecutive runs (three `push` triggers, one
+`workflow_dispatch`), each stuck ≥50 minutes on the step before being reaped. The same commands
+pass individually on the same SHA — `make lint` in the `lint` job (6m16s), the full
+`go test -race -count=1 ./...` in the `test` job (10m12s) — and the exact extracted script
+completes locally under `bash -euo pipefail` in ~5.5 minutes. Every prior `task-verification`
+run on other task branches succeeded; all of their scripts use `make test` — plain, non-verbose
+`go test` — and none emits anywhere near the ~60 MB of step output that `-v` produces on
+`internal/api` alone. Verbose output on the repo's largest test suite is the clearest variable
+that distinguishes this script from everything that has ever passed in that workflow — though the
+chained `make lint &&` prefix and the explicit package list differ as well — so it is the leading
+suspect for the stall mechanism (runner resource or log-pipeline exhaustion); the runner died too
+early to leave logs proving it.
+
+**Resolution applied in this deferral:** the `## Verification` block now runs the package pass
+without `-v`, then a `-v -run` pass naming the six required tests, so the gate keeps both halves
+of the intent while shedding the output volume. The next task-verification run of the repaired
+script doubles as the test of the `-v` hypothesis: green confirms it; another stall clears it
+and points at the remaining variables.
