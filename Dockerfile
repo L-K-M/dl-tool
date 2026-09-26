@@ -54,11 +54,14 @@ RUN apk add --no-cache xz && \
 # yt-dlp: fetched on the build platform, selected by TARGETARCH, verified by SHA-256.
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS ytdlp
 ARG TARGETARCH
-# The three defaults below ARE the pin. They are the only place the yt-dlp version and
+# The four defaults below ARE the pin. They are the only place the yt-dlp version and
 # hashes are recorded, and the weekly job in section 10.1 rewrites exactly these lines.
+# YTDLP_SHA256_WHEEL pins the py3-none-any wheel scripts/gen-ytdlp-patterns.py
+# downloads at maintenance time (ADR-0022); the image itself ships the binary above.
 ARG YTDLP_VERSION="2026.08.19"
 ARG YTDLP_SHA256_AMD64="f3dec9cfeaf304cec98290fe41c6ad465d4b747d302473559643e7af24929722"
 ARG YTDLP_SHA256_ARM64="17b164c4d258be92bb1ad146cb7c336b783aedb380814aabbcb7d52937f77e57"
+ARG YTDLP_SHA256_WHEEL="1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf"
 RUN apk add --no-cache curl
 RUN set -eu; \
     case "${TARGETARCH}" in \

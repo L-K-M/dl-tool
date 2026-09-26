@@ -46,13 +46,14 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `scripts/gen-ytdlp-patterns.py` | create | The maintainer-run generator per ADR-0022: reads the pinned wheel's `_VALID_URL`s, transpiles to RE2, verifies each pattern compiles, writes the two generated files below deterministically. |
 | `internal/engine/ytdlp/extractor_patterns.txt` | create | GENERATED — one RE2 pattern per line, `generic` excluded; `//go:embed`'d. Never hand-edit. |
 | `internal/engine/ytdlp/extractors_residual.txt` | create | GENERATED — extractor names whose patterns could not be made RE2-safe; drives `ResidualOverrides` coverage. Never hand-edit. |
-| `internal/engine/ytdlp/overrides.go` | create | Hand-maintained `ResidualOverrides` map: residual extractor name → host suffixes. |
-| `internal/engine/ytdlp/patterns.go` | create | `ExtractorCache`, `LoadExtractors`, `Match`, `Loaded`, `Len`. |
-| `internal/engine/ytdlp/patterns_test.go` | create | Table compiles, residual↔override coverage, YouTube/Vimeo routing, non-match, `generic` exclusion. |
-| `internal/engine/ytdlp/engine.go` | edit | `Engine` gains a `cache *ExtractorCache` field; `Connect` loads it (already called at boot by main.go's probe — no main.go edit needed); the `Accepts` stub delegates to `cache.Match`. |
+| `internal/engine/ytdlp/overrides.go` | create | Hand-maintained `ResidualOverrides` map: residual extractor name → host (or `host/path-fragment`) suffixes. |
+| `internal/engine/ytdlp/patterns.go` | create | `ExtractorCache`, `LoadExtractors`, `Match`, `Loaded`, `Len`, the `overrideRoute` spec decoder. |
+| `internal/engine/ytdlp/patterns_test.go` | create | Table compiles, residual↔override coverage, YouTube/Vimeo routing, path-scoped overrides, authority case, non-match, `generic` exclusion. |
+| `internal/engine/ytdlp/engine.go` | edit | `Engine` gains an `atomic.Pointer[ExtractorCache]` cache field; `Connect` loads and publishes it (already called at boot by main.go's probe — no main.go edit needed); the `Accepts` stub delegates to `Match` on the atomically loaded cache — a probe re-running `Connect` races `Accepts` reads otherwise. |
+| `internal/engine/ytdlp/engine_test.go` | edit | The pre-T088 `TestAcceptsMatchesNothing` asserts the stub the `Accepts` criterion replaces; it is updated to assert the loaded cache's answers. Added to this table because the restated table omitted it — same amendment class as T090's missing unit-test row. |
 | `internal/api/tasks.go` | edit | `NewTaskHandlers` gains the `mediaMatch func(string) bool` param (stored on the struct); its two `engine.Route(n, nil)` call sites pass `h.mediaMatch` — T091-#277 class: the hook exists but the composition root cannot reach it from the task's own package. |
 | `internal/api/tasks_inspect.go` | edit | The third `engine.Route(n, nil)` site passes `h.mediaMatch`; the `TaskHandlers` receiver is shared, so no second constructor change. |
-| `internal/api/server.go` | edit | Pull the registered ytdlp engine from the `engines` registry and pass its `Accepts` bound method into `NewTaskHandlers` — one cache, loaded once by `Engine.Connect`; absent engine → nil → rows 4-6, unchanged from today. |
+| `internal/api/server.go` | edit | Add `mediaMatcher(engines)`: a hook that resolves the registered ytdlp engine through the shared registry at match time and calls its `Accepts` — one cache, loaded once by `Engine.Connect`; absent engine → false → rows 4-6, unchanged from today. A bound method taken here would capture nil because cmd/dl-tool registers the adapter only after `NewServer` returns — see `## Blocked`. |
 | `internal/api/tasks_files_test.go` | edit | Update the `NewTaskHandlers` call for the new param (pass nil — today's assertions unchanged). |
 | `internal/api/tasks_actions_test.go` | edit | Same signature update, plus one new case proving the wiring: a `TaskHandlers` built with `cache.Match` accepts a YouTube URL onto the yt-dlp engine where nil would route it to aria2. |
 | `Dockerfile` | edit | Add `ARG YTDLP_SHA256_WHEEL` beside the existing pins — the generator refuses to import a wheel whose hash differs. For the current pin it is `1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf` (sha256 of `yt_dlp-2026.8.19-py3-none-any.whl`, measured during this repair). |
@@ -70,11 +71,17 @@ package ytdlp
 //go:embed extractor_patterns.txt
 var patternTable string
 
-// ResidualOverrides maps each extractor name in extractors_residual.txt to the host
-// suffixes that route its URIs (hostnames, lowercase, no port). It is hand-maintained:
-// the generator tells you which names need entries on each regen, and the coverage
-// test fails if any residual name lacks one. Hostname granularity is deliberate —
-// row 3 answers "should yt-dlp see this URL"; yt-dlp picks its own extractor later.
+// ResidualOverrides maps each extractor name in extractors_residual.txt to the
+// host specs that route its URIs. A spec is "host" (lowercase, no port, matched
+// on label boundaries) or "host/fragment" (the decoded path, case-folded, must
+// contain the fragment at a boundary — preceded by a non-alphanumeric and, for
+// fragments ending in an alphanumeric, followed by a non-letter — so
+// `vk.com/video/` claims /video/playlist/… but not the profile /videographer,
+// and `web.archive.org/youtube.com/` claims an archived www.youtube.com capture
+// but not an archived fakeyoutube.com one). It is hand-maintained: the generator
+// tells you which names need entries on each regen, and the coverage test fails
+// if any residual name lacks one. Host granularity is still the default — row 3
+// answers "should yt-dlp see this URL"; yt-dlp picks its own extractor later.
 var ResidualOverrides = map[string][]string{
 	"Youtube": {"youtube.com", "youtu.be"},
 	// … one entry per name in extractors_residual.txt …
@@ -83,28 +90,31 @@ var ResidualOverrides = map[string][]string{
 // ExtractorCache holds the generated routing table compiled once at start-up.
 // The zero value matches nothing.
 type ExtractorCache struct {
-	pattern  *regexp.Regexp // one alternation over the generated table
-	hosts    []string       // flattened ResidualOverrides suffixes, lowercase
-	patterns int            // table line count
-	loaded   bool
+	pattern   *regexp.Regexp  // one alternation over the generated table
+	overrides []overrideRoute // decoded ResidualOverrides specs
+	patterns  int             // table line count
+	loaded    bool
 }
 
-// LoadExtractors compiles the embedded table into one alternation and flattens the
-// override hosts. An empty table returns a usable empty cache with loaded == false;
+// LoadExtractors compiles the embedded table into one alternation and decodes the
+// override routes. An empty table returns a usable empty cache with loaded == false;
 // a line that fails regexp.Compile fails the load — the table is committed output and
 // a bad line means the generator or a hand edit is broken, which should be loud.
 func LoadExtractors() (*ExtractorCache, error)
 
 // Match reports whether uri routes to yt-dlp: the URI's lowercase hostname is
-// checked against the override suffixes (a suffix d matches h == d or
-// strings.HasSuffix(h, "."+d)), then against the compiled alternation.
-// It never performs I/O.
+// checked against the override routes (host suffix on label boundaries, plus
+// a boundary-aware, case-folded fragment match when the spec carries one —
+// boundary bytes are ASCII-only, so a UTF-8 letter never counts as one),
+// then the URI — scheme and
+// authority lowercased, mirroring yt-dlp's netloc normalization — is checked
+// against the compiled alternation. It never performs I/O.
 func (c *ExtractorCache) Match(uri string) bool
 
 // Loaded reports whether the table compiled; false means the media lane is disabled.
 func (c *ExtractorCache) Loaded() bool
 
-// Len returns the number of table patterns plus override hosts.
+// Len returns the number of table patterns plus override routes.
 func (c *ExtractorCache) Len() int
 ```
 
@@ -121,12 +131,14 @@ func NewTaskHandlers(db *sqlx.DB, engines *engine.Registry, roots []string,
 ```go
 package ytdlp
 
-// Engine owns the one cache instance. Connect — already invoked at boot by the
-// main.go engine probe — loads it; a load error is logged and leaves a usable
-// empty cache, so Connect still succeeds and row 3 degrades to nil semantics.
-// Accepts replaces today's `return false` stub; a nil cache answers false, which
-// keeps forced-engine submissions rejecting exactly as they do today.
-func (e *Engine) Accepts(uri string) bool // e.cache.Match(uri)
+// Engine owns the one cache instance, published via atomic.Pointer so a probe
+// re-running Connect cannot race Accepts reads. Connect — already invoked at
+// boot by the main.go engine probe — loads it; a load error is logged and
+// leaves a usable empty cache, so Connect still succeeds and row 3 degrades to
+// nil semantics. Accepts replaces today's `return false` stub; a nil or absent
+// cache answers false, which keeps forced-engine submissions rejecting exactly
+// as they do today.
+func (e *Engine) Accepts(uri string) bool // e.cache.Load().Match(uri)
 ```
 
 `internal/api/server.go` pulls the registered ytdlp engine from the `engines` registry
@@ -156,7 +168,12 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
      and `(?P<name>…)` — to
      `(?:…)`, skipping escaped `\(` and parens inside character classes exactly as the whitespace
      pass does (a naive rewrite still compiles yet silently changes what matches), since routing
-     needs only a boolean match; leave `(?i)` alone — Go's `regexp` accepts it;
+     needs only a boolean match; leave `(?i)` alone — Go's `regexp` accepts it. Widen the Unicode
+     shorthands Python's `re` defaults to — `\d` → `\p{Nd}`, `\w` → `\p{L}\p{N}_`, `\s` → whitespace
+     plus `\p{Z}` — because Go's RE2 reads them as ASCII-only and silently narrows upstream's claim
+     (measured on the pinned corpus: `https://player.fm/series/ポッドキャスト/ep-1` matched in
+     Python and missed in Go); a negated shorthand inside a character class, or a construct RE2
+     cannot express at all, residualizes instead of guessing;
    - writes every surviving pattern to a temp file and pipes it through a `go run` probe that
      `regexp.Compile`s each line; patterns that fail are dropped and their owning extractor name is
      recorded. `go` must be on the maintainer's `PATH` **and the probe must run under the repo's
@@ -168,22 +185,30 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
      header and the sorted residual extractor names;
    - prints the residual list so the maintainer knows which names `ResidualOverrides` must cover.
 2. Run it against the pinned wheel and commit both generated files unmodified.
-3. Create `internal/engine/ytdlp/overrides.go`: one `ResidualOverrides` entry — lowercase host
-   suffixes, no port, no leading dot — for **every** name in `extractors_residual.txt`. Youtube,
-   Vimeo, Instagram, Soundcloud and Dailymotion are the load-bearing ones; a missing entry is a
-   routing hole the coverage test catches.
+3. Create `internal/engine/ytdlp/overrides.go`: one `ResidualOverrides` entry — lowercase `host`
+   or `host/fragment` specs, no port, no leading dot — for **every** name in
+   `extractors_residual.txt`. Youtube, Vimeo, Instagram, Soundcloud and Dailymotion are the
+   load-bearing ones; a missing entry is a routing hole the coverage test catches. Where upstream's
+   `_VALID_URL` claims only specific paths on a shared host (SharePoint `/:v:/`, Wayback captures),
+   the entry carries the path fragment rather than claiming the host wholesale.
 4. Create `internal/engine/ytdlp/patterns.go` per the contract: `//go:embed` the table, skip `#`
    comment and blank lines, compile the rest as one `^(?:(?:p1)|(?:p2)|…)` alternation inside
-   `LoadExtractors` (measured ≈163 ms on this corpus — do it once, never per `Match`), flatten
-   `ResidualOverrides` into a lowercase host list. The alternation is start-anchored — yt-dlp
+   `LoadExtractors` (measured ≈163 ms on this corpus — do it once, never per `Match`), decode
+   `ResidualOverrides` into sorted override routes. The alternation is start-anchored — yt-dlp
    evaluates `_VALID_URL` with `re.match`, so an unanchored `MatchString` would substring-match
    e.g. `https://evil.example/?next=youtube.com/watch`.
    `Match(uri)`: parse with `net/url`, lowercase the hostname (no match on parse failure or empty
-   host), suffix-check the override hosts, then `pattern.MatchString`. No I/O anywhere.
-5. Wire the hook. `internal/engine/ytdlp/engine.go`: add the `cache` field, load it in `Connect`
-   (a failed load logs and leaves a usable empty cache — `Connect` still succeeds, and a nil or
-   unloaded cache makes `Accepts`/`Match` answer false, preserving today's semantics), delegate
-   `Accepts` to `cache.Match`. `internal/api/tasks.go`: `NewTaskHandlers` gains
+   host), check the override routes (host suffix on label boundaries, plus the decoded-path
+   fragment when the spec carries one — the fragment is case-folded like the host and must sit at
+   a path boundary so `vk.com/video/` cannot claim the profile `vk.com/videographer`), then
+   lowercase the URI's scheme and authority — yt-dlp's
+   `re` sees a netloc-normalized URL, while path and query keep their case — and run
+   `pattern.MatchString`. No I/O anywhere.
+5. Wire the hook. `internal/engine/ytdlp/engine.go`: add the `cache` field as
+   `atomic.Pointer[ExtractorCache]`, load it in `Connect` and publish with `Store` (a failed load
+   logs and leaves a usable empty cache — `Connect` still succeeds, and a nil or unloaded cache
+   makes `Accepts`/`Match` answer false, preserving today's semantics), delegate `Accepts` to
+   `Match` on the atomically loaded pointer. `internal/api/tasks.go`: `NewTaskHandlers` gains
    `mediaMatch func(string) bool`, stored on `TaskHandlers`; both `engine.Route(n, nil)` sites pass
    `h.mediaMatch`. `internal/api/tasks_inspect.go`: the third site does the same (shared receiver).
    `internal/api/server.go`: `engines.Get(engine.NameYtDlp)` and pass the engine's `Accepts` — the
@@ -205,6 +230,12 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
    - `Match` returns false for `https://evilyoutube.com/x` and `https://notyoutu.be/x` — the override
      lookup is a label-boundary suffix match (`host == suffix` or `host` ends in `"." + suffix`),
      never a raw `strings.HasSuffix`;
+   - the `host/fragment` routes claim inside their paths only, at path boundaries and case-folded:
+     SharePoint video/stream URLs and archived YouTube captures route, while a SharePoint document,
+     `TeamStream.aspx`, an archived `fakeyoutube.com` capture, an IMDb title page or a VK profile
+     (`vk.com/videographer`) on the same hosts do not;
+   - an uppercase scheme/authority (`HTTPS://X.COM/…`) still routes — the table lane normalizes
+     scheme and authority case before matching;
    - the zero-value cache reports `Loaded() == false` and `Match() == false`.
 7. In `tasks_actions_test.go`, add the wiring assertion: a `TaskHandlers` built with a stub
    `mediaMatch` that matches youtube URLs routes a `https://www.youtube.com/watch?v=…` submission to
@@ -213,18 +244,18 @@ registered (nil-db boots, tests), `mediaMatch` stays nil: rows 4-6, same as toda
    covered in the ytdlp package — this case only proves the param reaches `Route`).
 
 ## Acceptance criteria
-- [ ] `Match` performs no network or subprocess call.
-- [ ] `Engine.Accepts` answers from the same cache, so an engine-forced YouTube submission
+- [x] `Match` performs no network or subprocess call.
+- [x] `Engine.Accepts` answers from the same cache, so an engine-forced YouTube submission
       (`engine: "ytdlp"`) is no longer refused at the `tasks.go` accept gate.
-- [ ] `generic` patterns are never generated into the table.
-- [ ] `youtube.com/watch`, `youtu.be` and `vimeo.com` URLs route to `ytdlp` via the override hosts, and
+- [x] `generic` patterns are never generated into the table.
+- [x] `youtube.com/watch`, `youtu.be` and `vimeo.com` URLs route to `ytdlp` via the override hosts, and
       `x.com/…/status/…` via the generated table.
-- [ ] `https://releases.ubuntu.com/24.04/ubuntu-24.04.iso` routes to `aria2`, with and without the matcher.
-- [ ] Every line in `extractor_patterns.txt` compiles, and every `extractors_residual.txt` name has an
+- [x] `https://releases.ubuntu.com/24.04/ubuntu-24.04.iso` routes to `aria2`, with and without the matcher.
+- [x] Every line in `extractor_patterns.txt` compiles, and every `extractors_residual.txt` name has an
       override entry — both enforced by tests, so a stale regen or a dropped override fails CI.
-- [ ] `extractor_patterns.txt` and `extractors_residual.txt` carry the wheel-version header and are
+- [x] `extractor_patterns.txt` and `extractors_residual.txt` carry the wheel-version header and are
       byte-identical across reruns against the same pin.
-- [ ] The generator refuses to run against a `yt_dlp` package whose version ≠ `YTDLP_VERSION`, and
+- [x] The generator refuses to run against a `yt_dlp` package whose version ≠ `YTDLP_VERSION`, and
       aborts before unpacking when the downloaded wheel's SHA-256 ≠ `YTDLP_SHA256_WHEEL`.
 
 ## Verification
@@ -260,7 +291,147 @@ Expected: exactly the paths in the Files table, in that order, and nothing else.
 - Do NOT edit files outside the Files table. If you believe you must, STOP and write why under "Blocked".
 
 ## Evidence
-<Agent pastes command output here before marking done.>
+
+`make lint` on the final tree:
+
+```
+$ make lint
+test -z "$(gofmt -l cmd internal)"
+golangci-lint run ./...
+0 issues.
+cd web && npm run lint
+
+> lint
+> eslint .
+
+cd web && npx prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+```
+
+`make test PKG=./internal/engine/...` on the same tree:
+
+```
+$ make test PKG=./internal/engine/...
+go test -race -count=1 ./internal/engine/...
+ok  	github.com/L-K-M/dl-tool/internal/engine	32.450s
+ok  	github.com/L-K-M/dl-tool/internal/engine/aria2	3.252s
+ok  	github.com/L-K-M/dl-tool/internal/engine/qbittorrent	9.082s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	14.327s
+```
+
+Scope check — exactly the paths in the Files table and nothing else:
+
+```
+$ git status --porcelain=v1 -uall -- . ':(exclude)docs' | awk '{print $NF}' | sort
+Dockerfile
+internal/api/server.go
+internal/api/tasks.go
+internal/api/tasks_actions_test.go
+internal/api/tasks_files_test.go
+internal/api/tasks_inspect.go
+internal/engine/ytdlp/engine.go
+internal/engine/ytdlp/engine_test.go
+internal/engine/ytdlp/extractor_patterns.txt
+internal/engine/ytdlp/extractors_residual.txt
+internal/engine/ytdlp/overrides.go
+internal/engine/ytdlp/patterns.go
+internal/engine/ytdlp/patterns_test.go
+scripts/gen-ytdlp-patterns.py
+```
+
+Same-pin regeneration is byte-identical (re-ran the generator against the
+pinned wheel and diffed both outputs against the pre-run copies):
+
+```
+BYTE-IDENTICAL
+```
+
+All three refusal gates fire — a bad `--yt-dlp` path, a wheel-hash mismatch,
+and a version mismatch:
+
+```
+$ scripts/gen-ytdlp-patterns.py --yt-dlp /nonexistent-path
+gen-ytdlp-patterns: error: --yt-dlp /nonexistent-path: not a directory or a wheel file
+$ scripts/gen-ytdlp-patterns.py --yt-dlp /tmp/fake.whl
+gen-ytdlp-patterns: error: /tmp/fake.whl sha256 mismatch: got 997890bc…,
+Dockerfile pins 1d57897e… — refusing to unpack   (exit 1)
+$ scripts/gen-ytdlp-patterns.py --yt-dlp /tmp/fakepkg   # yt_dlp 1999.01.01
+gen-ytdlp-patterns: error: imported yt_dlp is version 1999.01.01,
+Dockerfile pins 2026.08.19 — refusing to generate   (exit 1)
+```
+
+The Unicode-widening fix is observable end-to-end — the same URL matches under
+Python `re` and the regenerated Go table (it missed before the fix):
+
+```
+Python re.match(_VALID_URL, "https://player.fm/series/ポッドキャスト/ep-1") → match
+Go table  Match("https://player.fm/series/ポッドキャスト/ep-1")            → true
+```
+
+`make ci` on the same tree — lint, vet, typecheck, `go test -race -count=1
+./...` (every package `ok`), the frontend suite (26 files / 311 tests) and
+doclint all passed. `compose-check` is the one target that cannot run in this
+worktree (`docker` is not installed); PR CI runs it on the runner and passed
+on the pushed head.
+
+```
+ok  	github.com/L-K-M/dl-tool/internal/api	204.626s
+ok  	github.com/L-K-M/dl-tool/internal/engine/ytdlp	23.531s
+...every other package ok...
+
+ Test Files  26 passed (26)
+      Tests  311 passed (311)
+
+./scripts/doclint.sh
+🔍 2535 Total (in 211ms) 🔗 581 Unique ✅ 2507 OK 🚫 0 Errors 👻 28 Excluded
+```
 
 ## Blocked
-<Only if you had to stop. State the exact ambiguity and which file should answer it.>
+Resolved planning errors found while implementing — recorded here per the
+stop-and-document rule, resolved by the task's own explicit instructions:
+
+- The restated Files table omitted `internal/engine/ytdlp/engine_test.go`, but
+  `TestAcceptsMatchesNothing` there pins the pre-T088 `Accepts` stub the
+  acceptance criteria replace (`engine-forced YouTube submission is no
+  longer refused`). The table above is amended to add it — the same
+  amendment class T090 used for its missing unit-test row — and the test now
+  asserts the loaded cache's answers.
+- The `internal/api/server.go` row says to pass the registered engine's
+  `Accepts` bound method, but the ytdlp adapter registers on
+  `server.Engines` in `cmd/dl-tool/main.go` *after* `NewServer` returns — a
+  bound method taken at `NewTaskHandlers` time would be permanently nil and
+  row 3 would never fire in production. The hook is therefore the named
+  `mediaMatcher(engines)` helper, whose returned closure resolves the engine
+  through the shared registry at match time and calls its `Accepts` — the
+  same `engine.Engine` value the contract intends, the same single cache,
+  and `absent engine → false`, which is Route's nil-matcher semantics.
+  `TestMediaMatchLateRegistration` builds a handler with `mediaMatcher`
+  before registering the fake media engine and proves the late-arriving
+  registration still claims the YouTube submission.
+- Review round 1 on PR #302 measured two contract gaps the restated contract had left implicit,
+  and they were repaired without widening the Files table:
+  - `ResidualOverrides` claimed whole hosts for extractors whose upstream `_VALID_URL` covers only
+    specific paths on shared infrastructure (SharePoint `/:v:/` and `stream.aspx`, Wayback captures
+    of youtube.com, IMDb `/list/ls`, VK `/video`, the KnownDRM service subdomains). The spec grammar
+    gained `host/fragment` and those entries were scoped — a SharePoint document or an archived
+    non-media page must not route to the media lane.
+  - Python `re` treats `\d`/`\w`/`\s` as Unicode while Go's RE2 treats them as ASCII; the transpiler
+    widened them to `\p{Nd}`, `\p{L}\p{N}_` and whitespace/`\p{Z}` classes, with an in-class
+    complement residualizing rather than narrowing. Measured divergence on the pinned corpus:
+    `https://player.fm/series/ポッドキャスト/ep-1` matched under Python and missed under the
+    pre-fix table.
+  - `Engine.cache` became `atomic.Pointer[ExtractorCache]` because the engine probe can re-run
+    `Connect` while `Accepts` reads the field.
+- Review round 2 refined the fragment grammar itself: containment is now boundary-checked and
+  case-folded (`vk.com/videographer`, `sharepoint.com/TeamStream.aspx` and archived
+  `fakeyoutube.com` captures all stay on the plain lane), and the VK spec narrowed to
+  `vk.com/video/` matching upstream's exact path prefix. The generator also learned that a
+  leading `]` in a character class is a literal member in both Python and Go — it passes
+  through instead of mis-tokenizing — and `\D` inside a class widens to `\P{Nd}`.
+- Review round 3 tightened the boundary check once more (bytes >= 0x80 may be UTF-8 letters
+  and never count as a claim boundary — the miss-safe direction) and was otherwise
+  minor-only. Deferred per the automated-review stopping rules: surfacing an
+  extractor-table load failure through `Health` (Connect deliberately degrades to nil
+  semantics; the committed table is pinned by `TestExtractorTableCompiles`, so the gap is
+  observability, not correctness — a Health contract change deserves its own task).

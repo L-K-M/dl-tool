@@ -382,12 +382,12 @@ func TestHealthReportsVersionAndUnavailable(t *testing.T) {
 	assert.ErrorIs(t, err, engine.ErrUnavailable)
 }
 
-// Accepts matches nothing while the T088 extractor cache is deferred:
-// the mechanism the plan prescribed does not exist, so the media-lane
-// answer is a plain false and Route keeps nil.
-func TestAcceptsMatchesNothing(t *testing.T) {
+// Accepts answers from the extractor cache Connect loaded (T088): a
+// claimed media-site URL is true, and a magnet — which no override suffix
+// or table pattern can claim — stays false.
+func TestAcceptsAnswersFromCache(t *testing.T) {
 	e := newTestEngine(t, "/nonexistent/yt-dlp")
-	assert.False(t, e.Accepts("https://www.youtube.com/watch?v=abc"))
+	assert.True(t, e.Accepts("https://www.youtube.com/watch?v=abc"))
 	assert.False(t, e.Accepts("magnet:?xt=urn:btih:abc"))
 }
 

@@ -206,6 +206,7 @@ Extraction, the bandwidth schedule, watch folders, the operator account and its 
 | [T118](T118-bandwidth-settings-and-schedule-grid.md) | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | done |
 | [T119](T119-downloads-and-bittorrent-settings.md) | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | done |
 | [T120](T120-account-and-notifications-settings.md) | Build the Account and Notifications settings sections | T053, T084, T106 | done |
+| [T131](T131-wait-persisted-notify-send.md) | Wait for the persisted send in the notification fanout test | T077 | done |
 
 ## M7 — yt-dlp, packaging and release
 
@@ -214,7 +215,7 @@ The yt-dlp engine, the release hardening of the image and the compose stack, the
 | Task | Title | Depends on | Status |
 |---|---|---|---|
 | [T087](T087-ytdlp-subprocess-runner.md) | Run yt-dlp as a supervised subprocess | T005, T016 | done |
-| [T088](T088-ytdlp-extractor-cache.md) | Cache the yt-dlp extractor patterns for the router | T016, T087 | todo |
+| [T088](T088-ytdlp-extractor-cache.md) | Cache the yt-dlp extractor patterns for the router | T016, T087 | done |
 | [T089](T089-ytdlp-progress-and-exit-codes.md) | Parse yt-dlp progress lines and exit codes | T087 | done |
 | [T090](T090-ytdlp-engine-registration.md) | Register the yt-dlp engine and run the contract suite | T028, T089 | done |
 | [T093](T093-harden-runtime-image.md) | Harden the runtime image for a multi-arch release | T124 | done |
@@ -247,9 +248,9 @@ reason and the task that will carry it.
 
 ## A note on identifier order
 
-Task identifiers **T098–T129** are overflow numbers allocated after the original ranges were set. They
+Task identifiers **T098 and above** are overflow numbers allocated after the original ranges were set. They
 belong to earlier milestones than their number suggests — T098, T099 and T126–T128 are M1, T100 and T101 are M2,
-T103 and T104 are M3, T105, T116, T122, T123 and T129 are M4, T106–T111 and T117–T120 are M6,
+T103 and T104 are M3, T105, T116, T122, T123 and T129 are M4, T106–T111, T117–T120 and T131 are M6,
 T113, T115, T121, T130, T132 and T133 are M7, and T124 and T125 are M0. A dependency on a numerically higher identifier is
 therefore usually not a forward reference: work milestones in order and the dependency is already
 satisfied. Do not "fix" these edges.
@@ -416,13 +417,14 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | T118 | Build the Bandwidth settings section and the 24×7 schedule grid | T053, T079, T080, T092, T110 | no | done | [T118](T118-bandwidth-settings-and-schedule-grid.md) |
 | T119 | Build the Downloads and BitTorrent settings sections | T050, T053, T074, T083, T092, T107 | no | done | [T119](T119-downloads-and-bittorrent-settings.md) |
 | T120 | Build the Account and Notifications settings sections | T053, T084, T106 | no | done | [T120](T120-account-and-notifications-settings.md) |
+| T131 | Wait for the persisted send in the notification fanout test | T077 | yes | done | [T131](T131-wait-persisted-notify-send.md) |
 
 ### M7
 
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
 | T087 | Run yt-dlp as a supervised subprocess | T005, T016 | yes | done | [T087](T087-ytdlp-subprocess-runner.md) |
-| T088 | Cache the yt-dlp extractor patterns for the router | T016, T087 | no | todo | [T088](T088-ytdlp-extractor-cache.md) |
+| T088 | Cache the yt-dlp extractor patterns for the router | T016, T087 | no | done | [T088](T088-ytdlp-extractor-cache.md) |
 | T089 | Parse yt-dlp progress lines and exit codes | T087 | yes | done | [T089](T089-ytdlp-progress-and-exit-codes.md) |
 | T090 | Register the yt-dlp engine and run the contract suite | T028, T089 | no | done | [T090](T090-ytdlp-engine-registration.md) |
 | T093 | Harden the runtime image for a multi-arch release | T124 | yes | done | [T093](T093-harden-runtime-image.md) |
@@ -456,4 +458,5 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | 2026-09-08 | Reset T030 to `todo` after correcting its qBittorrent rid-recovery contract. |
 | 2026-09-10 | Reset T032 to `todo`: its Files table omitted `internal/engine/qbittorrent/files_test.go`, which its Verification block requires. |
 | 2026-09-25 | Added T130 (close registered engines before the database at shutdown) — the final audit of ae072b5 found `Engine.Close` implemented by all three adapters but never invoked from the composition root's drain. |
+| 2026-09-25 | Added T131 (wait for the persisted send in the notification fanout test) — the audit of ae072b5 confirmed `TestChainFanoutDeliversEvent` waits on request arrival, not the channel-row write. |
 | 2026-09-25 | Added T132 (withdraw readiness and stop HTTP before the runtime drain) — the same audit found `/readyz` can never return 503 during shutdown and the runtime drain precedes the ingress close, inverting doc 17 §2 steps 1–2. |
