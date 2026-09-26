@@ -101,6 +101,16 @@ type recordingStub struct {
 }
 
 func newRecordingStub(t *testing.T, status int, respBody string) *recordingStub {
+	return newHeldRecordingStub(t, status, respBody, nil)
+}
+
+// newHeldRecordingStub is newRecordingStub whose handler records the
+// request, then parks on hold before writing the response. While the hold
+// stays closed, "the stub saw the delivery" provably precedes the notifier
+// finishing the send — its client is still blocked inside Do. The channel
+// is a constructor parameter so it exists before the handler goroutine
+// spawns; the test never writes a shared field behind the server's back.
+func newHeldRecordingStub(t *testing.T, status int, respBody string, hold <-chan struct{}) *recordingStub {
 	t.Helper()
 	stub := &recordingStub{}
 	stub.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +127,9 @@ func newRecordingStub(t *testing.T, status int, respBody string) *recordingStub 
 			Body:   body,
 		})
 		stub.mu.Unlock()
+		if hold != nil {
+			<-hold
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		if _, err := w.Write([]byte(respBody)); err != nil {
@@ -463,7 +476,13 @@ func TestUnreachableUpstream(t *testing.T) {
 // claims the webhook job, and the stub records the Event JSON.
 func TestChainFanoutDeliversEvent(t *testing.T) {
 	db := newTestDB(t)
-	stub := newRecordingStub(t, http.StatusOK, "{}")
+	// The stub parks after recording, so arrival is provably earlier than
+	// the notifier persisting the send. OnceFunc releases it exactly once —
+	// the explicit release below or function exit before test cleanup.
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	defer release()
+	stub := newHeldRecordingStub(t, http.StatusOK, "{}", hold)
 
 	id := insertChannel(t, db, "webhook", "hook", true,
 		map[string]any{"url": stub.srv.URL}, []string{"task.completed"}, "")
@@ -493,7 +512,13 @@ func TestChainFanoutDeliversEvent(t *testing.T) {
 	require.Equal(t, taskID, event.TaskID)
 	require.Equal(t, "payload.bin", event.Name)
 
-	// The channel row records the successful delivery.
+	// Release the response, then wait on the persisted row — the
+	// postcondition the assertions need — not the arrival count: touch
+	// writes it only after the send attempt completes.
+	release()
+	waitFor(t, "channel send persisted", func() bool {
+		return getChannel(t, db, id).LastSendAt != nil
+	})
 	ch := getChannel(t, db, id)
 	require.NotNil(t, ch.LastSendAt)
 	require.Nil(t, ch.LastError)
