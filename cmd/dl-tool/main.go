@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,11 +42,10 @@ const (
 
 	// readHeaderTimeout bounds slow-header exposure on the main listener;
 	// readTimeout bounds the whole request read (body included); idleTimeout
-	// bounds keep-alive idling; shutdownTimeout bounds the graceful drain.
+	// bounds keep-alive idling.
 	readHeaderTimeout = 10 * time.Second
 	readTimeout       = 60 * time.Second
 	idleTimeout       = 120 * time.Second
-	shutdownTimeout   = 10 * time.Second
 
 	// governorBootTimeout bounds the stored-limits fan-out so a black-holed
 	// engine can hold the boot for one window, not per daemon RPC.
@@ -62,6 +62,13 @@ const (
 	loopbackHost       = "127.0.0.1"
 	healthzPath        = "/healthz"
 )
+
+// shutdownTimeout bounds each drain phase separately — the in-flight
+// request grace and the conn-join — so worst-case teardown is the runtime
+// drain plus two budgets. A var, not a const, so drain tests can shrink it
+// and exercise the overrun paths; tests restore it via defer and never run
+// parallel.
+var shutdownTimeout = 10 * time.Second
 
 // Options are the humacli-bound flags.
 type Options struct {
@@ -85,6 +92,7 @@ func main() {
 	drained := make(chan struct{})
 
 	var httpServer *http.Server
+	var liveConns sync.WaitGroup
 	var cancelRun context.CancelFunc
 	var runDone sync.WaitGroup
 
@@ -385,6 +393,24 @@ func main() {
 				ReadHeaderTimeout: readHeaderTimeout,
 				ReadTimeout:       readTimeout,
 				IdleTimeout:       idleTimeout,
+				// Live-connection bookkeeping for the drain: each conn's
+				// serve goroutine runs its handlers, so joining them after a
+				// force-close is what actually clears in-flight handlers
+				// before engine teardown. StateNew is set before any request
+				// parses. Two residual gaps, both best-effort on a drain path:
+				// a conn racing listener Close can Add after Wait saw zero,
+				// and a hijacked conn leaves the count at StateHijacked while
+				// its handler may still run — neither exists today (no
+				// Hijacker/TLSNextProto users), but do not widen this count's
+				// claimed coverage without handler-level tracking.
+				ConnState: func(_ net.Conn, s http.ConnState) {
+					switch s {
+					case http.StateNew:
+						liveConns.Add(1)
+					case http.StateClosed, http.StateHijacked:
+						liveConns.Done()
+					}
+				},
 			}
 
 			go func() {
@@ -400,17 +426,17 @@ func main() {
 			// Drain in the goroutine that owns the values; stopped and drained
 			// are the happens-before edges, so there is no racy cross-goroutine
 			// read and humacli cannot return before the close completes.
-			shutdownDrain(httpServer, server, db)
+			shutdownDrain(httpServer, server, db, &liveConns, func() {
+				if cancelRun != nil {
+					cancelRun()
+				}
+				runDone.Wait()
+			})
 		})
 		hooks.OnStop(func() {
 			slog.Info("stopped")
-			// Ask the metrics listener and the tasks_total sampler to stop and
-			// join them before signalling the main shutdown path, so both drain
-			// before the store closes.
-			if cancelRun != nil {
-				cancelRun()
-			}
-			runDone.Wait()
+			// The whole teardown runs in the OnStart goroutine — the one that
+			// owns the values — released by stopped and fenced by drained.
 			close(stopped)
 			<-drained
 		})
@@ -422,25 +448,86 @@ func main() {
 }
 
 // shutdownDrain performs the ordered teardown of docs/17 §2 once OnStop has
-// cancelled the runtime loops: stop accepting HTTP, join the server's
-// background loops — the sync hub, the reconciler and the admission pass must
-// stop before the store closes — then close the database.
-func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB) {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
+// signalled: withdraw readiness and close ingress first — step 1 — then run
+// drainRuntime, which stops and joins the runtime loops — cron, job workers,
+// metrics — then the server's background loops, the engines and the store.
+// http.Server.Shutdown closes the listener before its RegisterOnShutdown
+// callbacks run (net/http server.go), so ingressStopped is the ingress-stop
+// barrier: drainRuntime cannot start until the listener is dead.
+//
+// liveConns counts open connections (net/http's ConnState); it is how the
+// drain joins handler goroutines after the HTTP phase, because
+// http.Server.Close reaps sockets and cancels request contexts but never
+// waits for the conn goroutines those handlers run on. If that join
+// overruns its budget — a handler ignoring its context — the drain returns
+// rather than closing engines and the store under a live request; the
+// process exit that follows reaps what is left.
+func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, liveConns *sync.WaitGroup, drainRuntime func()) {
+	server.Health.MarkDraining()
 
+	httpDone := make(chan struct{})
 	if httpServer != nil {
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			slog.Error("http shutdown failed", "err", err)
-			// Shutdown overran with requests still live. Close reaps the
-			// listener and sockets — cancelling request contexts — but cannot
-			// join hung handler goroutines; a handler that ignores its
-			// request context may still race the teardown below.
-			if cerr := httpServer.Close(); cerr != nil {
-				slog.Error("http force-close failed", "err", cerr)
+		ingressStopped := make(chan struct{})
+		httpServer.RegisterOnShutdown(sync.OnceFunc(func() { close(ingressStopped) }))
+		go func() {
+			defer close(httpDone)
+			// Background, not a deadline: Shutdown closes the listener
+			// immediately either way — ingress stops first — and the grace
+			// budget is enforced below, after the runtime drain, so a slow
+			// drain cannot eat the in-flight request window.
+			if err := httpServer.Shutdown(context.Background()); err != nil &&
+				!errors.Is(err, http.ErrServerClosed) {
+				slog.Error("http shutdown failed", "err", err)
 			}
+		}()
+		// The callback runs after closeListenersLocked returns inside
+		// Shutdown, so the listener close is complete — not merely started —
+		// before the runtime drain begins.
+		<-ingressStopped
+	} else {
+		close(httpDone)
+	}
+
+	drainRuntime()
+
+	graceCtx, graceCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer graceCancel()
+	select {
+	case <-httpDone:
+	case <-graceCtx.Done():
+		// Grace overran with requests still live. Close reaps the listener
+		// and sockets — cancelling request contexts — but cannot join hung
+		// handler goroutines; the liveConns wait below is what bounds them.
+		slog.Error("http shutdown overran its budget; force-closing connections")
+		if cerr := httpServer.Close(); cerr != nil {
+			slog.Error("http force-close failed", "err", cerr)
+		}
+		<-httpDone
+	}
+
+	// Join the conn goroutines still unwinding their handlers — after a
+	// graceful shutdown this is already empty; after a force-close it
+	// waits out the context cancellations.
+	if liveConns != nil {
+		connsJoined := make(chan struct{})
+		go func() {
+			liveConns.Wait()
+			close(connsJoined)
+		}()
+		joinCtx, joinCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer joinCancel()
+		select {
+		case <-connsJoined:
+		case <-joinCtx.Done():
+			// A live handler still holds its conn goroutine. Stopping the
+			// engines or closing the store under it is exactly the race this
+			// join exists to prevent, so the drain declines: bounded return,
+			// explicit log, and no claim of a completed safe teardown.
+			slog.Error("in-flight connections outlived the join budget; drain incomplete — engines and store left to process exit")
+			return
 		}
 	}
+
 	server.Shutdown()
 	// Engine teardown — yt-dlp's subprocess kills, qBittorrent's poll stop,
 	// aria2's websocket abort — runs only after the loops that call into

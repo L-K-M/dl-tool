@@ -19,6 +19,8 @@ const (
 	titleNotReady       = "Not ready"
 	// detailMigrationsPending answers /readyz before MarkReady has run.
 	detailMigrationsPending = "migrations have not completed"
+	// detailDraining answers /readyz once MarkDraining has withdrawn it.
+	detailDraining = "the server is shutting down"
 	// detailDatabaseFailed answers /readyz when the readiness probe fails.
 	detailDatabaseFailed = "the database did not answer"
 	readinessQuery       = `SELECT 1`
@@ -26,10 +28,12 @@ const (
 )
 
 // Health tracks readiness. Ready flips exactly once, after migrations
-// succeed; cmd/dl-tool calls MarkReady once store.Open has returned.
+// succeed; cmd/dl-tool calls MarkReady once store.Open has returned and
+// MarkDraining when the shutdown drain begins.
 type Health struct {
-	db    *sqlx.DB
-	ready atomic.Bool
+	db       *sqlx.DB
+	ready    atomic.Bool
+	draining atomic.Bool
 }
 
 // NewHealth wraps the store handle. db may be nil while the store is not
@@ -41,6 +45,14 @@ func NewHealth(db *sqlx.DB) *Health {
 // MarkReady flips the readiness gate exactly once per boot.
 func (h *Health) MarkReady() {
 	h.ready.Store(true)
+}
+
+// MarkDraining withdraws readiness for the shutdown drain: /readyz answers
+// 503 from this point so a proxy stops routing traffic before the listener
+// closes (docs/17-operations-and-runbook.md §2 step 1). One-way, like
+// MarkReady — there is no path back to serving.
+func (h *Health) MarkDraining() {
+	h.draining.Store(true)
 }
 
 // healthBody is the JSON of both 200 responses.
@@ -67,6 +79,11 @@ func (h *Health) Live(w http.ResponseWriter, _ *http.Request) {
 // run and SELECT 1 still answers; otherwise 503 application/problem+json
 // /problems/not-ready.
 func (h *Health) Ready(w http.ResponseWriter, r *http.Request) {
+	if h.draining.Load() {
+		writeNotReady(w, detailDraining)
+		return
+	}
+
 	if !h.ready.Load() {
 		writeNotReady(w, detailMigrationsPending)
 		return
