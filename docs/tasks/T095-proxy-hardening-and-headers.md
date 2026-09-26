@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T095 |
 | **Milestone** | M7 |
-| **Status** | deferred — see the open Blocked record dated 2026-09-26 |
+| **Status** | todo |
 | **Depends on** | T007, T013, T094 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
@@ -38,6 +38,7 @@ Read ONLY these, in this order. Do not explore the rest of the repo.
 | `internal/api/server_test.go` | edit | Give the shared router-request helper and direct requests an allowed Host. |
 | `internal/api/auth_test.go` | edit | Give root-router authentication requests an allowed Host. |
 | `internal/obs/health_test.go` | edit | Give main-router health requests an allowed Host. |
+| `internal/engine/qbittorrent/contract_test.go` | edit | Give the integration-tagged contract suite's two router-driving requests an allowed Host. |
 
 No other file may be modified.
 
@@ -119,8 +120,9 @@ including the `flush_interval -1` comment and the "do NOT add stripprefix" note.
    middleware chain, all on the base sub-router so a request outside the base still returns `404`.
    `cfg.AllowedHosts` and `cfg.ConfigLock` are the parsed `DLTOOL_ALLOWED_HOSTS` and `DLTOOL_CONFIG_LOCK`
    ([`11-config-reference.md`](../11-config-reference.md#2-dltool_-variables-application) §2) — they are
-   the only sources either has. Update router-driving requests in the three listed test files to use
-   an allowed Host; keep the middleware unconditional and preserve every existing assertion. The shared
+   the only sources either has. Update router-driving requests in the four listed test files to use
+   an allowed Host — including the `//go:build integration` `TestConformBootCorrection` constructions —
+   keep the middleware unconditional and preserve every existing assertion. The shared
    `do()` helper also covers `static_test.go`, which needs no edit.
 8. Create `deploy/caddy/Caddyfile.example` and `deploy/traefik/labels.md` from doc 10 §7.1 and §7.2, carrying
    forward the UNVERIFIED note on the Traefik flush-interval label name.
@@ -153,11 +155,14 @@ including the `flush_interval -1` comment and the "do NOT add stripprefix" note.
 Run exactly this. Paste the output under "Evidence".
 ```bash
 make lint && go test -race -count=1 ./internal/api/... ./internal/obs/... \
-  && go test -race -count=1 -v -run 'TestSecurityHeadersOnHTML|TestHSTSOnlyOverHTTPS|TestUnexpectedHostIs421|TestAllowedHostTable|TestSafeRedirectTable|TestNoInsecureSkipVerify' ./internal/api/... ./internal/obs/...
+  && go test -race -count=1 -v -run 'TestSecurityHeadersOnHTML|TestHSTSOnlyOverHTTPS|TestUnexpectedHostIs421|TestAllowedHostTable|TestSafeRedirectTable|TestNoInsecureSkipVerify' ./internal/api/... ./internal/obs/... | tee /tmp/t095-named-tests.log \
+  && [ "$(grep -c '^--- PASS: Test' /tmp/t095-named-tests.log)" -ge 6 ] \
+  && make test-integration
 ```
 Expected: lint succeeds and both packages pass, with
 `TestSecurityHeadersOnHTML`, `TestHSTSOnlyOverHTTPS`, `TestUnexpectedHostIs421`,
-`TestAllowedHostTable`, `TestSafeRedirectTable` and `TestNoInsecureSkipVerify` all listed as passing.
+`TestAllowedHostTable`, `TestSafeRedirectTable` and `TestNoInsecureSkipVerify` all listed as passing —
+the `grep -c` assertion fails the run if `-run` matched nothing — and the integration suite passes.
 No `FAIL`.
 
 Also confirm scope:
@@ -183,9 +188,12 @@ Expected: only paths allowed by the Files table, sorted lexically. Use `git stat
 
 ## Blocked
 
-Resolved by this plan repair: the Files table permits the three request-construction fixes below.
-The allowlist and existing assertions remain unchanged. The task is eligible again; implementation
-and its Verification output are still required.
+Resolved by plan repairs: the Files table permits the request-construction fixes recorded below —
+the three test helpers of the 2026-09-25 record (repair `3c2ea66`) and the integration-tagged
+`internal/engine/qbittorrent/contract_test.go` of the 2026-09-26 record (this repair) — and the
+Verification block now exercises `make test-integration`. The allowlist and existing assertions
+remain unchanged. The task is eligible again; implementation and its Verification output are still
+required.
 
 ### 2026-09-25 — the always-on host allowlist breaks 18 merged tests outside the Files table
 
@@ -302,3 +310,9 @@ without `-v`, then a `-v -run` pass naming the six required tests, so the gate k
 of the intent while shedding the output volume. The next task-verification run of the repaired
 script doubles as the test of the `-v` hypothesis: green confirms it; another stall clears it
 and points at the remaining variables.
+
+**Confirmed 2026-09-26:** the `task-verification` job ran the repaired script on the deferral PR's
+head (`453613d`) and passed in 14m36s — the `-v` output-volume hypothesis holds. The follow-up
+repair additionally guards the `-v -run` pass against a vacuous green (`grep -c` on the PASS
+lines) and appends `make test-integration`, closing the coverage gap both fallout records
+trace to.
