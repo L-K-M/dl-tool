@@ -257,6 +257,11 @@ type TaskHandlers struct {
 	// cfg.SSRFAllowPrivate and net.DefaultResolver; a nil pair fails closed.
 	guard    *secure.Guard
 	resolver secure.Resolver
+	// mediaMatch is the routing-table row-3 hook of T088, handed to every
+	// engine.Route call: the ytdlp engine's Accepts bound through the
+	// registry, or nil — which makes row 3 fall through to rows 4-6 rather
+	// than rejecting the URI.
+	mediaMatch func(string) bool
 }
 
 // NewTaskHandlers builds the task handlers. db is the store the task rows
@@ -266,16 +271,18 @@ type TaskHandlers struct {
 // routing-time availability table — a URI whose routed engine is not
 // registered answers 503; roots is DLTOOL_DATA_ROOTS in configured order.
 // guard and resolver are the SSRF preflight pair: server.go passes one
-// guard built once per server and the process resolver.
-func NewTaskHandlers(db *sqlx.DB, engines *engine.Registry, roots []string, guard *secure.Guard, resolver secure.Resolver) *TaskHandlers {
+// guard built once per server and the process resolver. mediaMatch is the
+// row-3 hook, typically bound from the registered ytdlp engine's Accepts.
+func NewTaskHandlers(db *sqlx.DB, engines *engine.Registry, roots []string, guard *secure.Guard, resolver secure.Resolver, mediaMatch func(string) bool) *TaskHandlers {
 	return &TaskHandlers{
-		db:       db,
-		tasks:    store.NewTaskStore(db),
-		settings: store.NewSettingsStore(db),
-		engines:  engines,
-		roots:    roots,
-		guard:    guard,
-		resolver: resolver,
+		db:         db,
+		tasks:      store.NewTaskStore(db),
+		settings:   store.NewSettingsStore(db),
+		engines:    engines,
+		roots:      roots,
+		guard:      guard,
+		resolver:   resolver,
+		mediaMatch: mediaMatch,
 	}
 }
 
@@ -811,9 +818,9 @@ func (h *TaskHandlers) planURIs(
 			continue
 		}
 
-		// MediaMatcher stays nil until the T088 ADR lands; until then a
-		// media URL simply routes to aria2 (IMPLEMENTING.md, open items).
-		engineName, err := engine.Route(n, nil)
+		// Row 3 asks the yt-dlp extractor cache through the injected
+		// hook; a nil matcher sends a media URL to aria2 as before.
+		engineName, err := engine.Route(n, h.mediaMatch)
 		if err != nil {
 			rejected = append(rejected, rejectURI(raw, err))
 
@@ -947,7 +954,7 @@ func (h *TaskHandlers) planSearchResults(
 			continue
 		}
 
-		engineName, err := engine.Route(n, nil)
+		engineName, err := engine.Route(n, h.mediaMatch)
 		if err != nil {
 			rejected = append(rejected, rejectSearchResult(id, err))
 

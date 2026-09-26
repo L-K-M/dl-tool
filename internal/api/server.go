@@ -367,7 +367,7 @@ func NewServer(cfg *config.Config, db *sqlx.DB, log *slog.Logger, deps ...Deps) 
 	// (POST /rules/{id}/run), to the feed handlers (the refresh poller's
 	// post-poll rules pass) and — as Server.RuleCreator — to the rss_poll
 	// job poller cmd/dl-tool builds.
-	tasks := NewTaskHandlers(db, engines, cfg.DataRoots, taskGuard, net.DefaultResolver)
+	tasks := NewTaskHandlers(db, engines, cfg.DataRoots, taskGuard, net.DefaultResolver, mediaMatcher(engines))
 	creator := ruleTaskCreator{tasks: tasks}
 	// The watch-folder creator shares the same tasks instance: a dropped
 	// .torrent takes the identical create path an uploaded one does.
@@ -957,6 +957,21 @@ func touchEngineOutcome(
 // alone, the check T122's acceptance criteria grep for.
 func newSSRFGuard(log *slog.Logger, allowPrivate bool) *secure.Guard {
 	return secure.NewGuard(log, allowPrivate)
+}
+
+// mediaMatcher is the routing-table row-3 hook of T088: whether a yt-dlp
+// extractor claims the URI. The media lane registers on the shared
+// registry only after NewServer returns — the composition root in
+// cmd/dl-tool owns the subprocess adapter — so the hook resolves the
+// engine at match time rather than binding a method here; the answer it
+// gives is the one Engine.Accepts reads off the cache Engine.Connect
+// loaded once at boot. An absent engine answers false, which is Route's
+// nil-matcher semantics: rows 4-6, unchanged from before.
+func mediaMatcher(engines *engine.Registry) func(string) bool {
+	return func(rawURI string) bool {
+		e, ok := engines.Get(engine.NameYtDlp)
+		return ok && e.Accepts(rawURI)
+	}
 }
 
 // loggerContextKey carries the request-scoped logger on the request context.
