@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -37,6 +38,12 @@ const eventsBuffer = 64
 type Engine struct {
 	runner *Runner
 	log    *slog.Logger
+	// cache is the T088 routing table: published by Connect before the
+	// listener accepts traffic, read by Accepts at routing time. Atomic
+	// publication, not a boot-ordering invariant, is what keeps a
+	// concurrent Connect/Accepts pair safe; an unpublished cache answers
+	// false through Match's nil-receiver contract.
+	cache atomic.Pointer[ExtractorCache]
 
 	mu      sync.Mutex
 	tasks   map[string]*taskRecord // keyed by the engine-namespaced id
@@ -81,17 +88,29 @@ func (e *Engine) Capabilities() []engine.Capability {
 	return []engine.Capability{engine.CapMediaSite, engine.CapPushEvents, engine.CapRename}
 }
 
-// Accepts reports whether a yt-dlp extractor claims the URI. The cache
-// that would answer it is the deferred T088 — the mechanism the plan
-// prescribed does not exist (docs/06-download-engines.md section 7.2) —
-// so until its ADR lands nothing matches here and Route's nil
-// mediaMatch sends a media URL to aria2.
-func (e *Engine) Accepts(string) bool { return false }
+// Accepts reports whether a yt-dlp extractor claims the URI: the cache
+// Connect loaded answers it from the committed table and the residual
+// host overrides — no subprocess, no network (docs/06-download-engines.md
+// section 7.2, ADR-0022). A nil or unloaded cache answers false, which
+// keeps forced-engine submissions rejecting exactly as they did before
+// the cache existed.
+func (e *Engine) Accepts(uri string) bool { return e.cache.Load().Match(uri) }
 
-// Connect readies the lane. The extractor cache it was meant to load is
-// the deferred T088, so there is nothing to load; a missing binary is
-// Health's report, never a Connect failure.
-func (e *Engine) Connect(context.Context) error { return nil }
+// Connect readies the lane: it compiles the committed extractor table
+// into the routing cache of T088. A load failure is logged and leaves a
+// usable empty cache — the table is committed output and a bad line is a
+// defect, but a lane that answers false beats a boot failure; a missing
+// binary is Health's report, never a Connect failure.
+func (e *Engine) Connect(context.Context) error {
+	cache, err := LoadExtractors()
+	if err != nil {
+		e.log.Error("ytdlp extractor table failed to load; media routing disabled",
+			slog.String("error", err.Error()))
+		cache = &ExtractorCache{}
+	}
+	e.cache.Store(cache)
+	return nil
+}
 
 // Close kills every live process and closes every subscriber channel.
 // A process already reaped by its watcher answers ErrNotFound, which is

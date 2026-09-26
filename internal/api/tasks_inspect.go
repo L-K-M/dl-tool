@@ -235,8 +235,8 @@ func (h *TaskHandlers) inspectURI(ctx context.Context, raw string) (*ManifestDTO
 		return nil, &rejection, nil
 	}
 
-	// MediaMatcher stays nil until the T088 ADR lands (IMPLEMENTING.md).
-	if _, err := engine.Route(n, nil); err != nil {
+	// Row 3 consults the same extractor cache the create path does.
+	if _, err := engine.Route(n, h.mediaMatch); err != nil {
 		rejection := rejectURI(raw, err)
 		return nil, &rejection, nil
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/L-K-M/dl-tool/internal/engine/aria2"
 	"github.com/L-K-M/dl-tool/internal/engine/qbittorrent"
 	"github.com/L-K-M/dl-tool/internal/fsx"
+	"github.com/L-K-M/dl-tool/internal/secure"
 	"github.com/L-K-M/dl-tool/internal/store"
 )
 
@@ -1723,7 +1724,7 @@ func newPauseEnv(t *testing.T) *pauseEnv {
 		registry:    registry,
 		destination: root,
 		admit:       engine.NewAdmitter(registry, tasks, time.Second, nil),
-		handlers:    NewTaskHandlers(db, registry, nil, nil, nil),
+		handlers:    NewTaskHandlers(db, registry, nil, nil, nil, nil),
 	}
 }
 
@@ -2355,5 +2356,124 @@ func TestPatchTaskReloadsUnderTheLease(t *testing.T) {
 	}
 	if stored != testDLLimit {
 		t.Errorf("stored dl_limit = %d, want %d", stored, testDLLimit)
+	}
+}
+
+// TestCreateTasksMediaMatchHook proves the T088 wiring: the mediaMatch
+// hook NewTaskHandlers stores is what reaches engine.Route — a handler
+// built with a stub matcher that claims YouTube URLs routes a
+// youtube.com/watch submission to the ytdlp engine, while the same
+// handler built with nil falls through to aria2. The engine-side row-3
+// mechanics live in internal/engine/router_test.go and the real matcher
+// in internal/engine/ytdlp/patterns_test.go; this case only proves the
+// param arrives.
+func TestCreateTasksMediaMatchHook(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(
+		t.Context(),
+		filepath.Join(root, "dl-tool.db"),
+		filepath.Join(root, "backups"),
+	)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	registry := engine.NewRegistry()
+	registry.Register(newActionEngine(engine.NameAria2, acceptsAria2Lanes))
+	registry.Register(newActionEngine(engine.NameYtDlp, func(string) bool { return true }))
+
+	guard := secure.NewGuard(slog.New(slog.NewJSONHandler(io.Discard, nil)), false)
+	const youtubeWatch = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+	stubMatch := func(raw string) bool { return strings.HasPrefix(raw, "https://www.youtube.com/") }
+
+	for _, tc := range []struct {
+		name       string
+		mediaMatch func(string) bool
+		wantEngine string
+	}{
+		{"nil matcher falls through to aria2", nil, engine.NameAria2},
+		{"stub matcher routes to ytdlp", stubMatch, engine.NameYtDlp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handlers := NewTaskHandlers(db, registry, []string{root}, guard, permissiveResolver{}, tc.mediaMatch)
+			out, err := handlers.CreateTasks(t.Context(), &CreateTasksInput{
+				Body: CreateTasksBody{URIs: []string{youtubeWatch}},
+			})
+			if err != nil {
+				t.Fatalf("CreateTasks: %v", err)
+			}
+			if len(out.Body.Created) != 1 {
+				t.Fatalf("created %d tasks, want 1; rejected=%v", len(out.Body.Created), out.Body.Rejected)
+			}
+			if got := out.Body.Created[0].Engine; got != tc.wantEngine {
+				t.Errorf("engine = %q, want %q", got, tc.wantEngine)
+			}
+		})
+	}
+}
+
+// TestMediaMatchLateRegistration pins the ordering constraint that shapes
+// the T088 composition-root hook: cmd/dl-tool registers the ytdlp adapter
+// on the shared registry only after api.NewServer has already run, so a
+// mediaMatch bound to an engine looked up at NewTaskHandlers time would be
+// permanently absent. mediaMatcher is the exact function server.go hands
+// NewTaskHandlers; a handler built with it before the registration still
+// routes through the late-arriving engine, and while no ytdlp engine is
+// registered it answers false — nil-matcher semantics — so the same
+// submission falls through to aria2.
+func TestMediaMatchLateRegistration(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(
+		t.Context(),
+		filepath.Join(root, "dl-tool.db"),
+		filepath.Join(root, "backups"),
+	)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	guard := secure.NewGuard(slog.New(slog.NewJSONHandler(io.Discard, nil)), false)
+
+	for _, tc := range []struct {
+		name       string
+		uri        string
+		lateYtdlp  bool
+		wantEngine string
+	}{
+		{"absent engine answers false", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", false, engine.NameAria2},
+		{"registered after handler build routes ytdlp", "https://www.youtube.com/watch?v=oHg5SJYRHA0", true, engine.NameYtDlp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := engine.NewRegistry()
+			registry.Register(newActionEngine(engine.NameAria2, acceptsAria2Lanes))
+			// The hook is built before the media lane joins the registry —
+			// the ordering cmd/dl-tool/main.go composes.
+			handlers := NewTaskHandlers(db, registry, []string{root}, guard, permissiveResolver{}, mediaMatcher(registry))
+			if tc.lateYtdlp {
+				registry.Register(newActionEngine(engine.NameYtDlp, func(string) bool { return true }))
+			}
+			out, err := handlers.CreateTasks(t.Context(), &CreateTasksInput{
+				Body: CreateTasksBody{URIs: []string{tc.uri}},
+			})
+			if err != nil {
+				t.Fatalf("CreateTasks: %v", err)
+			}
+			if len(out.Body.Created) != 1 {
+				t.Fatalf("created %d tasks, want 1; rejected=%v", len(out.Body.Created), out.Body.Rejected)
+			}
+			if got := out.Body.Created[0].Engine; got != tc.wantEngine {
+				t.Errorf("engine = %q, want %q", got, tc.wantEngine)
+			}
+		})
 	}
 }

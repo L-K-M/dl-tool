@@ -214,7 +214,7 @@ The yt-dlp engine, the release hardening of the image and the compose stack, the
 | Task | Title | Depends on | Status |
 |---|---|---|---|
 | [T087](T087-ytdlp-subprocess-runner.md) | Run yt-dlp as a supervised subprocess | T005, T016 | done |
-| [T088](T088-ytdlp-extractor-cache.md) | Cache the yt-dlp extractor patterns for the router | T016, T087 | todo |
+| [T088](T088-ytdlp-extractor-cache.md) | Cache the yt-dlp extractor patterns for the router | T016, T087 | done |
 | [T089](T089-ytdlp-progress-and-exit-codes.md) | Parse yt-dlp progress lines and exit codes | T087 | done |
 | [T090](T090-ytdlp-engine-registration.md) | Register the yt-dlp engine and run the contract suite | T028, T089 | done |
 | [T093](T093-harden-runtime-image.md) | Harden the runtime image for a multi-arch release | T124 | done |
@@ -421,7 +421,7 @@ The consequences of that overflow numbering are recorded rather than "fixed":
 | ID | Title | Depends on | Parallel | Status | File |
 |---|---|---|---|---|---|
 | T087 | Run yt-dlp as a supervised subprocess | T005, T016 | yes | done | [T087](T087-ytdlp-subprocess-runner.md) |
-| T088 | Cache the yt-dlp extractor patterns for the router | T016, T087 | no | todo | [T088](T088-ytdlp-extractor-cache.md) |
+| T088 | Cache the yt-dlp extractor patterns for the router | T016, T087 | no | done | [T088](T088-ytdlp-extractor-cache.md) |
 | T089 | Parse yt-dlp progress lines and exit codes | T087 | yes | done | [T089](T089-ytdlp-progress-and-exit-codes.md) |
 | T090 | Register the yt-dlp engine and run the contract suite | T028, T089 | no | done | [T090](T090-ytdlp-engine-registration.md) |
 | T093 | Harden the runtime image for a multi-arch release | T124 | yes | done | [T093](T093-harden-runtime-image.md) |
