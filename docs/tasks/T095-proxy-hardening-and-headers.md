@@ -154,15 +154,16 @@ including the `flush_interval -1` comment and the "do NOT add stripprefix" note.
 ## Verification
 Run exactly this. Paste the output under "Evidence".
 ```bash
+set -euo pipefail
 make lint && go test -race -count=1 ./internal/api/... ./internal/obs/... \
   && go test -race -count=1 -v -run 'TestSecurityHeadersOnHTML|TestHSTSOnlyOverHTTPS|TestUnexpectedHostIs421|TestAllowedHostTable|TestSafeRedirectTable|TestNoInsecureSkipVerify' ./internal/api/... ./internal/obs/... | tee /tmp/t095-named-tests.log \
-  && [ "$(grep -c '^--- PASS: Test' /tmp/t095-named-tests.log)" -ge 6 ] \
+  && [ "$(grep '^--- PASS: Test' /tmp/t095-named-tests.log | awk '{print $3}' | sort -u | wc -l)" -ge 6 ] \
   && make test-integration
 ```
 Expected: lint succeeds and both packages pass, with
 `TestSecurityHeadersOnHTML`, `TestHSTSOnlyOverHTTPS`, `TestUnexpectedHostIs421`,
 `TestAllowedHostTable`, `TestSafeRedirectTable` and `TestNoInsecureSkipVerify` all listed as passing —
-the `grep -c` assertion fails the run if `-run` matched nothing — and the integration suite passes.
+the distinct-name count fails the run if `-run` matched nothing — and the integration suite passes.
 No `FAIL`.
 
 Also confirm scope:
@@ -313,6 +314,6 @@ and points at the remaining variables.
 
 **Confirmed 2026-09-26:** the `task-verification` job ran the repaired script on the deferral PR's
 head (`453613d`) and passed in 14m36s — the `-v` output-volume hypothesis holds. The follow-up
-repair additionally guards the `-v -run` pass against a vacuous green (`grep -c` on the PASS
-lines) and appends `make test-integration`, closing the coverage gap both fallout records
-trace to.
+repair additionally guards the `-v -run` pass against a vacuous green (a distinct-name count
+of the `--- PASS` lines) and appends `make test-integration`, closing the coverage gap both
+fallout records trace to.
