@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -88,6 +89,7 @@ func main() {
 	drained := make(chan struct{})
 
 	var httpServer *http.Server
+	var liveConns sync.WaitGroup
 	var cancelRun context.CancelFunc
 	var runDone sync.WaitGroup
 
@@ -388,6 +390,19 @@ func main() {
 				ReadHeaderTimeout: readHeaderTimeout,
 				ReadTimeout:       readTimeout,
 				IdleTimeout:       idleTimeout,
+				// Live-connection bookkeeping for the drain: each conn's
+				// serve goroutine runs its handlers, so joining them after a
+				// force-close is what actually clears in-flight handlers
+				// before engine teardown. StateNew is set before any request
+				// parses, so nothing dispatched can evade the count.
+				ConnState: func(_ net.Conn, s http.ConnState) {
+					switch s {
+					case http.StateNew:
+						liveConns.Add(1)
+					case http.StateClosed, http.StateHijacked:
+						liveConns.Done()
+					}
+				},
 			}
 
 			go func() {
@@ -403,7 +418,7 @@ func main() {
 			// Drain in the goroutine that owns the values; stopped and drained
 			// are the happens-before edges, so there is no racy cross-goroutine
 			// read and humacli cannot return before the close completes.
-			shutdownDrain(httpServer, server, db, func() {
+			shutdownDrain(httpServer, server, db, &liveConns, func() {
 				cancelRun()
 				runDone.Wait()
 			})
@@ -430,7 +445,12 @@ func main() {
 // in-flight connections, and an open SSE stream can hold it for the whole
 // budget, so it runs beside the runtime drain rather than serialized ahead
 // of it: ingress stops accepting first either way.
-func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, drainRuntime func()) {
+//
+// liveConns counts open connections (net/http's ConnState); it is how the
+// drain joins handler goroutines after the HTTP phase, because
+// http.Server.Close reaps sockets and cancels request contexts but never
+// waits for the conn goroutines those handlers run on.
+func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, liveConns *sync.WaitGroup, drainRuntime func()) {
 	server.Health.MarkDraining()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -444,7 +464,8 @@ func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, dra
 				slog.Error("http shutdown failed", "err", err)
 				// Shutdown overran with requests still live. Close reaps
 				// the listener and sockets — cancelling request contexts —
-				// but cannot join hung handler goroutines.
+				// but cannot join hung handler goroutines; the liveConns
+				// wait below is what bounds them.
 				if cerr := httpServer.Close(); cerr != nil {
 					slog.Error("http force-close failed", "err", cerr)
 				}
@@ -456,6 +477,27 @@ func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, dra
 
 	drainRuntime()
 	<-httpDone
+
+	// Join the conn goroutines still unwinding their handlers — after a
+	// graceful shutdown this is already empty; after a force-close it
+	// waits out the context cancellations. A wedged handler that ignores
+	// its context gets the same budget again and is then abandoned loudly
+	// rather than hanging the process.
+	if liveConns != nil {
+		drained := make(chan struct{})
+		go func() {
+			liveConns.Wait()
+			close(drained)
+		}()
+		joinCtx, joinCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer joinCancel()
+		select {
+		case <-drained:
+		case <-joinCtx.Done():
+			slog.Error("live connections outlived force-close; teardown proceeds with stragglers")
+		}
+	}
+
 	server.Shutdown()
 	// Engine teardown — yt-dlp's subprocess kills, qBittorrent's poll stop,
 	// aria2's websocket abort — runs only after the loops that call into

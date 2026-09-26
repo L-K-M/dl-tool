@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -98,7 +99,7 @@ func TestShutdownDrainClosesEnginesBeforeDatabaseClose(t *testing.T) {
 	server.Engines.Register(live)
 	server.Engines.Register(second)
 
-	shutdownDrain(nil, server, db, func() {})
+	shutdownDrain(nil, server, db, nil, func() {})
 
 	require.Equal(t, int32(1), live.calls.Load(), "Close must run exactly once in the drain")
 	require.Equal(t, int32(1), second.calls.Load(), "every registered engine must close")
@@ -117,7 +118,7 @@ func TestShutdownDrainClosesDatabaseWhenEngineCloseFails(t *testing.T) {
 	server.Engines.Register(broken)
 	server.Engines.Register(healthy)
 
-	shutdownDrain(nil, server, db, func() {})
+	shutdownDrain(nil, server, db, nil, func() {})
 
 	require.Equal(t, int32(1), broken.calls.Load())
 	require.Equal(t, int32(1), healthy.calls.Load(), "one engine's failure must not skip the rest")
@@ -169,15 +170,16 @@ func TestShutdownDrainStopsIngressBeforeRuntimeDrain(t *testing.T) {
 		}
 	}
 
-	shutdownDrain(httpServer, server, db, drainRuntime)
+	shutdownDrain(httpServer, server, db, nil, drainRuntime)
 	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
 }
 
 // A handler still in flight when Shutdown's budget expires must be dead
 // before engines close — the SSE pattern, a handler parked on its request
 // context, is what holds Shutdown to the deadline. The drain escalates to
-// httpServer.Close, which cancels the request context; the engine's own
-// Close observes the handler exited.
+// httpServer.Close, which cancels the request context, and then joins the
+// conn goroutines through liveConns, so engine teardown observes the
+// handler already gone.
 func TestShutdownDrainForceClosesOverrunningHandler(t *testing.T) {
 	db := testDB(t)
 	server := testServer(t)
@@ -190,7 +192,18 @@ func TestShutdownDrainForceClosesOverrunningHandler(t *testing.T) {
 		close(exited)
 	})
 
-	httpServer := &http.Server{Handler: server.Router}
+	var liveConns sync.WaitGroup
+	httpServer := &http.Server{
+		Handler: server.Router,
+		ConnState: func(_ net.Conn, s http.ConnState) {
+			switch s {
+			case http.StateNew:
+				liveConns.Add(1)
+			case http.StateClosed, http.StateHijacked:
+				liveConns.Done()
+			}
+		},
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() { _ = httpServer.Serve(listener) }()
@@ -216,12 +229,12 @@ func TestShutdownDrainForceClosesOverrunningHandler(t *testing.T) {
 	engine := &closeProbeEngine{
 		name: "probe",
 		onClose: func() error {
-			// A bounded wait, not a sleep-ordering: the engine must find
-			// the cancelled handler already gone, and without the Close
-			// escalation it never is.
+			// The drain's conn join is what orders this: exited must
+			// already be closed, not merely on its way — without the
+			// Close escalation the handler is still parked here.
 			select {
 			case <-exited:
-			case <-time.After(2 * time.Second):
+			default:
 				t.Error("an overrunning handler was still live when engines closed")
 			}
 
@@ -230,9 +243,66 @@ func TestShutdownDrainForceClosesOverrunningHandler(t *testing.T) {
 	}
 	server.Engines.Register(engine)
 
-	shutdownDrain(httpServer, server, db, func() {})
+	shutdownDrain(httpServer, server, db, &liveConns, func() {})
 
 	require.Equal(t, int32(1), engine.calls.Load())
+	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
+}
+
+// A handler that ignores its request context survives both the graceful
+// budget and the force-close; the drain joins it for one more
+// shutdownTimeout and then proceeds rather than hanging the process.
+func TestShutdownDrainBoundedJoinOfWedgedHandler(t *testing.T) {
+	db := testDB(t)
+	server := testServer(t)
+
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+	server.Router.Get("/wedged", func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-unblock
+	})
+	// The wedged handler outlives the test if it is never released.
+	t.Cleanup(func() { close(unblock) })
+
+	var liveConns sync.WaitGroup
+	httpServer := &http.Server{
+		Handler: server.Router,
+		ConnState: func(_ net.Conn, s http.ConnState) {
+			switch s {
+			case http.StateNew:
+				liveConns.Add(1)
+			case http.StateClosed, http.StateHijacked:
+				liveConns.Done()
+			}
+		},
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() { _ = httpServer.Serve(listener) }()
+	addr := listener.Addr().String()
+
+	go func() {
+		resp, err := http.Get("http://" + addr + "/wedged")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wedged handler never ran")
+	}
+
+	savedTimeout := shutdownTimeout
+	shutdownTimeout = 50 * time.Millisecond
+	defer func() { shutdownTimeout = savedTimeout }()
+
+	// Two budgets — Shutdown's own plus the conn join — must still finish
+	// well inside the failure threshold.
+	start := time.Now()
+	shutdownDrain(httpServer, server, db, &liveConns, func() {})
+	require.Less(t, time.Since(start), 5*time.Second, "a wedged handler must not hang the drain")
 	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
 }
 
@@ -269,7 +339,7 @@ func TestShutdownDrainStopsHTTPBeforeEnginesClose(t *testing.T) {
 		},
 	})
 
-	shutdownDrain(httpServer, server, db, func() {})
+	shutdownDrain(httpServer, server, db, nil, func() {})
 
 	require.Error(t, midCloseErr, "the HTTP listener must be dead before engines close")
 }

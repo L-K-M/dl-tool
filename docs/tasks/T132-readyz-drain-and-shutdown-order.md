@@ -47,8 +47,8 @@ runtime drain, then join the listener close before the existing loop/engine/stor
 |---|---|---|
 | `internal/obs/health.go` | modify | `draining` flag + `MarkDraining()`; `Ready` answers 503 with a draining detail once marked. |
 | `internal/obs/health_test.go` | modify | `MarkDraining` yields 503 `problem+json` with the draining detail even while the database answers. |
-| `cmd/dl-tool/main.go` | modify | `OnStop` reduces to `close(stopped)` + `<-drained`; `shutdownDrain` gains the runtime-drain step and orders it: `MarkDraining` → begin `httpServer.Shutdown` → runtime drain → join listener close → `server.Shutdown()` → `Engines.CloseAll()` → `db.Close()`. |
-| `cmd/dl-tool/main_test.go` | modify | Drive the drain with an injected runtime-drain step that probes mid-drain state: readiness is already withdrawn and the listener already refuses new connections. |
+| `cmd/dl-tool/main.go` | modify | `OnStop` reduces to `close(stopped)` + `<-drained`; `shutdownDrain` gains the runtime-drain step and orders it: `MarkDraining` → begin `httpServer.Shutdown` → runtime drain → join listener close → join live conn goroutines → `server.Shutdown()` → `Engines.CloseAll()` → `db.Close()`. A `ConnState` counter on the server supplies the conn join. |
+| `cmd/dl-tool/main_test.go` | modify | Drive the drain with an injected runtime-drain step that probes mid-drain state: readiness is already withdrawn and the listener already refuses new connections; overrun and wedged-handler cases pin the escalation and bounded conn join. |
 | `docs/tasks/T132-readyz-drain-and-shutdown-order.md` | modify | Set Status to `done` and paste the verification output under Evidence (step 5). |
 | `docs/tasks/00-task-index.md` | modify | Flip both of this task's status cells (the M7 row and the roster row) to `done` (step 5); touch no other row except the identifier-order note's M7 enumeration. |
 
@@ -84,9 +84,12 @@ No other file may be modified.
       `server.Shutdown()`, engine close and `db.Close()` run — the join order is unchanged.
 - [ ] In-flight SSE connections keep the existing bounded `shutdownTimeout` drain; no new timers or
       grace windows are invented.
-- [ ] A handler that overruns the `Shutdown` budget is force-cancelled before engines close —
-      `TestShutdownDrainForceClosesOverrunningHandler` fails deterministically when the
-      `httpServer.Close()` escalation is removed.
+- [ ] A handler that overruns the `Shutdown` budget is force-cancelled and its conn goroutine joined
+      before engines close — `TestShutdownDrainForceClosesOverrunningHandler` fails
+      deterministically when the `httpServer.Close()` escalation is removed.
+- [ ] A handler that ignores its request context cannot hang the drain: the conn join is bounded by
+      one more `shutdownTimeout` and teardown proceeds with an explicit error log —
+      `TestShutdownDrainBoundedJoinOfWedgedHandler`.
 - [ ] The ordering test failed deterministically before the fix (step 2 output in Evidence).
 
 ## Verification
@@ -133,7 +136,7 @@ FAIL	github.com/L-K-M/dl-tool/cmd/dl-tool	1.719s
 ```
 
 Steps 3–4, the task's Verification block (`make lint && make vet && make test PKG=./cmd/... &&
-make test PKG=./internal/obs/...`):
+make test PKG=./internal/obs/...`), run on the final tree including the conn-join:
 
 ```
 test -z "$(gofmt -l cmd internal)"          # clean
@@ -143,23 +146,34 @@ cd web && npm run lint                       # clean
 cd web && npx prettier --check .             # clean
 go vet ./...                                 # clean
 go test -race -count=1 ./cmd/...
-ok  	github.com/L-K-M/dl-tool/cmd/dl-tool	3.595s
+ok  	github.com/L-K-M/dl-tool/cmd/dl-tool	3.602s
 go test -race -count=1 ./internal/obs/...
-ok  	github.com/L-K-M/dl-tool/internal/obs	1.319s
+ok  	github.com/L-K-M/dl-tool/internal/obs	1.345s
 ```
 
 The HTTP-overrun case — an in-flight handler parked on its request context outliving the
-`Shutdown` budget — is pinned by `TestShutdownDrainForceClosesOverrunningHandler`. Red observed by
-temporarily removing the `httpServer.Close()` escalation:
+`Shutdown` budget — is pinned by `TestShutdownDrainForceClosesOverrunningHandler`. `Server.Close`
+cancels request contexts but never joins the conn goroutines handlers run on, so the drain carries
+a `ConnState`-driven `liveConns` counter (Add at `StateNew`, Done at `StateClosed`/`StateHijacked`)
+and joins it — bounded by one more `shutdownTimeout` — between the listener close and
+`server.Shutdown()`. The engine's `Close` therefore asserts the handler exited with a non-blocking
+check, not a wait.
+
+Red observed on the final shape by removing the `httpServer.Close()` escalation — the conn never
+closes, the bounded join expires, and the handler is still parked at engine close:
 
 ```
---- FAIL: TestShutdownDrainForceClosesOverrunningHandler (2.50s)
-    main_test.go:218: an overrunning handler was still live when engines closed
-FAIL	github.com/L-K-M/dl-tool/cmd/dl-tool	2.560s
+ERROR http shutdown failed err="context deadline exceeded"
+ERROR live connections outlived force-close; teardown proceeds with stragglers
+FAIL	github.com/L-K-M/dl-tool/cmd/dl-tool	0.317s
 ```
 
-With the escalation restored the whole drain suite passes under `-race` (output above), including
-`TestShutdownDrainForceClosesOverrunningHandler` at ~0.5s — the 50 ms shrunken budget overruns, the
-force-close cancels the parked handler, and the engine's `Close` observes it already exited.
+(The earlier pre-join variant of the same test failed at 2.5s inside the engine's bounded wait;
+the failure is identical in kind.)
+
+The wedged-handler bound is pinned by `TestShutdownDrainBoundedJoinOfWedgedHandler`: a handler that
+ignores its request context costs the drain exactly one more `shutdownTimeout` (50 ms in the test,
+~0.47s total) with an explicit error log, and teardown completes — the process is never held hostage
+by a misbehaving handler.
 
 A full `go test -count=1 ./...` also passed — every package `ok`, no `FAIL`, no `DATA RACE`.
