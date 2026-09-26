@@ -133,12 +133,7 @@ func TestShutdownDrainStopsIngressBeforeRuntimeDrain(t *testing.T) {
 	db := testDB(t)
 	server := testServer(t)
 
-	httpServer := &http.Server{Handler: server.Router}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	go func() { _ = httpServer.Serve(listener) }()
-
-	addr := listener.Addr().String()
+	httpServer, addr := testHTTPServer(t, server.Router, nil)
 	conn, err := net.Dial("tcp", addr)
 	require.NoError(t, err, "the listener must be live before the drain")
 	require.NoError(t, conn.Close())
@@ -156,7 +151,7 @@ func TestShutdownDrainStopsIngressBeforeRuntimeDrain(t *testing.T) {
 		// listener first, so refusal is near-instant once it starts.
 		deadline := time.Now().Add(5 * time.Second)
 		for {
-			c, dialErr := net.Dial("tcp", addr)
+			c, dialErr := net.DialTimeout("tcp", addr, time.Second)
 			if dialErr != nil {
 				return
 			}
@@ -193,21 +188,7 @@ func TestShutdownDrainForceClosesOverrunningHandler(t *testing.T) {
 	})
 
 	var liveConns sync.WaitGroup
-	httpServer := &http.Server{
-		Handler: server.Router,
-		ConnState: func(_ net.Conn, s http.ConnState) {
-			switch s {
-			case http.StateNew:
-				liveConns.Add(1)
-			case http.StateClosed, http.StateHijacked:
-				liveConns.Done()
-			}
-		},
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	go func() { _ = httpServer.Serve(listener) }()
-	addr := listener.Addr().String()
+	httpServer, addr := testHTTPServer(t, server.Router, &liveConns)
 
 	go func() {
 		resp, err := http.Get("http://" + addr + "/stuck")
@@ -266,21 +247,7 @@ func TestShutdownDrainBoundedJoinOfWedgedHandler(t *testing.T) {
 	t.Cleanup(func() { close(unblock) })
 
 	var liveConns sync.WaitGroup
-	httpServer := &http.Server{
-		Handler: server.Router,
-		ConnState: func(_ net.Conn, s http.ConnState) {
-			switch s {
-			case http.StateNew:
-				liveConns.Add(1)
-			case http.StateClosed, http.StateHijacked:
-				liveConns.Done()
-			}
-		},
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	go func() { _ = httpServer.Serve(listener) }()
-	addr := listener.Addr().String()
+	httpServer, addr := testHTTPServer(t, server.Router, &liveConns)
 
 	go func() {
 		resp, err := http.Get("http://" + addr + "/wedged")
@@ -306,18 +273,44 @@ func TestShutdownDrainBoundedJoinOfWedgedHandler(t *testing.T) {
 	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
 }
 
+// testHTTPServer serves h on a loopback listener and closes both in cleanup.
+// The drain owns the ordinary shutdown; cleanup only sweeps the listener and
+// conn goroutines if a test aborts before the drain ran — Server.Close is
+// idempotent, so the double-close after a real drain is a nil no-op.
+func testHTTPServer(t *testing.T, h http.Handler, liveConns *sync.WaitGroup) (*http.Server, string) {
+	t.Helper()
+
+	httpServer := &http.Server{Handler: h}
+	if liveConns != nil {
+		httpServer.ConnState = func(_ net.Conn, s http.ConnState) {
+			switch s {
+			case http.StateNew:
+				liveConns.Add(1)
+			case http.StateClosed, http.StateHijacked:
+				liveConns.Done()
+			}
+		}
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if cerr := httpServer.Close(); cerr != nil {
+			t.Logf("test http server close: %v", cerr)
+		}
+	})
+	go func() { _ = httpServer.Serve(listener) }()
+
+	return httpServer, listener.Addr().String()
+}
+
 // The HTTP listener is released before the engines: an in-flight request
 // never meets a closed engine mid-handler.
 func TestShutdownDrainStopsHTTPBeforeEnginesClose(t *testing.T) {
 	server := testServer(t)
 	db := testDB(t)
 
-	httpServer := &http.Server{Handler: server.Router}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	go func() { _ = httpServer.Serve(listener) }()
-
-	base := "http://" + listener.Addr().String()
+	httpServer, addr := testHTTPServer(t, server.Router, nil)
+	base := "http://" + addr
 	probe := &http.Client{Timeout: 2 * time.Second}
 	resp, err := probe.Get(base + "/healthz")
 	require.NoError(t, err)

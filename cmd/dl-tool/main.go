@@ -63,8 +63,11 @@ const (
 	healthzPath        = "/healthz"
 )
 
-// shutdownTimeout bounds the graceful drain. A var, not a const, so a drain
-// test can shrink the budget and exercise the overrun path.
+// shutdownTimeout bounds each drain phase separately — the in-flight
+// request grace and the conn-join — so worst-case teardown is the runtime
+// drain plus two budgets. A var, not a const, so drain tests can shrink it
+// and exercise the overrun paths; tests restore it via defer and never run
+// parallel.
 var shutdownTimeout = 10 * time.Second
 
 // Options are the humacli-bound flags.
@@ -394,7 +397,12 @@ func main() {
 				// serve goroutine runs its handlers, so joining them after a
 				// force-close is what actually clears in-flight handlers
 				// before engine teardown. StateNew is set before any request
-				// parses, so nothing dispatched can evade the count.
+				// parses. Two residual gaps, both best-effort on a drain path:
+				// a conn racing listener Close can Add after Wait saw zero,
+				// and a hijacked conn leaves the count at StateHijacked while
+				// its handler may still run — neither exists today (no
+				// Hijacker/TLSNextProto users), but do not widen this count's
+				// claimed coverage without handler-level tracking.
 				ConnState: func(_ net.Conn, s http.ConnState) {
 					switch s {
 					case http.StateNew:
@@ -419,7 +427,9 @@ func main() {
 			// are the happens-before edges, so there is no racy cross-goroutine
 			// read and humacli cannot return before the close completes.
 			shutdownDrain(httpServer, server, db, &liveConns, func() {
-				cancelRun()
+				if cancelRun != nil {
+					cancelRun()
+				}
 				runDone.Wait()
 			})
 		})
@@ -453,22 +463,17 @@ func main() {
 func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, liveConns *sync.WaitGroup, drainRuntime func()) {
 	server.Health.MarkDraining()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-
 	httpDone := make(chan struct{})
 	if httpServer != nil {
 		go func() {
 			defer close(httpDone)
-			if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			// Background, not a deadline: Shutdown closes the listener
+			// immediately either way — ingress stops first — and the grace
+			// budget is enforced below, after the runtime drain, so a slow
+			// drain cannot eat the in-flight request window.
+			if err := httpServer.Shutdown(context.Background()); err != nil &&
+				!errors.Is(err, http.ErrServerClosed) {
 				slog.Error("http shutdown failed", "err", err)
-				// Shutdown overran with requests still live. Close reaps
-				// the listener and sockets — cancelling request contexts —
-				// but cannot join hung handler goroutines; the liveConns
-				// wait below is what bounds them.
-				if cerr := httpServer.Close(); cerr != nil {
-					slog.Error("http force-close failed", "err", cerr)
-				}
 			}
 		}()
 	} else {
@@ -476,7 +481,21 @@ func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, liv
 	}
 
 	drainRuntime()
-	<-httpDone
+
+	graceCtx, graceCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer graceCancel()
+	select {
+	case <-httpDone:
+	case <-graceCtx.Done():
+		// Grace overran with requests still live. Close reaps the listener
+		// and sockets — cancelling request contexts — but cannot join hung
+		// handler goroutines; the liveConns wait below is what bounds them.
+		slog.Error("http shutdown overran its budget; force-closing connections")
+		if cerr := httpServer.Close(); cerr != nil {
+			slog.Error("http force-close failed", "err", cerr)
+		}
+		<-httpDone
+	}
 
 	// Join the conn goroutines still unwinding their handlers — after a
 	// graceful shutdown this is already empty; after a force-close it
@@ -484,15 +503,15 @@ func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, liv
 	// its context gets the same budget again and is then abandoned loudly
 	// rather than hanging the process.
 	if liveConns != nil {
-		drained := make(chan struct{})
+		connsJoined := make(chan struct{})
 		go func() {
 			liveConns.Wait()
-			close(drained)
+			close(connsJoined)
 		}()
 		joinCtx, joinCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer joinCancel()
 		select {
-		case <-drained:
+		case <-connsJoined:
 		case <-joinCtx.Done():
 			slog.Error("live connections outlived force-close; teardown proceeds with stragglers")
 		}

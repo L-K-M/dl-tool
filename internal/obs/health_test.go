@@ -163,6 +163,34 @@ func TestReadyzIs503OnceDraining(t *testing.T) {
 	}
 }
 
+// Draining outranks a failing database: during shutdown the detail must
+// still say the server is shutting down, not report a misleading outage.
+func TestReadyzDrainingDetailOutranksDatabaseFailure(t *testing.T) {
+	db := newMemoryDB(t)
+	health := obs.NewHealth(db)
+	health.MarkReady()
+	if err := db.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+	health.MarkDraining()
+
+	recorder := httptest.NewRecorder()
+	health.Ready(recorder, httptest.NewRequest(http.MethodGet, readyzPath, nil))
+
+	response := recorder.Result()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	var problem problemDocument
+	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Detail != "the server is shutting down" {
+		t.Errorf("detail = %q, want the draining detail even when the database fails", problem.Detail)
+	}
+}
+
 func TestReadyzIs503WhenDatabaseFails(t *testing.T) {
 	db := newMemoryDB(t)
 	health := obs.NewHealth(db)
