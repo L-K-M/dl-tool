@@ -276,3 +276,26 @@ CI. Verified as of this record: `grep -rn "go:build integration" --include="*.go
 lists five files, and only this one calls `server.Router.ServeHTTP`; the untagged sweep
 `grep -rn "server\.Router" --include="*_test.go" .` adds only `cmd/dl-tool/main_test.go`, whose
 requests ride real listeners and send a `127.0.0.1` host the literal-IP rule accepts.
+
+#### Companion defect found while landing this record — the Verification block itself stalls `task-verification`
+
+This deferral's own PR could not go through the `task-verification` workflow: every run of the
+extracted script — `make lint && go test -race -count=1 -v ./internal/api/... ./internal/obs/...` —
+stalled at "Run task Verification" and wedged the runner so completely that cancellation and the
+job's own 60-minute `timeout-minutes` produced no effect for tens of minutes and no log blob was
+ever uploaded. Observed across four consecutive runs (three `push` triggers, one
+`workflow_dispatch`), each stuck ≥50 minutes on the step before being reaped. The same commands
+pass individually on the same SHA — `make lint` in the `lint` job (6m16s), the full
+`go test -race -count=1 ./...` in the `test` job (10m12s) — and the exact extracted script
+completes locally under `bash -euo pipefail` in ~5.5 minutes. Every prior `task-verification`
+run on other task branches succeeded; all of their scripts use `make test` — plain, non-verbose
+`go test` — and none emits anywhere near the ~60 MB of step output that `-v` produces on
+`internal/api` alone. Verbose output on the repo's largest test suite is the one variable that
+distinguishes this script from everything that has ever passed in that workflow, so it is the
+probable stall mechanism (runner resource or log-pipeline exhaustion); the runner died too early
+to leave logs proving it.
+
+**Remedy for this sub-defect, again an owner's call:** drop `-v` — `go test -race -count=1
+./internal/api/... ./internal/obs/...` followed by a `go test -v -run` pass naming the six
+required tests keeps both halves of the intent — or re-issue the block in `make test PKG=` form
+like every other task and assert the six names a different way.
