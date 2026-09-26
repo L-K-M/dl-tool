@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -125,47 +127,130 @@ func TestShutdownDrainClosesDatabaseWhenEngineCloseFails(t *testing.T) {
 	require.Error(t, db.PingContext(context.Background()), "a failed engine close must not strand the store")
 }
 
-// Doc 17 §2 orders ingress ahead of the runtime drain: by the time the
-// scheduler and workers begin draining, /readyz must already report the
-// draining 503 — not merely a failed probe — and the listener must already
-// refuse new connections. The injected step probes both mid-drain.
+// blockingListener parks its Close — the call http.Server.Shutdown makes
+// inside closeListenersLocked — until released, so a test can hold the
+// ingress-stop boundary open and observe what the drain does meanwhile.
+type blockingListener struct {
+	net.Listener
+	entered   chan struct{}
+	release   chan struct{}
+	completed chan struct{}
+}
+
+func (l *blockingListener) Close() error {
+	close(l.entered)
+	<-l.release
+	err := l.Listener.Close()
+	close(l.completed)
+	return err
+}
+
+// Doc 17 §2 orders ingress ahead of the runtime drain: the runtime step
+// must not start until the listener close has completed inside Shutdown —
+// after it, /readyz already reports the draining 503 and one Dial is
+// refused immediately, with no retry window.
 func TestShutdownDrainStopsIngressBeforeRuntimeDrain(t *testing.T) {
 	db := testDB(t)
 	server := testServer(t)
 
-	httpServer, addr := testHTTPServer(t, server.Router, nil)
-	conn, err := net.Dial("tcp", addr)
+	base, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	bl := &blockingListener{
+		Listener:  base,
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+		completed: make(chan struct{}),
+	}
+	// Any abort must release the held Close before the server cleanup below
+	// can call it — defer, not t.Cleanup: defers run before cleanups, and
+	// Server.Close would otherwise block on the held listener forever.
+	releaseOnce := sync.OnceFunc(func() { close(bl.release) })
+	defer releaseOnce()
+
+	httpServer := &http.Server{Handler: server.Router}
+	t.Cleanup(func() {
+		if cerr := httpServer.Close(); cerr != nil {
+			t.Logf("test http server close: %v", cerr)
+		}
+	})
+	go func() {
+		if serr := httpServer.Serve(bl); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+			t.Errorf("http serve: %v", serr)
+		}
+	}()
+	addr := base.Addr().String()
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
 	require.NoError(t, err, "the listener must be live before the drain")
 	require.NoError(t, conn.Close())
 
+	// Baseline: readiness must not already report draining before the drain
+	// runs — otherwise the mid-drain 503 would prove nothing.
+	baseline := httptest.NewRecorder()
+	server.Health.Ready(baseline, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	require.NotContains(t, baseline.Body.String(), "shutting down",
+		"readiness must not already report a drain before one begins")
+
+	runtimeRan := make(chan struct{})
 	drainRuntime := func() {
-		// The draining 503 carries its own detail — a nil-db or pre-migration
-		// 503 does not count as a withdrawn readiness.
+		defer close(runtimeRan)
+
+		// The listener close must already have completed — not merely be
+		// in progress somewhere on the Shutdown goroutine. t.Errorf, not
+		// require: this runs on the drain goroutine, where FailNow would
+		// silently abort shutdownDrain instead of reporting.
+		select {
+		case <-bl.completed:
+		default:
+			t.Error("the runtime drain started before the listener close completed")
+		}
+
+		// The draining 503 carries its own detail — a nil-db or
+		// pre-migration 503 does not count as a withdrawn readiness.
 		recorder := httptest.NewRecorder()
 		server.Health.Ready(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-		require.Contains(t, recorder.Body.String(), "shutting down",
-			"readiness must be withdrawn before the runtime drain runs")
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Errorf("mid-drain readyz = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+		}
+		if !strings.Contains(recorder.Body.String(), "shutting down") {
+			t.Errorf("mid-drain readyz detail = %q, want the draining detail", recorder.Body.String())
+		}
 
-		// New connections must already be refused: Shutdown closes the
-		// listener first, so refusal is near-instant once it starts.
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			c, dialErr := net.DialTimeout("tcp", addr, time.Second)
-			if dialErr != nil {
-				return
-			}
+		// With the listener close complete, one Dial is refused outright —
+		// no retry window.
+		c, dialErr := net.DialTimeout("tcp", addr, time.Second)
+		if dialErr == nil {
 			_ = c.Close()
-			if time.Now().After(deadline) {
-				t.Error("the listener still accepts connections during the runtime drain")
-
-				return
-			}
-			time.Sleep(time.Millisecond)
+			t.Error("the listener still accepts connections when the runtime drain starts")
 		}
 	}
 
-	shutdownDrain(httpServer, server, db, nil, drainRuntime)
+	drainDone := make(chan struct{})
+	go func() {
+		shutdownDrain(httpServer, server, db, nil, drainRuntime)
+		close(drainDone)
+	}()
+
+	select {
+	case <-bl.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the drain never reached the listener close")
+	}
+
+	// While the Close is held, the runtime drain must not have run.
+	select {
+	case <-runtimeRan:
+		t.Error("the runtime drain ran while the listener close was still held")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	releaseOnce()
+
+	select {
+	case <-drainDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the drain never finished after the listener close released")
+	}
 	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
 }
 
@@ -230,10 +315,12 @@ func TestShutdownDrainForceClosesOverrunningHandler(t *testing.T) {
 	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
 }
 
-// A handler that ignores its request context survives both the graceful
-// budget and the force-close; the drain joins it for one more
-// shutdownTimeout and then proceeds rather than hanging the process.
-func TestShutdownDrainBoundedJoinOfWedgedHandler(t *testing.T) {
+// A handler that ignores its request context survives the grace budget and
+// the force-close. Closing engines or the store under a live request is
+// the race the conn join exists to prevent, so on an exhausted join budget
+// the drain returns — bounded, before server.Shutdown, engines and db —
+// and leaves them to process exit. Nothing claims a completed safe close.
+func TestShutdownDrainWedgedHandlerLeavesResourcesForProcessExit(t *testing.T) {
 	db := testDB(t)
 	server := testServer(t)
 
@@ -265,12 +352,19 @@ func TestShutdownDrainBoundedJoinOfWedgedHandler(t *testing.T) {
 	shutdownTimeout = 50 * time.Millisecond
 	defer func() { shutdownTimeout = savedTimeout }()
 
-	// Two budgets — Shutdown's own plus the conn join — must still finish
-	// well inside the failure threshold.
+	engine := &closeProbeEngine{name: "probe"}
+	server.Engines.Register(engine)
+
 	start := time.Now()
 	shutdownDrain(httpServer, server, db, &liveConns, func() {})
 	require.Less(t, time.Since(start), 5*time.Second, "a wedged handler must not hang the drain")
-	require.Error(t, db.PingContext(context.Background()), "the store must be closed when the drain returns")
+
+	// The drain declined unsafe teardown while the handler is still held:
+	// no engine Close ran and the store still answers.
+	require.Equal(t, int32(0), engine.calls.Load(),
+		"engines must not close while a live handler could still reach them")
+	require.NoError(t, db.PingContext(context.Background()),
+		"the store must remain open when the drain bails on a live handler")
 }
 
 // testHTTPServer serves h on a loopback listener and closes both in cleanup.

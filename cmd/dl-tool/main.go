@@ -451,20 +451,24 @@ func main() {
 // signalled: withdraw readiness and close ingress first — step 1 — then run
 // drainRuntime, which stops and joins the runtime loops — cron, job workers,
 // metrics — then the server's background loops, the engines and the store.
-// http.Server.Shutdown closes the listener immediately but waits for
-// in-flight connections, and an open SSE stream can hold it for the whole
-// budget, so it runs beside the runtime drain rather than serialized ahead
-// of it: ingress stops accepting first either way.
+// http.Server.Shutdown closes the listener before its RegisterOnShutdown
+// callbacks run (net/http server.go), so ingressStopped is the ingress-stop
+// barrier: drainRuntime cannot start until the listener is dead.
 //
 // liveConns counts open connections (net/http's ConnState); it is how the
 // drain joins handler goroutines after the HTTP phase, because
 // http.Server.Close reaps sockets and cancels request contexts but never
-// waits for the conn goroutines those handlers run on.
+// waits for the conn goroutines those handlers run on. If that join
+// overruns its budget — a handler ignoring its context — the drain returns
+// rather than closing engines and the store under a live request; the
+// process exit that follows reaps what is left.
 func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, liveConns *sync.WaitGroup, drainRuntime func()) {
 	server.Health.MarkDraining()
 
 	httpDone := make(chan struct{})
 	if httpServer != nil {
+		ingressStopped := make(chan struct{})
+		httpServer.RegisterOnShutdown(sync.OnceFunc(func() { close(ingressStopped) }))
 		go func() {
 			defer close(httpDone)
 			// Background, not a deadline: Shutdown closes the listener
@@ -476,6 +480,10 @@ func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, liv
 				slog.Error("http shutdown failed", "err", err)
 			}
 		}()
+		// The callback runs after closeListenersLocked returns inside
+		// Shutdown, so the listener close is complete — not merely started —
+		// before the runtime drain begins.
+		<-ingressStopped
 	} else {
 		close(httpDone)
 	}
@@ -499,9 +507,7 @@ func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, liv
 
 	// Join the conn goroutines still unwinding their handlers — after a
 	// graceful shutdown this is already empty; after a force-close it
-	// waits out the context cancellations. A wedged handler that ignores
-	// its context gets the same budget again and is then abandoned loudly
-	// rather than hanging the process.
+	// waits out the context cancellations.
 	if liveConns != nil {
 		connsJoined := make(chan struct{})
 		go func() {
@@ -513,7 +519,12 @@ func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB, liv
 		select {
 		case <-connsJoined:
 		case <-joinCtx.Done():
-			slog.Error("live connections outlived force-close; teardown proceeds with stragglers")
+			// A live handler still holds its conn goroutine. Stopping the
+			// engines or closing the store under it is exactly the race this
+			// join exists to prevent, so the drain declines: bounded return,
+			// explicit log, and no claim of a completed safe teardown.
+			slog.Error("in-flight connections outlived the join budget; drain incomplete — engines and store left to process exit")
+			return
 		}
 	}
 
