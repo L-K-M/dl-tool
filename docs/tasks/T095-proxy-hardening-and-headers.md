@@ -4,7 +4,7 @@
 |---|---|
 | **ID** | T095 |
 | **Milestone** | M7 |
-| **Status** | todo |
+| **Status** | deferred — see the open Blocked record dated 2026-09-26 |
 | **Depends on** | T007, T013, T094 |
 | **Blocks** | — |
 | **Parallel-safe** | no — it edits `internal/api/server.go` |
@@ -234,3 +234,41 @@ file's `## Files` table with `internal/api/server_test.go`, `internal/api/auth_t
 it only calls `do()` (verified as of the 2026-09-25 block record — no direct
 `httptest.NewRequest`/`http.Request` construction in the file). The file that should answer the question "may tests set Host to satisfy an
 always-on allowlist" is this task file's Files table.
+
+### 2026-09-26 — the same allowlist also breaks the integration-tagged contract call site, again outside the Files table
+
+The 2026-09-25 repair scoped its verification to `go test ./internal/api/... ./internal/obs/...` —
+the Verification block still runs exactly that — and the fallout list it produced does not cover
+`//go:build integration` code in other packages. `make test-integration` does:
+`.github/workflows/ci.yml` runs it in the `integration` job (green on main as of this record),
+and under that tag
+[`internal/engine/qbittorrent/contract_test.go`](../../internal/engine/qbittorrent/contract_test.go)
+`TestConformBootCorrection` drives `server.Router.ServeHTTP` twice with `httptest.NewRequest`'s
+default `Host: example.com` — once for `POST /api/v1/auth/setup` asserting `201 Created`
+(line ~1491), once in the `call` helper asserting `200 OK` (line ~1506).
+
+Verified against this tree with `HostAllowlist` written exactly as the contract specifies and
+mounted on `base` ahead of `SecurityHeaders` — the construction `TestConformBootCorrection` uses,
+replayed through `server.Router`:
+
+```text
+POST /api/v1/auth/setup: status 421: {"type":"/problems/validation-failed","title":"Misdirected Request","status":421,"detail":"the request host \"example.com\" is not an allowed name"}
+GET /api/v1/engines: status 421: {"type":"/problems/validation-failed","title":"Misdirected Request","status":421,"detail":"the request host \"example.com\" is not an allowed name"}
+```
+
+The request path is the base sub-router's, so the always-on allowlist answers before any handler —
+the `require.Equal(t, http.StatusCreated, setup.Code)` assertion can only see 421. The fix is again
+test-only: give both request constructions an allowed `Host` (`localhost`). But
+`internal/engine/qbittorrent/contract_test.go` is not in this task's `## Files` table, hard rule 1
+forbids touching it, and no Files-table file can carry the fix — the test constructs its own
+requests. The remaining fallouts were re-swept and are clean: every other `NewServer` caller either
+never serves a request (rss, jobs, engine unit tests, search, secure), drives `server.API` through
+humatest — which enters at the `v1` mux, below the base sub-router the allowlist guards — or listens
+on a real socket, where the client sends a `127.0.0.1` host a literal IP accepts
+(`cmd/dl-tool/main_test.go`, the e2e harness).
+
+**Remedy:** a second contract repair of the class of `3c2ea66` ("Repair T095 host-test scope"):
+extend this file's `## Files` table with `internal/engine/qbittorrent/contract_test.go` — the one
+remaining file whose request construction must carry an allowed `Host` — and keep the middleware
+unconditional. Verified as of this record: `grep -rn "go:build integration" --include="*.go" .`
+lists five files, and only this one calls `server.Router.ServeHTTP`.
