@@ -119,6 +119,7 @@ func TestMatchPathScopedOverrides(t *testing.T) {
 		{"https://web.archive.org/web/20200101000000/https://example.com/page.html", false},
 		{"https://www.imdb.com/list/ls123456789/", true},
 		{"https://www.imdb.com/List/LS123456789/", true},
+		{"https://www.imdb.com/list/lsé/", false},
 		{"https://www.imdb.com/title/tt0111161/", false},
 		{"https://vk.com/video/playlist/-123_456", true},
 		{"https://vk.com/video/@user/all", true},

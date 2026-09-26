@@ -104,7 +104,8 @@ func LoadExtractors() (*ExtractorCache, error)
 
 // Match reports whether uri routes to yt-dlp: the URI's lowercase hostname is
 // checked against the override routes (host suffix on label boundaries, plus
-// a boundary-aware, case-folded fragment match when the spec carries one),
+// a boundary-aware, case-folded fragment match when the spec carries one —
+// boundary bytes are ASCII-only, so a UTF-8 letter never counts as one),
 // then the URI — scheme and
 // authority lowercased, mirroring yt-dlp's netloc normalization — is checked
 // against the compiled alternation. It never performs I/O.
@@ -428,3 +429,9 @@ stop-and-document rule, resolved by the task's own explicit instructions:
   `vk.com/video/` matching upstream's exact path prefix. The generator also learned that a
   leading `]` in a character class is a literal member in both Python and Go — it passes
   through instead of mis-tokenizing — and `\D` inside a class widens to `\P{Nd}`.
+- Review round 3 tightened the boundary check once more (bytes >= 0x80 may be UTF-8 letters
+  and never count as a claim boundary — the miss-safe direction) and was otherwise
+  minor-only. Deferred per the automated-review stopping rules: surfacing an
+  extractor-table load failure through `Health` (Connect deliberately degrades to nil
+  semantics; the committed table is pinned by `TestExtractorTableCompiles`, so the gap is
+  observability, not correctness — a Health contract change deserves its own task).

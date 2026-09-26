@@ -108,11 +108,14 @@ func isAlnum(b byte) bool {
 }
 
 // pathClaims reports whether fragment occurs in path at a claim boundary:
-// preceded by a non-alphanumeric (path separators, dots, scheme colons) and —
-// when the fragment ends in an alphanumeric — followed by a non-letter, so
-// `vk.com/video` claims video-123_456 but not the profile `videographer`, and
-// `youtube.com/` claims an archived www.youtube.com URL but not an archived
-// fakeyoutube.com one.
+// preceded by an ASCII non-alphanumeric (path separators, dots, scheme
+// colons) and — when the fragment ends in an alphanumeric — followed by an
+// ASCII non-letter, so `vk.com/video` claims video-123_456 but not the
+// profile `videographer`, and `youtube.com/` claims an archived
+// www.youtube.com URL but not an archived fakeyoutube.com one. Bytes >= 0x80
+// may be UTF-8 letters, so they never count as a boundary — the conservative
+// direction, since a miss falls through to the plain lane while a wrong claim
+// misroutes.
 func pathClaims(path, fragment string) bool {
 	for i := 0; ; {
 		j := strings.Index(path[i:], fragment)
@@ -121,10 +124,10 @@ func pathClaims(path, fragment string) bool {
 		}
 		at := i + j
 		end := at + len(fragment)
-		if (at == 0 || !isAlnum(path[at-1])) &&
+		if (at == 0 || (path[at-1] < 0x80 && !isAlnum(path[at-1]))) &&
 			(end == len(path) ||
 				!isAlnum(fragment[len(fragment)-1]) ||
-				path[end] < 'a' || 'z' < path[end]) {
+				path[end] < 0x80 && (path[end] < 'a' || 'z' < path[end])) {
 			return true
 		}
 		i = at + 1
