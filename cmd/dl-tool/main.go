@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2/humacli"
+	"github.com/jmoiron/sqlx"
 	"github.com/spf13/cobra"
 
 	"github.com/L-K-M/dl-tool/internal/api"
@@ -399,21 +400,7 @@ func main() {
 			// Drain in the goroutine that owns the values; stopped and drained
 			// are the happens-before edges, so there is no racy cross-goroutine
 			// read and humacli cannot return before the close completes.
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-			defer cancel()
-
-			if httpServer != nil {
-				if err := httpServer.Shutdown(shutdownCtx); err != nil {
-					slog.Error("http shutdown failed", "err", err)
-				}
-			}
-			// The server's background loops — sync hub, reconciler and
-			// admission — must stop before the store closes; Shutdown
-			// cancels their context and joins each goroutine.
-			server.Shutdown()
-			if err := db.Close(); err != nil {
-				slog.Error("database close failed", "err", err)
-			}
+			shutdownDrain(httpServer, server, db)
 		})
 		hooks.OnStop(func() {
 			slog.Info("stopped")
@@ -432,6 +419,40 @@ func main() {
 	cli.Root().AddCommand(openapiCmd())
 	cli.Root().AddCommand(restoreCmd())
 	cli.Run()
+}
+
+// shutdownDrain performs the ordered teardown of docs/17 §2 once OnStop has
+// cancelled the runtime loops: stop accepting HTTP, join the server's
+// background loops — the sync hub, the reconciler and the admission pass must
+// stop before the store closes — then close the database.
+func shutdownDrain(httpServer *http.Server, server *api.Server, db *sqlx.DB) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if httpServer != nil {
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("http shutdown failed", "err", err)
+			// Shutdown overran with requests still live. Close reaps the
+			// listener and sockets — cancelling request contexts — but cannot
+			// join hung handler goroutines; a handler that ignores its
+			// request context may still race the teardown below.
+			if cerr := httpServer.Close(); cerr != nil {
+				slog.Error("http force-close failed", "err", cerr)
+			}
+		}
+	}
+	server.Shutdown()
+	// Engine teardown — yt-dlp's subprocess kills, qBittorrent's poll stop,
+	// aria2's websocket abort — runs only after the loops that call into
+	// engines are dead, and before the store closes so write-back paths
+	// like the maindata infohash writer never meet a closed pool. A close
+	// error is logged, never fatal: teardown is not abandoned to it.
+	if err := server.Engines.CloseAll(); err != nil {
+		slog.Error("engine shutdown failed", "err", err)
+	}
+	if err := db.Close(); err != nil {
+		slog.Error("database close failed", "err", err)
+	}
 }
 
 // healthcheck GETs {DLTOOL_BASE_PATH}/healthz on DLTOOL_HTTP_ADDR and returns the
