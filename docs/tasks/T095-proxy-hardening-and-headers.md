@@ -239,7 +239,7 @@ always-on allowlist" is this task file's Files table.
 
 The 2026-09-25 repair scoped its verification to `go test ./internal/api/... ./internal/obs/...` —
 the Verification block still runs exactly that — and the fallout list it produced does not cover
-`//go:build integration` code in other packages. `make test-integration` does:
+`//go:build integration` code in other packages — and `make test-integration` does cover it, because
 `.github/workflows/ci.yml` runs it in the `integration` job (green on main as of this record),
 and under that tag
 [`internal/engine/qbittorrent/contract_test.go`](../../internal/engine/qbittorrent/contract_test.go)
@@ -270,5 +270,9 @@ on a real socket, where the client sends a `127.0.0.1` host a literal IP accepts
 **Remedy:** a second contract repair of the class of `3c2ea66` ("Repair T095 host-test scope"):
 extend this file's `## Files` table with `internal/engine/qbittorrent/contract_test.go` — the one
 remaining file whose request construction must carry an allowed `Host` — and keep the middleware
-unconditional. Verified as of this record: `grep -rn "go:build integration" --include="*.go" .`
-lists five files, and only this one calls `server.Router.ServeHTTP`.
+unconditional. Worth considering alongside it: extending the `## Verification` block with
+`make test-integration`, so the next attempt exercises the suite that has now broken twice rather
+than discovering it in CI. Verified as of this record: `grep -rn "go:build integration" --include="*.go" .`
+lists five files, and only this one calls `server.Router.ServeHTTP`; the untagged sweep
+`grep -rn "server\.Router" --include="*_test.go" .` adds only `cmd/dl-tool/main_test.go`, whose
+requests ride real listeners and send a `127.0.0.1` host the literal-IP rule accepts.
